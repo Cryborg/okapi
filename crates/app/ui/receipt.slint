@@ -1,0 +1,251 @@
+// The cleaning under way, and its receipt.
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { ActionButton, ButtonKind, Card, Detail, Footer, Icon, Line, ProgressBar, Title } from "widgets.slint";
+import {
+    CleanEnding, CleanPassKind, Cleaner, HistoryState, ReceiptKind, ReceiptLineShown,
+    Words,
+} from "cleaner-model.slint";
+
+// The cleaning under way: its pass, how far, what is freed so far.
+export component CleaningPage inherits VerticalLayout {
+    init => {
+        cancel.focus();
+    }
+
+    VerticalLayout {
+        vertical-stretch: 1;
+        padding: Theme.spacing-xxl;
+        spacing: Theme.spacing-xl;
+        VerticalLayout {
+            spacing: Theme.spacing-xs;
+            Title {
+                text: Cleaner.clean-cancel-asked ? @tr("Annulation du nettoyage") : @tr("Nettoyage en cours");
+            }
+            Detail {
+                text: Cleaner.clean-cancel-asked
+                    ? @tr("L'élément en cours se termine ; ce qui n'est pas encore retiré reste.")
+                    : Cleaner.clean-pass == CleanPassKind.check
+                    ? @tr("Vérification de chaque élément avant de le retirer.")
+                    : @tr("Suppression des éléments vérifiés.");
+                accessible-live-region: polite;
+            }
+        }
+        ProgressBar {
+            height: Theme.bar-height-large;
+            progress: Cleaner.clean-total == 0 ? 0 : Cleaner.clean-done / Cleaner.clean-total;
+            indeterminate: Cleaner.clean-total == 0;
+            label: Cleaner.clean-pass == CleanPassKind.check ? @tr("Vérification") : @tr("Suppression");
+        }
+        Detail {
+            text: @tr("Éléments : {} sur {}", Cleaner.clean-done, Cleaner.clean-total);
+        }
+        Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+    Footer {
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            spacing: Theme.spacing-s;
+            alignment: start;
+            Detail {
+                text: @tr("Libéré jusqu'ici");
+                vertical-alignment: center;
+            }
+            Text {
+                text: Words.size(Cleaner.freed);
+                color: Theme.text;
+                font-size: Theme.font-title;
+                font-weight: Theme.weight-semibold;
+                vertical-alignment: center;
+            }
+        }
+        cancel := ActionButton {
+            text: @tr("Annuler le nettoyage");
+            enabled: !Cleaner.clean-cancel-asked;
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                Cleaner.cancel-cleaning();
+            }
+        }
+    }
+}
+
+// A figure of the receipt.
+component Stat inherits VerticalLayout {
+    in property <string> label;
+    in property <string> value;
+    horizontal-stretch: 1;
+    padding: Theme.spacing-m;
+    padding-left: Theme.spacing-l;
+    spacing: Theme.spacing-xs;
+    accessible-role: text;
+    accessible-label: @tr("{} : {}", label, value);
+    Detail {
+        text: root.label;
+        accessible-role: none;
+    }
+    Text {
+        text: root.value;
+        accessible-role: none;
+        color: Theme.text;
+        font-size: Theme.font-title;
+        font-weight: Theme.weight-semibold;
+    }
+}
+
+// A line of the receipt: a result, or why entries were kept; unfolded, its
+// entries.
+component ReceiptLine inherits VerticalLayout {
+    in property <ReceiptLineShown> line;
+    property <bool> open;
+    property <string> name: line.kind == ReceiptKind.removed ? @tr("Retirées")
+        : line.kind == ReceiptKind.partial ? @tr("Retirées en partie")
+        : line.kind == ReceiptKind.gone ? @tr("Déjà parties")
+        : line.kind == ReceiptKind.recent ? @tr("Gardées : modifiées trop récemment")
+        : line.kind == ReceiptKind.changed ? @tr("Gardées : leur contenu a changé")
+        : line.kind == ReceiptKind.replaced ? @tr("Gardées : remplacées depuis l'analyse")
+        : line.kind == ReceiptKind.excluded ? @tr("Gardées : exclues par vos réglages")
+        : line.kind == ReceiptKind.protected ? @tr("Gardées : protégées")
+        : line.kind == ReceiptKind.refused ? @tr("Gardées : refus du système")
+        : line.kind == ReceiptKind.cancelled ? @tr("Gardées : nettoyage annulé avant leur tour")
+        : @tr("Gardées : inconnues de cette analyse");
+
+    ActionButton {
+        text: root.open ? @tr("Replier {} : {}, {}", root.name, line.count, Words.size(line.size))
+            : @tr("Déplier {} : {}, {}", root.name, line.count, Words.size(line.size));
+        kind: ButtonKind.ghost;
+        accessible-expandable: true;
+        accessible-expanded: root.open;
+        clicked => {
+            root.open = !root.open;
+        }
+    }
+    if root.open: VerticalLayout {
+        padding-left: Theme.results-indent;
+        spacing: Theme.spacing-xxs;
+        for entry in line.paths: VerticalLayout {
+            Detail {
+                text: entry.path;
+                color: Theme.text;
+                overflow: elide;
+            }
+            if entry.blocked != "": Detail {
+                text: @tr("Gardé à cause de : {}", entry.blocked);
+                overflow: elide;
+            }
+        }
+        if line.more > 0: Detail {
+            text: @tr("Autres : {}. Le journal les liste toutes.", line.more);
+        }
+    }
+}
+
+// What a cleaning did.
+export component ReceiptPage inherits VerticalLayout {
+    init => {
+        done.focus();
+    }
+
+    VerticalLayout {
+        vertical-stretch: 1;
+        padding: Theme.spacing-xxl;
+        padding-bottom: Theme.spacing-l;
+        spacing: Theme.spacing-l;
+        VerticalLayout {
+            spacing: Theme.spacing-xs;
+            Title {
+                text: Cleaner.ending == CleanEnding.done ? @tr("Nettoyage terminé")
+                    : Cleaner.ending == CleanEnding.cancelled ? @tr("Nettoyage annulé")
+                    : Cleaner.ending == CleanEnding.stopped ? @tr("Nettoyage arrêté")
+                    : @tr("Nettoyage interrompu");
+                accessible-live-region: polite;
+            }
+            Detail {
+                text: Cleaner.ending == CleanEnding.interrupted
+                    ? @tr("Le nettoyage s'est interrompu sans reçu. Ce qui a été supprimé est dans le journal technique.")
+                    : Cleaner.ending == CleanEnding.stopped
+                    ? @tr("Rien n'a été touché.")
+                    : Cleaner.ending == CleanEnding.cancelled
+                    ? @tr("Ce qui n'était pas encore retiré est resté.")
+                    : Cleaner.removed + Cleaner.partial == 0
+                    ? @tr("Rien n'a été retiré : le détail par résultat est ci-dessous.")
+                    : @tr("Chaque élément a été vérifié juste avant d'être retiré.");
+            }
+            Detail {
+                text: Cleaner.history == HistoryState.recorded ? @tr("Le reçu est enregistré dans l'historique.")
+                    : Cleaner.history == HistoryState.failed ? @tr("Le reçu n'a pas pu être enregistré dans l'historique. Le détail est dans le journal.")
+                    : Cleaner.history == HistoryState.unavailable ? @tr("L'historique est indisponible : ce reçu n'y est pas ajouté. Le détail est dans le journal.")
+                    : @tr("L'historique n'a pas été écrit.");
+                color: Cleaner.history == HistoryState.recorded ? Theme.text-2 : Theme.warning;
+            }
+            if Cleaner.deletion-log-lost: Line {
+                text: @tr("Le journal des suppressions que vous demandez n'a pas été écrit : ce qui a été supprimé n'est listé que dans le journal technique.");
+                color: Theme.danger;
+                accessible-live-region: assertive;
+            }
+        }
+        if Cleaner.ending == CleanEnding.stopped: VerticalLayout {
+            spacing: Theme.spacing-xs;
+            for stop in Cleaner.stops: Line {
+                text: Words.stop(stop);
+            }
+        }
+        if Cleaner.ending != CleanEnding.interrupted: Card {
+            HorizontalLayout {
+                Stat {
+                    label: @tr("Espace libéré");
+                    value: Words.size(Cleaner.freed);
+                }
+                Stat {
+                    label: @tr("Retirées");
+                    value: Cleaner.removed;
+                }
+                Stat {
+                    label: @tr("Retirées en partie");
+                    value: Cleaner.partial;
+                }
+                Stat {
+                    label: @tr("Déjà parties");
+                    value: Cleaner.gone;
+                }
+                Stat {
+                    label: @tr("Gardées");
+                    value: Cleaner.kept;
+                }
+            }
+        }
+        if Cleaner.receipt-lines.length > 0: Card {
+            vertical-stretch: 1;
+            accessible-role: list;
+            accessible-label: @tr("Détail par résultat");
+            ScrollView {
+                VerticalLayout {
+                    padding: Theme.spacing-s;
+                    alignment: start;
+                    for line in Cleaner.receipt-lines: ReceiptLine {
+                        line: line;
+                    }
+                }
+            }
+        }
+        Rectangle {
+            vertical-stretch: Cleaner.receipt-lines.length > 0 ? 0 : 1;
+        }
+    }
+    Footer {
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+        done := ActionButton {
+            text: @tr("Terminer");
+            kind: ButtonKind.primary;
+            large: true;
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                Cleaner.finish();
+            }
+        }
+    }
+}

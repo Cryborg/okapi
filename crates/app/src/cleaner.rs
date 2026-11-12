@@ -1,6 +1,7 @@
 //! The cleaner screen: the categories chosen, the analysis run on a thread
-//! and watched, and how it ended. What it shows is worked out in plain Rust
-//! ([`Choices`], [`ScanView`], [`ending`]), tested without a window;
+//! and watched, its results, and the cleaning of what is checked
+//! ([`cleaning`]). What it shows is worked out in plain Rust ([`Choices`],
+//! [`ScanView`], [`ending`], `Results`, `Receipt`), tested without a window;
 //! [`CleanerScreen`] binds it to the window.
 
 use std::cell::RefCell;
@@ -13,19 +14,21 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 use okapi_engine::{
-    ByteSize, Cancel, Category, DEFAULT_MIN_AGE, DEFAULT_MIN_AGE_MINUTES, DefaultChoice,
-    Exclusions, Progress, ScanIssue, ScanOptions, ScanReport, SizeUnit, Stop, Watch, scan_watched,
-    settings_min_age,
+    ByteSize, Cancel, Category, CleanReceipt, DEFAULT_MIN_AGE, DEFAULT_MIN_AGE_MINUTES,
+    DefaultChoice, Exclusions, Limit, Progress, ScanIssue, ScanOptions, ScanReport, SizeUnit, Stop,
+    Watch, clean_watched, scan_watched, settings_min_age,
 };
 use okapi_rules::{Os, RuleSet, TemplateVariables};
 use okapi_store::Settings;
-use slint::{ComponentHandle as _, Model as _, ModelRc, VecModel};
+use slint::{ComponentHandle as _, Model as _, ModelRc, SharedString, VecModel};
 
+use crate::results::{CheckState, GroupFacts, Line, Results};
 use crate::ui;
+use cleaning::CleanJob;
 
-/// How often the window looks at the analysis under way.
+/// How often the window looks at the task under way.
 const WATCH_EVERY: Duration = Duration::from_millis(50);
-/// How long closing the window waits for an analysis to stop, and how often
+/// How long closing the window waits for a task to stop, and how often
 /// it looks again.
 const STOP_WAIT: Duration = Duration::from_secs(1);
 const STOP_POLL: Duration = Duration::from_millis(10);
@@ -45,9 +48,14 @@ pub struct Inputs {
     pub variables: TemplateVariables,
     pub min_age_minutes: Option<u64>,
     pub exclusions: Vec<PathBuf>,
+    /// Every entry of a cleaning is kept in the history.
+    pub deletion_log: bool,
+    /// Where the history lives; none when no state directory is known.
+    pub state_directory: Option<PathBuf>,
 }
 
-/// Why the analysis cannot start, its detail traced where it is found.
+/// Why an analysis or a cleaning cannot start, its detail traced where it
+/// is found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Problem {
     Variables,
@@ -55,7 +63,13 @@ pub enum Problem {
     Settings,
     MinAge,
     Exclusion,
+    /// The deletion log asked for cannot be kept: nothing is removed.
+    History,
+    /// A task could not start: its thread, or what it would take.
+    Start,
 }
+
+mod cleaning;
 
 /// One analysis to run.
 #[derive(Debug)]
@@ -67,13 +81,15 @@ pub struct Job {
 
 pub type Read = Rc<dyn Fn() -> Result<Inputs, Problem>>;
 pub type Work = Arc<dyn Fn(Job, Cancel, Sender<Progress>) -> ScanReport + Send + Sync>;
+pub type Clean = Arc<dyn Fn(&CleanJob, Cancel, Sender<Progress>) -> CleanReceipt + Send + Sync>;
 
-/// What the screen reads the machine and scans with: the system's, or a
-/// test's, which never touches the machine.
+/// What the screen reads the machine, scans and cleans with: the system's,
+/// or a test's, which never touches the machine.
 #[derive(Clone)]
 pub struct Seams {
     pub read: Read,
     pub work: Work,
+    pub clean: Clean,
 }
 
 impl std::fmt::Debug for Seams {
@@ -89,6 +105,16 @@ impl Seams {
             read: Rc::new(read_system),
             work: Arc::new(|job, cancel, progress| {
                 scan_watched(
+                    &job.rules,
+                    &job.variables,
+                    &job.options,
+                    &Watch::new(cancel, Some(progress)),
+                )
+            }),
+            clean: Arc::new(|job, cancel, progress| {
+                clean_watched(
+                    &job.report,
+                    &job.ids,
                     &job.rules,
                     &job.variables,
                     &job.options,
@@ -116,6 +142,8 @@ fn read_system() -> Result<Inputs, Problem> {
         variables,
         min_age_minutes: settings.min_age_minutes,
         exclusions: settings.exclusions.into_iter().map(PathBuf::from).collect(),
+        deletion_log: settings.deletion_log,
+        state_directory: okapi_platform::state_directory(),
     })
 }
 
@@ -291,6 +319,12 @@ impl ScanView {
         }
     }
 
+    /// The categories the analysis looks at.
+    #[must_use]
+    pub fn chosen(&self) -> BTreeSet<Category> {
+        self.rows.iter().map(|row| row.category).collect()
+    }
+
     /// Whether the scan planned its roots.
     #[must_use]
     pub const fn is_planned(&self) -> bool {
@@ -437,6 +471,8 @@ const fn problem(problem: Option<Problem>) -> ui::SetupProblem {
         Some(Problem::Settings) => ui::SetupProblem::Settings,
         Some(Problem::MinAge) => ui::SetupProblem::MinAge,
         Some(Problem::Exclusion) => ui::SetupProblem::Exclusion,
+        Some(Problem::History) => ui::SetupProblem::History,
+        Some(Problem::Start) => ui::SetupProblem::Start,
     }
 }
 
@@ -457,6 +493,99 @@ fn stop_shown(stop: &Stop) -> Option<ui::StopShown> {
     })
 }
 
+/// A line of the results as the window shows it.
+fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
+    let state = |state: CheckState| match state {
+        CheckState::Checked => ui::CheckState::Checked,
+        CheckState::Unchecked => ui::CheckState::Unchecked,
+        CheckState::Partial => ui::CheckState::Partial,
+    };
+    match row {
+        Line::Category {
+            category,
+            state: check,
+            enabled,
+            folded,
+            entries,
+            bytes,
+        } => ui::ResultRow {
+            is_category: true,
+            category: kind(*category),
+            label: slint::SharedString::default(),
+            state: state(*check),
+            enabled: *enabled,
+            folded: *folded,
+            hidden: false,
+            badge: ui::ResultBadge::Preselected,
+            entries: shown(*entries),
+            size: size(*bytes),
+        },
+        Line::Group {
+            index,
+            checked,
+            hidden,
+        } => {
+            let Some(group) = results.group(*index) else {
+                tracing::error!(index, "a line of the results names no group");
+                return ui::ResultRow::default();
+            };
+            ui::ResultRow {
+                is_category: false,
+                category: results.shown_under(*index).map_or_else(
+                    || {
+                        tracing::error!(index, "a group of the results under no category chosen");
+                        ui::CategoryKind::System
+                    },
+                    kind,
+                ),
+                label: group.label.as_str().into(),
+                state: state(if *checked {
+                    CheckState::Checked
+                } else {
+                    CheckState::Unchecked
+                }),
+                enabled: !group.needs_admin,
+                folded: false,
+                hidden: *hidden,
+                badge: if group.needs_admin {
+                    ui::ResultBadge::Admin
+                } else if group.preselected {
+                    ui::ResultBadge::Preselected
+                } else {
+                    ui::ResultBadge::ToChoose
+                },
+                entries: shown(group.entries),
+                size: size(group.bytes),
+            }
+        }
+    }
+}
+
+/// A note of the analysis as the window says it; a stop is no note.
+fn note_shown(issue: &ScanIssue) -> Option<ui::IssueShown> {
+    let path = |path: &std::path::Path| SharedString::from(path.display().to_string());
+    let (kind, path) = match issue {
+        ScanIssue::Stopped(_) => return None,
+        ScanIssue::AgeBeyondClock { .. } => {
+            (ui::IssueKind::AgeBeyondClock, SharedString::default())
+        }
+        ScanIssue::Unsupported { .. } => (ui::IssueKind::Unsupported, SharedString::default()),
+        ScanIssue::Unresolvable { .. } => (ui::IssueKind::Unresolvable, SharedString::default()),
+        ScanIssue::UnreadableRoot { path: at, .. } => (ui::IssueKind::UnreadableRoot, path(at)),
+        ScanIssue::UnsafeRoot { path: at, .. } => (ui::IssueKind::UnsafeRoot, path(at)),
+        ScanIssue::ProtectedRoot { path: at, .. } => (ui::IssueKind::ProtectedRoot, path(at)),
+        ScanIssue::Excluded { path: at, .. } => (ui::IssueKind::Excluded, path(at)),
+        ScanIssue::LimitReached { root, limit, .. } => (
+            match limit {
+                Limit::Depth => ui::IssueKind::DepthLimit,
+                Limit::Entries => ui::IssueKind::EntriesLimit,
+            },
+            path(root),
+        ),
+    };
+    Some(ui::IssueShown { kind, path })
+}
+
 /// Shows `rows` in `model`, row by row when their number holds.
 fn show<T: Clone + 'static>(model: &VecModel<T>, rows: Vec<T>) {
     if model.row_count() == rows.len() {
@@ -468,47 +597,81 @@ fn show<T: Clone + 'static>(model: &VecModel<T>, rows: Vec<T>) {
     }
 }
 
-/// An analysis under way.
-struct Running {
+/// A thread at work, its progress and its result sent on channels made for
+/// it, and the token that cancels it.
+struct Running<T> {
     cancel: Cancel,
     progress: Receiver<Progress>,
-    report: Receiver<ScanReport>,
+    result: Receiver<T>,
     thread: JoinHandle<()>,
-    view: ScanView,
-    /// How long it has been waited for since it was cancelled, counted in
-    /// looks at it.
-    cancelled_for: Option<Duration>,
 }
 
-impl Running {
-    /// Runs `job` on its own thread, its progress and its report sent on
-    /// channels made for it.
-    fn start(work: &Work, job: Job, view: ScanView) -> std::io::Result<Self> {
+impl<T: Send + 'static> Running<T> {
+    /// Runs `work` on a thread named `name`, in `span`.
+    fn start(
+        name: &str,
+        span: tracing::Span,
+        work: impl FnOnce(Cancel, Sender<Progress>) -> T + Send + 'static,
+    ) -> std::io::Result<Self> {
         let cancel = Cancel::new();
         let (progress_sender, progress) = mpsc::channel();
-        let (report_sender, report) = mpsc::channel();
-        let work = Arc::clone(work);
-        let span = tracing::info_span!("analysis");
+        let (result_sender, result) = mpsc::channel();
         let token = cancel.clone();
         let thread = thread::Builder::new()
-            .name("okapi-analysis".to_owned())
+            .name(name.to_owned())
             .spawn(move || {
                 span.in_scope(|| {
-                    let report = work(job, token, progress_sender);
-                    if report_sender.send(report).is_err() {
-                        tracing::info!("report of an analysis given up or closed: unread");
+                    if result_sender.send(work(token, progress_sender)).is_err() {
+                        tracing::info!("result of a task given up or closed: unread");
                     }
                 });
             })?;
         Ok(Self {
             cancel,
             progress,
-            report,
+            result,
             thread,
-            view,
-            cancelled_for: None,
         })
     }
+}
+
+/// An analysis under way.
+struct Analysis {
+    running: Running<ScanReport>,
+    view: ScanView,
+    /// How long it has been waited for since it was cancelled, counted in
+    /// looks at it.
+    cancelled_for: Option<Duration>,
+}
+
+/// The one thing the screen follows at a time: an analysis and a cleaning
+/// are never both under way (the thread of an analysis given up may still
+/// read, its report unread).
+enum Task {
+    Analysis(Analysis),
+    Cleaning(cleaning::Cleaning),
+}
+
+impl Task {
+    const fn cancel(&self) -> &Cancel {
+        match self {
+            Self::Analysis(analysis) => &analysis.running.cancel,
+            Self::Cleaning(cleaning) => &cleaning.running.cancel,
+        }
+    }
+
+    fn is_finished(&self) -> bool {
+        match self {
+            Self::Analysis(analysis) => analysis.running.thread.is_finished(),
+            Self::Cleaning(cleaning) => cleaning.running.thread.is_finished(),
+        }
+    }
+}
+
+/// A report kept for its cleaning, and the results shown of it.
+struct Held {
+    report: Arc<ScanReport>,
+    results: Results,
 }
 
 struct State {
@@ -519,7 +682,15 @@ struct State {
     choice_model: Rc<VecModel<ui::CategoryChoice>>,
     row_model: Rc<VecModel<ui::ScanRow>>,
     stop_model: Rc<VecModel<ui::StopShown>>,
-    running: Option<Running>,
+    task: Option<Task>,
+    /// The last analysis that found something, and the user's choice in it:
+    /// what a cleaning takes its identifiers from (invariant 1).
+    held: Option<Held>,
+    /// The confirmation of a cleaning, open.
+    confirming: Option<cleaning::Confirming>,
+    result_model: Rc<VecModel<ui::ResultRow>>,
+    receipt_model: Rc<VecModel<ui::ReceiptLineShown>>,
+    note_model: Rc<VecModel<ui::IssueShown>>,
     timer: Rc<slint::Timer>,
     /// Runs for [`SECOND_CLICK`] after the screen changes.
     settling: slint::Timer,
@@ -554,7 +725,12 @@ impl CleanerScreen {
             choice_model: Rc::new(VecModel::default()),
             row_model: Rc::new(VecModel::default()),
             stop_model: Rc::new(VecModel::default()),
-            running: None,
+            task: None,
+            held: None,
+            confirming: None,
+            result_model: Rc::new(VecModel::default()),
+            receipt_model: Rc::new(VecModel::default()),
+            note_model: Rc::new(VecModel::default()),
             timer: Rc::new(slint::Timer::default()),
             settling: slint::Timer::default(),
         };
@@ -562,6 +738,9 @@ impl CleanerScreen {
         cleaner.set_choices(ModelRc::from(Rc::clone(&state.choice_model)));
         cleaner.set_rows(ModelRc::from(Rc::clone(&state.row_model)));
         cleaner.set_stops(ModelRc::from(Rc::clone(&state.stop_model)));
+        cleaner.set_results(ModelRc::from(Rc::clone(&state.result_model)));
+        cleaner.set_notes(ModelRc::from(Rc::clone(&state.note_model)));
+        cleaner.set_receipt_lines(ModelRc::from(Rc::clone(&state.receipt_model)));
         let screen = Self(Rc::new(RefCell::new(state)));
         screen.show_choices();
         screen.refresh();
@@ -585,6 +764,24 @@ impl CleanerScreen {
         cleaner.on_analyze(on(Self::analyze));
         cleaner.on_cancel(on(Self::cancel));
         cleaner.on_choose_again(on(Self::back_to_choosing));
+        let weak = Rc::downgrade(&screen.0);
+        cleaner.on_toggle_result(move |row| {
+            if let Some(state) = weak.upgrade() {
+                Self(state).change_results(row, Results::toggle_group, Results::toggle_category);
+            }
+        });
+        let weak = Rc::downgrade(&screen.0);
+        cleaner.on_fold(move |row| {
+            if let Some(state) = weak.upgrade() {
+                Self(state).change_results(row, |_, _| {}, Results::toggle_folded);
+            }
+        });
+        cleaner.on_deselect_all(on(Self::deselect_all));
+        cleaner.on_clean(on(Self::clean));
+        cleaner.on_confirm_delete(on(Self::confirm_delete));
+        cleaner.on_cancel_confirmation(on(Self::cancel_confirmation));
+        cleaner.on_cancel_cleaning(on(Self::cancel_cleaning));
+        cleaner.on_finish(on(Self::finish));
         screen
     }
 
@@ -681,11 +878,11 @@ impl CleanerScreen {
 
     /// Starts an analysis of the categories checked.
     fn analyze(&self) {
-        if self.is_settling("analysis") {
+        if self.is_settling("analysis") || self.results_frozen("analysis") {
             return;
         }
         let chosen = self.0.borrow().choices.chosen();
-        if self.0.borrow().running.is_some() {
+        if self.0.borrow().task.is_some() {
             tracing::warn!("analysis asked for while one runs");
             return;
         }
@@ -705,10 +902,19 @@ impl CleanerScreen {
                 return;
             }
         };
+        // It starts: a refusal said before is over.
+        self.with_window(|window, _| window.global::<ui::Cleaner>().set_problem(problem(None)));
         tracing::info!(options = ?job.options, categories = ?chosen, "analysis started");
         let work = Arc::clone(&self.0.borrow().seams.work);
+        let started = Running::start(
+            "okapi-analysis",
+            tracing::info_span!("analysis"),
+            move |cancel, progress| work(job, cancel, progress),
+        );
         self.settle();
-        let running = match Running::start(&work, job, ScanView::new(&chosen)) {
+        // A new analysis is the last one: the results of the one before go.
+        self.0.borrow_mut().held = None;
+        let running = match started {
             Ok(running) => running,
             Err(error) => {
                 tracing::error!(%error, "analysis thread not started");
@@ -716,14 +922,29 @@ impl CleanerScreen {
                 return;
             }
         };
-        self.0.borrow_mut().running = Some(running);
+        self.0.borrow_mut().task = Some(Task::Analysis(Analysis {
+            running,
+            view: ScanView::new(&chosen),
+            cancelled_for: None,
+        }));
         self.show_view();
         self.set_step(ui::CleanerStep::Planning);
+        self.watch_task();
+    }
+
+    /// Looks at the task under way every [`WATCH_EVERY`].
+    fn watch_task(&self) {
         let timer = Rc::clone(&self.0.borrow().timer);
         let weak = Rc::downgrade(&self.0);
         timer.start(slint::TimerMode::Repeated, WATCH_EVERY, move || {
             if let Some(state) = weak.upgrade() {
-                Self(state).watch();
+                let screen = Self(state);
+                let cleaning = matches!(screen.0.borrow().task, Some(Task::Cleaning(_)));
+                if cleaning {
+                    screen.watch_cleaning();
+                } else {
+                    screen.watch();
+                }
             }
         });
     }
@@ -734,23 +955,23 @@ impl CleanerScreen {
     fn watch(&self) {
         let (received, given_up, changed) = {
             let mut state = self.0.borrow_mut();
-            let Some(running) = state.running.as_mut() else {
+            let Some(Task::Analysis(analysis)) = state.task.as_mut() else {
                 return;
             };
             let mut changed = false;
-            for progress in running.progress.try_iter() {
-                running.view.apply(progress);
+            for progress in analysis.running.progress.try_iter() {
+                analysis.view.apply(progress);
                 changed = true;
             }
-            if let Some(waited) = &mut running.cancelled_for {
+            if let Some(waited) = &mut analysis.cancelled_for {
                 *waited += WATCH_EVERY;
             }
-            let view = &running.view;
-            let given_up = running
+            let view = &analysis.view;
+            let given_up = analysis
                 .cancelled_for
                 .is_some_and(|waited| waited >= CANCEL_WAIT)
                 .then(|| (view.path.clone(), view.roots_done, view.total));
-            (running.report.try_recv(), given_up, changed)
+            (analysis.running.result.try_recv(), given_up, changed)
         };
         if changed {
             self.show_view();
@@ -763,7 +984,11 @@ impl CleanerScreen {
                     issues = report.issues().len(),
                     "analysis report received"
                 );
-                self.end(ending_of(&report));
+                let outcome = ending_of(&report);
+                if matches!(outcome, Some(Outcome::Found { .. })) {
+                    self.hold(report);
+                }
+                self.end(outcome);
             }
             Err(TryRecvError::Empty) => {
                 if let Some((path, roots_done, roots)) = given_up {
@@ -788,10 +1013,10 @@ impl CleanerScreen {
 
     fn show_view(&self) {
         self.with_window(|window, state| {
-            let Some(running) = &state.running else {
+            let Some(Task::Analysis(analysis)) = &state.task else {
                 return;
             };
-            let view = &running.view;
+            let view = &analysis.view;
             let rows = view
                 .rows
                 .iter()
@@ -831,9 +1056,9 @@ impl CleanerScreen {
             let mut state = self.0.borrow_mut();
             state.timer.stop();
             state
-                .running
+                .task
                 .take()
-                .is_some_and(|running| running.cancel.is_cancelled())
+                .is_some_and(|task| task.cancel().is_cancelled())
         };
         let Some(outcome) = outcome else {
             tracing::info!("analysis cancelled: back to choosing");
@@ -856,20 +1081,111 @@ impl CleanerScreen {
                     cleaner.set_issues(shown(*issues));
                     ui::OutcomeKind::NothingToClean
                 }
-                Outcome::Found {
-                    groups,
-                    bytes,
-                    issues,
-                } => {
-                    cleaner.set_groups(shown(*groups));
+                Outcome::Found { bytes, .. } => {
                     cleaner.set_found(size(*bytes));
-                    cleaner.set_issues(shown(*issues));
-                    ui::OutcomeKind::Found
+                    // "Nettoyer" takes the place of "Annuler l'analyse".
+                    self.settle();
+                    cleaner.set_step(ui::CleanerStep::Results);
+                    return;
                 }
                 Outcome::Failed => ui::OutcomeKind::Failed,
             };
             cleaner.set_outcome(shown_kind);
             cleaner.set_step(ui::CleanerStep::Outcome);
+        });
+        self.show_results();
+    }
+
+    /// Keeps the report of an analysis that found something, its results
+    /// checked as the engine says.
+    fn hold(&self, report: ScanReport) {
+        let mut state = self.0.borrow_mut();
+        let chosen = state
+            .task
+            .as_ref()
+            .and_then(|task| match task {
+                Task::Analysis(analysis) => Some(analysis.view.chosen()),
+                Task::Cleaning(_) => None,
+            })
+            .unwrap_or_default();
+        let groups = report.groups().iter().map(GroupFacts::of).collect();
+        let notes: Vec<_> = report.issues().iter().filter_map(note_shown).collect();
+        show(&state.note_model, notes);
+        state.held = Some(Held {
+            results: Results::new(groups, chosen),
+            report: Arc::new(report),
+        });
+    }
+
+    /// Changes the results at the line `row` shows: `group` for a group,
+    /// `category` for a category.
+    fn change_results(
+        &self,
+        row: i32,
+        group: fn(&mut Results, usize),
+        category: fn(&mut Results, Category),
+    ) {
+        // The second click of a double click on what was in its place (the
+        // confirmation's buttons) changes nothing.
+        if self.is_settling("change of the results") || self.results_frozen("change of the results")
+        {
+            return;
+        }
+        {
+            let mut state = self.0.borrow_mut();
+            let Some(held) = state.held.as_mut() else {
+                return;
+            };
+            let rows = held.results.rows();
+            match usize::try_from(row).ok().and_then(|row| rows.get(row)) {
+                Some(Line::Group { index, .. }) => group(&mut held.results, *index),
+                Some(Line::Category {
+                    category: shown, ..
+                }) => category(&mut held.results, *shown),
+                None => return,
+            }
+        }
+        self.show_results();
+    }
+
+    /// Whether the results may change: never under an open confirmation,
+    /// which shows what a cleaning takes.
+    fn results_frozen(&self, asked: &str) -> bool {
+        let frozen = self.is_confirming();
+        if frozen {
+            tracing::warn!(asked, "refused while a cleaning waits for its confirmation");
+        }
+        frozen
+    }
+
+    fn deselect_all(&self) {
+        if self.is_settling("deselection") || self.results_frozen("deselection") {
+            return;
+        }
+        if let Some(held) = self.0.borrow_mut().held.as_mut() {
+            held.results.deselect_all();
+        }
+        self.show_results();
+    }
+
+    /// Shows the results held, if any.
+    fn show_results(&self) {
+        self.with_window(|window, state| {
+            let Some(held) = &state.held else {
+                return;
+            };
+            let results = &held.results;
+            let rows = results
+                .rows()
+                .iter()
+                .map(|row| result_row(results, row))
+                .collect();
+            show(&state.result_model, rows);
+            let (entries, bytes) = results.selected();
+            let cleaner = window.global::<ui::Cleaner>();
+            cleaner.set_selected_entries(shown(entries));
+            cleaner.set_selected_size(size(bytes));
+            cleaner.set_result_entries(shown(results.entries()));
         });
     }
 
@@ -879,20 +1195,19 @@ impl CleanerScreen {
         }
         {
             let mut state = self.0.borrow_mut();
-            let Some(running) = state.running.as_mut() else {
+            let Some(Task::Analysis(analysis)) = state.task.as_mut() else {
                 return;
             };
-            if running.cancelled_for.is_some() {
+            if analysis.cancelled_for.is_some() {
                 return;
             }
             tracing::info!("analysis cancelled by the user");
-            running.cancel.cancel();
-            running.cancelled_for = Some(Duration::ZERO);
+            analysis.running.cancel.cancel();
+            analysis.cancelled_for = Some(Duration::ZERO);
         }
         self.set_step(ui::CleanerStep::Cancelling);
     }
 
-    /// Back to the categories, the settings read again.
     /// Starts the time during which a click belongs to the screen before.
     fn settle(&self) {
         self.0
@@ -911,7 +1226,12 @@ impl CleanerScreen {
         settling
     }
 
+    /// Back to the categories, the settings read again.
     fn back_to_choosing(&self) {
+        if self.results_frozen("choosing again") {
+            return;
+        }
+        self.0.borrow_mut().held = None;
         self.settle();
         self.with_window(|window, _| {
             let cleaner = window.global::<ui::Cleaner>();
@@ -921,25 +1241,30 @@ impl CleanerScreen {
         self.refresh();
     }
 
-    /// Cancels an analysis under way and waits for it a little: the window
-    /// is closing.
+    /// Cancels a task under way and waits for it a little: the window is
+    /// closing. A cleaning is only left here when the user insisted on
+    /// closing ([`Self::close_requested`]) or the event loop ended: its
+    /// history line is then lost unless it finishes meanwhile.
     pub fn shut_down(&self) {
-        let Some(running) = self.0.borrow_mut().running.take() else {
+        let Some(task) = self.0.borrow_mut().task.take() else {
             return;
         };
-        running.cancel.cancel();
+        task.cancel().cancel();
         let started = Instant::now();
-        while !running.thread.is_finished() && started.elapsed() < STOP_WAIT {
+        while !task.is_finished() && started.elapsed() < STOP_WAIT {
             thread::sleep(STOP_POLL);
         }
-        if running.thread.is_finished() {
-            tracing::info!(waited = ?started.elapsed(), "analysis stopped on closing");
-        } else {
-            tracing::warn!(
+        match (&task, task.is_finished()) {
+            (_, true) => tracing::info!(waited = ?started.elapsed(), "task stopped on closing"),
+            (Task::Analysis(analysis), false) => tracing::warn!(
                 waited = ?started.elapsed(),
-                path = ?running.view.path,
+                path = ?analysis.view.path,
                 "analysis left running on closing"
-            );
+            ),
+            (Task::Cleaning(_), false) => tracing::error!(
+                waited = ?started.elapsed(),
+                "cleaning left running on closing: its history line is not written"
+            ),
         }
     }
 }
@@ -955,11 +1280,13 @@ pub mod tests {
 
     use super::*;
 
-    fn defaults() -> Inputs {
+    pub fn defaults() -> Inputs {
         Inputs {
             variables: TemplateVariables::new(),
             min_age_minutes: None,
             exclusions: Vec::new(),
+            deletion_log: false,
+            state_directory: None,
         }
     }
 
@@ -968,14 +1295,7 @@ pub mod tests {
     pub fn seams_never_scanning() -> Seams {
         Seams {
             read: Rc::new(|| Ok(defaults())),
-            work: Arc::new(|job, cancel, _| {
-                scan_watched(
-                    &job.rules,
-                    &job.variables,
-                    &job.options,
-                    &Watch::new(cancel, None),
-                )
-            }),
+            ..Seams::system()
         }
     }
 
@@ -1241,7 +1561,7 @@ pub mod tests {
         assert_eq!(shown(7_usize), 7);
     }
 
-    fn checkbox(window: &ui::AppWindow, label: &str) -> ElementHandle {
+    pub fn checkbox(window: &ui::AppWindow, label: &str) -> ElementHandle {
         ElementHandle::find_by_accessible_label(window, label)
             .find(|element| element.accessible_role() == Some(AccessibleRole::Checkbox))
             .unwrap_or_else(|| panic!("no checkbox {label}"))
@@ -1271,7 +1591,7 @@ pub mod tests {
             .is_some()
     }
 
-    fn shows_a_text_starting(window: &ui::AppWindow, start: &str) -> bool {
+    pub fn shows_a_text_starting(window: &ui::AppWindow, start: &str) -> bool {
         ElementHandle::find_by_element_type_name(window, "Text").any(|text| {
             text.accessible_label()
                 .is_some_and(|label| label.starts_with(start))
@@ -1280,7 +1600,7 @@ pub mod tests {
 
     /// The window on the cleaner, in French, reading and scanning with
     /// `seams`.
-    fn on_cleaner(seams: Seams) -> (ui::AppWindow, CleanerScreen) {
+    pub fn on_cleaner(seams: Seams) -> (ui::AppWindow, CleanerScreen) {
         i_slint_backend_testing::init_no_event_loop();
         let (window, screen) = crate::window(seams).unwrap();
         slint::select_bundled_translation("").unwrap();
@@ -1289,7 +1609,7 @@ pub mod tests {
         (window, screen)
     }
 
-    fn step(window: &ui::AppWindow) -> ui::CleanerStep {
+    pub fn step(window: &ui::AppWindow) -> ui::CleanerStep {
         window.global::<ui::Cleaner>().get_step()
     }
 
@@ -1354,7 +1674,7 @@ pub mod tests {
         });
         assert!(shows(
             &window,
-            "Les réglages sont illisibles : l'analyse ne peut pas démarrer. Le détail est dans le journal."
+            "Les réglages sont illisibles : rien ne peut démarrer. Le détail est dans le journal."
         ));
         assert_eq!(
             button(&window, "Analyser").accessible_enabled(),
@@ -1401,7 +1721,7 @@ pub mod tests {
 
     /// Lets the window look at the analysis, until `done` or a bound: the
     /// thread sends its report when it likes.
-    fn watch_until(window: &ui::AppWindow, done: impl Fn(&ui::AppWindow) -> bool) {
+    pub fn watch_until(window: &ui::AppWindow, done: impl Fn(&ui::AppWindow) -> bool) {
         for _ in 0..200 {
             i_slint_backend_testing::mock_elapsed_time(WATCH_EVERY);
             slint::platform::update_timers_and_animations();
@@ -1414,7 +1734,7 @@ pub mod tests {
     }
 
     /// Lets the time of a double click pass after the screen changed.
-    fn let_the_screen_settle() {
+    pub fn let_the_screen_settle() {
         i_slint_backend_testing::mock_elapsed_time(SECOND_CLICK);
         slint::platform::update_timers_and_animations();
     }
@@ -1489,6 +1809,7 @@ pub mod tests {
             Seams {
                 read: Rc::new(|| Ok(defaults())),
                 work,
+                ..Seams::system()
             },
             Scripted { go, started, sent },
         )
@@ -1723,24 +2044,10 @@ pub mod tests {
     }
 
     #[test]
-    fn the_endings_say_what_was_found_and_noted() {
+    fn the_endings_say_what_was_noted() {
         let (window, screen) = on_cleaner(seams_never_scanning());
-        screen.end(Some(Outcome::Found {
-            groups: 2,
-            bytes: 2_340_000,
-            issues: 3,
-        }));
-        assert_eq!(step(&window), ui::CleanerStep::Outcome);
-        assert!(shows(&window, "Analyse terminée"));
-        assert!(shows(
-            &window,
-            "Groupes trouvés : 2. Taille récupérable : 2,3 Mo."
-        ));
-        assert!(shows(
-            &window,
-            "Remarques de l'analyse : 3. Le détail est dans le journal."
-        ));
         screen.end(Some(Outcome::NothingToClean { issues: 2 }));
+        assert_eq!(step(&window), ui::CleanerStep::Outcome);
         assert!(shows(&window, "Rien à nettoyer"));
         assert!(shows(
             &window,
@@ -1750,11 +2057,11 @@ pub mod tests {
             &window,
             "Okapi n'a rien trouvé de récupérable dans ce qu'il a pu lire."
         ));
-        screen.end(Some(Outcome::Found {
-            groups: 1,
-            bytes: 1,
-            issues: 0,
-        }));
+        screen.end(Some(Outcome::NothingToClean { issues: 0 }));
+        assert!(shows_a_text_starting(
+            &window,
+            "Okapi a regardé les catégories choisies"
+        ));
         assert!(!shows_a_text_starting(&window, "Remarques de l'analyse"));
     }
 
@@ -1785,7 +2092,7 @@ pub mod tests {
         );
         assert!(shows(
             &window,
-            "Une exclusion des réglages est refusée : l'analyse ne peut pas démarrer. Le détail est dans le journal."
+            "Une exclusion des réglages est refusée : rien ne peut démarrer. Le détail est dans le journal."
         ));
         // Shown again with the analysis refused, the focus goes to the
         // button that still works.
@@ -1796,7 +2103,7 @@ pub mod tests {
         assert_eq!(step(&window), ui::CleanerStep::Idle);
         assert!(shows(
             &window,
-            "Une exclusion des réglages est refusée : l'analyse ne peut pas démarrer. Le détail est dans le journal."
+            "Une exclusion des réglages est refusée : rien ne peut démarrer. Le détail est dans le journal."
         ));
     }
 

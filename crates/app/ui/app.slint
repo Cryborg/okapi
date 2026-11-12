@@ -1,14 +1,17 @@
 import { Theme, Brand } from "theme.slint";
 import { Sidebar, Page } from "sidebar.slint";
 import { AboutPage } from "about.slint";
+import { CleanerPage } from "cleaner.slint";
 import {
-    CategoryChoice, CategoryKind, CleanerPage, CleanerStep, Cleaner, OutcomeKind, RowState,
-    ScanRow, SetupProblem, Size, SizeUnit, StopReason, StopShown,
-} from "cleaner.slint";
+    CategoryChoice, CategoryKind, CheckState, CleanerStep, Cleaner, IssueKind, IssueShown,
+    OutcomeKind, ResultBadge, ResultRow, RowState, ScanRow, SetupProblem, Size, SizeUnit,
+    StopReason, StopShown,
+} from "cleaner-model.slint";
 
 export {
-    Page, CategoryChoice, CategoryKind, CleanerStep, Cleaner, OutcomeKind, RowState, ScanRow,
-    SetupProblem, Size, SizeUnit, StopReason, StopShown,
+    Page, CategoryChoice, CategoryKind, CheckState, CleanerStep, Cleaner, IssueKind, IssueShown,
+    OutcomeKind, ResultBadge, ResultRow, RowState, ScanRow, SetupProblem, Size, SizeUnit,
+    StopReason, StopShown,
 }
 
 export component AppWindow inherits Window {

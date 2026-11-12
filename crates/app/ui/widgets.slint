@@ -45,7 +45,7 @@ export component FocusRing inherits Rectangle {
     border-color: Theme.focus;
 }
 
-export enum ButtonKind { primary, secondary, ghost }
+export enum ButtonKind { primary, secondary, ghost, danger }
 
 // A button with words, and an icon beside them at times. Reached with Tab,
 // pressed with Enter or Space, its focus ring visible; disabled, it is
@@ -62,7 +62,8 @@ export component ActionButton inherits Rectangle {
     height: large ? Theme.control-height-large : Theme.control-height;
     border-radius: large ? Theme.radius-large : Theme.radius-medium;
     opacity: enabled ? 1 : Theme.disabled-opacity;
-    background: kind == ButtonKind.primary ? (hovered ? Theme.accent-hover : Theme.accent)
+    background: kind == ButtonKind.danger ? (hovered ? Theme.danger-hover : Theme.danger)
+        : kind == ButtonKind.primary ? (hovered ? Theme.accent-hover : Theme.accent)
         : hovered ? Theme.surface-hover
         : kind == ButtonKind.secondary ? Theme.surface : transparent;
     border-width: kind == ButtonKind.secondary ? Theme.border-width : 0;
@@ -78,7 +79,7 @@ export component ActionButton inherits Rectangle {
 
     property <bool> hovered: enabled && touch.has-hover;
 
-        // Always enabled: a disabled scope would also miss losing the focus,
+    // Always enabled: a disabled scope would also miss losing the focus,
     // and keep its ring. Tab skips it while disabled.
     keys := FocusScope {
         focus-on-tab-navigation: root.enabled;
@@ -118,7 +119,8 @@ export component ActionButton inherits Rectangle {
         label := Text {
             text: root.text;
             accessible-role: none;
-            color: kind == ButtonKind.primary ? Theme.on-accent
+            color: kind == ButtonKind.danger ? Theme.on-danger
+                : kind == ButtonKind.primary ? Theme.on-accent
                 : kind == ButtonKind.ghost && !hovered ? Theme.text-2 : Theme.text;
             font-size: large ? Theme.font-heading : Theme.font-label;
             font-weight: Theme.weight-medium;
@@ -128,14 +130,24 @@ export component ActionButton inherits Rectangle {
 }
 
 // The box of a checkbox: its state drawn, read by the control around it.
+// Partial: some of what it stands for is checked.
 export component CheckMark inherits Rectangle {
     in property <bool> checked;
+    in property <bool> partial;
+    in property <bool> enabled: true;
     width: Theme.checkbox;
     height: Theme.checkbox;
     border-radius: Theme.radius-small;
     border-width: Theme.checkbox-border;
-    border-color: checked ? Theme.accent : Theme.border-strong;
-    background: checked ? Theme.accent : Theme.surface;
+    border-color: checked || partial ? Theme.accent : Theme.border-strong;
+    background: checked || partial ? Theme.accent : Theme.surface;
+    opacity: enabled ? 1 : Theme.disabled-opacity;
+    if partial && !checked: Icon {
+        source: @image-url("../assets/icons/minus.svg");
+        colorize: Theme.on-accent;
+        width: Theme.icon-badge;
+        height: Theme.icon-badge;
+    }
     if checked: Icon {
         source: @image-url("../assets/icons/check.svg");
         colorize: Theme.on-accent;
@@ -144,20 +156,22 @@ export component CheckMark inherits Rectangle {
     }
 }
 
-// What a choice is left to the user for, in the warning colours.
+// A word on a choice, in its tone: the warning colours by default.
 export component Badge inherits Rectangle {
     in property <string> text;
     in property <image> icon;
+    in property <color> tone: Theme.warning;
+    in property <color> tone-soft: Theme.warning-soft;
     height: Theme.badge-height;
     border-radius: Theme.radius-pill;
-    background: Theme.warning-soft;
+    background: tone-soft;
     HorizontalLayout {
         padding-left: Theme.spacing-s;
         padding-right: Theme.spacing-s;
         spacing: Theme.spacing-xs;
         Icon {
             source: root.icon;
-            colorize: Theme.warning;
+            colorize: root.tone;
             width: Theme.icon-badge;
             height: Theme.icon-badge;
             y: (parent.height - self.height) / 2;
@@ -166,7 +180,7 @@ export component Badge inherits Rectangle {
             text: root.text;
             // Read by the control the badge is in.
             accessible-role: none;
-            color: Theme.warning;
+            color: root.tone;
             font-size: Theme.font-caption;
             font-weight: Theme.weight-medium;
             vertical-alignment: center;
@@ -201,5 +215,22 @@ export component ProgressBar inherits Rectangle {
         height: parent.height;
         border-radius: parent.border-radius;
         background: Theme.accent;
+    }
+}
+
+// The bar under a screen, its actions on the right.
+export component Footer inherits Rectangle {
+    height: Theme.footer-height;
+    background: Theme.surface;
+    Rectangle {
+        y: 0;
+        height: Theme.border-width;
+        background: Theme.border;
+    }
+    HorizontalLayout {
+        padding-left: Theme.spacing-xxl;
+        padding-right: Theme.spacing-xxl;
+        spacing: Theme.spacing-m;
+        @children
     }
 }

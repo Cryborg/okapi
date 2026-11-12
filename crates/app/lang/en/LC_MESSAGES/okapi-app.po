@@ -124,24 +124,24 @@ msgid "Toujours épargnés : fichiers modifiés depuis moins de {} min. Exclusio
 msgstr "Always spared: files changed less than {} min ago. Exclusions: {}."
 
 msgctxt "ProblemBanner"
-msgid "Les dossiers de la session sont introuvables : l'analyse ne peut pas démarrer. Le détail est dans le journal."
-msgstr "The session's folders cannot be found: the analysis cannot start. The details are in the log."
+msgid "Les dossiers de la session sont introuvables : rien ne peut démarrer. Le détail est dans le journal."
+msgstr "The session's folders cannot be found: nothing can start. The details are in the log."
 
 msgctxt "ProblemBanner"
-msgid "Les règles de nettoyage sont illisibles : l'analyse ne peut pas démarrer. Le détail est dans le journal."
-msgstr "The cleaning rules cannot be read: the analysis cannot start. The details are in the log."
+msgid "Les règles de nettoyage sont illisibles : rien ne peut démarrer. Le détail est dans le journal."
+msgstr "The cleaning rules cannot be read: nothing can start. The details are in the log."
 
 msgctxt "ProblemBanner"
-msgid "Les réglages sont illisibles : l'analyse ne peut pas démarrer. Le détail est dans le journal."
-msgstr "The settings cannot be read: the analysis cannot start. The details are in the log."
+msgid "Les réglages sont illisibles : rien ne peut démarrer. Le détail est dans le journal."
+msgstr "The settings cannot be read: nothing can start. The details are in the log."
 
 msgctxt "ProblemBanner"
 msgid "L'âge minimal des réglages remonte avant l'horloge : rien ne serait assez ancien."
 msgstr "The minimum age in the settings goes back before the clock: nothing would be old enough."
 
 msgctxt "ProblemBanner"
-msgid "Une exclusion des réglages est refusée : l'analyse ne peut pas démarrer. Le détail est dans le journal."
-msgstr "An exclusion in the settings is refused: the analysis cannot start. The details are in the log."
+msgid "Une exclusion des réglages est refusée : rien ne peut démarrer. Le détail est dans le journal."
+msgstr "An exclusion in the settings is refused: nothing can start. The details are in the log."
 
 msgctxt "Choosing"
 msgid "Nettoyeur"
@@ -228,10 +228,6 @@ msgid "Rien à nettoyer"
 msgstr "Nothing to clean"
 
 msgctxt "Ended"
-msgid "Analyse terminée"
-msgstr "Analysis complete"
-
-msgctxt "Ended"
 msgid "Rien n'a été regardé"
 msgstr "Nothing was looked at"
 
@@ -242,10 +238,6 @@ msgstr "The analysis failed"
 msgctxt "Ended"
 msgid "Okapi a regardé les catégories choisies et n'a rien trouvé de récupérable. Les fichiers récents et vos exclusions ont été laissés de côté, comme toujours."
 msgstr "Okapi looked at the chosen categories and found nothing to reclaim. Recent files and your exclusions were left aside, as always."
-
-msgctxt "Ended"
-msgid "Groupes trouvés : {}. Taille récupérable : {}."
-msgstr "Groups found: {}. Size to reclaim: {}."
 
 msgctxt "Ended"
 msgid "L'analyse s'est arrêtée avant de commencer. Aucun fichier n'a été lu ni modifié : ce n'est pas la même chose que « rien à nettoyer »."
@@ -259,19 +251,19 @@ msgctxt "Ended"
 msgid "Raisons"
 msgstr "Reasons"
 
-msgctxt "Ended"
+msgctxt "Words"
 msgid "Ce système ne permet pas de distinguer les points de montage et les fichiers remplacés."
 msgstr "This system cannot tell mount points and replaced files apart."
 
-msgctxt "Ended"
+msgctxt "Words"
 msgid "La variable {} n'est pas définie : ce qu'elle protège ne peut pas être garanti."
 msgstr "The variable {} is not set: what it protects cannot be vouched for."
 
-msgctxt "Ended"
+msgctxt "Words"
 msgid "Le dossier de la variable {} est illisible : ce qu'il protège ne peut pas être garanti."
 msgstr "The folder of the variable {} cannot be read: what it protects cannot be vouched for."
 
-msgctxt "Ended"
+msgctxt "Words"
 msgid "L'âge minimal remonte avant l'horloge : rien ne serait assez ancien."
 msgstr "The minimum age goes back before the clock: nothing would be old enough."
 
@@ -290,3 +282,355 @@ msgstr "Analysis notes: {}. The details are in the log."
 msgctxt "Ended"
 msgid "Okapi n'a rien trouvé de récupérable dans ce qu'il a pu lire. Les fichiers récents et vos exclusions ont été laissés de côté, comme toujours."
 msgstr "Okapi found nothing to reclaim in what it could read. Recent files and your exclusions were left aside, as always."
+
+msgctxt "ProblemBanner"
+msgid "Le travail n'a pas pu démarrer : rien n'est supprimé. Le détail est dans le journal."
+msgstr "The work could not start: nothing is removed. The details are in the log."
+
+msgctxt "ProblemBanner"
+msgid "L'historique ne peut pas être tenu alors que vous demandez le journal des suppressions : rien n'est supprimé. Le détail est dans le journal."
+msgstr "The history cannot be kept while you ask for the deletion log: nothing is removed. The details are in the log."
+
+msgctxt "CleaningPage"
+msgid "Annulation du nettoyage"
+msgstr "Cancelling the cleaning"
+
+msgctxt "CleaningPage"
+msgid "Nettoyage en cours"
+msgstr "Cleaning in progress"
+
+msgctxt "CleaningPage"
+msgid "L'élément en cours se termine ; ce qui n'est pas encore retiré reste."
+msgstr "The entry under way finishes; what is not yet removed stays."
+
+msgctxt "CleaningPage"
+msgid "Vérification de chaque élément avant de le retirer."
+msgstr "Checking each entry before removing it."
+
+msgctxt "CleaningPage"
+msgid "Suppression des éléments vérifiés."
+msgstr "Removing the entries checked."
+
+msgctxt "CleaningPage"
+msgid "Vérification"
+msgstr "Checking"
+
+msgctxt "CleaningPage"
+msgid "Suppression"
+msgstr "Removing"
+
+msgctxt "CleaningPage"
+msgid "Éléments : {} sur {}"
+msgstr "Entries: {} of {}"
+
+msgctxt "CleaningPage"
+msgid "Libéré jusqu'ici"
+msgstr "Freed so far"
+
+msgctxt "CleaningPage"
+msgid "Annuler le nettoyage"
+msgstr "Cancel the cleaning"
+
+msgctxt "Stat"
+msgid "{} : {}"
+msgstr "{}: {}"
+
+msgctxt "ReceiptLine"
+msgid "Retirées"
+msgstr "Removed"
+
+msgctxt "ReceiptLine"
+msgid "Retirées en partie"
+msgstr "Removed in part"
+
+msgctxt "ReceiptLine"
+msgid "Déjà parties"
+msgstr "Already gone"
+
+msgctxt "ReceiptLine"
+msgid "Gardées : modifiées trop récemment"
+msgstr "Kept: changed too recently"
+
+msgctxt "ReceiptLine"
+msgid "Gardées : leur contenu a changé"
+msgstr "Kept: their contents changed"
+
+msgctxt "ReceiptLine"
+msgid "Gardées : remplacées depuis l'analyse"
+msgstr "Kept: replaced since the analysis"
+
+msgctxt "ReceiptLine"
+msgid "Gardées : exclues par vos réglages"
+msgstr "Kept: excluded by your settings"
+
+msgctxt "ReceiptLine"
+msgid "Gardées : protégées"
+msgstr "Kept: protected"
+
+msgctxt "ReceiptLine"
+msgid "Gardées : refus du système"
+msgstr "Kept: refused by the system"
+
+msgctxt "ReceiptLine"
+msgid "Gardées : nettoyage annulé avant leur tour"
+msgstr "Kept: cleaning cancelled before their turn"
+
+msgctxt "ReceiptLine"
+msgid "Gardées : inconnues de cette analyse"
+msgstr "Kept: unknown to this analysis"
+
+msgctxt "ReceiptLine"
+msgid "Replier {} : {}, {}"
+msgstr "Fold {}: {}, {}"
+
+msgctxt "ReceiptLine"
+msgid "Déplier {} : {}, {}"
+msgstr "Unfold {}: {}, {}"
+
+msgctxt "ReceiptLine"
+msgid "Gardé à cause de : {}"
+msgstr "Kept because of: {}"
+
+msgctxt "ReceiptLine"
+msgid "Autres : {}. Le journal les liste toutes."
+msgstr "Others: {}. The log lists them all."
+
+msgctxt "ReceiptPage"
+msgid "Nettoyage terminé"
+msgstr "Cleaning complete"
+
+msgctxt "ReceiptPage"
+msgid "Nettoyage annulé"
+msgstr "Cleaning cancelled"
+
+msgctxt "ReceiptPage"
+msgid "Nettoyage arrêté"
+msgstr "Cleaning stopped"
+
+msgctxt "ReceiptPage"
+msgid "Nettoyage interrompu"
+msgstr "Cleaning interrupted"
+
+msgctxt "ReceiptPage"
+msgid "Rien n'a été touché."
+msgstr "Nothing was touched."
+
+msgctxt "ReceiptPage"
+msgid "Ce qui n'était pas encore retiré est resté."
+msgstr "What was not yet removed stayed."
+
+msgctxt "ReceiptPage"
+msgid "Chaque élément a été vérifié juste avant d'être retiré."
+msgstr "Each entry was checked just before it was removed."
+
+msgctxt "ReceiptPage"
+msgid "Le reçu est enregistré dans l'historique."
+msgstr "The receipt is recorded in the history."
+
+msgctxt "ReceiptPage"
+msgid "Le reçu n'a pas pu être enregistré dans l'historique. Le détail est dans le journal."
+msgstr "The receipt could not be recorded in the history. The details are in the log."
+
+msgctxt "ReceiptPage"
+msgid "L'historique est indisponible : ce reçu n'y est pas ajouté. Le détail est dans le journal."
+msgstr "The history is unavailable: this receipt is not added to it. The details are in the log."
+
+msgctxt "ReceiptPage"
+msgid "L'historique n'a pas été écrit."
+msgstr "The history was not written."
+
+msgctxt "ReceiptPage"
+msgid "Espace libéré"
+msgstr "Space freed"
+
+msgctxt "ReceiptPage"
+msgid "Retirées"
+msgstr "Removed"
+
+msgctxt "ReceiptPage"
+msgid "Retirées en partie"
+msgstr "Removed in part"
+
+msgctxt "ReceiptPage"
+msgid "Déjà parties"
+msgstr "Already gone"
+
+msgctxt "ReceiptPage"
+msgid "Gardées"
+msgstr "Kept"
+
+msgctxt "ReceiptPage"
+msgid "Détail par résultat"
+msgstr "Detail by result"
+
+msgctxt "ReceiptPage"
+msgid "Terminer"
+msgstr "Done"
+
+msgctxt "Fold"
+msgid "Déplier {}"
+msgstr "Unfold {}"
+
+msgctxt "Fold"
+msgid "Replier {}"
+msgstr "Fold {}"
+
+msgctxt "ResultLine"
+msgid "Le prochain démarrage sera plus lent, le temps de recréer ce cache."
+msgstr "The next start will be slower, while this cache is built again."
+
+msgctxt "ResultLine"
+msgid "Demande les droits administrateur, que l'interface ne sait pas encore obtenir."
+msgstr "Needs administrator rights, which the interface cannot obtain yet."
+
+msgctxt "ResultLine"
+msgid "Présélectionné"
+msgstr "Preselected"
+
+msgctxt "ResultLine"
+msgid "À choisir"
+msgstr "Your choice"
+
+msgctxt "ResultLine"
+msgid "Administrateur"
+msgstr "Administrator"
+
+msgctxt "ResultLine"
+msgid "sélection partielle"
+msgstr "partly selected"
+
+msgctxt "ResultLine"
+msgid "À choisir groupe par groupe"
+msgstr "Choose group by group"
+
+msgctxt "NoteLine"
+msgid "Dossier illisible, non compté : {}"
+msgstr "Unreadable folder, not counted: {}"
+
+msgctxt "NoteLine"
+msgid "Dossier qui n'est pas ce que la règle attend, laissé de côté : {}"
+msgstr "Folder that is not what the rule expects, left aside: {}"
+
+msgctxt "NoteLine"
+msgid "Dossier qui contient un dossier protégé, laissé de côté : {}"
+msgstr "Folder holding a protected folder, left aside: {}"
+
+msgctxt "NoteLine"
+msgid "Dossier exclu par vos réglages : {}"
+msgstr "Folder excluded by your settings: {}"
+
+msgctxt "NoteLine"
+msgid "Profondeur maximale atteinte, la suite n'est pas comptée : {}"
+msgstr "Maximum depth reached, the rest is not counted: {}"
+
+msgctxt "NoteLine"
+msgid "Trop d'éléments parcourus, la suite n'est pas comptée : {}"
+msgstr "Too many entries visited, the rest is not counted: {}"
+
+msgctxt "NoteLine"
+msgid "Une règle demande un âge qui remonte avant l'horloge : elle ne propose rien."
+msgstr "A rule asks for an age going back before the clock: it offers nothing."
+
+msgctxt "NoteLine"
+msgid "Une règle n'est pas encore prise en charge : elle ne propose rien."
+msgstr "A rule is not supported yet: it offers nothing."
+
+msgctxt "NoteLine"
+msgid "Un chemin d'une règle ne peut pas être résolu : elle ne propose rien."
+msgstr "A path of a rule cannot be resolved: it offers nothing."
+
+msgctxt "Confirmation"
+msgid "Supprimer définitivement ?"
+msgstr "Delete for good?"
+
+msgctxt "Confirmation"
+msgid "Taille : {}. Éléments : {}. Rien ne passe par la corbeille : cette action est irréversible."
+msgstr "Size: {}. Entries: {}. Nothing goes to the trash: this cannot be undone."
+
+msgctxt "Confirmation"
+msgid "J'ai compris que c'est définitif"
+msgstr "I understand this is final"
+
+msgctxt "Confirmation"
+msgid "Annuler"
+msgstr "Cancel"
+
+msgctxt "Confirmation"
+msgid "Supprimer définitivement"
+msgstr "Delete for good"
+
+msgctxt "ResultsPage"
+msgid "Résultats"
+msgstr "Results"
+
+msgctxt "ResultsPage"
+msgid "Trouvé : {}. Éléments : {}."
+msgstr "Found: {}. Entries: {}."
+
+msgctxt "ResultsPage"
+msgid "Choisir d'autres catégories"
+msgstr "Choose other categories"
+
+msgctxt "ResultsPage"
+msgid "Nouvelle analyse"
+msgstr "New analysis"
+
+msgctxt "ResultsPage"
+msgid "Éléments trouvés"
+msgstr "Entries found"
+
+msgctxt "ResultsPage"
+msgid "Élément"
+msgstr "Entry"
+
+msgctxt "ResultsPage"
+msgid "Éléments"
+msgstr "Entries"
+
+msgctxt "ResultsPage"
+msgid "Taille"
+msgstr "Size"
+
+msgctxt "ResultsPage"
+msgid "Remarques de l'analyse : {}"
+msgstr "Analysis notes: {}"
+
+msgctxt "ResultsPage"
+msgid "Masquer"
+msgstr "Hide"
+
+msgctxt "ResultsPage"
+msgid "Afficher"
+msgstr "Show"
+
+msgctxt "ResultsPage"
+msgid "Sélectionné"
+msgstr "Selected"
+
+msgctxt "ResultsPage"
+msgid "Éléments : {} sur {}"
+msgstr "Entries: {} of {}"
+
+msgctxt "ResultsPage"
+msgid "Tout désélectionner"
+msgstr "Deselect all"
+
+msgctxt "ResultsPage"
+msgid "Nettoyer"
+msgstr "Clean"
+
+msgctxt "ReceiptPage"
+msgid "Le journal des suppressions que vous demandez n'a pas été écrit : ce qui a été supprimé n'est listé que dans le journal technique."
+msgstr "The deletion log you ask for was not written: what was removed is only listed in the technical log."
+
+msgctxt "ReceiptPage"
+msgid "Rien n'a été retiré : le détail par résultat est ci-dessous."
+msgstr "Nothing was removed: the detail by result is below."
+
+msgctxt "ReceiptPage"
+msgid "Le nettoyage s'est interrompu sans reçu. Ce qui a été supprimé est dans le journal technique."
+msgstr "The cleaning stopped without a receipt. What was removed is in the technical log."
+
+msgctxt "ResultLine"
+msgid "{} : {}"
+msgstr "{}: {}"

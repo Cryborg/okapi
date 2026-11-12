@@ -1,0 +1,543 @@
+// What an analysis found: the groups by category, which are checked, the
+// notes of the analysis, and what a cleaning would take.
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import {
+    ActionButton, ButtonKind, Badge, Card, CheckMark, Detail, Footer, FocusRing, Icon, Line, Title,
+} from "widgets.slint";
+import {
+    CheckState, Cleaner, IssueKind, IssueShown, ProblemBanner, ResultBadge, ResultRow,
+    SetupProblem, Words,
+} from "cleaner-model.slint";
+
+// The button that folds or unfolds a category.
+component Fold inherits Rectangle {
+    in property <bool> folded;
+    in property <string> category;
+    callback clicked;
+
+    width: Theme.icon-box;
+    height: Theme.icon-box;
+    border-radius: Theme.radius-medium;
+    background: touch.has-hover ? Theme.surface-hover : transparent;
+    accessible-role: button;
+    accessible-label: folded ? @tr("Déplier {}", category) : @tr("Replier {}", category);
+    accessible-expandable: true;
+    accessible-expanded: !folded;
+    accessible-action-default => {
+        root.clicked();
+    }
+    forward-focus: keys;
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if !event.repeat && (event.text == Key.Return || event.text == Key.Space) {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    FocusRing {
+        shown: keys.has-focus;
+        border-radius: root.border-radius;
+    }
+
+    Icon {
+        source: folded ? @image-url("../assets/icons/chevron-right.svg") : @image-url("../assets/icons/chevron-down.svg");
+        colorize: Theme.text-2;
+    }
+}
+
+// One line of the results: a category (its fold and its checkbox) or one of
+// its groups (a checkbox). A hidden line takes no room and no focus.
+component ResultLine inherits Rectangle {
+    in property <ResultRow> line;
+    in property <int> index;
+    // Where the focused line sits, for the list to bring it into view.
+    callback focused(length, length);
+
+    property <string> badge-text: line.badge == ResultBadge.preselected ? @tr("Présélectionné")
+        : line.badge == ResultBadge.to-choose ? @tr("À choisir") : @tr("Administrateur");
+    property <string> name: line.is-category ? Words.category(line.category) : line.label;
+    // Why a group is left to the user, or out of reach.
+    property <string> note: line.badge == ResultBadge.to-choose
+        ? @tr("Le prochain démarrage sera plus lent, le temps de recréer ce cache.")
+        : @tr("Demande les droits administrateur, que l'interface ne sait pas encore obtenir.");
+
+    if !line.hidden: Rectangle {
+        min-height: Theme.results-row-height;
+        Rectangle {
+            y: parent.height - self.height;
+            height: Theme.border-width;
+            background: Theme.border;
+        }
+        HorizontalLayout {
+            padding-left: line.is-category ? Theme.spacing-s : Theme.results-indent + Theme.spacing-s;
+            padding-right: Theme.spacing-l;
+            padding-top: Theme.spacing-xs;
+            padding-bottom: Theme.spacing-xs;
+            spacing: Theme.spacing-m;
+            if line.is-category: Fold {
+                folded: line.folded;
+                category: root.name;
+                y: (parent.height - self.height) / 2;
+                clicked => {
+                    Cleaner.fold(root.index);
+                }
+            }
+            check := Rectangle {
+                horizontal-stretch: 1;
+                accessible-role: checkbox;
+                accessible-checkable: true;
+                accessible-checked: line.state == CheckState.checked;
+                accessible-enabled: line.enabled;
+                accessible-label: root.name;
+                accessible-description: line.state == CheckState.partial ? @tr("sélection partielle")
+                    : line.is-category ? (line.enabled ? "" : @tr("À choisir groupe par groupe"))
+                    : line.badge == ResultBadge.preselected ? root.badge-text
+                    : @tr("{} : {}", root.badge-text, root.note);
+                accessible-action-default => {
+                    if line.enabled {
+                        Cleaner.toggle-result(root.index);
+                    }
+                }
+                forward-focus: keys;
+
+                keys := FocusScope {
+                    focus-on-tab-navigation: line.enabled;
+                    key-pressed(event) => {
+                        if line.enabled && !event.repeat && event.text == Key.Space {
+                            Cleaner.toggle-result(root.index);
+                            return accept;
+                        }
+                        reject
+                    }
+                    changed has-focus => {
+                        if self.has-focus {
+                            root.focused(root.y, root.height);
+                        }
+                    }
+                }
+
+                TouchArea {
+                    enabled: line.enabled;
+                    clicked => {
+                        Cleaner.toggle-result(root.index);
+                    }
+                }
+
+                FocusRing {
+                    shown: keys.has-focus;
+                    border-radius: Theme.radius-medium;
+                }
+
+                HorizontalLayout {
+                    padding-left: Theme.spacing-xs;
+                    spacing: Theme.spacing-m;
+                    CheckMark {
+                        checked: line.state == CheckState.checked;
+                        partial: line.state == CheckState.partial;
+                        enabled: line.enabled;
+                        y: (parent.height - self.height) / 2;
+                    }
+                    if line.is-category: Icon {
+                        source: Words.icon(line.category);
+                        colorize: Theme.text-2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        spacing: Theme.spacing-xxs;
+                        HorizontalLayout {
+                            spacing: Theme.spacing-s;
+                            alignment: start;
+                            Text {
+                                text: root.name;
+                                accessible-role: none;
+                                color: Theme.text;
+                                font-size: Theme.font-label;
+                                font-weight: line.is-category ? Theme.weight-semibold : Theme.weight-medium;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            if !line.is-category: Badge {
+                                text: root.badge-text;
+                                icon: line.badge == ResultBadge.preselected ? @image-url("../assets/icons/check.svg")
+                                    : line.badge == ResultBadge.to-choose ? @image-url("../assets/icons/hourglass.svg")
+                                    : @image-url("../assets/icons/shield.svg");
+                                tone: line.badge == ResultBadge.preselected ? Theme.accent
+                                    : line.badge == ResultBadge.admin ? Theme.admin : Theme.warning;
+                                tone-soft: line.badge == ResultBadge.preselected ? Theme.accent-soft
+                                    : line.badge == ResultBadge.admin ? Theme.admin-soft : Theme.warning-soft;
+                                accessible-role: none;
+                            }
+                        }
+                        if !line.is-category && line.badge != ResultBadge.preselected: Detail {
+                            text: root.note;
+                            accessible-role: none;
+                            color: line.badge == ResultBadge.to-choose ? Theme.warning : Theme.text-2;
+                        }
+                    }
+                }
+            }
+            Detail {
+                width: Theme.results-entries-width;
+                accessible-role: none;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                text: line.entries;
+            }
+            Line {
+                width: Theme.results-size-width;
+                accessible-role: none;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                text: Words.size(line.size);
+            }
+        }
+    }
+}
+
+// A note of the analysis, worded by its kind.
+component NoteLine inherits HorizontalLayout {
+    in property <IssueShown> note;
+    spacing: Theme.spacing-s;
+    Icon {
+        source: @image-url("../assets/icons/info.svg");
+        colorize: Theme.text-2;
+        width: Theme.icon-small;
+        height: Theme.icon-small;
+    }
+    Detail {
+        horizontal-stretch: 1;
+        text: note.kind == IssueKind.unreadable-root ? @tr("Dossier illisible, non compté : {}", note.path)
+            : note.kind == IssueKind.unsafe-root ? @tr("Dossier qui n'est pas ce que la règle attend, laissé de côté : {}", note.path)
+            : note.kind == IssueKind.protected-root ? @tr("Dossier qui contient un dossier protégé, laissé de côté : {}", note.path)
+            : note.kind == IssueKind.excluded ? @tr("Dossier exclu par vos réglages : {}", note.path)
+            : note.kind == IssueKind.depth-limit ? @tr("Profondeur maximale atteinte, la suite n'est pas comptée : {}", note.path)
+            : note.kind == IssueKind.entries-limit ? @tr("Trop d'éléments parcourus, la suite n'est pas comptée : {}", note.path)
+            : note.kind == IssueKind.age-beyond-clock ? @tr("Une règle demande un âge qui remonte avant l'horloge : elle ne propose rien.")
+            : note.kind == IssueKind.unsupported ? @tr("Une règle n'est pas encore prise en charge : elle ne propose rien.")
+            : @tr("Un chemin d'une règle ne peut pas être résolu : elle ne propose rien.");
+    }
+}
+
+// The confirmation of a cleaning: irreversible, so a checkbox says it is
+// understood before "Supprimer" acts. Closed by its buttons or Escape, never
+// by a click outside.
+component Confirmation inherits PopupWindow {
+    close-policy: no-auto-close;
+
+    // Escape, from wherever the focus is in the confirmation; never a stop
+    // of Tab itself.
+    keys := FocusScope {
+        focus-on-tab-navigation: false;
+        init => {
+            back.focus();
+        }
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                Cleaner.cancel-confirmation();
+                return accept;
+            }
+            reject
+        }
+        Rectangle {
+            background: Theme.surface;
+            border-radius: Theme.radius-large;
+            border-color: Theme.border;
+            border-width: Theme.border-width;
+            drop-shadow-color: Theme.shadow-1;
+            drop-shadow-blur: Theme.shadow-1-blur;
+            drop-shadow-offset-y: Theme.shadow-1-offset;
+            accessible-role: groupbox;
+            accessible-label: title.text;
+            VerticalLayout {
+                padding: Theme.spacing-xl;
+                spacing: Theme.spacing-l;
+                HorizontalLayout {
+                    alignment: start;
+                    Rectangle {
+                        width: Theme.icon-box;
+                        height: Theme.icon-box;
+                        border-radius: Theme.radius-medium;
+                        background: Theme.danger-soft;
+                        Icon {
+                            source: @image-url("../assets/icons/triangle-alert.svg");
+                            colorize: Theme.danger;
+                        }
+                    }
+                }
+                title := Text {
+                    text: @tr("Supprimer définitivement ?");
+                    accessible-role: none;
+                    color: Theme.text;
+                    font-size: Theme.font-title;
+                    font-weight: Theme.weight-semibold;
+                }
+                Detail {
+                    text: @tr("Taille : {}. Éléments : {}. Rien ne passe par la corbeille : cette action est irréversible.", Words.size(Cleaner.confirm-size), Cleaner.confirm-entries);
+                }
+                understood-box := Rectangle {
+                    accessible-role: checkbox;
+                    accessible-checkable: true;
+                    accessible-checked: Cleaner.understood;
+                    accessible-label: understood-text.text;
+                    accessible-action-default => {
+                        Cleaner.understood = !Cleaner.understood;
+                    }
+                    forward-focus: understood-keys;
+                    understood-keys := FocusScope {
+                        key-pressed(event) => {
+                            if !event.repeat && event.text == Key.Space {
+                                Cleaner.understood = !Cleaner.understood;
+                                return accept;
+                            }
+                            reject
+                        }
+                    }
+                    TouchArea {
+                        clicked => {
+                            Cleaner.understood = !Cleaner.understood;
+                        }
+                    }
+                    FocusRing {
+                        shown: understood-keys.has-focus;
+                        border-radius: Theme.radius-medium;
+                    }
+                    HorizontalLayout {
+                        padding: Theme.spacing-xs;
+                        spacing: Theme.spacing-s;
+                        CheckMark {
+                            checked: Cleaner.understood;
+                            y: (parent.height - self.height) / 2;
+                        }
+                        understood-text := Detail {
+                            text: @tr("J'ai compris que c'est définitif");
+                            accessible-role: none;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Theme.spacing-s;
+                    back := ActionButton {
+                        text: @tr("Annuler");
+                        kind: ButtonKind.ghost;
+                        clicked => {
+                            Cleaner.cancel-confirmation();
+                        }
+                    }
+                    ActionButton {
+                        text: @tr("Supprimer définitivement");
+                        kind: ButtonKind.danger;
+                        enabled: Cleaner.understood;
+                        clicked => {
+                            Cleaner.confirm-delete();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component ResultsPage inherits VerticalLayout {
+    property <bool> notes-shown;
+    // Opened and closed by Rust, which keeps what it confirms; a page built
+    // again shows the confirmation still open.
+    property <bool> confirming: Cleaner.confirming;
+    init => {
+        if self.confirming {
+            confirmation.show();
+        }
+    }
+    changed confirming => {
+        if self.confirming {
+            confirmation.show();
+        } else {
+            confirmation.close();
+        }
+    }
+
+    confirmation := Confirmation {
+        x: (root.width - Theme.modal-width) / 2;
+        y: root.height / 4;
+        width: Theme.modal-width;
+    }
+
+    VerticalLayout {
+        vertical-stretch: 1;
+        padding: Theme.spacing-xxl;
+        padding-bottom: Theme.spacing-l;
+        spacing: Theme.spacing-l;
+        HorizontalLayout {
+            spacing: Theme.spacing-s;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Theme.spacing-xs;
+                Title {
+                    text: @tr("Résultats");
+                }
+                Detail {
+                    text: @tr("Trouvé : {}. Éléments : {}.", Words.size(Cleaner.found), Cleaner.result-entries);
+                }
+            }
+            ActionButton {
+                text: @tr("Choisir d'autres catégories");
+                kind: ButtonKind.ghost;
+                y: (parent.height - self.height) / 2;
+                clicked => {
+                    Cleaner.choose-again();
+                }
+            }
+            ActionButton {
+                text: @tr("Nouvelle analyse");
+                icon: @image-url("../assets/icons/search.svg");
+                kind: ButtonKind.ghost;
+                // A refused cleaning does not keep an analysis from starting.
+                enabled: Cleaner.problem == SetupProblem.none || Cleaner.problem == SetupProblem.history
+                    || Cleaner.problem == SetupProblem.start;
+                y: (parent.height - self.height) / 2;
+                clicked => {
+                    Cleaner.analyze();
+                }
+            }
+        }
+        if Cleaner.problem != SetupProblem.none: ProblemBanner { }
+        Card {
+            vertical-stretch: 1;
+            accessible-role: list;
+            accessible-label: @tr("Éléments trouvés");
+            VerticalLayout {
+                HorizontalLayout {
+                    padding-left: Theme.spacing-l + Theme.icon-box;
+                    padding-right: Theme.spacing-l;
+                    padding-top: Theme.spacing-s;
+                    padding-bottom: Theme.spacing-s;
+                    spacing: Theme.spacing-m;
+                    Detail {
+                        horizontal-stretch: 1;
+                        text: @tr("Élément");
+                        accessible-role: none;
+                    }
+                    Detail {
+                        width: Theme.results-entries-width;
+                        horizontal-alignment: right;
+                        text: @tr("Éléments");
+                        accessible-role: none;
+                    }
+                    Detail {
+                        width: Theme.results-size-width;
+                        horizontal-alignment: right;
+                        text: @tr("Taille");
+                        accessible-role: none;
+                    }
+                }
+                Rectangle {
+                    height: Theme.border-width;
+                    background: Theme.border;
+                }
+                tree := ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        for row[index] in Cleaner.results: ResultLine {
+                            line: row;
+                            index: index;
+                            focused(top, height) => {
+                                if top + tree.content-y < 0 {
+                                    tree.content-y = -top;
+                                } else if top + height + tree.content-y > tree.visible-height {
+                                    tree.content-y = tree.visible-height - top - height;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if Cleaner.notes.length > 0: VerticalLayout {
+            spacing: Theme.spacing-s;
+            HorizontalLayout {
+                spacing: Theme.spacing-s;
+                Icon {
+                    source: @image-url("../assets/icons/info.svg");
+                    colorize: Theme.text-2;
+                    width: Theme.icon-small;
+                    height: Theme.icon-small;
+                    y: (parent.height - self.height) / 2;
+                }
+                Detail {
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                    text: @tr("Remarques de l'analyse : {}", Cleaner.notes.length);
+                }
+                ActionButton {
+                    text: notes-shown ? @tr("Masquer") : @tr("Afficher");
+                    kind: ButtonKind.ghost;
+                    clicked => {
+                        notes-shown = !notes-shown;
+                    }
+                }
+            }
+            if notes-shown: VerticalLayout {
+                spacing: Theme.spacing-xs;
+                for note in Cleaner.notes: NoteLine {
+                    note: note;
+                }
+            }
+        }
+    }
+    Footer {
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            spacing: Theme.spacing-s;
+            alignment: start;
+            Detail {
+                text: @tr("Sélectionné");
+                vertical-alignment: center;
+            }
+            Text {
+                text: Words.size(Cleaner.selected-size);
+                color: Theme.text;
+                font-size: Theme.font-title;
+                font-weight: Theme.weight-semibold;
+                vertical-alignment: center;
+            }
+            Detail {
+                text: @tr("Éléments : {} sur {}", Cleaner.selected-entries, Cleaner.result-entries);
+                vertical-alignment: center;
+            }
+        }
+        ActionButton {
+            text: @tr("Tout désélectionner");
+            kind: ButtonKind.ghost;
+            enabled: Cleaner.selected-entries > 0;
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                Cleaner.deselect-all();
+            }
+        }
+        ActionButton {
+            text: @tr("Nettoyer");
+            icon: @image-url("../assets/icons/sparkles.svg");
+            kind: ButtonKind.primary;
+            large: true;
+            enabled: Cleaner.selected-entries > 0;
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                Cleaner.clean();
+            }
+        }
+    }
+}

@@ -1,0 +1,297 @@
+// What the cleaner shows, as Rust fills it (src/cleaner.rs), and the words
+// every part of it shares.
+import { Theme } from "theme.slint";
+import { Icon, Line } from "widgets.slint";
+
+export enum CategoryKind { system, apps, gaming, gpu }
+
+export struct CategoryChoice {
+    kind: CategoryKind,
+    checked: bool,
+    // None of its rules is chosen by default: cache resets (invariant 5).
+    to-choose: bool,
+}
+
+// Why an analysis or a cleaning cannot start; the detail is in the journal.
+export enum SetupProblem { none, variables, rules, settings, min-age, exclusion, history, start }
+
+export enum CleanerStep { idle, planning, scanning, cancelling, outcome, results, cleaning, receipt }
+
+export enum SizeUnit { byte, kilobyte, megabyte, gigabyte, terabyte }
+
+// A size scaled by Rust (`okapi_engine::ByteSize`), worded here.
+export struct Size {
+    whole: int,
+    tenths: int,
+    has-tenths: bool,
+    unit: SizeUnit,
+}
+
+export enum RowState { waiting, running, done }
+
+export struct ScanRow {
+    kind: CategoryKind,
+    state: RowState,
+    // How far the running one is, from 0 to 1.
+    progress: float,
+    entries: int,
+    size: Size,
+    // The entry the running one reached.
+    path: string,
+}
+
+export enum OutcomeKind { nothing-looked, nothing-to-clean, failed }
+
+export enum StopReason { unsupported-system, missing-variable, unreadable-variable, min-age-beyond-clock }
+
+export struct StopShown {
+    reason: StopReason,
+    // The variable a reason names, as the rules write it (`HOME`).
+    variable: string,
+}
+
+export enum CheckState { checked, unchecked, partial }
+
+// What a group of the results is: offered checked, left to the user (a
+// cache reset, invariant 5), or out of reach without the administrator.
+export enum ResultBadge { preselected, to-choose, admin }
+
+// One line of the results: a category, or one of its groups. The list never
+// changes length: folding a category hides its groups.
+export struct ResultRow {
+    is-category: bool,
+    category: CategoryKind,
+    // A group's label, from the rules.
+    label: string,
+    state: CheckState,
+    // Its checkbox does something.
+    enabled: bool,
+    folded: bool,
+    hidden: bool,
+    badge: ResultBadge,
+    entries: int,
+    size: Size,
+}
+
+export enum IssueKind {
+    age-beyond-clock, unsupported, unresolvable, unreadable-root, unsafe-root, protected-root,
+    excluded, depth-limit, entries-limit,
+}
+
+// A note of the analysis, and the path it is about (none for a rule).
+export struct IssueShown {
+    kind: IssueKind,
+    path: string,
+}
+
+export enum CleanPassKind { check, remove }
+
+export enum CleanEnding { done, cancelled, stopped, interrupted }
+
+// What became of the history line of a cleaning.
+export enum HistoryState { recorded, failed, unavailable, not-written }
+
+export enum ReceiptKind {
+    removed, partial, gone, recent, changed, replaced, excluded, protected, refused, cancelled,
+    unknown,
+}
+
+// An entry of a receipt line, and what kept it, or part of it, if anything.
+export struct PathShown {
+    path: string,
+    blocked: string,
+}
+
+export struct ReceiptLineShown {
+    kind: ReceiptKind,
+    count: int,
+    size: Size,
+    paths: [PathShown],
+    // How many more than the paths listed.
+    more: int,
+}
+
+export global Cleaner {
+    in property <CleanerStep> step;
+
+    in property <[CategoryChoice]> choices;
+    in property <int> chosen-count;
+    // The categories checked are exactly the recommended ones.
+    in property <bool> recommended-only;
+    in property <int> min-age-minutes;
+    in property <int> exclusion-count;
+    in property <SetupProblem> problem;
+    // Set when an analysis is left: the focus then goes back to the
+    // categories, once.
+    in-out property <bool> back-from-analysis;
+
+    in property <[ScanRow]> rows;
+    in property <int> rows-done;
+    in property <float> progress;
+    in property <Size> found;
+    in property <int> issues;
+
+    in property <OutcomeKind> outcome;
+    in property <[StopShown]> stops;
+
+    in property <[ResultRow]> results;
+    in property <[IssueShown]> notes;
+    in property <Size> selected-size;
+    in property <int> selected-entries;
+    in property <int> result-entries;
+
+    // The confirmation: what it would remove.
+    in property <bool> confirming;
+    in property <int> confirm-entries;
+    // The checkbox of the confirmation: Rust deletes nothing without it.
+    in-out property <bool> understood;
+    in property <Size> confirm-size;
+
+    // The cleaning under way.
+    in property <CleanPassKind> clean-pass;
+    in property <int> clean-done;
+    in property <int> clean-total;
+    in property <Size> freed;
+    in property <bool> clean-cancel-asked;
+
+    // The receipt.
+    in property <CleanEnding> ending;
+    in property <int> removed;
+    in property <int> partial;
+    in property <int> gone;
+    in property <int> kept;
+    in property <[ReceiptLineShown]> receipt-lines;
+    in property <HistoryState> history;
+    // The deletion log the user asked for is not written.
+    in property <bool> deletion-log-lost;
+
+    callback toggle(int);
+    callback confirm-delete();
+    callback cancel-confirmation();
+    callback cancel-cleaning();
+    callback finish();
+    callback toggle-result(int);
+    callback fold(int);
+    callback deselect-all();
+    callback clean();
+    callback check-recommended();
+    callback analyze();
+    callback cancel();
+    callback choose-again();
+}
+
+// The words and icons of a category, and the words of a size.
+export global Words {
+    pure public function category(kind: CategoryKind) -> string {
+        if kind == CategoryKind.system {
+            return @tr("Système");
+        }
+        if kind == CategoryKind.apps {
+            return @tr("Applications");
+        }
+        if kind == CategoryKind.gaming {
+            return @tr("Jeux");
+        }
+        return @tr("Caches GPU");
+    }
+
+    pure public function description(kind: CategoryKind) -> string {
+        if kind == CategoryKind.system {
+            return @tr("Journaux, fichiers temporaires, miniatures et caches de paquets.");
+        }
+        if kind == CategoryKind.apps {
+            return @tr("Caches des applications installées.");
+        }
+        if kind == CategoryKind.gaming {
+            return @tr("Steam, Heroic, Lutris et itch.io : journaux et caches.");
+        }
+        return @tr("Shaders Mesa et NVIDIA. Recréés ensuite : le prochain lancement des jeux sera plus lent.");
+    }
+
+    pure public function icon(kind: CategoryKind) -> image {
+        if kind == CategoryKind.system {
+            return @image-url("../assets/icons/monitor.svg");
+        }
+        if kind == CategoryKind.apps {
+            return @image-url("../assets/icons/app-window.svg");
+        }
+        if kind == CategoryKind.gaming {
+            return @image-url("../assets/icons/gamepad.svg");
+        }
+        return @image-url("../assets/icons/cpu.svg");
+    }
+
+    // Why nothing was looked at, or touched.
+    pure public function stop(stop: StopShown) -> string {
+        if stop.reason == StopReason.unsupported-system {
+            return @tr("Ce système ne permet pas de distinguer les points de montage et les fichiers remplacés.");
+        }
+        if stop.reason == StopReason.missing-variable {
+            return @tr("La variable {} n'est pas définie : ce qu'elle protège ne peut pas être garanti.", stop.variable);
+        }
+        if stop.reason == StopReason.unreadable-variable {
+            return @tr("Le dossier de la variable {} est illisible : ce qu'il protège ne peut pas être garanti.", stop.variable);
+        }
+        return @tr("L'âge minimal remonte avant l'horloge : rien ne serait assez ancien.");
+    }
+
+    pure public function unit(unit: SizeUnit) -> string {
+        if unit == SizeUnit.byte {
+            return @tr("o");
+        }
+        if unit == SizeUnit.kilobyte {
+            return @tr("ko");
+        }
+        if unit == SizeUnit.megabyte {
+            return @tr("Mo");
+        }
+        if unit == SizeUnit.gigabyte {
+            return @tr("Go");
+        }
+        return @tr("To");
+    }
+
+    pure public function size(size: Size) -> string {
+        if size.has-tenths {
+            return @tr("{},{} {}", size.whole, size.tenths, unit(size.unit));
+        }
+        return @tr("{} {}", size.whole, unit(size.unit));
+    }
+}
+
+export component ProblemBanner inherits Rectangle {
+    background: Theme.warning-soft;
+    border-radius: Theme.radius-medium;
+    accessible-role: text;
+    accessible-label: problem.text;
+    accessible-live-region: polite;
+    HorizontalLayout {
+        padding: Theme.spacing-m;
+        padding-left: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        Icon {
+            source: @image-url("../assets/icons/triangle-alert.svg");
+            colorize: Theme.warning;
+            y: (parent.height - self.height) / 2;
+        }
+        problem := Line {
+            horizontal-stretch: 1;
+            accessible-role: none;
+            color: Theme.warning;
+            vertical-alignment: center;
+            text: Cleaner.problem == SetupProblem.variables
+                ? @tr("Les dossiers de la session sont introuvables : rien ne peut démarrer. Le détail est dans le journal.")
+                : Cleaner.problem == SetupProblem.rules
+                ? @tr("Les règles de nettoyage sont illisibles : rien ne peut démarrer. Le détail est dans le journal.")
+                : Cleaner.problem == SetupProblem.settings
+                ? @tr("Les réglages sont illisibles : rien ne peut démarrer. Le détail est dans le journal.")
+                : Cleaner.problem == SetupProblem.min-age
+                ? @tr("L'âge minimal des réglages remonte avant l'horloge : rien ne serait assez ancien.")
+                : Cleaner.problem == SetupProblem.start
+                ? @tr("Le travail n'a pas pu démarrer : rien n'est supprimé. Le détail est dans le journal.")
+                : Cleaner.problem == SetupProblem.history
+                ? @tr("L'historique ne peut pas être tenu alors que vous demandez le journal des suppressions : rien n'est supprimé. Le détail est dans le journal.")
+                : @tr("Une exclusion des réglages est refusée : rien ne peut démarrer. Le détail est dans le journal.");
+        }
+    }
+}

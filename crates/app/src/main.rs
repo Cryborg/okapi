@@ -7,6 +7,8 @@ use okapi_store::journal;
 use slint::ComponentHandle as _;
 
 mod cleaner;
+mod receipt;
+mod results;
 
 use cleaner::{CleanerScreen, Seams};
 
@@ -42,6 +44,10 @@ fn window(seams: Seams) -> Result<(AppWindow, CleanerScreen), slint::PlatformErr
             .into(),
     );
     let screen = CleanerScreen::attach(&window, seams);
+    let closing = screen.clone();
+    window
+        .window()
+        .on_close_requested(move || closing.close_requested());
     tracing::debug!(page = ?window.get_page(), "page shown");
     let cleaner = screen.clone();
     window.on_page_shown(move |page| {
@@ -335,6 +341,10 @@ mod tests {
             "Choosing",
             "Scanning",
             "Ended",
+            "ResultsPage",
+            "Confirmation",
+            "CleaningPage",
+            "ReceiptPage",
         ] {
             assert!(
                 texts.iter().any(|(component, _)| component == context),

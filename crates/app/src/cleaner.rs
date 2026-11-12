@@ -33,6 +33,10 @@ const STOP_POLL: Duration = Duration::from_millis(10);
 /// before giving it up: a read stuck on a dead mount would otherwise keep it
 /// waiting for good.
 const CANCEL_WAIT: Duration = Duration::from_secs(5);
+/// How long after the screen changes a click is taken for the second click
+/// of a double click on what it showed before: "Analyser" and "Annuler
+/// l'analyse" share a place, so a double click would start and cancel.
+const SECOND_CLICK: Duration = Duration::from_millis(500);
 
 /// What a scan is prepared from, read from the machine each time it is
 /// needed: the settings may change between two analyses.
@@ -517,6 +521,8 @@ struct State {
     stop_model: Rc<VecModel<ui::StopShown>>,
     running: Option<Running>,
     timer: Rc<slint::Timer>,
+    /// Runs for [`SECOND_CLICK`] after the screen changes.
+    settling: slint::Timer,
 }
 
 /// The cleaner screen bound to its window.
@@ -550,6 +556,7 @@ impl CleanerScreen {
             stop_model: Rc::new(VecModel::default()),
             running: None,
             timer: Rc::new(slint::Timer::default()),
+            settling: slint::Timer::default(),
         };
         let cleaner = window.global::<ui::Cleaner>();
         cleaner.set_choices(ModelRc::from(Rc::clone(&state.choice_model)));
@@ -674,6 +681,9 @@ impl CleanerScreen {
 
     /// Starts an analysis of the categories checked.
     fn analyze(&self) {
+        if self.is_settling("analysis") {
+            return;
+        }
         let chosen = self.0.borrow().choices.chosen();
         if self.0.borrow().running.is_some() {
             tracing::warn!("analysis asked for while one runs");
@@ -697,6 +707,7 @@ impl CleanerScreen {
         };
         tracing::info!(options = ?job.options, categories = ?chosen, "analysis started");
         let work = Arc::clone(&self.0.borrow().seams.work);
+        self.settle();
         let running = match Running::start(&work, job, ScanView::new(&chosen)) {
             Ok(running) => running,
             Err(error) => {
@@ -863,6 +874,9 @@ impl CleanerScreen {
     }
 
     fn cancel(&self) {
+        if self.is_settling("cancellation") {
+            return;
+        }
         {
             let mut state = self.0.borrow_mut();
             let Some(running) = state.running.as_mut() else {
@@ -879,7 +893,26 @@ impl CleanerScreen {
     }
 
     /// Back to the categories, the settings read again.
+    /// Starts the time during which a click belongs to the screen before.
+    fn settle(&self) {
+        self.0
+            .borrow()
+            .settling
+            .start(slint::TimerMode::SingleShot, SECOND_CLICK, || {});
+    }
+
+    /// Whether the screen just changed: `asked` for is then the second click
+    /// of a double click, and ignored.
+    fn is_settling(&self, asked: &str) -> bool {
+        let settling = self.0.borrow().settling.running();
+        if settling {
+            tracing::debug!(asked, "second click of a double click ignored");
+        }
+        settling
+    }
+
     fn back_to_choosing(&self) {
+        self.settle();
         self.with_window(|window, _| {
             let cleaner = window.global::<ui::Cleaner>();
             cleaner.set_back_from_analysis(true);
@@ -1380,6 +1413,42 @@ pub mod tests {
         panic!("the window never got there: still at {:?}", step(window));
     }
 
+    /// Lets the time of a double click pass after the screen changed.
+    fn let_the_screen_settle() {
+        i_slint_backend_testing::mock_elapsed_time(SECOND_CLICK);
+        slint::platform::update_timers_and_animations();
+    }
+
+    #[test]
+    fn a_double_click_never_crosses_a_change_of_screen() {
+        let (seams, scan) = scripted(Vec::new());
+        let (window, _screen) = on_cleaner(Seams {
+            read: Rc::new(|| {
+                Ok(Inputs {
+                    variables: every_variable(),
+                    ..defaults()
+                })
+            }),
+            ..seams
+        });
+        // On "Analyser": its second click lands on "Annuler l'analyse".
+        button(&window, "Analyser").invoke_accessible_default_action();
+        scan.started.recv().unwrap();
+        button(&window, "Annuler l'analyse").invoke_accessible_default_action();
+        assert_eq!(step(&window), ui::CleanerStep::Planning, "not cancelled");
+        let_the_screen_settle();
+        // On "Annuler l'analyse": its second click lands on "Analyser".
+        button(&window, "Annuler l'analyse").invoke_accessible_default_action();
+        scan.go.send(()).unwrap();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Idle);
+        button(&window, "Analyser").invoke_accessible_default_action();
+        assert_eq!(step(&window), ui::CleanerStep::Idle, "not started again");
+        let_the_screen_settle();
+        button(&window, "Analyser").invoke_accessible_default_action();
+        assert_eq!(step(&window), ui::CleanerStep::Planning);
+        scan.go.send(()).unwrap();
+    }
+
     /// A scan run by the test: it says it started (with its options), then
     /// waits for each go to send the next progress, and at the last one ends
     /// as the real scan does with the variables read.
@@ -1579,6 +1648,7 @@ pub mod tests {
         button(&window, "Analyser").invoke_accessible_default_action();
         scan.started.recv().unwrap();
         // The focus went to the cancel button: Enter cancels.
+        let_the_screen_settle();
         press(&window, slint::platform::Key::Return);
         assert_eq!(step(&window), ui::CleanerStep::Cancelling);
         assert_eq!(
@@ -1625,6 +1695,7 @@ pub mod tests {
         let (window, _screen) = on_cleaner(seams);
         button(&window, "Analyser").invoke_accessible_default_action();
         scan.started.recv().unwrap();
+        let_the_screen_settle();
         button(&window, "Annuler l'analyse").invoke_accessible_default_action();
         scan.go.send(()).unwrap();
         scan.sent.recv().unwrap();
@@ -1638,6 +1709,7 @@ pub mod tests {
         let (window, _screen) = on_cleaner(seams);
         button(&window, "Analyser").invoke_accessible_default_action();
         scan.started.recv().unwrap();
+        let_the_screen_settle();
         button(&window, "Annuler l'analyse").invoke_accessible_default_action();
         // The scan waits for a go that only comes after.
         let looks = usize::try_from(CANCEL_WAIT.as_millis() / WATCH_EVERY.as_millis()).unwrap();
@@ -1742,6 +1814,7 @@ pub mod tests {
         );
         assert!(shows(&window, "L'analyse a échoué"));
         // The focus went to a new analysis: Enter starts one.
+        let_the_screen_settle();
         press(&window, slint::platform::Key::Return);
         assert_eq!(step(&window), ui::CleanerStep::Planning);
         watch_until(&window, |window| step(window) == ui::CleanerStep::Outcome);
@@ -1829,7 +1902,8 @@ pub mod tests {
     fn a_disabled_button_is_skipped_by_the_keyboard() {
         use slint::platform::Key;
 
-        let (window, _screen) = on_cleaner(seams_never_scanning());
+        let (seams, scan) = scripted(Vec::new());
+        let (window, _screen) = on_cleaner(seams);
         // The sidebar, the four categories, then past the disabled
         // "Cocher les recommandées" to "Analyser".
         for _ in 0..8 {
@@ -1837,6 +1911,7 @@ pub mod tests {
         }
         press(&window, Key::Return);
         assert_eq!(step(&window), ui::CleanerStep::Planning);
+        let_the_screen_settle();
         // Enter held: its repeats reach the cancel button, now focused.
         window
             .window()
@@ -1844,6 +1919,7 @@ pub mod tests {
                 text: Key::Return.into(),
             });
         assert_eq!(step(&window), ui::CleanerStep::Planning, "not cancelled");
+        scan.go.send(()).unwrap();
         watch_until(&window, |window| step(window) == ui::CleanerStep::Outcome);
     }
 

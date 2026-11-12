@@ -48,3 +48,21 @@ pub use steam::SteamRules;
 pub use system::{CleanTarget, SingleFileTarget, SystemRules, TargetDeletion};
 pub use template::{TemplatePath, TemplateVariables, Variable};
 pub use values::{Label, NonEmpty, RuleId};
+
+/// The notices of the third-party material embedded here (the rules come from
+/// Kudu, under the MIT license): shown wherever Okapi lists its licenses.
+pub const THIRD_PARTY_NOTICES: &str = include_str!("../../../THIRD_PARTY_NOTICES");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_notices_carry_the_kudu_license() {
+        assert!(THIRD_PARTY_NOTICES.contains("https://github.com/adventdevinc/kudu"));
+        assert!(THIRD_PARTY_NOTICES.contains("Copyright (c) 2026 Advent Development Inc"));
+        assert!(
+            THIRD_PARTY_NOTICES.contains("The above copyright notice and this permission notice")
+        );
+    }
+}

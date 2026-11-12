@@ -2036,3 +2036,18 @@ fn a_single_file_replaced_between_its_reads_is_reported() {
         report.issues()
     );
 }
+
+#[test]
+fn a_system_target_keeps_what_is_younger_than_its_own_age() {
+    let fixture = Fixture::new();
+    let root = fixture.directory("temp");
+    fixture.file("temp/three-days", 1, 72 * HOUR);
+    fixture.file("temp/one-day", 1, 24 * HOUR);
+    let rule = target(&format!(
+        r#"{{"path": "{}", "subcategory": "Temp", "minAgeDays": 2}}"#,
+        root.display()
+    ));
+    let report = Run::new(&fixture, vec![RuleEntry::Target(&rule)]).scan();
+    assert_eq!(offered_paths(&report), [fixture.path("temp/three-days")]);
+    assert_eq!(report.stats().recent(), 1);
+}

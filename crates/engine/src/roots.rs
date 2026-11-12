@@ -5,8 +5,8 @@ use std::time::{Duration, SystemTime};
 
 use okapi_platform::FileIdentity;
 use okapi_rules::{
-    AppCacheRule, CleanTarget, Effect, MiscRules, PathMatcher, RelativePath, SingleFileTarget,
-    TemplatePath, TemplateVariables,
+    AgeDays, AppCacheRule, CleanTarget, Effect, MiscRules, PathMatcher, RelativePath,
+    SingleFileTarget, TemplatePath, TemplateVariables,
 };
 
 use crate::options::ScanOptions;
@@ -16,8 +16,6 @@ use crate::report::{
     AppFile, EntryKind, GroupAttributes, Origin, ScanIssue, ScanStats, UnsafeReason,
 };
 use crate::walk::{Found, Readers};
-
-const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 
 /// A rule to scan, from any of the rule files the scan handles.
 #[derive(Debug, Clone, Copy)]
@@ -92,7 +90,8 @@ impl Planner<'_> {
             Some(subdirectory) => self.expand(&origin, &base, subdirectory),
             None => vec![base],
         };
-        self.check_roots(&origin, roots, None, &attributes)
+        let rule_age = deletion.min_age().map(AgeDays::duration);
+        self.check_roots(&origin, roots, rule_age, &attributes)
     }
 
     fn plan_app(&mut self, file: AppFile, rule: &AppCacheRule) -> Vec<PlannedRoot> {
@@ -129,9 +128,7 @@ impl Planner<'_> {
                 None => roots.push(base),
             }
         }
-        let rule_age = deletion
-            .min_age()
-            .map(|age| Duration::from_secs(u64::from(age.days()) * SECONDS_PER_DAY));
+        let rule_age = deletion.min_age().map(AgeDays::duration);
         self.check_roots(&origin, roots, rule_age, &attributes)
     }
 

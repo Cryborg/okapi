@@ -1,5 +1,6 @@
 use serde::Deserialize;
 
+use crate::app::AgeDays;
 use crate::effect::{CleanupAction, Effect};
 use crate::error::ValidationError;
 use crate::name::RelativePath;
@@ -12,6 +13,7 @@ use crate::values::Label;
 pub struct TargetDeletion {
     path: TemplatePath,
     child_subdirectory: Option<RelativePath>,
+    min_age: Option<AgeDays>,
     deep_recency_check: bool,
     cache_reset: bool,
 }
@@ -26,6 +28,13 @@ impl TargetDeletion {
     #[must_use]
     pub const fn child_subdirectory(&self) -> Option<&RelativePath> {
         self.child_subdirectory.as_ref()
+    }
+
+    /// Entries younger than this are kept; the stricter of this and the
+    /// age the user chose applies.
+    #[must_use]
+    pub const fn min_age(&self) -> Option<AgeDays> {
+        self.min_age
     }
 
     /// Kudu's request for a closer age check of every descendant. It never
@@ -102,6 +111,7 @@ struct RawCleanTarget {
     #[serde(default)]
     needs_admin: bool,
     child_subdir: Option<RelativePath>,
+    min_age_days: Option<AgeDays>,
     #[serde(default)]
     deep_recency_check: bool,
     #[serde(default)]
@@ -121,6 +131,7 @@ impl TryFrom<RawCleanTarget> for CleanTarget {
         };
         let effect = match raw.cleanup_action {
             Some(_) if raw.child_subdir.is_some() => return Err(conflict("childSubdir")),
+            Some(_) if raw.min_age_days.is_some() => return Err(conflict("minAgeDays")),
             Some(_) if raw.deep_recency_check => return Err(conflict("deepRecencyCheck")),
             Some(_) if raw.cache_reset => return Err(conflict("cacheReset")),
             Some(action) => Effect::Maintenance {
@@ -132,6 +143,7 @@ impl TryFrom<RawCleanTarget> for CleanTarget {
                 Effect::Delete(TargetDeletion {
                     path: raw.path,
                     child_subdirectory: raw.child_subdir,
+                    min_age: raw.min_age_days,
                     deep_recency_check: raw.deep_recency_check,
                     cache_reset: raw.cache_reset,
                 })
@@ -221,6 +233,7 @@ mod tests {
         assert_eq!(deletion.path().to_string(), "/var/tmp");
         assert!(!deletion.is_cache_reset());
         assert_eq!(deletion.child_subdirectory(), None);
+        assert_eq!(deletion.min_age(), None);
         assert!(!deletion.deep_recency_check());
     }
 
@@ -228,7 +241,7 @@ mod tests {
     fn reads_every_optional_field_of_a_deletion() {
         let target = target(
             r#"{"path": "${HOME}/.var/app", "subcategory": "Flatpak", "needsAdmin": true,
-                "childSubdir": "common/.cache", "deepRecencyCheck": true, "cacheReset": true,
+                "childSubdir": "common/.cache", "minAgeDays": 30, "deepRecencyCheck": true, "cacheReset": true,
                 "description": "App caches"}"#,
         )
         .unwrap();
@@ -245,6 +258,7 @@ mod tests {
             deletion.child_subdirectory().unwrap().to_string(),
             "common/.cache"
         );
+        assert_eq!(deletion.min_age().map(AgeDays::days), Some(30));
         assert!(deletion.deep_recency_check());
         assert!(deletion.is_cache_reset());
     }
@@ -265,6 +279,7 @@ mod tests {
 
         for (extra, second) in [
             (r#""childSubdir": "x""#, "childSubdir"),
+            (r#""minAgeDays": 30"#, "minAgeDays"),
             (r#""deepRecencyCheck": true"#, "deepRecencyCheck"),
             (r#""cacheReset": true"#, "cacheReset"),
         ] {

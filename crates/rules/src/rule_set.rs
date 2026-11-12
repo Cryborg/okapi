@@ -482,6 +482,37 @@ mod tests {
     }
 
     #[test]
+    fn the_linux_temporary_directories_keep_a_month() {
+        let rules = RuleSet::embedded(Os::Linux).unwrap();
+        let ages: Vec<(String, Option<u16>)> = rules
+            .system()
+            .clean_targets()
+            .iter()
+            .filter_map(|target| match target.effect() {
+                Effect::Delete(deletion) => Some(deletion),
+                Effect::Maintenance { .. } => None,
+            })
+            .filter(|deletion| {
+                ["${TMPDIR}", "/tmp", "/var/tmp"].contains(&deletion.path().to_string().as_str())
+            })
+            .map(|deletion| {
+                (
+                    deletion.path().to_string(),
+                    deletion.min_age().map(crate::AgeDays::days),
+                )
+            })
+            .collect();
+        assert_eq!(
+            ages,
+            [
+                ("${TMPDIR}".to_owned(), Some(30)),
+                ("/tmp".to_owned(), Some(30)),
+                ("/var/tmp".to_owned(), Some(30)),
+            ]
+        );
+    }
+
+    #[test]
     fn the_windows_event_logs_are_protected() {
         let rules = RuleSet::embedded(Os::Windows).unwrap();
         for name in [

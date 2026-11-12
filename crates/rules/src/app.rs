@@ -1,4 +1,5 @@
 use std::fmt;
+use std::time::Duration;
 
 use serde::Deserialize;
 
@@ -22,7 +23,14 @@ impl AgeDays {
     pub const fn days(self) -> u16 {
         self.0
     }
+
+    #[must_use]
+    pub fn duration(self) -> Duration {
+        Duration::from_hours(u64::from(self.0) * HOURS_PER_DAY)
+    }
 }
+
+const HOURS_PER_DAY: u64 = 24;
 
 impl TryFrom<u32> for AgeDays {
     type Error = ValidationError;
@@ -855,6 +863,10 @@ mod tests {
     fn age_and_depth_stay_in_range_without_truncation() {
         assert_eq!(AgeDays::try_from(1).unwrap().days(), 1);
         assert_eq!(AgeDays::try_from(3650).unwrap().days(), 3650);
+        assert_eq!(
+            AgeDays::try_from(2).unwrap().duration(),
+            Duration::from_hours(48)
+        );
         // 65_537 truncates to 1 as a `u16`, which would be in range.
         for days in [0, 3651, 65_537] {
             assert_eq!(

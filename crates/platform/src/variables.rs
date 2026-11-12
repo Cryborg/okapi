@@ -37,6 +37,30 @@ pub fn template_variables() -> Result<TemplateVariables, VariablesError> {
     variables_from(|name| env::var_os(name), env::home_dir())
 }
 
+/// Where Okapi keeps its state (the journal): `$XDG_STATE_HOME/okapi`, or
+/// `~/.local/state/okapi` when it is not set or not absolute.
+#[must_use]
+pub fn state_directory() -> Option<PathBuf> {
+    state_directory_from(|name| env::var_os(name), env::home_dir())
+}
+
+/// The application's own directory name below the XDG ones.
+const APPLICATION: &str = "okapi";
+
+fn state_directory_from(
+    read: impl Fn(&str) -> Option<OsString>,
+    home: Option<PathBuf>,
+) -> Option<PathBuf> {
+    let base = read("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .filter(|value| value.is_absolute())
+        .or_else(|| {
+            home.filter(|home| home.is_absolute())
+                .map(|home| home.join(".local/state"))
+        })?;
+    Some(base.join(APPLICATION))
+}
+
 /// [`template_variables`], reading the environment through `read`.
 fn variables_from(
     read: impl Fn(&str) -> Option<OsString>,
@@ -173,6 +197,31 @@ mod tests {
             variables(&[], Some("")).unwrap_err(),
             VariablesError::NoHome
         );
+    }
+
+    #[test]
+    fn the_state_directory_follows_the_xdg_specification() {
+        let read = |value: Option<&'static str>| {
+            move |name: &str| {
+                (name == "XDG_STATE_HOME")
+                    .then_some(value)
+                    .flatten()
+                    .map(OsString::from)
+            }
+        };
+        assert_eq!(
+            state_directory_from(read(None), Some(PathBuf::from("/home/ana"))),
+            Some(PathBuf::from("/home/ana/.local/state/okapi"))
+        );
+        assert_eq!(
+            state_directory_from(read(Some("/data/state")), Some(PathBuf::from("/home/ana"))),
+            Some(PathBuf::from("/data/state/okapi"))
+        );
+        assert_eq!(
+            state_directory_from(read(Some("relative")), Some(PathBuf::from("/home/ana"))),
+            Some(PathBuf::from("/home/ana/.local/state/okapi"))
+        );
+        assert_eq!(state_directory_from(read(None), None), None);
     }
 
     #[test]

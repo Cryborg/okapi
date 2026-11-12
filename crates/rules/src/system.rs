@@ -182,6 +182,14 @@ impl SingleFileTarget {
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
     }
+
+    /// Whether the file is selected before the user chooses: always, as it
+    /// is neither a performance cache nor a maintenance operation
+    /// (invariant 5).
+    #[must_use]
+    pub const fn is_selected_by_default(&self) -> bool {
+        true
+    }
 }
 
 /// The content of `system.json`.

@@ -7,13 +7,14 @@ use std::io;
 use std::path::Path;
 
 use okapi_engine::{
-    CleanResult, ExclusionError, KeepReason, Limit, Origin, ScanIssue, Stop, UnsafeReason,
+    ByteSize, CleanResult, ExclusionError, KeepReason, Limit, Origin, ScanIssue, SizeUnit, Stop,
+    UnsafeReason,
 };
 use okapi_platform::VariablesError;
 use okapi_rules::{TemplateError, Variable};
 use okapi_store::StoreError;
 
-use crate::args::{ArgumentError, SECONDS_PER_MINUTE};
+use crate::args::ArgumentError;
 use crate::selection::{Decision, rule_name};
 
 /// `path` as shown in a terminal: a control character in a name (an escape
@@ -501,7 +502,7 @@ fn not_removed_text(
 }
 
 fn help(language: Language, settings: Option<&Path>, history: Option<&Path>) -> String {
-    let default_minutes = okapi_engine::DEFAULT_MIN_AGE.as_secs() / SECONDS_PER_MINUTE;
+    let default_minutes = okapi_engine::DEFAULT_MIN_AGE_MINUTES;
     let unknown = match language {
         Language::French => "inconnu (ni XDG ni HOME absolu)",
         Language::English => "unknown (no absolute XDG nor HOME)",
@@ -939,27 +940,27 @@ fn error_text(language: Language, kind: io::ErrorKind, code: Option<i32>) -> Str
 /// `bytes` with a decimal unit: `o`, `ko`... in French (decimal comma), `B`,
 /// `kB`... in English.
 fn size(language: Language, bytes: u64) -> String {
-    const STEP: u64 = 1000;
-    let units: [&str; 5] = match language {
-        Language::French => ["o", "ko", "Mo", "Go", "To"],
-        Language::English => ["B", "kB", "MB", "GB", "TB"],
+    let size = ByteSize::of(bytes);
+    let unit = match (language, size.unit()) {
+        (Language::French, SizeUnit::Byte) => "o",
+        (Language::French, SizeUnit::Kilobyte) => "ko",
+        (Language::French, SizeUnit::Megabyte) => "Mo",
+        (Language::French, SizeUnit::Gigabyte) => "Go",
+        (Language::French, SizeUnit::Terabyte) => "To",
+        (Language::English, SizeUnit::Byte) => "B",
+        (Language::English, SizeUnit::Kilobyte) => "kB",
+        (Language::English, SizeUnit::Megabyte) => "MB",
+        (Language::English, SizeUnit::Gigabyte) => "GB",
+        (Language::English, SizeUnit::Terabyte) => "TB",
     };
-    let mut unit = 0;
-    let mut scaled = bytes;
-    let mut tenths = 0;
-    while scaled >= STEP && unit + 1 < units.len() {
-        tenths = (scaled % STEP) / (STEP / 10);
-        scaled /= STEP;
-        unit += 1;
-    }
-    if unit == 0 {
-        return format!("{scaled} {}", units[0]);
-    }
+    let Some(tenths) = size.tenths() else {
+        return format!("{} {unit}", size.whole());
+    };
     let separator = match language {
         Language::French => ',',
         Language::English => '.',
     };
-    format!("{scaled}{separator}{tenths} {}", units[unit])
+    format!("{}{separator}{tenths} {unit}", size.whole())
 }
 
 #[cfg(test)]

@@ -16,19 +16,24 @@ mod protection;
 mod report;
 mod roots;
 mod scan;
+mod size;
 mod walk;
 mod watch;
 
 pub use clean::{
     CleanOutcome, CleanPass, CleanReceipt, CleanResult, KeepReason, clean, clean_watched,
 };
-pub use options::{DEFAULT_MIN_AGE, ExclusionError, Exclusions, ScanOptions};
+pub use options::{
+    DEFAULT_MIN_AGE, DEFAULT_MIN_AGE_MINUTES, ExclusionError, Exclusions, ScanOptions,
+    duration_of_minutes, settings_min_age,
+};
 pub use preconditions::Stop;
 pub use report::{
     AppFile, Category, EntryKind, ItemId, Limit, Origin, ScanGroup, ScanIssue, ScanItem,
     ScanReport, ScanStats, UnsafeReason,
 };
-pub use scan::{scan, scan_watched};
+pub use scan::{DefaultChoice, scan, scan_watched};
+pub use size::{ByteSize, SizeUnit};
 pub use watch::{Cancel, Progress, Watch};
 
 // The end-to-end tests write rule paths into JSON and create links: Unix only.

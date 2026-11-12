@@ -16,12 +16,12 @@ use std::time::{Instant, SystemTime};
 
 use okapi_engine::{
     CleanOutcome, CleanReceipt, DEFAULT_MIN_AGE, Exclusions, ItemId, ScanIssue, ScanOptions, Stop,
-    clean, scan,
+    clean, scan, settings_min_age,
 };
 use okapi_rules::{Os, RuleSet, THIRD_PARTY_NOTICES, TemplateVariables};
 use okapi_store::{History, Settings, StoreError, journal};
 
-use crate::args::{Command, Run, Verbosity, duration_of_minutes};
+use crate::args::{Command, Run, Verbosity};
 use crate::output::{Output, Shown, error_line, history_entry, summaries};
 use crate::selection::Decision;
 use crate::text::{Language, Message, language, text};
@@ -220,12 +220,12 @@ fn prepare(run: &Run, language: Language) -> Result<Prepared, u8> {
             Message::ExclusionMissing(missing)
         }));
     }
+    let now = SystemTime::now();
     let min_age = match (run.min_age, settings.min_age_minutes) {
         (Some(age), _) => age,
-        (None, Some(minutes)) => duration_of_minutes(minutes)
+        (None, Some(minutes)) => settings_min_age(minutes, now)
             // Beyond the clock, the age would stop the scan without naming
             // the settings: said here, where they are known to be the cause.
-            .filter(|age| SystemTime::now().checked_sub(*age).is_some())
             .ok_or_else(|| {
                 tracing::warn!(minutes, "settings minimum age beyond the clock");
                 error_line(&say(&Message::SettingsMinAge(&settings_path, minutes)));
@@ -237,7 +237,7 @@ fn prepare(run: &Run, language: Language) -> Result<Prepared, u8> {
     Ok(Prepared {
         variables,
         rules,
-        options: ScanOptions::new(SystemTime::now(), min_age, exclusions),
+        options: ScanOptions::new(now, min_age, exclusions),
         deletion_log: settings.deletion_log,
     })
 }

@@ -188,7 +188,8 @@ fn a_scan_reports_its_roots_by_category_and_what_each_found() {
     assert_eq!(
         progress[0],
         Progress::Planned {
-            roots: BTreeMap::from([(Category::System, 4), (Category::Apps, 1)])
+            roots: BTreeMap::from([(Category::System, 4), (Category::Apps, 1)]),
+            total: 5,
         }
     );
     let system = || BTreeSet::from([Category::System]);
@@ -232,7 +233,8 @@ fn a_root_shared_by_two_categories_counts_for_both() {
     assert_eq!(
         progress[0],
         Progress::Planned {
-            roots: BTreeMap::from([(Category::System, 1), (Category::Gaming, 1)])
+            roots: BTreeMap::from([(Category::System, 1), (Category::Gaming, 1)]),
+            total: 1,
         }
     );
     assert_eq!(roots_done(&progress), [(both, 1, 3, 0)], "walked once");
@@ -247,7 +249,8 @@ fn a_scan_with_no_root_is_planned_empty() {
     assert_eq!(
         progress,
         [Progress::Planned {
-            roots: BTreeMap::new()
+            roots: BTreeMap::new(),
+            total: 0,
         }]
     );
 }
@@ -501,9 +504,121 @@ fn a_withheld_root_is_not_counted_as_planned() {
     assert_eq!(
         progress[0],
         Progress::Planned {
-            roots: BTreeMap::from([(Category::System, 1)])
+            roots: BTreeMap::from([(Category::System, 1)]),
+            total: 1,
         },
         "the bound root is withheld, only the local one is walked"
     );
     assert_eq!(roots_done(&progress).len(), 1);
+}
+
+/// A rule of `file` on `path`, a cache reset when `reset`.
+fn app_on(file: AppFile, id: &str, path: &Path, reset: bool) -> (AppFile, AppCacheRule) {
+    (
+        file,
+        app(&format!(
+            r#"{{"id": "{id}", "name": "{id}", "paths": ["{}"], "cacheReset": {reset}}}"#,
+            path.display()
+        )),
+    )
+}
+
+fn entries(rules: &[(AppFile, AppCacheRule)]) -> Vec<RuleEntry<'_>> {
+    rules
+        .iter()
+        .map(|(file, rule)| RuleEntry::App { file: *file, rule })
+        .collect()
+}
+
+#[test]
+fn a_scan_walks_only_the_chosen_categories_keeping_the_attributes_of_all() {
+    let fixture = Fixture::new();
+    let shared = fixture.directory("shared");
+    fixture.file("shared/old", 3, 2 * HOUR);
+    let gpu_only = fixture.directory("gpu-only");
+    fixture.file("gpu-only/old", 5, 2 * HOUR);
+    let rules = [
+        app_on(AppFile::Apps, "wide", &shared, false),
+        app_on(AppFile::GpuCache, "reset", &shared, true),
+        app_on(AppFile::GpuCache, "alone", &gpu_only, true),
+    ];
+    let mut run = Run::new(&fixture, entries(&rules));
+    run.options = run
+        .options
+        .clone()
+        .with_categories(BTreeSet::from([Category::Apps]));
+    let (report, progress) = scan_watching(run, Cancel::new());
+    assert_eq!(
+        progress[0],
+        Progress::Planned {
+            roots: BTreeMap::from([(Category::Apps, 1), (Category::Gpu, 1)]),
+            total: 1,
+        },
+        "the shared root counts for both, the GPU one is not walked"
+    );
+    assert_eq!(roots_done(&progress).len(), 1);
+    let [group] = report.groups() else {
+        panic!("expected the shared group: {:?}", report.groups());
+    };
+    assert_eq!(group.total_size(), 3);
+    assert!(
+        !group.is_selected_by_default(),
+        "a cache reset for a rule left out still (invariant 5)"
+    );
+
+    let (everything, progress) = scan_watching(Run::new(&fixture, entries(&rules)), Cancel::new());
+    assert_eq!(everything.groups().len(), 2, "none chosen: all");
+    let Progress::Planned { total, .. } = progress[0] else {
+        panic!("expected the plan first");
+    };
+    assert_eq!(total, 2);
+    assert_eq!(roots_done(&progress).len(), total);
+}
+
+#[test]
+fn a_root_left_out_below_a_chosen_one_is_still_reserved() {
+    let fixture = Fixture::new();
+    let outer = fixture.directory("outer");
+    fixture.file("outer/old", 3, 2 * HOUR);
+    let inner = fixture.directory("outer/inner");
+    fixture.file("outer/inner/old", 5, 2 * HOUR);
+    let rules = [
+        app_on(AppFile::Apps, "outer", &outer, false),
+        app_on(AppFile::GpuCache, "inner", &inner, true),
+    ];
+    let mut run = Run::new(&fixture, entries(&rules));
+    run.options = run
+        .options
+        .clone()
+        .with_categories(BTreeSet::from([Category::Apps]));
+    let (report, _) = scan_watching(run, Cancel::new());
+    assert_eq!(
+        offered_paths(&report),
+        [fixture.path("outer/old")],
+        "the reset's root is neither offered by its rule nor by the outer one"
+    );
+}
+
+#[test]
+fn a_chosen_root_below_one_left_out_is_walked_alone() {
+    let fixture = Fixture::new();
+    let outer = fixture.directory("outer");
+    fixture.file("outer/old", 3, 2 * HOUR);
+    let inner = fixture.directory("outer/inner");
+    fixture.file("outer/inner/old", 5, 2 * HOUR);
+    let rules = [
+        app_on(AppFile::GpuCache, "outer", &outer, true),
+        app_on(AppFile::Apps, "inner", &inner, false),
+    ];
+    let mut run = Run::new(&fixture, entries(&rules));
+    run.options = run
+        .options
+        .clone()
+        .with_categories(BTreeSet::from([Category::Apps]));
+    let (report, _) = scan_watching(run, Cancel::new());
+    assert_eq!(
+        offered_paths(&report),
+        [fixture.path("outer/inner/old")],
+        "the outer root left out is not walked, the inner one offered once"
+    );
 }

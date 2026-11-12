@@ -8,10 +8,33 @@ use okapi_platform::{FileIdentity, file_identity};
 use thiserror::Error;
 
 use crate::paths::{canonicalize_longest_prefix, lowercase, starts_with_ignoring_case};
+use crate::report::Category;
 use crate::walk::IdentityReader;
 
-/// How old an entry must be to be offered when the user has not chosen.
-pub const DEFAULT_MIN_AGE: Duration = Duration::from_hours(1);
+/// How old an entry must be to be offered when the user has not chosen, in
+/// minutes, as ages are written.
+pub const DEFAULT_MIN_AGE_MINUTES: u64 = 60;
+/// [`DEFAULT_MIN_AGE_MINUTES`] as a duration.
+pub const DEFAULT_MIN_AGE: Duration = Duration::from_mins(DEFAULT_MIN_AGE_MINUTES);
+
+const SECONDS_PER_MINUTE: u64 = 60;
+
+/// `minutes` as a duration, if a duration can hold it: the one conversion of
+/// an age written in minutes.
+#[must_use]
+pub fn duration_of_minutes(minutes: u64) -> Option<Duration> {
+    Some(Duration::from_secs(
+        minutes.checked_mul(SECONDS_PER_MINUTE)?,
+    ))
+}
+
+/// The minimum age of `minutes` set in the settings, if the clock can reach
+/// back that far from `now`: beyond it, nothing could be old enough, which
+/// the caller says is the settings' fault, where they are known.
+#[must_use]
+pub fn settings_min_age(minutes: u64, now: SystemTime) -> Option<Duration> {
+    duration_of_minutes(minutes).filter(|age| now.checked_sub(*age).is_some())
+}
 
 /// The prefix of an exclusion that matches file names by their extension.
 const EXTENSION_PATTERN_PREFIX: &str = "*.";
@@ -144,6 +167,8 @@ pub struct ScanOptions {
     now: SystemTime,
     min_age: Duration,
     exclusions: Exclusions,
+    /// The categories walked; none means all.
+    categories: BTreeSet<Category>,
 }
 
 impl ScanOptions {
@@ -155,7 +180,24 @@ impl ScanOptions {
             now,
             min_age,
             exclusions,
+            categories: BTreeSet::new(),
         }
+    }
+
+    /// Walks only the roots of a group with one of `categories` (none: all).
+    /// The groups are formed over every rule first, so a root shared with a
+    /// category left out keeps the attributes of all its rules (invariant 5),
+    /// and every root still reserves its place below another one.
+    #[must_use]
+    pub fn with_categories(mut self, categories: BTreeSet<Category>) -> Self {
+        self.categories = categories;
+        self
+    }
+
+    /// The categories walked; none means all.
+    #[must_use]
+    pub const fn categories(&self) -> &BTreeSet<Category> {
+        &self.categories
     }
 
     pub(crate) const fn exclusions(&self) -> &Exclusions {
@@ -174,6 +216,24 @@ impl ScanOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minutes_become_an_age_the_clock_can_reach() {
+        assert_eq!(duration_of_minutes(2), Some(Duration::from_secs(120)));
+        assert_eq!(duration_of_minutes(u64::MAX), None);
+        let now = SystemTime::now();
+        assert_eq!(settings_min_age(90, now), Some(Duration::from_mins(90)));
+        // The most minutes a duration holds: more seconds than any system's
+        // clock counts back (at most a signed 64-bit count of seconds).
+        let beyond = u64::MAX / SECONDS_PER_MINUTE;
+        assert!(duration_of_minutes(beyond).is_some());
+        assert_eq!(
+            settings_min_age(beyond, now),
+            None,
+            "fits in a duration, beyond what the clock can go back to"
+        );
+        assert_eq!(settings_min_age(u64::MAX, now), None);
+    }
 
     fn exclusions(entries: &[&str]) -> Result<Exclusions, ExclusionError> {
         Exclusions::new(entries.iter().map(PathBuf::from))

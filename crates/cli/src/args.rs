@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use okapi_engine::Category;
+use okapi_engine::{Category, duration_of_minutes};
 
 /// What the command line asks for.
 #[derive(Debug, PartialEq, Eq)]
@@ -52,7 +52,6 @@ const VERBOSE: &str = "--verbose";
 const QUIET: &str = "--quiet";
 const EXCLUDE: &str = "--exclude";
 const MIN_AGE: &str = "--min-age";
-pub const SECONDS_PER_MINUTE: u64 = 60;
 
 /// Reads the arguments that follow the program's name.
 pub fn parse(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, ArgumentError> {
@@ -132,14 +131,6 @@ pub fn parse(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, A
 /// `text` minutes, if it is a whole number that the clock can hold.
 fn minutes(text: &str) -> Option<Duration> {
     duration_of_minutes(text.parse().ok()?)
-}
-
-/// `minutes` as a duration, if the clock can hold it: the one conversion for
-/// the command line and the settings.
-pub fn duration_of_minutes(minutes: u64) -> Option<Duration> {
-    Some(Duration::from_secs(
-        minutes.checked_mul(SECONDS_PER_MINUTE)?,
-    ))
 }
 
 #[cfg(test)]

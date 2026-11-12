@@ -58,11 +58,7 @@ impl Origin {
     pub const fn category(&self) -> Category {
         match self {
             Self::SystemTarget { .. } | Self::SystemFile { .. } => Category::System,
-            Self::App { file, .. } => match file {
-                AppFile::Apps => Category::Apps,
-                AppFile::Gaming => Category::Gaming,
-                AppFile::GpuCache => Category::Gpu,
-            },
+            Self::App { file, .. } => Category::of_file(*file),
         }
     }
 }
@@ -83,6 +79,28 @@ pub enum Category {
 
 impl Category {
     pub const ALL: [Self; 4] = [Self::System, Self::Apps, Self::Gaming, Self::Gpu];
+
+    /// The category of the rules of `file`.
+    pub(crate) const fn of_file(file: AppFile) -> Self {
+        match file {
+            AppFile::Apps => Self::Apps,
+            AppFile::Gaming => Self::Gaming,
+            AppFile::GpuCache => Self::Gpu,
+        }
+    }
+
+    /// The categories of a group: those of its rules `origins`.
+    #[must_use]
+    pub fn of_group(origins: &[Origin]) -> BTreeSet<Self> {
+        origins.iter().map(Origin::category).collect()
+    }
+
+    /// Whether a group of `categories` is among those `chosen` (all when none
+    /// is): one of its rules is.
+    #[must_use]
+    pub fn is_chosen(categories: &BTreeSet<Self>, chosen: &BTreeSet<Self>) -> bool {
+        chosen.is_empty() || !chosen.is_disjoint(categories)
+    }
 
     /// Its stable key (`apps`), for flags and qualified rule names.
     #[must_use]
@@ -432,6 +450,15 @@ impl ScanReport {
         &self.groups
     }
 
+    /// The size of everything offered: the sum over groups, each entry once.
+    #[must_use]
+    pub fn total_size(&self) -> u64 {
+        self.groups
+            .iter()
+            .map(ScanGroup::total_size)
+            .fold(0, u64::saturating_add)
+    }
+
     #[must_use]
     pub fn issues(&self) -> &[ScanIssue] {
         &self.issues
@@ -625,5 +652,24 @@ mod tests {
             .map(|category| category.name())
             .collect();
         assert_eq!(names, ["system", "apps", "gaming", "gpu"]);
+    }
+
+    #[test]
+    fn a_group_is_chosen_when_one_of_its_rules_is() {
+        let app = |file, id: &str| Origin::App {
+            file,
+            id: RuleId::try_from(id.to_owned()).unwrap(),
+        };
+        let shared =
+            Category::of_group(&[app(AppFile::Apps, "pip"), app(AppFile::GpuCache, "mesa")]);
+        assert_eq!(shared, BTreeSet::from([Category::Apps, Category::Gpu]));
+        let gpu = Category::of_group(&[app(AppFile::GpuCache, "mesa")]);
+        let apps = BTreeSet::from([Category::Apps]);
+        assert!(Category::is_chosen(&shared, &apps));
+        assert!(!Category::is_chosen(&gpu, &apps));
+        assert!(
+            Category::is_chosen(&gpu, &BTreeSet::new()),
+            "none chosen: all"
+        );
     }
 }

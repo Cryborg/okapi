@@ -13,7 +13,7 @@ use crate::options::ScanOptions;
 use crate::paths::is_absent;
 use crate::protection::ProtectedRoots;
 use crate::report::{
-    AppFile, EntryKind, GroupAttributes, Origin, ScanIssue, ScanStats, UnsafeReason,
+    AppFile, Category, EntryKind, GroupAttributes, Origin, ScanIssue, ScanStats, UnsafeReason,
 };
 use crate::walk::{Found, Readers, by_name};
 
@@ -26,6 +26,24 @@ pub(crate) enum RuleEntry<'a> {
         file: AppFile,
         rule: &'a AppCacheRule,
     },
+}
+
+impl RuleEntry<'_> {
+    pub(crate) const fn category(&self) -> Category {
+        match self {
+            Self::Target(_) | Self::File(_) => Category::System,
+            Self::App { file, .. } => Category::of_file(*file),
+        }
+    }
+
+    /// Whether the rule is selected before the user chooses (invariant 5).
+    pub(crate) const fn is_selected_by_default(&self) -> bool {
+        match self {
+            Self::Target(target) => target.is_selected_by_default(),
+            Self::File(target) => target.is_selected_by_default(),
+            Self::App { rule, .. } => rule.is_selected_by_default(),
+        }
+    }
 }
 
 /// What a planned root is.
@@ -232,7 +250,7 @@ impl Planner<'_> {
             label: target.subcategory().clone(),
             rule_group: None,
             cache_reset: false,
-            selected_by_default: true,
+            selected_by_default: target.is_selected_by_default(),
             needs_admin: false,
         };
         // A bind mount of a file: never offered by this rule, it still joins

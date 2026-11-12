@@ -27,11 +27,7 @@ pub fn decide(
     needs_admin: bool,
     categories: &BTreeSet<Category>,
 ) -> Decision {
-    let asked = categories.is_empty()
-        || origins
-            .iter()
-            .any(|origin| categories.contains(&origin.category()));
-    if !asked {
+    if !Category::is_chosen(&Category::of_group(origins), categories) {
         Decision::OutsideCategories
     } else if !selected_by_default {
         Decision::NotPreselected

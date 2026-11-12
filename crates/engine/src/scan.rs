@@ -10,8 +10,8 @@ use crate::paths::is_absent_kind;
 use crate::preconditions::{protection, stops_before_reading};
 use crate::protection::ProtectedRoots;
 use crate::report::{
-    AppFile, Category, FoundItem, GroupAttributes, Origin, ReportBuilder, ScanGroup, ScanIssue,
-    ScanReport, ScanStats, UnsafeReason,
+    AppFile, Category, FoundItem, GroupAttributes, Origin, ReportBuilder, ScanIssue, ScanReport,
+    ScanStats, UnsafeReason,
 };
 use crate::roots::{PlannedKind, PlannedRoot, Planner, RuleEntry};
 use crate::walk::{Found, Limits, Readers, RootProblem, ScanProgress, WalkContext, walk};
@@ -71,16 +71,38 @@ pub fn scan_watched(
     tracing::info!(
         groups = groups.len(),
         entries = groups.iter().map(|group| group.items().len()).sum::<usize>(),
-        bytes = groups
-            .iter()
-            .map(ScanGroup::total_size)
-            .fold(0, u64::saturating_add),
+        bytes = report.total_size(),
         issues = report.issues().len(),
         stats = ?report.stats(),
         elapsed = ?started.elapsed(),
         "scan finished"
     );
     report
+}
+
+/// How a category is offered before a scan is asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefaultChoice {
+    /// One of its rules is selected by default: chosen.
+    Chosen,
+    /// None of its rules is (cache resets and maintenance operations, or no
+    /// rule at all): left to the user (invariant 5).
+    ToChoose,
+}
+
+impl Category {
+    /// How `self` is offered before a scan of `rules`.
+    #[must_use]
+    pub fn default_choice(self, rules: &RuleSet) -> DefaultChoice {
+        let chosen = entries_of(rules)
+            .iter()
+            .any(|entry| entry.category() == self && entry.is_selected_by_default());
+        if chosen {
+            DefaultChoice::Chosen
+        } else {
+            DefaultChoice::ToChoose
+        }
+    }
 }
 
 /// The rules [`scan`] handles, in the order of their files.
@@ -137,14 +159,17 @@ pub(crate) fn scan_entries(
         attributes,
     } = group_rules(roots_by_rule, entries.len());
     let attributes = merge_attributes(attributes, &mut groups);
+    // Every root reserves its place, chosen or not: the walks of the chosen
+    // ones skip the others below them.
     let root_identities: BTreeSet<_> = roots.iter().map(|(_, root)| root.identity).collect();
-    let roots = categorized(roots, &attributes, &mut groups);
+    let roots = chosen_roots(roots, &attributes, &mut groups, options.categories());
     let roots_total = roots
         .iter()
         .filter(|(_, root, _)| root.kind != PlannedKind::Withheld)
         .count();
     watch.emit(Progress::Planned {
         roots: roots_by_category(&roots),
+        total: roots_total,
     });
     let mut progress = ScanProgress::new(watch);
     let mut roots_done = 0;
@@ -269,22 +294,25 @@ fn plan(
     Some((protected, roots_by_rule))
 }
 
-/// Each root with its categories: those of its group's rules (the sense a
-/// group is shown in).
-fn categorized(
+/// The roots of a group in the categories `chosen` (all when none is), each
+/// with its categories: those of its group's rules (the sense a group is
+/// shown in).
+fn chosen_roots(
     roots: Vec<(usize, PlannedRoot)>,
     attributes: &BTreeMap<usize, GroupAttributes>,
     groups: &mut RuleGroups,
+    chosen: &BTreeSet<Category>,
 ) -> Vec<(usize, PlannedRoot, BTreeSet<Category>)> {
     roots
         .into_iter()
         .map(|(rule, root)| {
             let categories = attributes
                 .get(&groups.find(rule))
-                .map(|attributes| attributes.origins.iter().map(Origin::category).collect())
+                .map(|attributes| Category::of_group(&attributes.origins))
                 .unwrap_or_default();
             (rule, root, categories)
         })
+        .filter(|(_, _, categories)| Category::is_chosen(categories, chosen))
         .collect()
 }
 
@@ -476,6 +504,31 @@ mod tests {
             entries
                 .iter()
                 .any(|entry| matches!(entry, RuleEntry::File(_)))
+        );
+    }
+
+    #[test]
+    fn only_cache_resets_leave_a_category_to_choose() {
+        let rules = RuleSet::embedded(Os::Linux).unwrap();
+        let choices: Vec<_> = Category::ALL
+            .iter()
+            .map(|category| category.default_choice(&rules))
+            .collect();
+        assert_eq!(
+            choices,
+            [
+                DefaultChoice::Chosen,
+                DefaultChoice::Chosen,
+                DefaultChoice::Chosen,
+                DefaultChoice::ToChoose
+            ]
+        );
+        assert!(
+            rules
+                .gpu_cache()
+                .iter()
+                .all(|rule| !rule.is_selected_by_default()),
+            "GPU caches are all resets"
         );
     }
 

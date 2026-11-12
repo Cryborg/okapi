@@ -11,7 +11,7 @@ use crate::walk::IdentityReader;
 /// What keeps a scan or a cleaning from looking at anything, or a scan from
 /// offering anything: the report or the receipt then holds nothing offered,
 /// which does not mean there is nothing to clean.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stop {
     /// This system lacks what the engine needs to tell mount points, bind
     /// mounts and replaced entries apart (file identity, and for cleaning,

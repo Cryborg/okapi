@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Duration;
 
-use okapi_rules::{Effect, Os, RuleSet};
+use okapi_rules::{Os, RuleSet};
 
 struct Sandbox {
     _directory: tempfile::TempDir,
@@ -91,46 +91,15 @@ impl Sandbox {
 
 /// Every target of the Linux rules that is not below a variable.
 fn absolute_targets() -> Vec<PathBuf> {
-    targets(false)
+    RuleSet::embedded(Os::Linux)
+        .unwrap()
+        .absolute_targets(false)
 }
 
 /// [`absolute_targets`] that the scan walks: maintenance operations are
 /// never scanned, so never reported as excluded.
 fn absolute_deletion_targets() -> Vec<PathBuf> {
-    targets(true)
-}
-
-fn targets(deletions_only: bool) -> Vec<PathBuf> {
-    let rules = RuleSet::embedded(Os::Linux).unwrap();
-    let system = rules.system();
-    let targets = system
-        .clean_targets()
-        .iter()
-        .filter_map(|target| match target.effect() {
-            Effect::Delete(deletion) => Some(deletion.path().to_string()),
-            Effect::Maintenance { affected, .. } => (!deletions_only).then(|| affected.to_string()),
-        });
-    let files = system
-        .single_file_targets()
-        .iter()
-        .map(|target| target.path().to_string());
-    let applications = rules
-        .apps()
-        .iter()
-        .chain(rules.gaming())
-        .chain(rules.gpu_cache())
-        .flat_map(|rule| match rule.effect() {
-            Effect::Delete(deletion) => deletion.paths().to_vec(),
-            Effect::Maintenance { affected, .. } if !deletions_only => affected.to_vec(),
-            Effect::Maintenance { .. } => Vec::new(),
-        })
-        .map(|path| path.to_string());
-    targets
-        .chain(files)
-        .chain(applications)
-        .filter(|path| path.starts_with('/'))
-        .map(PathBuf::from)
-        .collect()
+    RuleSet::embedded(Os::Linux).unwrap().absolute_targets(true)
 }
 
 fn running_as_root() -> bool {
@@ -711,4 +680,66 @@ fn a_deletion_log_that_cannot_be_kept_stops_before_cleaning() {
         "the missing history line is said"
     );
     assert!(!kept.exists());
+}
+
+/// The exact form scripts and the history read, fixed before the names move
+/// to their shared source.
+#[test]
+fn the_cleaning_outcomes_keep_their_exact_form() {
+    use std::os::unix::fs::PermissionsExt;
+    if running_as_root() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let pip = sandbox.root.join("home/.cache/pip");
+    fs::create_dir_all(pip.join("locked")).unwrap();
+    fs::write(pip.join("three"), b"abc").unwrap();
+    fs::write(pip.join("locked/kept"), b"x").unwrap();
+    fs::set_permissions(pip.join("locked"), fs::Permissions::from_mode(0o500)).unwrap();
+    settle();
+    sandbox.settings(r#"{"version": 1, "deletionLog": true}"#);
+    let output = sandbox.run(&["--clean", "--apps", "--min-age", "0", "--json"]);
+    fs::set_permissions(pip.join("locked"), fs::Permissions::from_mode(0o700)).unwrap();
+    let mut outcomes = json(&output)["clean"]["outcomes"]
+        .as_array()
+        .unwrap()
+        .clone();
+    outcomes.sort_by_key(|outcome| outcome["path"].as_str().unwrap().to_owned());
+    let path = |relative: &str| pip.join(relative).to_string_lossy().into_owned();
+    let expected = serde_json::json!([
+        {
+            "path": path("locked"),
+            "result": "kept",
+            "reason": "failed",
+            "error": "PermissionDenied",
+            "code": 13,
+            "blocked": path("locked/kept"),
+        },
+        {"path": path("three"), "result": "removed", "bytes": 3},
+    ]);
+    assert_eq!(serde_json::Value::Array(outcomes.clone()), expected);
+    let mut line = sandbox.history()[0].clone();
+    let mut entries = line["entries"].as_array().unwrap().clone();
+    entries.sort_by_key(|entry| entry["path"].as_str().unwrap().to_owned());
+    assert_eq!(
+        serde_json::Value::Array(entries),
+        expected,
+        "the deletion log"
+    );
+    let object = line.as_object_mut().unwrap();
+    object.remove("entries");
+    assert!(object.remove("time").unwrap().is_i64());
+    assert_eq!(
+        line,
+        serde_json::json!({
+            "version": 1,
+            "stops": [],
+            "removedBytes": 3,
+            "removed": 1,
+            "partial": 0,
+            "gone": 0,
+            "kept": 1,
+            "complete": false,
+        })
+    );
 }

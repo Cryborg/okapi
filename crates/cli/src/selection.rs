@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use okapi_engine::{Category, Origin};
+use okapi_engine::{Category, Origin, checked_by_default};
 
 /// What a run does with a group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -29,12 +29,12 @@ pub fn decide(
 ) -> Decision {
     if !Category::is_chosen(&Category::of_group(origins), categories) {
         Decision::OutsideCategories
+    } else if checked_by_default(selected_by_default, needs_admin) {
+        Decision::Selected
     } else if !selected_by_default {
         Decision::NotPreselected
-    } else if needs_admin {
-        Decision::NeedsAdmin
     } else {
-        Decision::Selected
+        Decision::NeedsAdmin
     }
 }
 

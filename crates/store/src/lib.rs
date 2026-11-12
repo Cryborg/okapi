@@ -1,8 +1,8 @@
 //! Persistent settings, history and journal: what the user set in
 //! `$XDG_CONFIG_HOME/okapi/settings.json`, one line per cleaning in
 //! `$XDG_STATE_HOME/okapi/history.jsonl`, and every trace in the journal
-//! beside it. Nothing here depends on the engine
-//! nor on the interface: callers turn their results into these plain types.
+//! beside it. A cleaning's receipt becomes its history line here, the one
+//! form both interfaces write; nothing here depends on an interface.
 
 mod history;
 pub mod journal;
@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-pub use history::{History, HistoryEntry, HistoryOutcome};
+pub use history::{History, HistoryEntry, HistoryOutcome, HistoryUnavailable, Opened, seconds};
 pub use settings::Settings;
 
 /// A settings or history file could not be used.

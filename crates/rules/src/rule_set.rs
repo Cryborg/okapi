@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::PathBuf;
 
 use serde::de::{self, DeserializeOwned};
 use serde::{Deserialize, Deserializer};
@@ -7,6 +8,7 @@ use serde::{Deserialize, Deserializer};
 use crate::app::{AppCacheRule, AppRules};
 use crate::browser::BrowserRules;
 use crate::database::{DatabaseRules, DatabaseTarget};
+use crate::effect::Effect;
 use crate::error::RulesError;
 use crate::misc::MiscRules;
 use crate::os::Os;
@@ -251,6 +253,45 @@ impl RuleSet {
     #[must_use]
     pub const fn misc(&self) -> &MiscRules {
         &self.misc
+    }
+
+    /// The paths of the system targets and application rules that no
+    /// variable places, maintenance operations included unless
+    /// `deletions_only`: what a test must keep a scan or a cleaning away
+    /// from, the real system.
+    #[must_use]
+    pub fn absolute_targets(&self, deletions_only: bool) -> Vec<PathBuf> {
+        let system = self.system();
+        let targets = system
+            .clean_targets()
+            .iter()
+            .filter_map(|target| match target.effect() {
+                Effect::Delete(deletion) => Some(deletion.path().to_string()),
+                Effect::Maintenance { affected, .. } => {
+                    (!deletions_only).then(|| affected.to_string())
+                }
+            });
+        let files = system
+            .single_file_targets()
+            .iter()
+            .map(|target| target.path().to_string());
+        let applications = self
+            .apps()
+            .iter()
+            .chain(self.gaming())
+            .chain(self.gpu_cache())
+            .flat_map(|rule| match rule.effect() {
+                Effect::Delete(deletion) => deletion.paths().to_vec(),
+                Effect::Maintenance { affected, .. } if !deletions_only => affected.to_vec(),
+                Effect::Maintenance { .. } => Vec::new(),
+            })
+            .map(|path| path.to_string());
+        targets
+            .chain(files)
+            .chain(applications)
+            .filter(|path| path.starts_with('/'))
+            .map(PathBuf::from)
+            .collect()
     }
 
     fn app_files(&self) -> [(RuleFileKind, &AppRules); 3] {

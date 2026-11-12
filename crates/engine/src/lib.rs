@@ -30,7 +30,7 @@ pub use options::{
 pub use preconditions::Stop;
 pub use report::{
     AppFile, Category, EntryKind, ItemId, Limit, Origin, ScanGroup, ScanIssue, ScanItem,
-    ScanReport, ScanStats, UnsafeReason,
+    ScanReport, ScanStats, UnsafeReason, checked_by_default,
 };
 pub use scan::{DefaultChoice, scan, scan_watched};
 pub use size::{ByteSize, SizeUnit};

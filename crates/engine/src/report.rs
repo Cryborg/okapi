@@ -114,6 +114,14 @@ impl Category {
     }
 }
 
+/// Whether a group is checked before the user chooses: selected by default
+/// (never a cache reset nor a maintenance, invariant 5) and removable without
+/// the administrator. The one rule of every interface.
+#[must_use]
+pub const fn checked_by_default(selected_by_default: bool, needs_admin: bool) -> bool {
+    selected_by_default && !needs_admin
+}
+
 /// Why a root that exists was not walked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnsafeReason {
@@ -407,6 +415,15 @@ impl ScanGroup {
         self.attributes.selected_by_default
     }
 
+    /// Whether the group is checked before the user chooses.
+    #[must_use]
+    pub const fn is_checked_by_default(&self) -> bool {
+        checked_by_default(
+            self.attributes.selected_by_default,
+            self.attributes.needs_admin,
+        )
+    }
+
     /// Removing these entries goes through the privileged helper.
     #[must_use]
     pub const fn needs_admin(&self) -> bool {
@@ -671,5 +688,78 @@ mod tests {
             Category::is_chosen(&gpu, &BTreeSet::new()),
             "none chosen: all"
         );
+    }
+
+    #[test]
+    fn the_default_check_needs_a_preselection_and_no_administrator() {
+        assert!(checked_by_default(true, false));
+        assert!(!checked_by_default(false, false), "invariant 5");
+        assert!(!checked_by_default(true, true));
+        assert!(!checked_by_default(false, true));
+    }
+
+    /// The names scripts and the history read: public, never renamed.
+    #[test]
+    fn every_stop_reason_and_result_keeps_its_name() {
+        use std::io::ErrorKind;
+
+        use okapi_rules::Variable;
+
+        use crate::{CleanResult, KeepReason, Stop};
+
+        let stops = [
+            (Stop::UnsupportedSystem, "unsupportedSystem"),
+            (
+                Stop::MissingVariable {
+                    variable: Variable::Config,
+                },
+                "missingVariable",
+            ),
+            (
+                Stop::UnreadableVariable {
+                    variable: Variable::Config,
+                    path: "/home/ana/.config".into(),
+                    error: ErrorKind::PermissionDenied,
+                },
+                "unreadableVariable",
+            ),
+            (Stop::MinAgeBeyondClock, "minAgeBeyondClock"),
+            (Stop::Cancelled, "cancelled"),
+        ];
+        for (stop, name) in stops {
+            assert_eq!(stop.key(), name);
+        }
+        let failed = KeepReason::Failed {
+            kind: ErrorKind::PermissionDenied,
+            code: Some(13),
+        };
+        let reasons = [
+            (KeepReason::UnknownItem, "unknown_item"),
+            (KeepReason::Replaced, "replaced"),
+            (KeepReason::Recent, "recent"),
+            (KeepReason::Changed, "changed"),
+            (KeepReason::Excluded, "excluded"),
+            (KeepReason::Protected, "protected"),
+            (failed, "failed"),
+            (KeepReason::Cancelled, "cancelled"),
+        ];
+        for (reason, name) in reasons {
+            assert_eq!(reason.key(), name);
+        }
+        let results = [
+            (CleanResult::Removed { bytes: 1 }, "removed"),
+            (
+                CleanResult::Partial {
+                    bytes: 1,
+                    reason: failed,
+                },
+                "partial",
+            ),
+            (CleanResult::Gone, "gone"),
+            (CleanResult::Kept(failed), "kept"),
+        ];
+        for (result, name) in results {
+            assert_eq!(result.key(), name);
+        }
     }
 }

@@ -48,6 +48,23 @@ pub enum KeepReason {
     Cancelled,
 }
 
+impl KeepReason {
+    /// Its stable name, for scripts and the history.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::UnknownItem => "unknown_item",
+            Self::Replaced => "replaced",
+            Self::Recent => "recent",
+            Self::Changed => "changed",
+            Self::Excluded => "excluded",
+            Self::Protected => "protected",
+            Self::Failed { .. } => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
 /// What became of one entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CleanResult {
@@ -65,6 +82,17 @@ pub enum CleanResult {
 }
 
 impl CleanResult {
+    /// Its stable name, for scripts and the history.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Removed { .. } => "removed",
+            Self::Partial { .. } => "partial",
+            Self::Gone => "gone",
+            Self::Kept(_) => "kept",
+        }
+    }
+
     /// What it freed: the size of every file removed.
     #[must_use]
     pub const fn removed_bytes(self) -> u64 {

@@ -36,6 +36,20 @@ pub enum Stop {
     Cancelled,
 }
 
+impl Stop {
+    /// Its stable name, for scripts and the history.
+    #[must_use]
+    pub const fn key(&self) -> &'static str {
+        match self {
+            Self::UnsupportedSystem => "unsupportedSystem",
+            Self::MissingVariable { .. } => "missingVariable",
+            Self::UnreadableVariable { .. } => "unreadableVariable",
+            Self::MinAgeBeyondClock => "minAgeBeyondClock",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
 /// The stops that need no file to be read: an unsupported system, or the
 /// variables of `os` that have no value (a rule naming `/tmp` would then walk
 /// into a `${HOME}` placed below it).

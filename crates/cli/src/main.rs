@@ -19,10 +19,10 @@ use okapi_engine::{
     clean, scan, settings_min_age,
 };
 use okapi_rules::{Os, RuleSet, THIRD_PARTY_NOTICES, TemplateVariables};
-use okapi_store::{History, Settings, StoreError, journal};
+use okapi_store::{History, HistoryUnavailable, Opened, Settings, StoreError, journal};
 
 use crate::args::{Command, Run, Verbosity};
-use crate::output::{Output, Shown, error_line, history_entry, summaries};
+use crate::output::{Output, Shown, error_line, summaries};
 use crate::selection::Decision;
 use crate::text::{Language, Message, language, text};
 
@@ -267,10 +267,9 @@ fn record_history(
     deletion_log: bool,
     language: Language,
 ) -> bool {
-    match history.record(&history_entry(receipt, SystemTime::now(), deletion_log)) {
+    match history.record_cleaning(receipt, deletion_log) {
         Ok(()) => true,
         Err(error) => {
-            tracing::error!(%error, "history not recorded");
             error_line(&text(language, &Message::HistoryNotRecorded(&error)));
             false
         }
@@ -280,27 +279,24 @@ fn record_history(
 /// The history, opened before a cleaning: with a deletion log asked for, a
 /// history that cannot be kept stops the run before anything is removed.
 fn open_history(deletion_log: bool, language: Language) -> Result<Option<History>, u8> {
-    let opened = okapi_platform::state_directory()
-        .ok_or(None)
-        .and_then(|directory| History::open(&directory).map_err(Some));
-    match opened {
-        Ok(history) => Ok(Some(history)),
-        Err(error) => {
-            if let Some(error) = &error {
-                tracing::warn!(%error, "history unavailable");
-                error_line(&text(language, &Message::Store(error)));
-            } else {
-                tracing::warn!("no state directory, no history");
-                error_line(&text(language, &Message::HistoryDirectoryUnknown));
-            }
-            if deletion_log {
-                tracing::error!("run stopped: the deletion log asked for cannot be kept");
-                error_line(&text(language, &Message::DeletionLogUnavailable));
-                Err(exit::FAILURE)
-            } else {
-                error_line(&text(language, &Message::HistoryContinues));
-                Ok(None)
-            }
+    let directory = okapi_platform::state_directory();
+    let say = |unavailable: &HistoryUnavailable| match unavailable {
+        HistoryUnavailable::NoDirectory => {
+            error_line(&text(language, &Message::HistoryDirectoryUnknown));
+        }
+        HistoryUnavailable::Store(error) => error_line(&text(language, &Message::Store(error))),
+    };
+    match History::open_for_cleaning(directory.as_deref(), deletion_log) {
+        Ok(Opened::Open(history)) => Ok(Some(history)),
+        Ok(Opened::Unavailable(unavailable)) => {
+            say(&unavailable);
+            error_line(&text(language, &Message::HistoryContinues));
+            Ok(None)
+        }
+        Err(unavailable) => {
+            say(&unavailable);
+            error_line(&text(language, &Message::DeletionLogUnavailable));
+            Err(exit::FAILURE)
         }
     }
 }

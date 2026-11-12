@@ -4,13 +4,9 @@
 use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::path::Path;
-use std::time::SystemTime;
 
-use okapi_engine::{
-    Category, CleanOutcome, CleanReceipt, CleanResult, ItemId, KeepReason, Origin, ScanGroup,
-    ScanReport,
-};
-use okapi_store::{HistoryEntry, HistoryOutcome};
+use okapi_engine::{Category, CleanReceipt, CleanResult, ItemId, Origin, ScanGroup, ScanReport};
+use okapi_store::HistoryOutcome;
 use serde::Serialize;
 
 use crate::args::Verbosity;
@@ -60,7 +56,7 @@ fn summary(group: &ScanGroup, categories: &BTreeSet<Category>) -> GroupSummary {
             .map(|item| EntrySummary {
                 path: item.path().to_string_lossy().into_owned(),
                 bytes: item.size(),
-                last_change: seconds(item.last_change()),
+                last_change: okapi_store::seconds(item.last_change()),
             })
             .collect(),
         bytes: group.total_size(),
@@ -94,15 +90,6 @@ fn qualified_rule_name(origin: &Origin) -> String {
 /// to say it: the failure is dropped rather than turned into a panic.
 pub fn error_line(line: &str) {
     let _ = writeln!(io::stderr(), "{line}");
-}
-
-fn seconds(instant: SystemTime) -> i64 {
-    match instant.duration_since(SystemTime::UNIX_EPOCH) {
-        Ok(after) => i64::try_from(after.as_secs()).unwrap_or(i64::MAX),
-        Err(before) => {
-            i64::try_from(before.duration().as_secs()).map_or(i64::MIN, |seconds| -seconds)
-        }
-    }
 }
 
 /// Standard output, written line by line. A closed pipe (`okapi | head`)
@@ -313,138 +300,13 @@ struct CleanJson {
 
 fn clean_json(receipt: &CleanReceipt) -> CleanJson {
     CleanJson {
-        stops: receipt.stops().iter().map(stop_name).collect(),
-        removed_bytes: receipt.removed_bytes(),
-        complete: receipt.is_complete(),
-        outcomes: receipt.outcomes().iter().map(outcome).collect(),
-    }
-}
-
-/// What became of one entry, in the form scripts and the history read.
-fn outcome(outcome: &CleanOutcome) -> HistoryOutcome {
-    let inexact = [outcome.path(), outcome.blocked()]
-        .into_iter()
-        .flatten()
-        .any(|path| path.to_str().is_none());
-    if inexact {
-        tracing::warn!(path = ?outcome.path(), "a name not in UTF-8 is recorded inexactly");
-    }
-    let lossy = |path: &Path| path.to_string_lossy().into_owned();
-    let (result, bytes, reason) = match outcome.result() {
-        CleanResult::Removed { bytes } => ("removed", Some(bytes), None),
-        CleanResult::Partial { bytes, reason } => ("partial", Some(bytes), Some(reason)),
-        CleanResult::Gone => ("gone", None, None),
-        CleanResult::Kept(reason) => ("kept", None, Some(reason)),
-    };
-    let (error, code) = match reason {
-        Some(KeepReason::Failed { kind, code }) => (Some(format!("{kind:?}")), code),
-        _ => (None, None),
-    };
-    HistoryOutcome {
-        path: outcome.path().map(lossy),
-        result,
-        bytes,
-        reason: reason.map(reason_name),
-        error,
-        code,
-        blocked: outcome.blocked().map(lossy),
-        inexact,
-    }
-}
-
-/// The history line of a cleaning that ended at `now`, with every entry when
-/// the user keeps a deletion log.
-pub fn history_entry(receipt: &CleanReceipt, now: SystemTime, deletion_log: bool) -> HistoryEntry {
-    let count = |wanted: fn(&CleanResult) -> bool| {
-        receipt
-            .outcomes()
+        stops: receipt
+            .stops()
             .iter()
-            .filter(|outcome| wanted(&outcome.result()))
-            .count()
-    };
-    HistoryEntry {
-        time: seconds(now),
-        stops: receipt.stops().iter().map(stop_name).collect(),
+            .map(|stop| stop.key().to_owned())
+            .collect(),
         removed_bytes: receipt.removed_bytes(),
-        removed: count(|result| matches!(result, CleanResult::Removed { .. })),
-        partial: count(|result| matches!(result, CleanResult::Partial { .. })),
-        gone: count(|result| matches!(result, CleanResult::Gone)),
-        kept: count(|result| matches!(result, CleanResult::Kept(_))),
         complete: receipt.is_complete(),
-        entries: deletion_log.then(|| receipt.outcomes().iter().map(outcome).collect()),
-    }
-}
-
-/// A stop as scripts and the history keep it.
-fn stop_name(stop: &okapi_engine::Stop) -> String {
-    use okapi_engine::Stop;
-    match stop {
-        Stop::UnsupportedSystem => "unsupportedSystem",
-        Stop::MissingVariable { .. } => "missingVariable",
-        Stop::UnreadableVariable { .. } => "unreadableVariable",
-        Stop::MinAgeBeyondClock => "minAgeBeyondClock",
-        Stop::Cancelled => "cancelled",
-    }
-    .to_owned()
-}
-
-/// A stable name for scripts.
-const fn reason_name(reason: KeepReason) -> &'static str {
-    match reason {
-        KeepReason::UnknownItem => "unknown_item",
-        KeepReason::Replaced => "replaced",
-        KeepReason::Recent => "recent",
-        KeepReason::Changed => "changed",
-        KeepReason::Excluded => "excluded",
-        KeepReason::Protected => "protected",
-        KeepReason::Failed { .. } => "failed",
-        KeepReason::Cancelled => "cancelled",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stops_keep_their_names_in_the_history_whatever_they_carry() {
-        use okapi_engine::Stop;
-        use okapi_rules::Variable;
-        let stop = Stop::UnreadableVariable {
-            variable: Variable::Config,
-            path: "/home/ana/.config".into(),
-            error: std::io::ErrorKind::PermissionDenied,
-        };
-        assert_eq!(stop_name(&stop), "unreadableVariable");
-        assert_eq!(
-            stop_name(&Stop::MissingVariable {
-                variable: Variable::Config
-            }),
-            "missingVariable"
-        );
-        assert_eq!(stop_name(&Stop::MinAgeBeyondClock), "minAgeBeyondClock");
-        assert_eq!(stop_name(&Stop::UnsupportedSystem), "unsupportedSystem");
-        assert_eq!(stop_name(&Stop::Cancelled), "cancelled");
-    }
-
-    #[test]
-    fn dates_are_signed_seconds() {
-        let after = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(5);
-        let before = SystemTime::UNIX_EPOCH - std::time::Duration::from_secs(5);
-        assert_eq!(seconds(after), 5);
-        assert_eq!(seconds(before), -5);
-    }
-
-    #[test]
-    fn reasons_have_stable_names() {
-        assert_eq!(reason_name(KeepReason::Recent), "recent");
-        assert_eq!(reason_name(KeepReason::Cancelled), "cancelled");
-        assert_eq!(
-            reason_name(KeepReason::Failed {
-                kind: io::ErrorKind::PermissionDenied,
-                code: Some(13)
-            }),
-            "failed"
-        );
+        outcomes: receipt.outcomes().iter().map(HistoryOutcome::of).collect(),
     }
 }

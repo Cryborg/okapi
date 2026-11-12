@@ -1,3 +1,3 @@
-fn main() {
-    println!("Hello, world!");
-}
+//! Okapi desktop application (Slint).
+
+fn main() {}

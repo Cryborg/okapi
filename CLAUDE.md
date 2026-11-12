@@ -29,9 +29,15 @@ Ce fichier ne porte que ce qui change le code qu'on écrit. Le « pourquoi » vi
 
 ## Conventions
 
+- Exigence : du Rust idiomatique et irréprochable. Ce qui suit n'est pas négociable, une revue le fait respecter.
 - Code et identifiants en anglais, sans abréviation (sauf acronymes usuels et `i`, `j`, `k`).
 - Aucune chaîne affichée en dur, aucun nombre magique : traductions (`@tr()` côté Slint) et constantes nommées.
-- KISS d'abord : pas d'abstraction pour deux cas, imiter l'existant plutôt que créer un mécanisme parallèle.
+- KISS : la solution la plus simple qui marche, pas d'abstraction spéculative, imiter l'existant plutôt que créer un mécanisme parallèle.
+- DRY : chaque connaissance (règle métier, constante, chemin, format) a une seule source. Deux codes qui se ressemblent par hasard ne sont pas une duplication.
+- SOLID : une responsabilité par module et par type ; `engine` et `tools` dépendent des traits d'`okapi-platform`, jamais d'une implémentation d'OS, ce qui les rend testables avec des doublures.
+- Erreurs typées (`thiserror`) dans les bibliothèques, `anyhow` seulement dans les binaires. Pas d'`unwrap`/`expect` hors tests, pas d'erreur avalée.
+- Les lints de `[workspace.lints]` (clippy pedantic, `unsafe_code` interdit...) sont la norme : on ne les affaiblit jamais globalement. Une exception est locale et justifiée : `#[expect(lint, reason = "...")]`.
+- Toute bibliothèque a sa doc de module (`//!`) et ses tests unitaires à côté du code.
 - Un commentaire n'existe que pour faire comprendre le code, expliquer une correction contre-intuitive, ou retenir une erreur qu'on referait. Jamais de récit, jamais de compte recopié.
 - Aucun tiret cadratin dans un texte affiché.
 - Une modale ne se ferme jamais par un clic en dehors : seulement par ses boutons, Échap ou retour.

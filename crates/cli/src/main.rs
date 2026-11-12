@@ -1,3 +1,3 @@
-fn main() {
-    println!("Hello, world!");
-}
+//! Okapi command line interface.
+
+fn main() {}

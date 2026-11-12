@@ -380,14 +380,6 @@ msgid "Gardées : inconnues de cette analyse"
 msgstr "Kept: unknown to this analysis"
 
 msgctxt "ReceiptLine"
-msgid "Replier {} : {}, {}"
-msgstr "Fold {}: {}, {}"
-
-msgctxt "ReceiptLine"
-msgid "Déplier {} : {}, {}"
-msgstr "Unfold {}: {}, {}"
-
-msgctxt "ReceiptLine"
 msgid "Gardé à cause de : {}"
 msgstr "Kept because of: {}"
 
@@ -634,3 +626,15 @@ msgstr "The cleaning stopped without a receipt. What was removed is in the techn
 msgctxt "ResultLine"
 msgid "{} : {}"
 msgstr "{}: {}"
+
+msgctxt "ReceiptLine"
+msgid "Replier {}"
+msgstr "Fold {}"
+
+msgctxt "ReceiptLine"
+msgid "Déplier {}"
+msgstr "Unfold {}"
+
+msgctxt "ReceiptLine"
+msgid "Éléments : {}. Taille : {}."
+msgstr "Entries: {}. Size: {}."

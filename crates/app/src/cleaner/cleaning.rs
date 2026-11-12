@@ -1205,4 +1205,65 @@ mod tests {
             "{line}"
         );
     }
+
+    /// The checkbox of the line `label`: where it sits and how high it is.
+    fn place(window: &ui::AppWindow, label: &str) -> (f32, f32, f32) {
+        let line = found(window, label);
+        let (position, size) = (line.absolute_position(), line.size());
+        (position.x, position.y, size.height)
+    }
+
+    #[test]
+    fn the_lines_of_the_results_never_overlap_and_fold_away() {
+        let sandbox = Sandbox::new();
+        // Many groups: more lines than the list shows.
+        for rule in ["yarn", "pip", "pipenv", "npm/_cacache", "go-build", "deno"] {
+            let relative = if rule.contains('/') {
+                format!("home/.{rule}/old")
+            } else {
+                format!("home/.cache/{rule}/old")
+            };
+            sandbox.file(&relative);
+        }
+        sandbox.file("home/.cache/thumbnails/normal/old");
+        // Left to choose: its note makes it a line of two.
+        sandbox.file("home/.cache/fontconfig/old");
+        settle_files();
+        let (window, _screen) = on_cleaner(sandbox.read(&sandbox.root.join("state")));
+        window
+            .window()
+            .set_size(slint::PhysicalSize::new(1280, 480));
+        checkbox(&window, "Jeux").invoke_accessible_default_action();
+        let_the_screen_settle();
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
+        // Lines at the top of a list too short for all: never squeezed.
+        let (_, system_top, system_height) = place(&window, "Système");
+        let (_, thumbnails_top, thumbnails_height) = place(&window, "Thumbnail Cache");
+        assert!(
+            thumbnails_top >= system_top + system_height,
+            "a line below the one before: {system_top} + {system_height} > {thumbnails_top}"
+        );
+        let (_, applications_top, _) = place(&window, "Applications");
+        assert!(
+            applications_top >= thumbnails_top + thumbnails_height,
+            "{thumbnails_top} + {thumbnails_height} > {applications_top}"
+        );
+        let (_, _, font_height) = place(&window, "Font Cache");
+        assert!(
+            font_height > thumbnails_height,
+            "a line with its note is higher: {font_height} {thumbnails_height}"
+        );
+        let (category_x, ..) = place(&window, "Système");
+        let (group_x, ..) = place(&window, "Thumbnail Cache");
+        assert!(group_x > category_x, "a group further in than its category");
+        // Folded, Système leaves no room: Applications comes right below.
+        let_the_screen_settle();
+        window.global::<ui::Cleaner>().invoke_fold(0);
+        let (_, applications_top, _) = place(&window, "Applications");
+        assert!(
+            applications_top - (system_top + system_height) < system_height,
+            "folded away: {system_top} {system_height} {applications_top}"
+        );
+    }
 }

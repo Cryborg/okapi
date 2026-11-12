@@ -1,7 +1,9 @@
 // The cleaning under way, and its receipt.
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { ActionButton, ButtonKind, Card, Detail, Footer, Icon, Line, ProgressBar, Title } from "widgets.slint";
+import {
+    ActionButton, ButtonKind, Card, Detail, Footer, FocusRing, Icon, Line, ProgressBar, Title,
+} from "widgets.slint";
 import {
     CleanEnding, CleanPassKind, Cleaner, HistoryState, ReceiptKind, ReceiptLineShown,
     Words,
@@ -18,6 +20,7 @@ export component CleaningPage inherits VerticalLayout {
         padding: Theme.spacing-xxl;
         spacing: Theme.spacing-xl;
         VerticalLayout {
+            vertical-stretch: 0;
             spacing: Theme.spacing-xs;
             Title {
                 text: Cleaner.clean-cancel-asked ? @tr("Annulation du nettoyage") : @tr("Nettoyage en cours");
@@ -112,18 +115,79 @@ component ReceiptLine inherits VerticalLayout {
         : line.kind == ReceiptKind.cancelled ? @tr("Gardées : nettoyage annulé avant leur tour")
         : @tr("Gardées : inconnues de cette analyse");
 
-    ActionButton {
-        text: root.open ? @tr("Replier {} : {}, {}", root.name, line.count, Words.size(line.size))
-            : @tr("Déplier {} : {}, {}", root.name, line.count, Words.size(line.size));
-        kind: ButtonKind.ghost;
+    // Its result, how many and how much: a button that unfolds its entries.
+    Rectangle {
+        min-height: Theme.results-row-height;
+        background: touch.has-hover ? Theme.surface-hover : transparent;
+        accessible-role: button;
+        accessible-label: root.open ? @tr("Replier {}", root.name) : @tr("Déplier {}", root.name);
+        accessible-description: @tr("Éléments : {}. Taille : {}.", line.count, Words.size(line.size));
         accessible-expandable: true;
         accessible-expanded: root.open;
-        clicked => {
+        accessible-action-default => {
             root.open = !root.open;
+        }
+        forward-focus: keys;
+        keys := FocusScope {
+            key-pressed(event) => {
+                if !event.repeat && (event.text == Key.Return || event.text == Key.Space) {
+                    root.open = !root.open;
+                    return accept;
+                }
+                reject
+            }
+        }
+        touch := TouchArea {
+            clicked => {
+                root.open = !root.open;
+            }
+        }
+        FocusRing {
+            shown: keys.has-focus;
+            border-radius: Theme.radius-medium;
+        }
+        Rectangle {
+            y: parent.height - self.height;
+            height: Theme.border-width;
+            background: Theme.border;
+        }
+        HorizontalLayout {
+            padding-left: Theme.spacing-m;
+            padding-right: Theme.spacing-l;
+            spacing: Theme.spacing-m;
+            Icon {
+                source: root.open ? @image-url("../assets/icons/chevron-down.svg") : @image-url("../assets/icons/chevron-right.svg");
+                colorize: Theme.text-2;
+                width: Theme.icon-small;
+                height: Theme.icon-small;
+                y: (parent.height - self.height) / 2;
+            }
+            Line {
+                horizontal-stretch: 1;
+                text: root.name;
+                accessible-role: none;
+                vertical-alignment: center;
+            }
+            Detail {
+                width: Theme.results-entries-width;
+                text: line.count;
+                accessible-role: none;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+            Line {
+                width: Theme.results-size-width;
+                text: Words.size(line.size);
+                accessible-role: none;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
         }
     }
     if root.open: VerticalLayout {
         padding-left: Theme.results-indent;
+        padding-top: Theme.spacing-s;
+        padding-bottom: Theme.spacing-s;
         spacing: Theme.spacing-xxs;
         for entry in line.paths: VerticalLayout {
             Detail {
@@ -220,8 +284,12 @@ export component ReceiptPage inherits VerticalLayout {
             vertical-stretch: 1;
             accessible-role: list;
             accessible-label: @tr("Détail par résultat");
-            ScrollView {
-                VerticalLayout {
+            // The lines at their own height, scrolled.
+            receipt-view := ScrollView {
+                content-width: self.visible-width;
+                content-height: receipt-lines.preferred-height;
+                receipt-lines := VerticalLayout {
+                    width: receipt-view.visible-width;
                     padding: Theme.spacing-s;
                     alignment: start;
                     for line in Cleaner.receipt-lines: ReceiptLine {

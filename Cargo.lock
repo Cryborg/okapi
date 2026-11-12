@@ -3109,6 +3109,7 @@ dependencies = [
  "okapi-platform",
  "okapi-rules",
  "okapi-store",
+ "png",
  "serde_json",
  "slint",
  "slint-build",
@@ -3150,6 +3151,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]

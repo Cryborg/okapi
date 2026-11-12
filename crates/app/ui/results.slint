@@ -57,8 +57,9 @@ component Fold inherits Rectangle {
 }
 
 // One line of the results: a category (its fold and its checkbox) or one of
-// its groups (a checkbox). A hidden line takes no room and no focus.
-component ResultLine inherits Rectangle {
+// its groups (a checkbox), indented below it. A layout of its own height: a
+// hidden line takes no room and no focus.
+component ResultLine inherits VerticalLayout {
     in property <ResultRow> line;
     in property <int> index;
     // Where the focused line sits, for the list to bring it into view.
@@ -80,7 +81,7 @@ component ResultLine inherits Rectangle {
             background: Theme.border;
         }
         HorizontalLayout {
-            padding-left: line.is-category ? Theme.spacing-s : Theme.results-indent + Theme.spacing-s;
+            padding-left: Theme.spacing-s;
             padding-right: Theme.spacing-l;
             padding-top: Theme.spacing-xs;
             padding-bottom: Theme.spacing-xs;
@@ -88,10 +89,13 @@ component ResultLine inherits Rectangle {
             if line.is-category: Fold {
                 folded: line.folded;
                 category: root.name;
-                y: (parent.height - self.height) / 2;
                 clicked => {
                     Cleaner.fold(root.index);
                 }
+            }
+            // A group's checkbox sits further in than its category's.
+            if !line.is-category: Rectangle {
+                width: Theme.icon-box + Theme.results-indent;
             }
             check := Rectangle {
                 horizontal-stretch: 1;
@@ -448,9 +452,15 @@ export component ResultsPage inherits VerticalLayout {
                     height: Theme.border-width;
                     background: Theme.border;
                 }
+                // The lines at their own height, scrolled: never stretched or
+                // squeezed to the height shown.
                 tree := ScrollView {
                     vertical-stretch: 1;
-                    VerticalLayout {
+                    content-width: self.visible-width;
+                    content-height: lines.preferred-height;
+                    lines := VerticalLayout {
+                        width: tree.visible-width;
+                        alignment: start;
                         for row[index] in Cleaner.results: ResultLine {
                             line: row;
                             index: index;

@@ -15,6 +15,7 @@ slint = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+png = { workspace = true }
 i-slint-backend-testing = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

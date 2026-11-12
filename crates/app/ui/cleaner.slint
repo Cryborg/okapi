@@ -155,17 +155,30 @@ component Choosing inherits VerticalLayout {
             Row {
                 first := CategoryCard {
                     index: 0;
+                    // Columns of one width, whatever each card says.
+                    min-width: 0px;
+                    preferred-width: 0px;
+                    horizontal-stretch: 1;
                 }
                 CategoryCard {
                     index: 1;
+                    min-width: 0px;
+                    preferred-width: 0px;
+                    horizontal-stretch: 1;
                 }
             }
             Row {
                 CategoryCard {
                     index: 2;
+                    min-width: 0px;
+                    preferred-width: 0px;
+                    horizontal-stretch: 1;
                 }
                 CategoryCard {
                     index: 3;
+                    min-width: 0px;
+                    preferred-width: 0px;
+                    horizontal-stretch: 1;
                 }
             }
         }
@@ -313,6 +326,7 @@ component Scanning inherits VerticalLayout {
         padding: Theme.spacing-xxl;
         spacing: Theme.spacing-xl;
         VerticalLayout {
+            vertical-stretch: 0;
             spacing: Theme.spacing-m;
             VerticalLayout {
                 spacing: Theme.spacing-xs;

@@ -111,14 +111,6 @@ msgctxt "Words"
 msgid "{} {}"
 msgstr "{} {}"
 
-msgctxt "CategoryCard"
-msgid "À choisir : {}"
-msgstr "Your choice: {}"
-
-msgctxt "CategoryCard"
-msgid "À choisir"
-msgstr "Your choice"
-
 msgctxt "Spared"
 msgid "Toujours épargnés : fichiers modifiés depuis moins de {} min. Exclusions : {}."
 msgstr "Always spared: files changed less than {} min ago. Exclusions: {}."
@@ -478,10 +470,6 @@ msgstr "Needs administrator rights, which the interface cannot obtain yet."
 msgctxt "ResultLine"
 msgid "Présélectionné"
 msgstr "Preselected"
-
-msgctxt "ResultLine"
-msgid "À choisir"
-msgstr "Your choice"
 
 msgctxt "ResultLine"
 msgid "Administrateur"

@@ -1643,8 +1643,8 @@ pub mod tests {
         assert_eq!(gpu.accessible_checked(), Some(false), "invariant 5");
         assert!(
             gpu.accessible_description()
-                .is_some_and(|description| description.starts_with("À choisir")),
-            "the badge is read"
+                .is_some_and(|description| description.ends_with("sera plus lent.")),
+            "the warning is read"
         );
         assert!(shows(&window, "Catégories sélectionnées : 3 sur 4"));
         assert!(shows(

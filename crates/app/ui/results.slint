@@ -3,7 +3,8 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import {
-    ActionButton, ButtonKind, Badge, Card, CheckMark, Detail, Footer, FocusRing, Icon, Line, Title,
+    ActionButton, ButtonKind, Badge, Card, CheckMark, Detail, Footer, FocusRing, Icon, IconNote,
+    Line, Title,
 } from "widgets.slint";
 import {
     CheckState, Cleaner, IssueKind, IssueShown, ProblemBanner, ResultBadge, ResultRow,
@@ -65,8 +66,9 @@ component ResultLine inherits VerticalLayout {
     // Where the focused line sits, for the list to bring it into view.
     callback focused(length, length);
 
+    // A group left to the user has no badge: its note, a warning, says why.
     property <string> badge-text: line.badge == ResultBadge.preselected ? @tr("Présélectionné")
-        : line.badge == ResultBadge.to-choose ? @tr("À choisir") : @tr("Administrateur");
+        : @tr("Administrateur");
     property <string> name: line.is-category ? Words.category(line.category) : line.label;
     // Why a group is left to the user, or out of reach.
     property <string> note: line.badge == ResultBadge.to-choose
@@ -108,6 +110,7 @@ component ResultLine inherits VerticalLayout {
                 accessible-description: line.state == CheckState.partial ? @tr("sélection partielle")
                     : line.is-category ? (line.enabled ? "" : @tr("À choisir groupe par groupe"))
                     : line.badge == ResultBadge.preselected ? root.badge-text
+                    : line.badge == ResultBadge.to-choose ? root.note
                     : @tr("{} : {}", root.badge-text, root.note);
                 accessible-action-default => {
                     if line.enabled {
@@ -174,22 +177,23 @@ component ResultLine inherits VerticalLayout {
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
-                            if !line.is-category: Badge {
+                            if !line.is-category && line.badge != ResultBadge.to-choose: Badge {
                                 text: root.badge-text;
                                 icon: line.badge == ResultBadge.preselected ? @image-url("../assets/icons/check.svg")
-                                    : line.badge == ResultBadge.to-choose ? @image-url("../assets/icons/hourglass.svg")
                                     : @image-url("../assets/icons/shield.svg");
-                                tone: line.badge == ResultBadge.preselected ? Theme.accent
-                                    : line.badge == ResultBadge.admin ? Theme.admin : Theme.warning;
-                                tone-soft: line.badge == ResultBadge.preselected ? Theme.accent-soft
-                                    : line.badge == ResultBadge.admin ? Theme.admin-soft : Theme.warning-soft;
+                                tone: line.badge == ResultBadge.preselected ? Theme.accent : Theme.admin;
+                                tone-soft: line.badge == ResultBadge.preselected ? Theme.accent-soft : Theme.admin-soft;
                                 accessible-role: none;
                             }
                         }
-                        if !line.is-category && line.badge != ResultBadge.preselected: Detail {
+                        if !line.is-category && line.badge == ResultBadge.to-choose: IconNote {
+                            text: root.note;
+                            icon: @image-url("../assets/icons/triangle-alert.svg");
+                            tone: Theme.warning;
+                        }
+                        if !line.is-category && line.badge == ResultBadge.admin: Detail {
                             text: root.note;
                             accessible-role: none;
-                            color: line.badge == ResultBadge.to-choose ? Theme.warning : Theme.text-2;
                         }
                     }
                 }

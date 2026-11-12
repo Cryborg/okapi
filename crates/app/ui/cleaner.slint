@@ -2,8 +2,8 @@
 // it ended. Rust keeps the state (src/cleaner.rs): this file draws it.
 import { Theme } from "theme.slint";
 import {
-    ActionButton, ButtonKind, Badge, Card, CheckMark, Detail, Footer, FocusRing, Icon, Line,
-    ProgressBar, Title,
+    ActionButton, ButtonKind, Card, CheckMark, Detail, Footer, FocusRing, Icon, IconNote,
+    Line, ProgressBar, Title,
 } from "widgets.slint";
 import {
     CategoryChoice, CategoryKind, Cleaner, CleanerStep, OutcomeKind, ProblemBanner, RowState,
@@ -28,9 +28,7 @@ component CategoryCard inherits Rectangle {
     accessible-checkable: true;
     accessible-checked: choice.checked;
     accessible-label: Words.category(choice.kind);
-    accessible-description: choice.to-choose
-        ? @tr("À choisir : {}", Words.description(choice.kind))
-        : Words.description(choice.kind);
+    accessible-description: Words.description(choice.kind);
     accessible-action-default => {
         Cleaner.toggle(index);
     }
@@ -70,23 +68,20 @@ component CategoryCard inherits Rectangle {
             horizontal-stretch: 1;
             spacing: Theme.spacing-xs;
             alignment: start;
-            HorizontalLayout {
-                spacing: Theme.spacing-s;
-                alignment: start;
-                Text {
-                    text: Words.category(choice.kind);
-                    accessible-role: none;
-                    color: Theme.text;
-                    font-size: Theme.font-heading;
-                    font-weight: Theme.weight-semibold;
-                }
-                if choice.to-choose: Badge {
-                    text: @tr("À choisir");
-                    icon: @image-url("../assets/icons/hourglass.svg");
-                    accessible-role: none;
-                }
+            Text {
+                text: Words.category(choice.kind);
+                accessible-role: none;
+                color: Theme.text;
+                font-size: Theme.font-heading;
+                font-weight: Theme.weight-semibold;
             }
-            Detail {
+            // Left to the user: its description, a warning, says the cost.
+            if choice.to-choose: IconNote {
+                text: Words.description(choice.kind);
+                icon: @image-url("../assets/icons/triangle-alert.svg");
+                tone: Theme.warning;
+            }
+            if !choice.to-choose: Detail {
                 text: Words.description(choice.kind);
                 accessible-role: none;
             }

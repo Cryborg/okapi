@@ -38,6 +38,27 @@ export component Icon inherits Image {
     accessible-role: none;
 }
 
+// A small note led by an icon, both in its tone: the icon only marks it,
+// the words say it all. Never read: the control it explains reads it.
+export component IconNote inherits HorizontalLayout {
+    in property <string> text;
+    in property <image> icon;
+    in property <color> tone: Theme.text-2;
+    spacing: Theme.spacing-s;
+    Icon {
+        source: root.icon;
+        colorize: root.tone;
+        width: Theme.icon-small;
+        height: Theme.icon-small;
+    }
+    Detail {
+        horizontal-stretch: 1;
+        text: root.text;
+        color: root.tone;
+        accessible-role: none;
+    }
+}
+
 // The ring around the control that has the keyboard focus.
 export component FocusRing inherits Rectangle {
     in property <bool> shown;

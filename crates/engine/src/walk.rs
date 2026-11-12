@@ -26,6 +26,9 @@ pub(crate) struct Readers {
     /// Who owns it, and for a directory whether it is sticky (a test cannot
     /// give a file to another user).
     pub(crate) ownership: fn(&Metadata) -> Option<Ownership>,
+    /// Whether the entry at a path, its link never followed, is the root of
+    /// a mount; `Ok(None)` when the system cannot tell (a test cannot mount).
+    pub(crate) mount_root: fn(&Path) -> io::Result<Option<bool>>,
 }
 
 impl Readers {
@@ -33,6 +36,7 @@ impl Readers {
         identity: okapi_platform::file_identity,
         last_change: okapi_platform::last_change,
         ownership: okapi_platform::ownership,
+        mount_root: okapi_platform::mount_root,
     };
 }
 
@@ -70,8 +74,9 @@ pub(crate) struct WalkContext<'a> {
     pub(crate) exclusions: &'a Exclusions,
     pub(crate) misc: &'a MiscRules,
     pub(crate) protected: &'a ProtectedRoots,
-    /// The identities of every scan root: a root met below another one keeps
-    /// its own entries and is never entered by the outer walk.
+    /// The identities of every scan root, withheld ones included: a root met
+    /// below another one keeps its own entries (none, when withheld) and is
+    /// never entered by the outer walk.
     pub(crate) roots: &'a BTreeSet<FileIdentity>,
     pub(crate) readers: Readers,
     pub(crate) limits: Limits,
@@ -115,9 +120,9 @@ pub(crate) struct Observed {
 }
 
 impl Observed {
-    /// What the scan reads by path. It does not detect a bind mount of the
-    /// same device, so the entry is taken as no mount root.
-    fn from_metadata(metadata: &Metadata, readers: Readers) -> Self {
+    /// What the scan reads by path, with whether the entry is the root of a
+    /// mount, read apart ([`Walker::mount_root`]).
+    fn from_metadata(metadata: &Metadata, readers: Readers, mount_root: bool) -> Self {
         let file_type = metadata.file_type();
         let kind = if file_type.is_symlink() {
             EntryType::Link
@@ -132,7 +137,7 @@ impl Observed {
             kind,
             identity: (readers.identity)(metadata),
             last_change: (readers.last_change)(metadata),
-            mount_root: Some(false),
+            mount_root: Some(mount_root),
         }
     }
 }
@@ -257,15 +262,20 @@ struct Walker<'a> {
 /// cutoff (content or inode, see [`Readers::last_change`]), or a directory last
 /// changed at or before the cutoff whose whole contents are offered (it is
 /// then one entry). Anything else is held back and keeps its parent open: a
-/// link, a special file, another device, a variable's directory or one of its
-/// ancestors, another scan root, an unreadable or recent entry, an excluded or
-/// protected name, a name a running session relies on, an entry the remover
-/// may not remove from a sticky directory, or a limit reached.
+/// link, a special file, another device or the root of a mount, a variable's
+/// directory or one of its ancestors, another scan root, an unreadable or
+/// recent entry, an excluded or protected name, a name a running session
+/// relies on, an entry the remover may not remove from a sticky directory, or
+/// a limit reached.
 ///
 /// No link is followed: every entry is judged by metadata read without
 /// following links, and a directory is listed only if, once opened, it is
 /// still the directory that was judged. A swap between the two reads cannot be
-/// excluded by paths alone: cleaning checks every entry again.
+/// excluded by paths alone (a bind mount of a directory onto itself keeps its
+/// identity; a component swapped for a link is followed by the path): cleaning
+/// checks every entry again, through descriptors.
+///
+/// The root itself is never judged as a mount: it may be one (`/tmp`).
 pub(crate) fn walk(root: &Path, root_identity: FileIdentity, context: WalkContext<'_>) -> Walk {
     let mut walker = Walker {
         context,
@@ -358,7 +368,10 @@ impl Walker<'_> {
                 return Resolved::held_back();
             }
         };
-        let observed = Observed::from_metadata(&metadata, self.context.readers);
+        let Some(mount_root) = self.mount_root(path, &metadata) else {
+            return Resolved::held_back();
+        };
+        let observed = Observed::from_metadata(&metadata, self.context.readers, mount_root);
         let accepted = match self.context.by_status(&observed, self.device, None) {
             Ok(accepted) => accepted,
             Err(reason) => return self.held_back(path, reason),
@@ -378,6 +391,27 @@ impl Walker<'_> {
             return self.limit(Limit::Depth);
         };
         self.directory(path, accepted.last_change, accepted.identity, depth_left)
+    }
+
+    /// Whether the entry at `path`, a file or a directory, is the root of a
+    /// mount, a bind mount of the same device included: such an entry keeps
+    /// its parent open, as another device does. `None` when it is gone or its
+    /// status cannot be read (traced and counted here). A system that cannot
+    /// tell gives `false`, unlike the cleaning's fail-closed reading: the
+    /// cleaning refuses to run on such a system (`tells_mount_roots`).
+    fn mount_root(&mut self, path: &Path, metadata: &Metadata) -> Option<bool> {
+        if !(metadata.is_file() || metadata.is_dir()) {
+            return Some(false);
+        }
+        match (self.context.readers.mount_root)(path) {
+            Ok(mount_root) => Some(mount_root.unwrap_or(false)),
+            Err(error) if is_absent(&error) => None,
+            Err(error) => {
+                tracing::debug!(path = %path.display(), %error, "mount status unreadable");
+                self.walk.stats.unreadable += 1;
+                None
+            }
+        }
     }
 
     /// Whether the remover may remove the entry read as `metadata` from a

@@ -156,6 +156,7 @@ impl<'a> Run<'a> {
                 identity: file_identity,
                 last_change: modification_time,
                 ownership: marked_ownership,
+                mount_root: okapi_platform::mount_root,
             },
             limits: Limits::DEFAULT,
             user: Some(TEST_USER),
@@ -1413,6 +1414,441 @@ fn a_variable_that_cannot_be_located_stops_the_scan() {
     assert!(report.issues()[0].stops_the_scan());
 }
 
+/// The modification date that marks an entry as the root of a mount on the
+/// same device (a bind mount), for the mount readers below.
+const BIND_MARK: Duration = Duration::from_hours(300_004);
+
+fn bears_bind_mark(path: &Path) -> std::io::Result<bool> {
+    let modified = fs::symlink_metadata(path)?.modified()?;
+    Ok(modified == SystemTime::UNIX_EPOCH + BIND_MARK)
+}
+
+/// Mount roots as the marks say.
+fn mount_root_when_marked(path: &Path) -> std::io::Result<Option<bool>> {
+    bears_bind_mark(path).map(Some)
+}
+
+/// A mount status that cannot be read for marked entries.
+fn mount_status_refused_when_marked(path: &Path) -> std::io::Result<Option<bool>> {
+    if bears_bind_mark(path)? {
+        return Err(std::io::ErrorKind::PermissionDenied.into());
+    }
+    Ok(Some(false))
+}
+
+/// Marked entries are gone by the time their mount status is read.
+fn gone_when_marked(path: &Path) -> std::io::Result<Option<bool>> {
+    if bears_bind_mark(path)? {
+        return Err(std::io::ErrorKind::NotFound.into());
+    }
+    Ok(Some(false))
+}
+
+/// A system that cannot tell a mount root.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "a stand-in for the mount reader, whose signature it must have"
+)]
+fn mount_root_unknown(_path: &Path) -> std::io::Result<Option<bool>> {
+    Ok(None)
+}
+
+#[test]
+fn a_bind_mounted_directory_or_file_keeps_its_parent_and_is_never_entered() {
+    for bound in ["directory", "file"] {
+        let fixture = Fixture::new();
+        let root = fixture.directory("data");
+        let parent = format!("data/{bound}-parent");
+        let old = fixture.file(&format!("{parent}/old"), 1, 2 * HOUR);
+        let marked = if bound == "directory" {
+            fixture.file(&format!("{parent}/bound/deep"), 1, 2 * HOUR);
+            fixture.path(&format!("{parent}/bound"))
+        } else {
+            fixture.file(&format!("{parent}/bound"), 1, 2 * HOUR)
+        };
+        mark(&marked, BIND_MARK);
+        fixture.age(&fixture.path(&parent), 2 * HOUR);
+        let rule = target_at(&root);
+        let mut run = Run::new(&fixture, vec![RuleEntry::Target(&rule)]);
+        run.readers.mount_root = mount_root_when_marked;
+        let report = run.scan();
+        assert_eq!(
+            offered_paths(&report),
+            [old],
+            "{bound}: neither its parent whole nor anything below it"
+        );
+        assert_eq!(report.stats().other_filesystems(), 1, "{bound}");
+        assert_eq!(report.stats().unreadable(), 0, "{bound}");
+        assert_eq!(report.issues(), &[], "{bound}");
+    }
+}
+
+#[test]
+fn a_mount_status_that_cannot_be_read_holds_back_and_is_counted_once() {
+    let fixture = Fixture::new();
+    let root = fixture.directory("data");
+    let old = fixture.file("data/parent/old", 1, 2 * HOUR);
+    fixture.file("data/parent/locked/deep", 1, 2 * HOUR);
+    mark(&fixture.path("data/parent/locked"), BIND_MARK);
+    fixture.age(&fixture.path("data/parent"), 2 * HOUR);
+    let rule = target_at(&root);
+    let mut run = Run::new(&fixture, vec![RuleEntry::Target(&rule)]);
+    run.readers.mount_root = mount_status_refused_when_marked;
+    let report = run.scan();
+    assert_eq!(offered_paths(&report), [old]);
+    assert_eq!(report.stats().unreadable(), 1);
+    assert_eq!(report.stats().other_filesystems(), 0);
+    assert_eq!(report.issues(), &[], "counted, not reported twice");
+}
+
+#[test]
+fn an_entry_gone_before_its_mount_status_is_read_is_not_counted() {
+    let fixture = Fixture::new();
+    let root = fixture.directory("data");
+    let old = fixture.file("data/parent/old", 1, 2 * HOUR);
+    let gone = fixture.file("data/parent/gone", 1, 2 * HOUR);
+    mark(&gone, BIND_MARK);
+    fixture.age(&fixture.path("data/parent"), 2 * HOUR);
+    let rule = target_at(&root);
+    let mut run = Run::new(&fixture, vec![RuleEntry::Target(&rule)]);
+    run.readers.mount_root = gone_when_marked;
+    let report = run.scan();
+    assert_eq!(offered_paths(&report), [old], "nor its parent, whole");
+    assert_eq!(report.stats().unreadable(), 0);
+    assert_eq!(report.stats().other_filesystems(), 0);
+}
+
+#[test]
+fn a_system_that_cannot_tell_mount_roots_scans_as_before() {
+    let fixture = Fixture::new();
+    let root = fixture.directory("data");
+    fixture.file("data/parent/sub/old", 1, 2 * HOUR);
+    fixture.age(&fixture.path("data/parent/sub"), 2 * HOUR);
+    fixture.age(&fixture.path("data/parent"), 2 * HOUR);
+    let rule = target_at(&root);
+    let mut run = Run::new(&fixture, vec![RuleEntry::Target(&rule)]);
+    run.readers.mount_root = mount_root_unknown;
+    assert_eq!(offered_paths(&run.scan()), [fixture.path("data/parent")]);
+}
+
+#[test]
+fn a_scan_root_that_is_a_mount_is_still_walked() {
+    let fixture = Fixture::new();
+    let root = fixture.directory("tmp");
+    let old = fixture.file("tmp/old", 1, 2 * HOUR);
+    mark(&root, BIND_MARK);
+    let rule = target_at(&root);
+    let mut run = Run::new(&fixture, vec![RuleEntry::Target(&rule)]);
+    run.readers.mount_root = mount_root_when_marked;
+    let report = run.scan();
+    assert_eq!(offered_paths(&report), [old]);
+    assert_eq!(report.stats().other_filesystems(), 0);
+}
+
+/// An expansion `apps/*/cache/data`, with an old file below `local` and
+/// below `bound`, and `marked` marked as a bind mount.
+fn expansion_with(fixture: &Fixture, marked: &str) -> CleanTarget {
+    let base = fixture.directory("apps");
+    fixture.file("apps/local/cache/data/old", 1, 2 * HOUR);
+    fixture.file("apps/bound/cache/data/old", 1, 2 * HOUR);
+    mark(&fixture.path(marked), BIND_MARK);
+    target(&format!(
+        r#"{{"path": "{}", "subcategory": "Apps", "childSubdir": "cache/data"}}"#,
+        base.display()
+    ))
+}
+
+#[test]
+fn an_expansion_never_goes_through_a_bind_mount() {
+    for marked in ["apps/bound", "apps/bound/cache", "apps/bound/cache/data"] {
+        let fixture = Fixture::new();
+        let rule = expansion_with(&fixture, marked);
+        let mut run = Run::new(&fixture, vec![RuleEntry::Target(&rule)]);
+        run.readers.mount_root = mount_root_when_marked;
+        let report = run.scan();
+        assert_eq!(
+            offered_paths(&report),
+            [fixture.path("apps/local/cache/data/old")],
+            "{marked}"
+        );
+        assert_eq!(report.stats().other_filesystems(), 1, "{marked}");
+        assert_eq!(report.issues(), &[], "{marked}");
+    }
+}
+
+#[test]
+fn a_root_withheld_by_an_expansion_still_joins_the_rules_that_share_it() {
+    for (reset_age, offered) in [("", true), (r#", "minAgeDays": 1"#, false)] {
+        let fixture = Fixture::new();
+        let base = fixture.directory("apps");
+        let old = fixture.file("apps/bound/cache/old", 1, 2 * HOUR);
+        mark(&fixture.path("apps/bound"), BIND_MARK);
+        // A plain rule on the directory itself (its own path may be a
+        // mount, so it walks it), and a cache reset reaching it across the
+        // bind mount (withheld); in both orders.
+        let plain = target_at(&fixture.path("apps/bound/cache"));
+        let reset = target(&format!(
+            r#"{{"path": "{}", "subcategory": "Shaders", "childSubdir": "cache", "cacheReset": true{reset_age}}}"#,
+            base.display()
+        ));
+        for rules in [[&plain, &reset], [&reset, &plain]] {
+            let mut run = Run::new(&fixture, rules.into_iter().map(RuleEntry::Target).collect());
+            run.readers.mount_root = mount_root_when_marked;
+            let report = run.scan();
+            if offered {
+                assert_eq!(offered_paths(&report), std::slice::from_ref(&old));
+                let group = &report.groups()[0];
+                assert!(!group.is_selected_by_default(), "the AND of both rules");
+                assert!(group.is_cache_reset());
+            } else {
+                assert_eq!(
+                    offered_paths(&report),
+                    Vec::<PathBuf>::new(),
+                    "the strictest age of both rules"
+                );
+            }
+        }
+    }
+}
+
+/// Mount roots by name: an entry named `bound` is one, whatever its inode
+/// (a hard link elsewhere shares the inode, not the mount).
+fn mount_root_when_named_bound(path: &Path) -> std::io::Result<Option<bool>> {
+    fs::symlink_metadata(path)?;
+    Ok(Some(
+        path.file_name() == Some(std::ffi::OsStr::new("bound")),
+    ))
+}
+
+#[test]
+fn a_bound_file_target_still_joins_the_rule_that_offers_the_same_file() {
+    let fixture = Fixture::new();
+    let real = fixture.file("home/real", 1, 2 * HOUR);
+    fs::hard_link(&real, fixture.path("home/bound")).unwrap();
+    let file = |path: &Path, subcategory: &str| -> SingleFileTarget {
+        serde_json::from_str(&format!(
+            r#"{{"path": "{}", "subcategory": "{subcategory}"}}"#,
+            path.display()
+        ))
+        .unwrap()
+    };
+    let bound = file(&fixture.path("home/bound"), "Bound");
+    let direct = file(&real, "Direct");
+    for targets in [[&bound, &direct], [&direct, &bound]] {
+        let mut run = Run::new(&fixture, targets.into_iter().map(RuleEntry::File).collect());
+        run.readers.mount_root = mount_root_when_named_bound;
+        let report = run.scan();
+        assert_eq!(offered_paths(&report), std::slice::from_ref(&real));
+        assert_eq!(
+            report.groups()[0].origins().len(),
+            2,
+            "one group, both rules"
+        );
+        assert_eq!(report.stats().other_filesystems(), 1);
+    }
+}
+
+#[test]
+fn a_withheld_root_that_cannot_be_read_is_reported() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    if reads_through_permissions(&fixture) {
+        return;
+    }
+    let rule = expansion_with(&fixture, "apps/bound");
+    let locked = fixture.path("apps/bound/cache");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let mut run = Run::new(&fixture, vec![RuleEntry::Target(&rule)]);
+    run.readers.mount_root = mount_root_when_marked;
+    let report = run.scan();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        offered_paths(&report),
+        [fixture.path("apps/local/cache/data/old")]
+    );
+    assert!(matches!(
+        report.issues(),
+        [ScanIssue::UnreadableRoot { path, .. }] if *path == fixture.path("apps/bound/cache/data")
+    ));
+}
+
+#[test]
+fn a_root_withheld_through_a_link_is_walked_by_its_real_path_with_both_rules() {
+    use std::os::unix::fs::symlink;
+
+    // The link as the expanded child, then as a segment below it.
+    for (link, target_of_link) in [("apps/x", "../real"), ("apps/x/cache", "../../real/cache")] {
+        let fixture = Fixture::new();
+        let base = fixture.directory("apps");
+        let old = fixture.file("real/cache/old", 1, 2 * HOUR);
+        if link == "apps/x/cache" {
+            fixture.directory("apps/x");
+        }
+        symlink(target_of_link, fixture.path(link)).unwrap();
+        let plain = target_at(&fixture.path("real/cache"));
+        let reset = target(&format!(
+            r#"{{"path": "{}", "subcategory": "Shaders", "childSubdir": "cache", "cacheReset": true}}"#,
+            base.display()
+        ));
+        for rules in [[&plain, &reset], [&reset, &plain]] {
+            let report =
+                Run::new(&fixture, rules.into_iter().map(RuleEntry::Target).collect()).scan();
+            assert_eq!(offered_paths(&report), std::slice::from_ref(&old), "{link}");
+            let group = &report.groups()[0];
+            assert!(
+                !group.is_selected_by_default(),
+                "{link}: the AND of both rules"
+            );
+            assert!(group.is_cache_reset(), "{link}");
+        }
+    }
+}
+
+#[test]
+fn a_root_withheld_below_another_rules_root_is_offered_by_nobody() {
+    let fixture = Fixture::new();
+    let base = fixture.directory("apps");
+    let top = fixture.file("apps/bound/top", 1, 2 * HOUR);
+    fixture.file("apps/bound/cache/old", 1, 2 * HOUR);
+    mark(&fixture.path("apps/bound"), BIND_MARK);
+    // A plain rule on the bound directory itself (its own path may be a
+    // mount), and a cache reset that reaches `cache` across the bind mount.
+    let plain = target_at(&fixture.path("apps/bound"));
+    let reset = target(&format!(
+        r#"{{"path": "{}", "subcategory": "Shaders", "childSubdir": "cache", "cacheReset": true}}"#,
+        base.display()
+    ));
+    let mut run = Run::new(
+        &fixture,
+        vec![RuleEntry::Target(&plain), RuleEntry::Target(&reset)],
+    );
+    run.readers.mount_root = mount_root_when_marked;
+    let report = run.scan();
+    assert_eq!(
+        offered_paths(&report),
+        [top],
+        "the reset's root is reserved: never offered without its restrictions"
+    );
+}
+
+#[test]
+fn an_expansion_base_that_is_a_mount_is_still_expanded() {
+    let fixture = Fixture::new();
+    let rule = expansion_with(&fixture, "apps");
+    let mut run = Run::new(&fixture, vec![RuleEntry::Target(&rule)]);
+    run.readers.mount_root = mount_root_when_marked;
+    let report = run.scan();
+    assert_eq!(
+        offered_paths(&report),
+        [
+            fixture.path("apps/bound/cache/data/old"),
+            fixture.path("apps/local/cache/data/old")
+        ]
+    );
+    assert_eq!(report.stats().other_filesystems(), 0);
+}
+
+#[test]
+fn an_expansion_reports_a_mount_status_it_cannot_read_and_skips_one_gone() {
+    let fixture = Fixture::new();
+    let rule = expansion_with(&fixture, "apps/bound/cache");
+    let local = fixture.path("apps/local/cache/data/old");
+    let mut run = Run::new(&fixture, vec![RuleEntry::Target(&rule)]);
+    run.readers.mount_root = mount_status_refused_when_marked;
+    let report = run.scan();
+    assert_eq!(offered_paths(&report), std::slice::from_ref(&local));
+    assert!(matches!(
+        report.issues(),
+        [ScanIssue::UnreadableRoot { path, .. }] if *path == fixture.path("apps/bound/cache")
+    ));
+    assert_eq!(report.stats().other_filesystems(), 0);
+
+    run.readers.mount_root = gone_when_marked;
+    let report = run.scan();
+    assert_eq!(offered_paths(&report), std::slice::from_ref(&local));
+    assert_eq!(report.issues(), &[]);
+    assert_eq!(report.stats().other_filesystems(), 0);
+
+    run.readers.mount_root = mount_root_unknown;
+    assert_eq!(
+        offered_paths(&run.scan()),
+        [
+            fixture.path("apps/bound/cache/data/old"),
+            fixture.path("apps/local/cache/data/old")
+        ],
+        "a system that cannot tell"
+    );
+}
+
+/// A mount status that cannot be read for entries on the marked device.
+fn mount_status_refused_when_mounted(path: &Path) -> std::io::Result<Option<bool>> {
+    let modified = fs::symlink_metadata(path)?.modified()?;
+    if modified == SystemTime::UNIX_EPOCH + MOUNTED_MARK {
+        return Err(std::io::ErrorKind::PermissionDenied.into());
+    }
+    Ok(Some(false))
+}
+
+#[test]
+fn an_expansion_leaves_another_device_without_reading_its_mount_status() {
+    let fixture = Fixture::new();
+    // Marked bound first, then on another device: the last mark wins.
+    let rule = expansion_with(&fixture, "apps/bound");
+    mark(&fixture.path("apps/bound"), MOUNTED_MARK);
+    let mut run = Run::new(&fixture, vec![RuleEntry::Target(&rule)]);
+    run.readers.identity = other_device_when_marked;
+    run.readers.mount_root = mount_status_refused_when_mounted;
+    let report = run.scan();
+    assert_eq!(report.issues(), &[], "its status was never asked for");
+    assert_eq!(report.stats().unreadable(), 0);
+    assert_eq!(report.stats().other_filesystems(), 1);
+    assert_eq!(
+        offered_paths(&report),
+        [fixture.path("apps/local/cache/data/old")]
+    );
+}
+
+#[test]
+fn a_file_target_that_is_a_mount_root_is_not_offered() {
+    let fixture = Fixture::new();
+    let bound = fixture.file("home/.xsession-errors.old", 1, 2 * HOUR);
+    mark(&bound, BIND_MARK);
+    let target: SingleFileTarget = serde_json::from_str(&format!(
+        r#"{{"path": "{}", "subcategory": "Errors"}}"#,
+        bound.display()
+    ))
+    .unwrap();
+    let mut run = Run::new(&fixture, vec![RuleEntry::File(&target)]);
+    run.readers.mount_root = mount_root_when_marked;
+    let report = run.scan();
+    assert_eq!(report.groups(), &[]);
+    assert_eq!(report.issues(), &[]);
+    assert_eq!(report.stats().other_filesystems(), 1);
+
+    run.readers.mount_root = mount_status_refused_when_marked;
+    let report = run.scan();
+    assert_eq!(report.groups(), &[]);
+    assert!(matches!(
+        report.issues(),
+        [ScanIssue::UnreadableRoot { path, .. }] if *path == bound
+    ));
+    assert_eq!(report.stats().other_filesystems(), 0);
+
+    run.readers.mount_root = gone_when_marked;
+    let report = run.scan();
+    assert_eq!(report.groups(), &[]);
+    assert_eq!(report.issues(), &[]);
+    assert_eq!(report.stats().other_filesystems(), 0);
+
+    run.readers.mount_root = mount_root_unknown;
+    assert_eq!(
+        offered_paths(&run.scan()),
+        [bound],
+        "a system that cannot tell"
+    );
+}
+
 #[test]
 fn an_expanded_subdirectory_on_another_filesystem_is_skipped() {
     let fixture = Fixture::new();
@@ -1777,11 +2213,13 @@ fn an_entry_whose_date_or_identity_is_unknown_is_held_back() {
             identity: unknown_when_marked,
             last_change: modification_time,
             ownership: marked_ownership,
+            mount_root: okapi_platform::mount_root,
         },
         Readers {
             identity: file_identity,
             last_change: no_date_when_marked,
             ownership: marked_ownership,
+            mount_root: okapi_platform::mount_root,
         },
     ] {
         let mut run = Run::new(&fixture, vec![RuleEntry::Target(&rule)]);

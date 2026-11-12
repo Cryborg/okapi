@@ -35,6 +35,39 @@ pub(crate) enum PlannedKind {
     Directory,
     /// A single file, already found offerable.
     File(Found),
+    /// A directory a rule reaches only across a link, another device or a
+    /// mount, or a file target that is a bind mount: never walked nor offered
+    /// for that rule, it still joins the group of the rules that share it, so
+    /// that their AND (invariant 5) and strictest age hold for whoever walks
+    /// or offers it. Met below another rule's root, it is reserved as any root
+    /// is: then nobody offers it, rather than that rule without this one's
+    /// restrictions.
+    Withheld,
+}
+
+/// A root an expansion reached, walked or withheld.
+struct Candidate {
+    path: PathBuf,
+    withheld: bool,
+}
+
+impl Candidate {
+    fn walked(path: PathBuf) -> Self {
+        Self {
+            path,
+            withheld: false,
+        }
+    }
+}
+
+/// What a segment of an expansion is.
+enum Segment {
+    /// A plain directory on the base's filesystem: the expansion goes on.
+    Plain,
+    /// A link, another device or a mount: never entered.
+    Refused,
+    /// Absent, not a directory, or unreadable (reported).
+    Missing,
 }
 
 /// A canonical root, checked, with the group it fills.
@@ -88,7 +121,7 @@ impl Planner<'_> {
         };
         let roots = match deletion.child_subdirectory() {
             Some(subdirectory) => self.expand(&origin, &base, subdirectory),
-            None => vec![base],
+            None => vec![Candidate::walked(base)],
         };
         let rule_age = deletion.min_age().map(AgeDays::duration);
         self.check_roots(&origin, roots, rule_age, &attributes)
@@ -125,7 +158,7 @@ impl Planner<'_> {
             };
             match subdirectory {
                 Some(subdirectory) => roots.extend(self.expand(&origin, &base, subdirectory)),
-                None => roots.push(base),
+                None => roots.push(Candidate::walked(base)),
             }
         }
         let rule_age = deletion.min_age().map(AgeDays::duration);
@@ -161,6 +194,11 @@ impl Planner<'_> {
             Err(error) if is_absent(&error) => return None,
             Err(error) => return self.unreadable(&origin, canonical, error.kind()),
         };
+        let mount_root = match (self.readers.mount_root)(&canonical) {
+            Ok(mount_root) => mount_root == Some(true),
+            Err(error) if is_absent(&error) => return None,
+            Err(error) => return self.unreadable(&origin, canonical, error.kind()),
+        };
         let (Some(last_change), Some(identity)) = (
             (self.readers.last_change)(&metadata),
             (self.readers.identity)(&metadata),
@@ -189,6 +227,27 @@ impl Planner<'_> {
         }
         // The global age was checked before planning: it is within the clock.
         let cutoff = self.options.cutoff(None)?;
+        let attributes = GroupAttributes {
+            origins: vec![origin],
+            label: target.subcategory().clone(),
+            rule_group: None,
+            cache_reset: false,
+            selected_by_default: true,
+            needs_admin: false,
+        };
+        // A bind mount of a file: never offered by this rule, it still joins
+        // the rules that share it (invariant 5, strictest age).
+        if mount_root {
+            tracing::trace!(path = %canonical.display(), "file target is a mount root");
+            self.stats.other_filesystems += 1;
+            return Some(PlannedRoot {
+                path: canonical,
+                identity,
+                cutoff,
+                attributes,
+                kind: PlannedKind::Withheld,
+            });
+        }
         if last_change > cutoff {
             tracing::trace!(path = %canonical.display(), "file target recent");
             self.stats.recent += 1;
@@ -198,14 +257,7 @@ impl Planner<'_> {
             path: canonical.clone(),
             identity,
             cutoff,
-            attributes: GroupAttributes {
-                origins: vec![origin],
-                label: target.subcategory().clone(),
-                rule_group: None,
-                cache_reset: false,
-                selected_by_default: true,
-                needs_admin: false,
-            },
+            attributes,
             kind: PlannedKind::File(Found {
                 path: canonical,
                 size: metadata.len(),
@@ -230,7 +282,8 @@ impl Planner<'_> {
     }
 
     /// The canonical directory a rule path names, if it exists and is a real
-    /// directory: the last component is never a link (an ancestor may be).
+    /// directory: the last component is never a link (an ancestor may be). It
+    /// may be a mount (`/tmp`), so that is not read here.
     fn open_base(&mut self, origin: &Origin, path: &TemplatePath) -> Option<PathBuf> {
         let resolved = self.resolve(origin, path)?;
         let metadata = match fs::symlink_metadata(&resolved) {
@@ -260,14 +313,15 @@ impl Planner<'_> {
         }
     }
 
-    /// The directories `<base>/*/<subdirectory>`, reached without following
-    /// any link nor leaving the base's filesystem.
+    /// The directories `<base>/*/<subdirectory>`: walked when reached
+    /// without following any link nor leaving the base's filesystem, withheld
+    /// otherwise.
     fn expand(
         &mut self,
         origin: &Origin,
         base: &Path,
         subdirectory: &RelativePath,
-    ) -> Vec<PathBuf> {
+    ) -> Vec<Candidate> {
         let device = match fs::symlink_metadata(base) {
             Ok(metadata) => (self.readers.identity)(&metadata).map(FileIdentity::device),
             Err(error) if is_absent(&error) => return Vec::new(),
@@ -286,20 +340,25 @@ impl Planner<'_> {
         };
         let mut roots = Vec::new();
         for entry in entries {
-            let Ok((entry, file_type)) = entry.and_then(|entry| {
-                let file_type = entry.file_type()?;
-                Ok((entry, file_type))
-            }) else {
-                tracing::debug!(base = %base.display(), "expanded entry unreadable");
-                self.stats.unreadable += 1;
-                continue;
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    tracing::debug!(base = %base.display(), %error, "expanded entry unreadable");
+                    self.stats.unreadable += 1;
+                    continue;
+                }
             };
-            if file_type.is_symlink() {
-                tracing::trace!(path = %entry.path().display(), "expanded entry is a link");
-                self.stats.links += 1;
-                continue;
-            }
-            if file_type.is_dir()
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) => {
+                    tracing::debug!(path = %entry.path().display(), %error, "expanded entry unreadable");
+                    self.stats.unreadable += 1;
+                    continue;
+                }
+            };
+            // A link is judged by `reach`, as any segment: withheld, it still
+            // joins the rules that reach its target directly.
+            if (file_type.is_dir() || file_type.is_symlink())
                 && let Some(root) = self.reach(origin, entry.path(), subdirectory, device)
             {
                 roots.push(root);
@@ -308,46 +367,102 @@ impl Planner<'_> {
         roots
     }
 
-    /// `<child>/<subdirectory>`, if every segment is a real directory on the
-    /// base's device.
+    /// `<child>/<subdirectory>`: a candidate walked when the child and every
+    /// segment is a plain directory on the base's device, withheld from the
+    /// first one that is a link, another device or a mount
+    /// ([`Self::segment`]; the segments after it are not judged), none when
+    /// one before is missing.
     fn reach(
         &mut self,
         origin: &Origin,
-        mut path: PathBuf,
+        child: PathBuf,
         subdirectory: &RelativePath,
         device: Option<u64>,
-    ) -> Option<PathBuf> {
-        for segment in subdirectory.segments() {
-            path.push(segment.as_str());
-            let metadata = match fs::symlink_metadata(&path) {
-                Ok(metadata) => metadata,
-                Err(error) if is_absent(&error) => return None,
-                Err(error) => return self.unreadable(origin, path, error.kind()),
-            };
-            if metadata.file_type().is_symlink() {
-                tracing::trace!(path = %path.display(), "expanded segment is a link");
-                self.stats.links += 1;
-                return None;
+    ) -> Option<Candidate> {
+        // The child first, as segment zero: the listing only gave its type.
+        let mut path = child;
+        let mut withheld = false;
+        for segment in std::iter::once(None).chain(subdirectory.segments().iter().map(Some)) {
+            if let Some(segment) = segment {
+                path.push(segment.as_str());
             }
-            if !metadata.is_dir() {
-                return None;
-            }
-            if (self.readers.identity)(&metadata).map(FileIdentity::device) != device {
-                tracing::trace!(path = %path.display(), "expanded segment on another device");
-                self.stats.other_filesystems += 1;
-                return None;
+            if !withheld {
+                match self.segment(origin, &path, device) {
+                    Segment::Plain => {}
+                    Segment::Refused => withheld = true,
+                    Segment::Missing => return None,
+                }
             }
         }
-        Some(path)
+        Some(Candidate { path, withheld })
+    }
+
+    /// What `path` is to an expansion below a base on `device`: the base
+    /// itself is never judged so (it may be a mount, as `/tmp` is).
+    fn segment(&mut self, origin: &Origin, path: &Path, device: Option<u64>) -> Segment {
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if is_absent(&error) => return Segment::Missing,
+            Err(error) => {
+                self.unreadable::<()>(origin, path.to_path_buf(), error.kind());
+                return Segment::Missing;
+            }
+        };
+        if metadata.file_type().is_symlink() {
+            tracing::trace!(path = %path.display(), "expanded segment is a link");
+            self.stats.links += 1;
+            return Segment::Refused;
+        }
+        if !metadata.is_dir() {
+            return Segment::Missing;
+        }
+        // Another device is enough: its mount status is then never read.
+        let mut other_filesystem =
+            (self.readers.identity)(&metadata).map(FileIdentity::device) != device;
+        if !other_filesystem {
+            other_filesystem = match (self.readers.mount_root)(path) {
+                Ok(mount_root) => mount_root == Some(true),
+                Err(error) if is_absent(&error) => return Segment::Missing,
+                Err(error) => {
+                    self.unreadable::<()>(origin, path.to_path_buf(), error.kind());
+                    return Segment::Missing;
+                }
+            };
+        }
+        if other_filesystem {
+            tracing::trace!(path = %path.display(), "expanded segment on another filesystem");
+            self.stats.other_filesystems += 1;
+            return Segment::Refused;
+        }
+        Segment::Plain
+    }
+
+    /// The identity of a withheld root, read through links: it is never
+    /// walked, only matched against the roots of other rules. `None` when it
+    /// is gone or not a directory (no other directory root can share it), or
+    /// when it cannot be read: then reported, since a rule that walks it
+    /// directly would do so without this rule's restrictions.
+    fn withheld_identity(&mut self, origin: &Origin, path: &Path) -> Option<FileIdentity> {
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.is_dir() => match (self.readers.identity)(&metadata) {
+                Some(identity) => Some(identity),
+                None => self.unreadable(origin, path.to_path_buf(), io::ErrorKind::Unsupported),
+            },
+            Ok(_) => None,
+            Err(error) if is_absent(&error) => None,
+            Err(error) => self.unreadable(origin, path.to_path_buf(), error.kind()),
+        }
     }
 
     /// Keeps the roots a walk may enter: not a variable's directory nor one of
-    /// its ancestors (invariant 6), not excluded. A rule age beyond the clock
+    /// its ancestors (invariant 6), not excluded. Not judged as a mount here:
+    /// a rule's own path may be one (`/tmp`); an expanded root was judged by
+    /// [`Self::reach`]. A rule age beyond the clock
     /// leaves nothing old enough; it is reported once the rule has a root.
     fn check_roots(
         &mut self,
         origin: &Origin,
-        roots: Vec<PathBuf>,
+        roots: Vec<Candidate>,
         rule_age: Option<Duration>,
         attributes: &GroupAttributes,
     ) -> Vec<PlannedRoot> {
@@ -361,7 +476,23 @@ impl Planner<'_> {
             return Vec::new();
         };
         let mut planned = Vec::new();
-        for root in roots {
+        for Candidate {
+            path: root,
+            withheld,
+        } in roots
+        {
+            if withheld {
+                if let Some(identity) = self.withheld_identity(origin, &root) {
+                    planned.push(PlannedRoot {
+                        path: root,
+                        identity,
+                        cutoff,
+                        attributes: attributes.clone(),
+                        kind: PlannedKind::Withheld,
+                    });
+                }
+                continue;
+            }
             let metadata = match fs::symlink_metadata(&root) {
                 Ok(metadata) => metadata,
                 Err(error) if is_absent(&error) => continue,

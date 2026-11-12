@@ -146,8 +146,8 @@ impl ScanStats {
         self.special_files
     }
 
-    /// Files and directories on another device (mount points). A bind mount
-    /// of a directory of the same device is not told apart this way.
+    /// Files and directories on another device, or the root of a mount (a
+    /// bind mount of the same device included).
     #[must_use]
     pub const fn other_filesystems(&self) -> u64 {
         self.other_filesystems
@@ -375,8 +375,8 @@ pub struct ScanReport {
     locations: Vec<(usize, usize)>,
     issues: Vec<ScanIssue>,
     stats: ScanStats,
-    /// The identity of every root walked: cleaning judges an entry against
-    /// them as the scan did.
+    /// The identity of every root, walked or withheld: cleaning judges an
+    /// entry against them as the scan did.
     roots: BTreeSet<FileIdentity>,
 }
 

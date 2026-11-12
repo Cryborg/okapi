@@ -8,6 +8,7 @@ use rustix::fs::{
     Access, AtFlags, CWD, Dir, FileType, Mode, OFlags, Statx, StatxAttributes, StatxFlags,
     StatxTimestamp, accessat, makedev, openat, statx, unlinkat,
 };
+use rustix::io::Errno;
 
 use super::{EntryStatus, EntryType, removal_allowed};
 use crate::FileIdentity;
@@ -18,6 +19,12 @@ const OPEN_FLAGS: OFlags = OFlags::RDONLY
     .union(OFlags::DIRECTORY)
     .union(OFlags::NOFOLLOW)
     .union(OFlags::CLOEXEC);
+
+/// How an entry is read: never through its link, never mounting an automount
+/// point, and as fresh as `stat` gives it. Never `AT_STATX_DONT_SYNC`: the
+/// cleaning judges ages on these reads (invariant 2). On a network filesystem,
+/// `stat` itself may answer from its attribute cache for a few seconds.
+const ENTRY_FLAGS: AtFlags = AtFlags::SYMLINK_NOFOLLOW.union(AtFlags::NO_AUTOMOUNT);
 
 /// What [`EntryStatus`] is built from: an entry missing one is unreadable.
 const NEEDED: StatxFlags = StatxFlags::TYPE
@@ -121,13 +128,7 @@ impl Directory {
     /// [`io::ErrorKind::InvalidInput`] when `name` is not a single name, or
     /// the errors of [`Self::status`].
     pub fn status_of(&self, name: &OsStr) -> io::Result<EntryStatus> {
-        status(&statx(
-            &self.fd,
-            single_name(name)?,
-            // Reading an automount point must not mount it.
-            AtFlags::SYMLINK_NOFOLLOW | AtFlags::NO_AUTOMOUNT,
-            NEEDED,
-        )?)
+        status(&statx(&self.fd, single_name(name)?, ENTRY_FLAGS, NEEDED)?)
     }
 
     /// Opens the subdirectory `name`, refusing a link.
@@ -175,6 +176,30 @@ pub fn tells_mount_roots() -> bool {
         .is_ok_and(|status| status.mount_root.is_some())
 }
 
+/// Whether the entry at `path`, its last component never followed, is the root
+/// of a mount, which catches a bind mount of the same device; `Ok(None)` when
+/// the system cannot tell (Linux before 5.8, or no `statx` at all).
+///
+/// # Errors
+///
+/// The system's error: absent, unreadable...
+pub fn mount_root(path: &Path) -> io::Result<Option<bool>> {
+    match statx(CWD, path, ENTRY_FLAGS, StatxFlags::empty()) {
+        Ok(stat) => Ok(mount_root_of(&stat)),
+        // A kernel or a sandbox without `statx`: the scan works as it did,
+        // the cleaning refuses such a system (`tells_mount_roots`).
+        Err(Errno::NOSYS) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Whether `stat` is a mount root, if the system says.
+fn mount_root_of(stat: &Statx) -> Option<bool> {
+    stat.stx_attributes_mask
+        .contains(StatxAttributes::MOUNT_ROOT)
+        .then(|| stat.stx_attributes.contains(StatxAttributes::MOUNT_ROOT))
+}
+
 /// `name`, if it names an entry of the directory itself: a path such as
 /// `../x` or `a/b` would reach outside it.
 fn single_name(name: &OsStr) -> io::Result<&OsStr> {
@@ -200,10 +225,7 @@ fn status(stat: &Statx) -> io::Result<EntryStatus> {
     };
     let modified = date(stat.stx_mtime)?;
     let changed = date(stat.stx_ctime)?;
-    let mount_root = stat
-        .stx_attributes_mask
-        .contains(StatxAttributes::MOUNT_ROOT)
-        .then(|| stat.stx_attributes.contains(StatxAttributes::MOUNT_ROOT));
+    let mount_root = mount_root_of(stat);
     let locked = stat
         .stx_attributes
         .intersects(StatxAttributes::IMMUTABLE | StatxAttributes::APPEND);
@@ -402,5 +424,28 @@ mod tests {
             Some(false)
         );
         assert!(tells_mount_roots());
+    }
+
+    #[test]
+    fn mount_roots_are_read_by_path_never_through_a_link() {
+        assert_eq!(mount_root(Path::new("/")).unwrap(), Some(true));
+        let temporary = tempfile::tempdir().unwrap();
+        let plain = temporary.path().join("plain");
+        fs::create_dir(&plain).unwrap();
+        fs::write(temporary.path().join("file"), b"x").unwrap();
+        assert_eq!(mount_root(&plain).unwrap(), Some(false));
+        assert_eq!(
+            mount_root(&temporary.path().join("file")).unwrap(),
+            Some(false)
+        );
+        let link = temporary.path().join("root");
+        symlink("/", &link).unwrap();
+        assert_eq!(mount_root(&link).unwrap(), Some(false), "the link itself");
+        assert_eq!(
+            mount_root(&temporary.path().join("absent"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
     }
 }

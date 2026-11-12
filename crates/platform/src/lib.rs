@@ -7,8 +7,8 @@ mod session;
 mod variables;
 
 pub use directory::{
-    DESCRIPTOR_REMOVAL_SUPPORTED, Directory, EntryStatus, EntryType, Ownership, sticky_allows,
-    tells_mount_roots,
+    DESCRIPTOR_REMOVAL_SUPPORTED, Directory, EntryStatus, EntryType, Ownership, mount_root,
+    sticky_allows, tells_mount_roots,
 };
 pub use identity::{FileIdentity, IDENTITY_SUPPORTED, file_identity, last_change, ownership};
 pub use session::{

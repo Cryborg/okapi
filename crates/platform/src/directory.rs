@@ -9,7 +9,7 @@ mod system;
 #[path = "directory/unsupported.rs"]
 mod system;
 
-pub use system::{Directory, tells_mount_roots};
+pub use system::{Directory, mount_root, tells_mount_roots};
 
 /// Whether [`Directory`] works on this system. Elsewhere it cannot be opened
 /// ([`std::io::ErrorKind::Unsupported`]): on macOS the scan works but cleaning

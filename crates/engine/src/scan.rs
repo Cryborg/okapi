@@ -150,6 +150,7 @@ pub(crate) fn scan_entries(
         let remover = if needs_admin { None } else { user };
         let found = match root.kind {
             PlannedKind::File(found) => vec![found],
+            PlannedKind::Withheld => Vec::new(),
             PlannedKind::Directory => {
                 let context = WalkContext {
                     cutoff: root.cutoff,
@@ -296,6 +297,17 @@ fn group_rules(roots_by_rule: Vec<(usize, PlannedRoot)>, rules: usize) -> Groupe
         if let Some(&index) = index_of.get(&root.identity) {
             let (first_rule, existing): &mut (usize, PlannedRoot) = &mut grouped.roots[index];
             existing.cutoff = existing.cutoff.min(root.cutoff);
+            tracing::debug!(
+                path = %existing.path.display(),
+                joined = %root.path.display(),
+                withheld = existing.kind == PlannedKind::Withheld || root.kind == PlannedKind::Withheld,
+                "rules share a root"
+            );
+            // Walked by whichever rule reaches it plainly, by its own path.
+            if existing.kind == PlannedKind::Withheld && root.kind != PlannedKind::Withheld {
+                existing.path = root.path;
+                existing.kind = root.kind;
+            }
             let first_rule = *first_rule;
             grouped.groups.join(first_rule, rule);
         } else {

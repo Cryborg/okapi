@@ -80,6 +80,16 @@ impl Directory {
     }
 }
 
+/// Whether the entry at `path` is the root of a mount: this system cannot
+/// tell.
+///
+/// # Errors
+///
+/// None here.
+pub fn mount_root(_path: &Path) -> io::Result<Option<bool>> {
+    Ok(None)
+}
+
 /// Whether this system tells a mount root from a plain directory: not here.
 #[must_use]
 pub const fn tells_mount_roots() -> bool {

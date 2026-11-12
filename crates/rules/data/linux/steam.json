@@ -1,0 +1,11 @@
+{
+  "type": "steam",
+  "libraries": [
+    "${HOME}/.steam/steam/steamapps",
+    "${LOCAL_SHARE}/Steam/steamapps"
+  ],
+  "redistPatterns": [
+    "_CommonRedist", "DirectX", "dotNetFx", "vcredist",
+    "DXSETUP", "UE4PrereqSetup", "Redist"
+  ]
+}

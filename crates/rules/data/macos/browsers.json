@@ -1,0 +1,49 @@
+{
+  "type": "browsers",
+  "chromiumCacheDirs": {
+    "profile": [
+      { "dir": "Cache", "label": "Cache" },
+      { "dir": "Code Cache", "label": "Code Cache" },
+      { "dir": "GPUCache", "label": "GPU Cache" },
+      { "dir": "Shared Dictionary/cache", "label": "Shared Dictionary Cache", "description": "Chromium shared-compression dictionary cache; downloaded content rebuilt on demand" },
+      { "dir": "Service Worker/CacheStorage", "label": "Service Worker Cache" },
+      { "dir": "DawnWebGPUCache", "label": "WebGPU Shader Cache", "description": "Dawn's compiled WebGPU shaders: rebuilt on demand" },
+      { "dir": "DawnGraphiteCache", "label": "Graphite Shader Cache", "description": "Dawn/Skia Graphite pipeline cache: rebuilt on demand" }
+    ],
+    "shared": [
+      { "dir": "component_crx_cache", "label": "Component Extension Cache", "description": "Downloaded CRX packages for component extensions: re-fetched on next update check, not the installed extensions themselves" },
+      { "dir": "extensions_crx_cache", "label": "Extension Update Cache", "description": "Downloaded CRX packages awaiting install: re-fetched on next update check" },
+      { "dir": "GrShaderCache", "label": "Skia Shader Cache", "description": "Skia GPU shader cache: rebuilt on demand" },
+      { "dir": "ShaderCache", "label": "Shader Cache", "description": "Legacy GPU shader cache: rebuilt on demand" },
+      { "dir": "GraphiteDawnCache", "label": "Graphite Pipeline Cache", "description": "Where newer Chromium builds keep the Graphite pipeline cache: rebuilt on demand" },
+      { "dir": "GPUPersistentCache", "label": "Persistent GPU Cache", "description": "Where newer Chromium builds keep the on-disk GPU cache: rebuilt on demand" },
+      { "dir": "PnaclTranslationCache", "label": "PNaCl Translation Cache", "description": "Translated PNaCl modules: regenerated on demand" }
+    ]
+  },
+  "chromium": [
+    { "key": "chrome", "base": "${APP_SUPPORT}/Google/Chrome", "cache": "${CACHES}/Google/Chrome" },
+    { "key": "edge", "base": "${APP_SUPPORT}/Microsoft Edge", "cache": "${CACHES}/Microsoft Edge" },
+    { "key": "brave", "base": "${APP_SUPPORT}/BraveSoftware/Brave-Browser", "cache": "${CACHES}/BraveSoftware/Brave-Browser" },
+    { "key": "opera", "base": "${APP_SUPPORT}/com.operasoftware.Opera", "cache": "${CACHES}/com.operasoftware.Opera" },
+    { "key": "operaGX", "base": "${APP_SUPPORT}/com.operasoftware.OperaGX", "cache": "${CACHES}/com.operasoftware.OperaGX" },
+    { "key": "vivaldi", "base": "${APP_SUPPORT}/Vivaldi", "cache": "${CACHES}/Vivaldi" },
+    { "key": "arc", "base": "${APP_SUPPORT}/Arc/User Data", "cache": "${CACHES}/Arc/User Data" },
+    { "key": "chromium", "base": "${APP_SUPPORT}/Chromium", "cache": "${CACHES}/Chromium" },
+    { "key": "thorium", "base": "${APP_SUPPORT}/Thorium", "cache": "${CACHES}/Thorium" },
+    { "key": "supermium", "base": "${APP_SUPPORT}/Supermium", "cache": "${CACHES}/Supermium" },
+    { "key": "helium", "base": "${APP_SUPPORT}/net.imput.helium", "cache": "${CACHES}/net.imput.helium" },
+    { "key": "cromite", "base": "${APP_SUPPORT}/Cromite", "cache": "${CACHES}/Cromite" },
+    { "key": "catsxp", "base": "${APP_SUPPORT}/ArcSoft/CatsXP", "cache": "${CACHES}/ArcSoft/CatsXP" }
+  ],
+  "firefox": {
+    "base": "${APP_SUPPORT}/Firefox/Profiles",
+    "cache": "${CACHES}/Firefox/Profiles"
+  },
+  "firefoxForks": [
+    { "key": "librewolf", "base": "${APP_SUPPORT}/LibreWolf/Profiles", "cache": "${CACHES}/LibreWolf/Profiles" },
+    { "key": "waterfox", "base": "${APP_SUPPORT}/Waterfox/Profiles", "cache": "${CACHES}/Waterfox/Profiles" },
+    { "key": "floorp", "base": "${APP_SUPPORT}/Floorp/Profiles", "cache": "${CACHES}/Floorp/Profiles" },
+    { "key": "zen", "base": "${APP_SUPPORT}/Zen/Profiles", "cache": "${CACHES}/Zen/Profiles" }
+  ],
+  "safari": { "cache": "${CACHES}/com.apple.Safari" }
+}

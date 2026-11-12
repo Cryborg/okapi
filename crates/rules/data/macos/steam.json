@@ -1,0 +1,10 @@
+{
+  "type": "steam",
+  "libraries": [
+    "${APP_SUPPORT}/Steam/steamapps"
+  ],
+  "redistPatterns": [
+    "_CommonRedist", "DirectX", "dotNetFx", "vcredist",
+    "DXSETUP", "UE4PrereqSetup", "Redist"
+  ]
+}

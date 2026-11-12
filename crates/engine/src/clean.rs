@@ -74,14 +74,17 @@ impl CleanOutcome {
     fn trace(&self) {
         let path = self.path.as_deref().map(Path::display);
         let blocked = self.blocked.as_deref().map(Path::display);
-        let warning = matches!(
-            self.result,
-            CleanResult::Partial { .. } | CleanResult::Kept(KeepReason::Failed { .. })
-        );
-        if warning {
-            tracing::warn!(path = ?path, result = ?self.result, blocked = ?blocked, "entry not removed");
-        } else {
-            tracing::info!(path = ?path, result = ?self.result, blocked = ?blocked, "entry cleaned");
+        match self.result {
+            CleanResult::Removed { .. } => {
+                tracing::info!(path = ?path, result = ?self.result, "entry removed");
+            }
+            CleanResult::Gone => tracing::info!(path = ?path, "entry already gone"),
+            CleanResult::Partial { .. } | CleanResult::Kept(KeepReason::Failed { .. }) => {
+                tracing::warn!(path = ?path, result = ?self.result, blocked = ?blocked, "entry not removed");
+            }
+            CleanResult::Kept(_) => {
+                tracing::info!(path = ?path, result = ?self.result, blocked = ?blocked, "entry kept");
+            }
         }
     }
 

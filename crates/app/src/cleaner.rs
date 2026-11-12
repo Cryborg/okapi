@@ -69,6 +69,7 @@ pub enum Problem {
     Start,
 }
 
+mod browsers;
 mod cleaning;
 
 /// One analysis to run.
@@ -90,6 +91,8 @@ pub struct Seams {
     pub read: Read,
     pub work: Work,
     pub clean: Clean,
+    /// Who holds the lock of an open browser, and how to close it.
+    pub browser: browsers::HolderSeam,
 }
 
 impl std::fmt::Debug for Seams {
@@ -121,6 +124,7 @@ impl Seams {
                     &Watch::new(cancel, Some(progress)),
                 )
             }),
+            browser: browsers::system_holder(),
         }
     }
 }
@@ -457,6 +461,7 @@ fn size(bytes: u64) -> ui::Size {
 const fn kind(category: Category) -> ui::CategoryKind {
     match category {
         Category::System => ui::CategoryKind::System,
+        Category::Browsers => ui::CategoryKind::Browsers,
         Category::Apps => ui::CategoryKind::Apps,
         Category::Gaming => ui::CategoryKind::Gaming,
         Category::Gpu => ui::CategoryKind::Gpu,
@@ -509,7 +514,8 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
             entries,
             bytes,
         } => ui::ResultRow {
-            is_category: true,
+            kind: ui::RowKind::Category,
+            nested: false,
             category: kind(*category),
             label: slint::SharedString::default(),
             state: state(*check),
@@ -520,17 +526,40 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
             entries: shown(*entries),
             size: size(*bytes),
         },
+        Line::Browser {
+            browser,
+            state: check,
+            enabled,
+            folded,
+            hidden,
+            entries,
+            bytes,
+        } => ui::ResultRow {
+            kind: ui::RowKind::Browser,
+            nested: false,
+            category: ui::CategoryKind::Browsers,
+            label: browser.name().into(),
+            state: state(*check),
+            enabled: *enabled,
+            folded: *folded,
+            hidden: *hidden,
+            badge: ui::ResultBadge::Preselected,
+            entries: shown(*entries),
+            size: size(*bytes),
+        },
         Line::Group {
             index,
             checked,
             hidden,
+            nested,
         } => {
             let Some(group) = results.group(*index) else {
                 tracing::error!(index, "a line of the results names no group");
                 return ui::ResultRow::default();
             };
             ui::ResultRow {
-                is_category: false,
+                kind: ui::RowKind::Group,
+                nested: *nested,
                 category: results.shown_under(*index).map_or_else(
                     || {
                         tracing::error!(index, "a group of the results under no category chosen");
@@ -538,7 +567,11 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
                     },
                     kind,
                 ),
-                label: group.label.as_str().into(),
+                label: if *nested {
+                    group.label.as_str().into()
+                } else {
+                    group.label_alone.as_str().into()
+                },
                 state: state(if *checked {
                     CheckState::Checked
                 } else {
@@ -690,6 +723,10 @@ struct State {
     held: Option<Held>,
     /// The confirmation of a cleaning, open.
     confirming: Option<cleaning::Confirming>,
+    /// The question about an open browser, before the cleaning confirmed.
+    asking: Option<browsers::Asking>,
+    /// The processes of the browsers asked to close, never asked twice.
+    asked_to_close: BTreeSet<u32>,
     result_model: Rc<VecModel<ui::ResultRow>>,
     receipt_model: Rc<VecModel<ui::ReceiptLineShown>>,
     note_model: Rc<VecModel<ui::IssueShown>>,
@@ -731,6 +768,8 @@ impl CleanerScreen {
             task: None,
             held: None,
             confirming: None,
+            asking: None,
+            asked_to_close: BTreeSet::new(),
             result_model: Rc::new(VecModel::default()),
             receipt_model: Rc::new(VecModel::default()),
             note_model: Rc::new(VecModel::default()),
@@ -770,19 +809,22 @@ impl CleanerScreen {
         let weak = Rc::downgrade(&screen.0);
         cleaner.on_toggle_result(move |row| {
             if let Some(state) = weak.upgrade() {
-                Self(state).change_results(row, Results::toggle_group, Results::toggle_category);
+                Self(state).change_results(row, Results::toggle_row);
             }
         });
         let weak = Rc::downgrade(&screen.0);
         cleaner.on_fold(move |row| {
             if let Some(state) = weak.upgrade() {
-                Self(state).change_results(row, |_, _| {}, Results::toggle_folded);
+                Self(state).change_results(row, Results::fold_row);
             }
         });
         cleaner.on_deselect_all(on(Self::deselect_all));
         cleaner.on_clean(on(Self::clean));
         cleaner.on_confirm_delete(on(Self::confirm_delete));
         cleaner.on_cancel_confirmation(on(Self::cancel_confirmation));
+        cleaner.on_ignore_browser(on(Self::ignore_browser));
+        cleaner.on_close_browser(on(Self::close_browser));
+        cleaner.on_cancel_browser(on(Self::cancel_browser_question));
         cleaner.on_cancel_cleaning(on(Self::cancel_cleaning));
         cleaner.on_finish(on(Self::finish));
         screen
@@ -1125,14 +1167,8 @@ impl CleanerScreen {
         });
     }
 
-    /// Changes the results at the line `row` shows: `group` for a group,
-    /// `category` for a category.
-    fn change_results(
-        &self,
-        row: i32,
-        group: fn(&mut Results, usize),
-        category: fn(&mut Results, Category),
-    ) {
+    /// Changes the results at the line `row` shows, by `change`.
+    fn change_results(&self, row: i32, change: fn(&mut Results, usize)) {
         // The second click of a double click on what was in its place (the
         // confirmation's buttons) changes nothing.
         if self.is_settling("change of the results") || self.results_frozen("change of the results")
@@ -1144,14 +1180,10 @@ impl CleanerScreen {
             let Some(held) = state.held.as_mut() else {
                 return;
             };
-            let rows = held.results.rows();
-            match usize::try_from(row).ok().and_then(|row| rows.get(row)) {
-                Some(Line::Group { index, .. }) => group(&mut held.results, *index),
-                Some(Line::Category {
-                    category: shown, ..
-                }) => category(&mut held.results, *shown),
-                None => return,
-            }
+            let Ok(row) = usize::try_from(row) else {
+                return;
+            };
+            change(&mut held.results, row);
         }
         self.show_results();
     }
@@ -1161,7 +1193,10 @@ impl CleanerScreen {
     fn results_frozen(&self, asked: &str) -> bool {
         let frozen = self.is_confirming();
         if frozen {
-            tracing::warn!(asked, "refused while a cleaning waits for its confirmation");
+            tracing::warn!(
+                asked,
+                "refused while a cleaning waits for its confirmation or an answer about a browser"
+            );
         }
         frozen
     }
@@ -1327,12 +1362,17 @@ pub mod tests {
     fn choices_follow_the_rules_and_leave_resets_to_the_user() {
         let rules = embedded();
         let mut choices = Choices::of(Some(&rules));
-        let all_but_gpu = BTreeSet::from([Category::System, Category::Apps, Category::Gaming]);
+        let all_but_gpu = BTreeSet::from([
+            Category::System,
+            Category::Browsers,
+            Category::Apps,
+            Category::Gaming,
+        ]);
         assert_eq!(choices.chosen(), all_but_gpu);
         assert!(choices.is_recommended());
         choices.toggle(0);
         assert!(!choices.is_recommended(), "a recommended one left out");
-        choices.toggle(3);
+        choices.toggle(4);
         assert!(choices.chosen().contains(&Category::Gpu));
         assert!(!choices.is_recommended());
         choices.check_recommended();
@@ -1632,7 +1672,7 @@ pub mod tests {
     #[test]
     fn the_categories_offered_leave_cache_resets_unchecked() {
         let (window, _screen) = on_cleaner(seams_never_scanning());
-        for label in ["Système", "Applications", "Jeux"] {
+        for label in ["Système", "Navigateurs", "Applications", "Jeux"] {
             assert_eq!(
                 checkbox(&window, label).accessible_checked(),
                 Some(true),
@@ -1646,7 +1686,7 @@ pub mod tests {
                 .is_some_and(|description| description.ends_with("sera plus lent.")),
             "the warning is read"
         );
-        assert!(shows(&window, "Catégories sélectionnées : 3 sur 4"));
+        assert!(shows(&window, "Catégories sélectionnées : 4 sur 5"));
         assert!(shows(
             &window,
             "Toujours épargnés : fichiers modifiés depuis moins de 60 min. Exclusions : 0."
@@ -1667,7 +1707,7 @@ pub mod tests {
             Some(true)
         );
 
-        for label in ["Système", "Applications", "Jeux"] {
+        for label in ["Système", "Navigateurs", "Applications", "Jeux"] {
             checkbox(&window, label).invoke_accessible_default_action();
         }
         assert!(shows(&window, "Aucune catégorie sélectionnée"));
@@ -1891,15 +1931,16 @@ pub mod tests {
         button(&window, "Analyser").invoke_accessible_default_action();
         let options = scan.started.recv().unwrap();
         assert_eq!(reads.get(), before + 1, "the settings read at the click");
-        assert_eq!(
-            *options.categories(),
-            BTreeSet::from([Category::System, Category::Apps, Category::Gaming])
-        );
+        let all_but_gpu = Category::ALL
+            .into_iter()
+            .filter(|category| *category != Category::Gpu);
+        assert_eq!(*options.categories(), all_but_gpu.collect());
         assert_eq!(step(&window), ui::CleanerStep::Planning);
         assert_eq!(
             rows(&window),
             [
                 (ui::CategoryKind::System, ui::RowState::Waiting),
+                (ui::CategoryKind::Browsers, ui::RowState::Waiting),
                 (ui::CategoryKind::Apps, ui::RowState::Waiting),
                 (ui::CategoryKind::Gaming, ui::RowState::Waiting),
             ]
@@ -1912,13 +1953,14 @@ pub mod tests {
             rows(&window),
             [
                 (ui::CategoryKind::System, ui::RowState::Running),
+                (ui::CategoryKind::Browsers, ui::RowState::Done),
                 (ui::CategoryKind::Apps, ui::RowState::Done),
                 (ui::CategoryKind::Gaming, ui::RowState::Done),
             ]
         );
         assert!(shows(
             &window,
-            "Catégories terminées : 2 sur 3. Rien n'est supprimé pendant l'analyse."
+            "Catégories terminées : 3 sur 4. Rien n'est supprimé pendant l'analyse."
         ));
         assert!(window.global::<ui::Cleaner>().get_progress().abs() < f32::EPSILON);
 
@@ -1935,14 +1977,14 @@ pub mod tests {
         });
         assert_eq!(
             paths(&window),
-            ["/okapi-test/walked", "", ""],
+            ["/okapi-test/walked", "", "", ""],
             "on the category under way only"
         );
 
         scan.go.send(()).unwrap();
         scan.sent.recv().unwrap();
         watch_until(&window, |window| {
-            window.global::<ui::Cleaner>().get_rows_done() == 3
+            window.global::<ui::Cleaner>().get_rows_done() == 4
         });
         assert!(shows(&window, "Remarques de l'analyse : 1"));
         assert!(shows(&window, "1,5 ko"), "found so far");
@@ -2210,8 +2252,8 @@ pub mod tests {
             Some(false),
             "a checkbox takes Space only"
         );
-        // The other three categories, then the recommended ones.
-        for _ in 0..4 {
+        // The other four categories, then the recommended ones.
+        for _ in 0..5 {
             press(&window, Key::Tab);
         }
         press(&window, Key::Return);
@@ -2227,9 +2269,9 @@ pub mod tests {
 
         let (seams, scan) = scripted(Vec::new());
         let (window, _screen) = on_cleaner(seams);
-        // The sidebar, the four categories, then past the disabled
+        // The sidebar, the five categories, then past the disabled
         // "Cocher les recommandées" to "Analyser".
-        for _ in 0..8 {
+        for _ in 0..9 {
             press(&window, Key::Tab);
         }
         press(&window, Key::Return);

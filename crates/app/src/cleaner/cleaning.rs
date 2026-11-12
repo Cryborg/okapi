@@ -8,8 +8,8 @@ use std::sync::mpsc::TryRecvError;
 use std::time::SystemTime;
 
 use okapi_engine::{
-    CleanPass, CleanReceipt, CleanResult, ItemId, KeepReason, Progress, ScanItem, ScanOptions,
-    ScanReport,
+    BrowserLock, CleanPass, CleanReceipt, CleanResult, ItemId, KeepReason, Progress, ScanItem,
+    ScanOptions, ScanReport,
 };
 use okapi_rules::{RuleSet, TemplateVariables};
 use okapi_store::{History, Opened};
@@ -77,6 +77,45 @@ pub(super) struct Confirming {
     entries: usize,
 }
 
+impl Confirming {
+    pub(super) fn report(&self) -> &ScanReport {
+        &self.report
+    }
+
+    pub(super) const fn groups(&self) -> &BTreeSet<usize> {
+        &self.groups
+    }
+
+    /// The identifiers of the entries confirmed.
+    pub(super) fn ids(&self) -> Vec<ItemId> {
+        let groups = self.report.groups();
+        self.groups
+            .iter()
+            .filter_map(|index| groups.get(*index))
+            .flat_map(|group| group.items().iter().map(ScanItem::id))
+            .collect()
+    }
+
+    /// Leaves out of this cleaning the groups that empty a cache of the
+    /// browser of `lock`: what is confirmed is then what is left. The entries
+    /// left.
+    pub(super) fn leave_out(&mut self, lock: &BrowserLock) -> usize {
+        let groups = self.report.groups();
+        self.groups.retain(|index| {
+            groups
+                .get(*index)
+                .is_some_and(|group| !group.locks().contains(lock))
+        });
+        self.entries = self
+            .groups
+            .iter()
+            .filter_map(|index| groups.get(*index))
+            .map(|group| group.items().len())
+            .sum();
+        self.entries
+    }
+}
+
 /// A cleaning ready to start: its job, the history it writes to, and whether
 /// the user asked for a deletion log.
 struct Prepared {
@@ -102,7 +141,7 @@ impl CleanerScreen {
     /// Opens the confirmation of the groups checked: what it shows is what a
     /// confirmed cleaning takes, of this very report.
     pub(super) fn clean(&self) {
-        if self.is_settling("cleaning") {
+        if self.is_settling("cleaning") || self.results_frozen("cleaning") {
             return;
         }
         let opened = {
@@ -156,9 +195,10 @@ impl CleanerScreen {
         self.close_confirmation();
     }
 
-    /// Whether a confirmation is open: the results are then frozen.
+    /// Whether a confirmation, or the question about an open browser, is
+    /// open: the results are then frozen.
     pub(super) fn is_confirming(&self) -> bool {
-        self.0.borrow().confirming.is_some()
+        self.0.borrow().confirming.is_some() || self.is_asking()
     }
 
     /// The cleaning of `confirmed`, its options built now from the settings
@@ -176,13 +216,7 @@ impl CleanerScreen {
             Ok(Opened::Unavailable(_)) => None,
             Err(_) => return Err(Problem::History),
         };
-        let groups = confirmed.report.groups();
-        let ids: Vec<ItemId> = confirmed
-            .groups
-            .iter()
-            .filter_map(|index| groups.get(*index))
-            .flat_map(|group| group.items().iter().map(ScanItem::id))
-            .collect();
+        let ids = confirmed.ids();
         if ids.len() != confirmed.entries {
             tracing::error!(
                 ids = ids.len(),
@@ -223,6 +257,12 @@ impl CleanerScreen {
             return;
         };
         self.close_confirmation();
+        self.ask_about_browsers(confirmed);
+    }
+
+    /// Starts the cleaning `confirmed`, if its report is still the one held
+    /// and nothing runs.
+    pub(super) fn launch(&self, confirmed: &Confirming) {
         let fit = {
             let state = self.0.borrow();
             state.task.is_none()
@@ -238,7 +278,7 @@ impl CleanerScreen {
             return;
         }
         let started = self
-            .prepare_cleaning(&confirmed)
+            .prepare_cleaning(confirmed)
             .and_then(|prepared| self.start_cleaning(prepared));
         if let Err(found) = started {
             tracing::warn!(problem = ?found, "cleaning cannot start: nothing removed");
@@ -446,6 +486,12 @@ impl CleanerScreen {
         // The second click of a double click on the close button is no
         // insistence.
         let settling = self.0.borrow().settling.running();
+        if let Some(asking) = &self.0.borrow().asking {
+            tracing::info!(
+                closing = asking.is_closing(),
+                "window closed at the question about a browser: nothing cleaned"
+            );
+        }
         let insisted = {
             let mut state = self.0.borrow_mut();
             let Some(Task::Cleaning(cleaning)) = state.task.as_mut() else {
@@ -523,6 +569,7 @@ fn show_receipt(
                 LineKind::Kept(Kept::Protected) => ui::ReceiptKind::Protected,
                 LineKind::Kept(Kept::Refused) => ui::ReceiptKind::Refused,
                 LineKind::Kept(Kept::Cancelled) => ui::ReceiptKind::Cancelled,
+                LineKind::Kept(Kept::BrowserOpen) => ui::ReceiptKind::BrowserOpen,
                 LineKind::Kept(Kept::Unknown) => ui::ReceiptKind::Unknown,
             },
             count: shown(line.count),
@@ -1313,5 +1360,548 @@ mod tests {
             okapi_rules::Language::English,
             ["System", "Games", "Analyze", "Results", "pip Cache"],
         );
+    }
+
+    /// Chrome's cache and pip's, Chrome open: its lock names this machine
+    /// and this very process (live, and never signalled by Okapi).
+    fn chrome_open(sandbox: &Sandbox, with_pip: bool) -> (PathBuf, Option<PathBuf>, PathBuf) {
+        let chrome = sandbox.file("home/.config/google-chrome/Default/Cache/old");
+        let pip = with_pip.then(|| sandbox.file("home/.cache/pip/old"));
+        let host = fs::read_to_string("/proc/sys/kernel/hostname").unwrap();
+        let lock = sandbox
+            .root
+            .join("home/.config/google-chrome/SingletonLock");
+        std::os::unix::fs::symlink(format!("{}-{}", host.trim(), std::process::id()), &lock)
+            .unwrap();
+        settle_files();
+        (chrome, pip, lock)
+    }
+
+    /// The lock there, though it points nowhere (`exists` follows it).
+    fn there(lock: &Path) -> bool {
+        fs::symlink_metadata(lock).is_ok()
+    }
+
+    /// The cleaning confirmed, and the question shown.
+    fn confirm_and_ask(window: &ui::AppWindow) {
+        confirm(window);
+        slint::platform::update_timers_and_animations();
+    }
+
+    fn asking(window: &ui::AppWindow) -> bool {
+        window.global::<ui::Cleaner>().get_browser_asking()
+    }
+
+    fn no_button(window: &ui::AppWindow, label: &str) -> bool {
+        ElementHandle::find_by_accessible_label(window, label)
+            .all(|element| element.accessible_role() != Some(AccessibleRole::Button))
+    }
+
+    #[test]
+    fn an_open_browser_okapi_cannot_vouch_for_can_be_left_out() {
+        let sandbox = Sandbox::new();
+        let (chrome, pip, _) = chrome_open(&sandbox, true);
+        let pip = pip.unwrap();
+        let (window, _screen) = on_results(sandbox.read(&sandbox.root.join("state")));
+        confirm_and_ask(&window);
+        assert!(asking(&window));
+        assert!(shows(&window, "Chrome est ouvert"));
+        assert!(shows(&window, "Chrome : Cache"));
+        assert!(
+            no_button(&window, "Fermer Chrome et continuer"),
+            "never signalled"
+        );
+        assert!(shows_a_text_starting(
+            &window,
+            "Okapi ne peut pas fermer Chrome"
+        ));
+        let_the_screen_settle();
+        found(&window, "Cache de pip").invoke_accessible_default_action();
+        assert_eq!(
+            found(&window, "Cache de pip").accessible_checked(),
+            Some(true),
+            "the results frozen under the question"
+        );
+        button(&window, "Ignorer Chrome").invoke_accessible_default_action();
+        assert!(!asking(&window));
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(!pip.exists());
+        assert!(chrome.exists(), "left out this time");
+        assert_eq!(sandbox.history()[0]["removed"], 1);
+    }
+
+    #[test]
+    fn okapi_closes_an_open_browser_then_cleans() {
+        let sandbox = Sandbox::new();
+        let (chrome, _, lock) = chrome_open(&sandbox, false);
+        let seams = Seams {
+            // A browser that closes when asked: its lock goes.
+            browser: Rc::new(|lock| {
+                let lock = lock.lock().to_path_buf();
+                super::super::browsers::Asked::Closable {
+                    pid: 1,
+                    close: Box::new(move || fs::remove_file(lock)),
+                }
+            }),
+            ..sandbox.read(&sandbox.root.join("state"))
+        };
+        let (window, _screen) = on_results(seams);
+        confirm_and_ask(&window);
+        assert!(asking(&window));
+        button(&window, "Fermer Chrome et continuer").invoke_accessible_default_action();
+        assert!(
+            there(&lock),
+            "the second click of a double click on Supprimer"
+        );
+        let_the_screen_settle();
+        button(&window, "Fermer Chrome et continuer").invoke_accessible_default_action();
+        assert!(!there(&lock));
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(!asking(&window));
+        assert!(!chrome.exists(), "cleaned once closed");
+    }
+
+    #[test]
+    fn a_browser_that_does_not_close_is_said_and_can_be_left_out() {
+        let sandbox = Sandbox::new();
+        let (chrome, _, lock) = chrome_open(&sandbox, false);
+        let seams = Seams {
+            browser: Rc::new(|_| super::super::browsers::Asked::Closable {
+                pid: 1,
+                close: Box::new(|| Ok(())),
+            }),
+            ..sandbox.read(&sandbox.root.join("state"))
+        };
+        let (window, _screen) = on_results(seams);
+        confirm_and_ask(&window);
+        let_the_screen_settle();
+        button(&window, "Fermer Chrome et continuer").invoke_accessible_default_action();
+        assert!(shows(&window, "Fermeture de Chrome…"));
+        for _ in 0..super::super::browsers::CLOSE_LOOKS {
+            i_slint_backend_testing::mock_elapsed_time(super::super::browsers::CLOSE_LOOK_EVERY);
+            slint::platform::update_timers_and_animations();
+        }
+        assert!(shows(
+            &window,
+            "Chrome ne s'est pas fermé : fermez-le, puis relancez le nettoyage."
+        ));
+        assert!(
+            no_button(&window, "Fermer Chrome et continuer"),
+            "asked once only"
+        );
+        assert!(there(&lock));
+        let_the_screen_settle();
+        button(&window, "Ignorer Chrome").invoke_accessible_default_action();
+        assert!(!asking(&window));
+        assert_eq!(
+            step(&window),
+            ui::CleanerStep::Results,
+            "nothing left to clean"
+        );
+        assert!(chrome.exists());
+        assert_eq!(
+            sandbox.history(),
+            Vec::<serde_json::Value>::new(),
+            "no history line"
+        );
+    }
+
+    #[test]
+    fn escape_at_an_open_browser_cancels_the_cleaning() {
+        let sandbox = Sandbox::new();
+        let (chrome, pip, _) = chrome_open(&sandbox, true);
+        let (window, _screen) = on_results(sandbox.read(&sandbox.root.join("state")));
+        confirm_and_ask(&window);
+        let_the_screen_settle();
+        window.global::<ui::Cleaner>().invoke_cancel_browser();
+        assert!(!asking(&window));
+        assert_eq!(step(&window), ui::CleanerStep::Results);
+        assert!(chrome.exists());
+        assert!(pip.unwrap().exists(), "nothing removed");
+        assert_eq!(sandbox.history(), Vec::<serde_json::Value>::new());
+    }
+
+    /// A browser's cache in the sandbox, the browser open (see
+    /// [`chrome_open`]).
+    fn open_browser(sandbox: &Sandbox, base: &str, files: usize) -> PathBuf {
+        for file in 0..files {
+            sandbox.file(&format!("home/.config/{base}/Default/Cache/{file}"));
+        }
+        let host = fs::read_to_string("/proc/sys/kernel/hostname").unwrap();
+        let lock = sandbox
+            .root
+            .join(format!("home/.config/{base}/SingletonLock"));
+        std::os::unix::fs::symlink(format!("{}-{}", host.trim(), std::process::id()), &lock)
+            .unwrap();
+        lock
+    }
+
+    #[test]
+    fn two_open_browsers_are_asked_about_one_after_the_other() {
+        let sandbox = Sandbox::new();
+        // Of sizes apart: what is left is counted by entry, not by group.
+        open_browser(&sandbox, "google-chrome", 3);
+        let edge = open_browser(&sandbox, "microsoft-edge", 2);
+        let pip = sandbox.file("home/.cache/pip/old");
+        sandbox.file("home/.cache/pip/second");
+        sandbox.file("home/.cache/pip/third");
+        settle_files();
+        let (window, _screen) = on_results(sandbox.read(&sandbox.root.join("state")));
+        confirm_and_ask(&window);
+        assert!(shows(&window, "Chrome est ouvert"));
+        // The second click of a double click on Supprimer leaves nothing out.
+        window.global::<ui::Cleaner>().invoke_ignore_browser();
+        assert!(asking(&window));
+        assert!(shows(&window, "Chrome est ouvert"));
+        let_the_screen_settle();
+        // No cleaning starts under the question.
+        window.global::<ui::Cleaner>().invoke_clean();
+        assert!(!window.global::<ui::Cleaner>().get_confirming());
+        assert!(asking(&window));
+        button(&window, "Ignorer Chrome").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert!(shows(&window, "Edge est ouvert"), "then the next one");
+        let_the_screen_settle();
+        button(&window, "Ignorer Edge").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(!pip.exists());
+        assert!(there(&edge));
+        assert_eq!(sandbox.history()[0]["removed"], 3, "pip alone");
+    }
+
+    #[test]
+    fn a_browser_closed_meanwhile_is_not_asked_about() {
+        let sandbox = Sandbox::new();
+        open_browser(&sandbox, "google-chrome", 3);
+        let edge = open_browser(&sandbox, "microsoft-edge", 1);
+        settle_files();
+        let (window, _screen) = on_results(sandbox.read(&sandbox.root.join("state")));
+        confirm_and_ask(&window);
+        fs::remove_file(&edge).unwrap();
+        let_the_screen_settle();
+        button(&window, "Ignorer Chrome").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(!asking(&window));
+        assert_eq!(sandbox.history()[0]["removed"], 1, "Edge's cache, closed");
+        assert!(
+            sandbox
+                .root
+                .join("home/.config/google-chrome/Default/Cache/0")
+                .exists()
+        );
+        assert!(
+            !sandbox
+                .root
+                .join("home/.config/microsoft-edge/Default/Cache/0")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn the_holder_is_asked_again_at_the_click() {
+        use std::cell::Cell;
+
+        let sandbox = Sandbox::new();
+        open_browser(&sandbox, "google-chrome", 1);
+        settle_files();
+        let asked = Rc::new(Cell::new(0));
+        let signalled = Rc::new(Cell::new(0));
+        let (asked_by, signalled_by) = (Rc::clone(&asked), Rc::clone(&signalled));
+        let seams = Seams {
+            // Vouched for when shown, no more at the click.
+            browser: Rc::new(move |_| {
+                asked_by.set(asked_by.get() + 1);
+                if asked_by.get() == 1 {
+                    let signalled = Rc::clone(&signalled_by);
+                    super::super::browsers::Asked::Closable {
+                        pid: 1,
+                        close: Box::new(move || {
+                            signalled.set(signalled.get() + 1);
+                            Ok(())
+                        }),
+                    }
+                } else {
+                    super::super::browsers::Asked::Unverified
+                }
+            }),
+            ..sandbox.read(&sandbox.root.join("state"))
+        };
+        let (window, _screen) = on_results(seams);
+        confirm_and_ask(&window);
+        let_the_screen_settle();
+        button(&window, "Fermer Chrome et continuer").invoke_accessible_default_action();
+        assert_eq!(asked.get(), 2, "asked again at the click");
+        assert_eq!(signalled.get(), 0, "never signalled");
+        assert!(shows_a_text_starting(
+            &window,
+            "Okapi ne peut pas fermer Chrome"
+        ));
+    }
+
+    #[test]
+    fn a_refused_request_to_close_is_said_at_once() {
+        let sandbox = Sandbox::new();
+        open_browser(&sandbox, "google-chrome", 1);
+        settle_files();
+        let seams = Seams {
+            browser: Rc::new(|_| super::super::browsers::Asked::Closable {
+                pid: 1,
+                close: Box::new(|| Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))),
+            }),
+            ..sandbox.read(&sandbox.root.join("state"))
+        };
+        let (window, _screen) = on_results(seams);
+        confirm_and_ask(&window);
+        let_the_screen_settle();
+        button(&window, "Fermer Chrome et continuer").invoke_accessible_default_action();
+        assert!(shows(
+            &window,
+            "Le système a refusé de demander à Chrome de se fermer : fermez-le, puis relancez le nettoyage."
+        ));
+        assert!(asking(&window));
+        assert!(no_button(&window, "Fermer Chrome et continuer"));
+    }
+
+    #[test]
+    fn a_browser_has_its_whole_wait_to_close() {
+        use super::super::browsers::{CLOSE_LOOK_EVERY, CLOSE_LOOKS};
+
+        assert_eq!(
+            CLOSE_LOOK_EVERY * CLOSE_LOOKS,
+            Duration::from_secs(15),
+            "time for a browser to save its session"
+        );
+        let sandbox = Sandbox::new();
+        let lock = open_browser(&sandbox, "google-chrome", 1);
+        settle_files();
+        let seams = Seams {
+            browser: Rc::new(|_| super::super::browsers::Asked::Closable {
+                pid: 1,
+                close: Box::new(|| Ok(())),
+            }),
+            ..sandbox.read(&sandbox.root.join("state"))
+        };
+        let (window, _screen) = on_results(seams);
+        confirm_and_ask(&window);
+        let_the_screen_settle();
+        button(&window, "Fermer Chrome et continuer").invoke_accessible_default_action();
+        let one_look = || {
+            i_slint_backend_testing::mock_elapsed_time(CLOSE_LOOK_EVERY);
+            slint::platform::update_timers_and_animations();
+        };
+        for _ in 1..CLOSE_LOOKS {
+            one_look();
+        }
+        assert!(shows(&window, "Fermeture de Chrome…"), "still waiting");
+        // Closed at the last look: the cleaning goes on.
+        fs::remove_file(&lock).unwrap();
+        one_look();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert_eq!(sandbox.history()[0]["removed"], 1);
+    }
+
+    #[test]
+    fn escape_right_after_fermer_still_cancels() {
+        let sandbox = Sandbox::new();
+        let lock = open_browser(&sandbox, "google-chrome", 1);
+        let pip = sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let seams = Seams {
+            browser: Rc::new(|lock| {
+                let lock = lock.lock().to_path_buf();
+                super::super::browsers::Asked::Closable {
+                    pid: 1,
+                    close: Box::new(move || fs::remove_file(lock)),
+                }
+            }),
+            ..sandbox.read(&sandbox.root.join("state"))
+        };
+        let (window, _screen) = on_results(seams);
+        confirm_and_ask(&window);
+        let_the_screen_settle();
+        button(&window, "Fermer Chrome et continuer").invoke_accessible_default_action();
+        assert!(!there(&lock), "asked to close");
+        window.global::<ui::Cleaner>().invoke_cancel_browser();
+        assert!(!asking(&window));
+        for _ in 0..super::super::browsers::CLOSE_LOOKS {
+            i_slint_backend_testing::mock_elapsed_time(super::super::browsers::CLOSE_LOOK_EVERY);
+            slint::platform::update_timers_and_animations();
+        }
+        assert_eq!(step(&window), ui::CleanerStep::Results, "nothing started");
+        assert!(pip.exists());
+        assert_eq!(sandbox.history(), Vec::<serde_json::Value>::new());
+    }
+
+    #[test]
+    fn a_browser_found_closed_when_asked_about_is_skipped() {
+        let sandbox = Sandbox::new();
+        let chrome = sandbox
+            .root
+            .join("home/.config/google-chrome/Default/Cache/0");
+        open_browser(&sandbox, "google-chrome", 1);
+        settle_files();
+        let seams = Seams {
+            browser: Rc::new(|_| super::super::browsers::Asked::Closed),
+            ..sandbox.read(&sandbox.root.join("state"))
+        };
+        let (window, _screen) = on_results(seams);
+        confirm(&window);
+        slint::platform::update_timers_and_animations();
+        assert!(!asking(&window), "no question");
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(
+            chrome.exists(),
+            "its lock still read as held at removal: kept"
+        );
+    }
+
+    #[test]
+    fn the_focus_goes_back_to_ignorer_when_the_buttons_change() {
+        use slint::platform::Key;
+
+        let sandbox = Sandbox::new();
+        let chrome = sandbox
+            .root
+            .join("home/.config/google-chrome/Default/Cache/0");
+        open_browser(&sandbox, "google-chrome", 1);
+        settle_files();
+        let shown = Rc::new(std::cell::Cell::new(false));
+        let seams = Seams {
+            // Vouched for when shown, no more at the click.
+            browser: Rc::new(move |_| {
+                if shown.replace(true) {
+                    super::super::browsers::Asked::Unverified
+                } else {
+                    super::super::browsers::Asked::Closable {
+                        pid: 1,
+                        close: Box::new(|| Ok(())),
+                    }
+                }
+            }),
+            ..sandbox.read(&sandbox.root.join("state"))
+        };
+        let (window, _screen) = on_results(seams);
+        confirm_and_ask(&window);
+        let_the_screen_settle();
+        // From Ignorer to Fermer, pressed: Fermer goes away.
+        press(&window, Key::Tab);
+        press(&window, Key::Return);
+        assert!(asking(&window));
+        assert!(no_button(&window, "Fermer Chrome et continuer"));
+        slint::platform::update_timers_and_animations();
+        let_the_screen_settle();
+        press(&window, Key::Return);
+        assert!(!asking(&window), "Ignorer took the key");
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
+        assert!(chrome.exists());
+    }
+
+    /// Chrome and Edge open, the second shown after the first; a seam whose
+    /// answer for each browser `answer` gives, from how many times it was
+    /// asked about it, and that counts the requests to close.
+    fn two_browsers(
+        answer: fn(okapi_rules::ChromiumBrowserKind, u32) -> bool,
+    ) -> (Sandbox, Seams, Rc<std::cell::Cell<u32>>) {
+        let sandbox = Sandbox::new();
+        open_browser(&sandbox, "google-chrome", 1);
+        open_browser(&sandbox, "microsoft-edge", 1);
+        sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let signalled = Rc::new(std::cell::Cell::new(0));
+        let asked = Rc::new(std::cell::RefCell::new(std::collections::BTreeMap::new()));
+        let counted = Rc::clone(&signalled);
+        let seams = Seams {
+            browser: Rc::new(move |lock| {
+                let times = {
+                    let mut asked = asked.borrow_mut();
+                    let times = asked.entry(lock.browser()).or_insert(0);
+                    *times += 1;
+                    *times
+                };
+                if answer(lock.browser(), times) {
+                    let counted = Rc::clone(&counted);
+                    super::super::browsers::Asked::Closable {
+                        pid: if lock.browser() == okapi_rules::ChromiumBrowserKind::Chrome {
+                            1
+                        } else {
+                            2
+                        },
+                        close: Box::new(move || {
+                            counted.set(counted.get() + 1);
+                            Ok(())
+                        }),
+                    }
+                } else {
+                    super::super::browsers::Asked::Closed
+                }
+            }),
+            ..sandbox.read(&sandbox.root.join("state"))
+        };
+        (sandbox, seams, signalled)
+    }
+
+    #[test]
+    fn a_browser_closed_between_the_question_and_the_click_is_skipped() {
+        use okapi_rules::ChromiumBrowserKind::Chrome;
+        use slint::platform::Key;
+
+        // Chrome open when shown, closed at the click; Edge open.
+        let (sandbox, seams, signalled) =
+            two_browsers(|browser, times| browser != Chrome || times == 1);
+        let (window, _screen) = on_results(seams);
+        confirm_and_ask(&window);
+        assert!(shows(&window, "Chrome est ouvert"));
+        let_the_screen_settle();
+        press(&window, Key::Tab);
+        press(&window, Key::Return);
+        slint::platform::update_timers_and_animations();
+        assert!(shows(&window, "Edge est ouvert"), "Chrome skipped");
+        assert_eq!(signalled.get(), 0);
+        let_the_screen_settle();
+        // The focus went back to Ignorer: Return never closes Edge unseen.
+        press(&window, Key::Return);
+        assert_eq!(signalled.get(), 0, "Edge never asked to close");
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert_eq!(sandbox.history()[0]["removed"], 1, "pip alone");
+    }
+
+    #[test]
+    fn ignoring_a_browser_while_it_closes_leaves_the_next_one_whole() {
+        let (_sandbox, seams, signalled) = two_browsers(|_, _| true);
+        let (window, _screen) = on_results(seams);
+        confirm_and_ask(&window);
+        let_the_screen_settle();
+        button(&window, "Fermer Chrome et continuer").invoke_accessible_default_action();
+        assert!(shows(&window, "Fermeture de Chrome…"));
+        let_the_screen_settle();
+        button(&window, "Ignorer Chrome").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert!(shows(&window, "Edge est ouvert"));
+        let_the_screen_settle();
+        button(&window, "Fermer Edge et continuer").invoke_accessible_default_action();
+        assert!(shows(&window, "Fermeture de Edge…"));
+        assert_eq!(signalled.get(), 2);
+        for _ in 0..super::super::browsers::CLOSE_LOOKS {
+            i_slint_backend_testing::mock_elapsed_time(super::super::browsers::CLOSE_LOOK_EVERY);
+            slint::platform::update_timers_and_animations();
+        }
+        assert!(shows(
+            &window,
+            "Edge ne s'est pas fermé : fermez-le, puis relancez le nettoyage."
+        ));
+        // Never a second request to the same browser, in this question or
+        // the next.
+        let_the_screen_settle();
+        window.global::<ui::Cleaner>().invoke_close_browser();
+        assert_eq!(signalled.get(), 2);
+        window.global::<ui::Cleaner>().invoke_cancel_browser();
+        let_the_screen_settle();
+        confirm_and_ask(&window);
+        assert!(shows(
+            &window,
+            "Chrome ne s'est pas fermé : fermez-le, puis relancez le nettoyage."
+        ));
+        assert!(no_button(&window, "Fermer Chrome et continuer"));
+        assert_eq!(signalled.get(), 2);
     }
 }

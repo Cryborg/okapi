@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use okapi_platform::FileIdentity;
-use okapi_rules::{Label, RuleId, TemplateError, TemplatePath, Variable};
+use okapi_rules::{
+    ChromiumBrowserKind, Label, RelativePath, RuleId, TemplateError, TemplatePath, Variable,
+};
 
 use crate::preconditions::Stop;
 
@@ -50,6 +52,12 @@ pub enum Origin {
     },
     /// A rule of `apps.json`, `gaming.json` or `gpu-cache.json`.
     App { file: AppFile, id: RuleId },
+    /// A cache directory of a Chromium-based browser, in every profile:
+    /// never the profile, which is no stable key.
+    Browser {
+        browser: ChromiumBrowserKind,
+        directory: RelativePath,
+    },
 }
 
 impl Origin {
@@ -59,6 +67,7 @@ impl Origin {
         match self {
             Self::SystemTarget { .. } | Self::SystemFile { .. } => Category::System,
             Self::App { file, .. } => Category::of_file(*file),
+            Self::Browser { .. } => Category::Browsers,
         }
     }
 }
@@ -69,6 +78,8 @@ impl Origin {
 pub enum Category {
     /// The targets and single files of `system.json`.
     System,
+    /// The caches of `browsers.json`.
+    Browsers,
     /// `apps.json`.
     Apps,
     /// `gaming.json`.
@@ -78,7 +89,13 @@ pub enum Category {
 }
 
 impl Category {
-    pub const ALL: [Self; 4] = [Self::System, Self::Apps, Self::Gaming, Self::Gpu];
+    pub const ALL: [Self; 5] = [
+        Self::System,
+        Self::Browsers,
+        Self::Apps,
+        Self::Gaming,
+        Self::Gpu,
+    ];
 
     /// The category of the rules of `file`.
     pub(crate) const fn of_file(file: AppFile) -> Self {
@@ -107,6 +124,7 @@ impl Category {
     pub const fn name(self) -> &'static str {
         match self {
             Self::System => "system",
+            Self::Browsers => "browsers",
             Self::Apps => "apps",
             Self::Gaming => "gaming",
             Self::Gpu => "gpu",
@@ -403,6 +421,22 @@ impl ScanGroup {
         self.attributes.rule_group.as_ref()
     }
 
+    /// The browser whose cache the group is, when its label is a browser
+    /// cache's: that of its first rule, which gives the label.
+    #[must_use]
+    pub fn browser(&self) -> Option<ChromiumBrowserKind> {
+        match self.attributes.origins.first() {
+            Some(Origin::Browser { browser, .. }) => Some(*browser),
+            _ => None,
+        }
+    }
+
+    /// The locks of the browsers whose caches the group holds.
+    #[must_use]
+    pub const fn locks(&self) -> &BTreeSet<BrowserLock> {
+        &self.attributes.locks
+    }
+
     /// A performance cache: clearing it slows the next launch.
     #[must_use]
     pub const fn is_cache_reset(&self) -> bool {
@@ -498,6 +532,26 @@ impl ScanReport {
         Some((group, group.items.get(item)?))
     }
 
+    /// The locks held of the browsers whose caches these identifiers are in,
+    /// one per browser: what to ask the user about before cleaning them.
+    #[must_use]
+    pub fn open_browsers(&self, ids: &[ItemId]) -> Vec<BrowserLock> {
+        let locks: BTreeSet<&BrowserLock> = ids
+            .iter()
+            .filter_map(|id| self.find(*id))
+            .flat_map(|(group, _)| group.locks())
+            .collect();
+        let mut seen = BTreeSet::new();
+        locks
+            .into_iter()
+            .filter(|lock| lock.is_held() && seen.insert(lock.browser))
+            .inspect(|lock| {
+                tracing::info!(browser = lock.browser.key(), lock = %lock.lock.display(), "browser open");
+            })
+            .cloned()
+            .collect()
+    }
+
     pub(crate) const fn roots(&self) -> &BTreeSet<FileIdentity> {
         &self.roots
     }
@@ -506,6 +560,54 @@ impl ScanReport {
 impl ScanItem {
     pub(crate) const fn found_item(&self) -> &FoundItem {
         &self.item
+    }
+}
+
+/// The lock a running browser holds in its user-data directory: while it is
+/// there, the browser's caches are not to be emptied.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct BrowserLock {
+    browser: ChromiumBrowserKind,
+    /// The lock itself, a link that may point nowhere.
+    lock: PathBuf,
+    /// The browser's user-data directory, which holds the lock.
+    user_data: PathBuf,
+}
+
+impl BrowserLock {
+    pub(crate) const fn new(
+        browser: ChromiumBrowserKind,
+        lock: PathBuf,
+        user_data: PathBuf,
+    ) -> Self {
+        Self {
+            browser,
+            lock,
+            user_data,
+        }
+    }
+
+    #[must_use]
+    pub const fn browser(&self) -> ChromiumBrowserKind {
+        self.browser
+    }
+
+    #[must_use]
+    pub fn lock(&self) -> &Path {
+        &self.lock
+    }
+
+    #[must_use]
+    pub fn user_data(&self) -> &Path {
+        &self.user_data
+    }
+
+    /// Whether the browser runs: its lock is there and not left by a browser
+    /// gone (`okapi_platform::lock_is_live`); a lock that cannot be judged
+    /// is held (a browser not known closed is not emptied).
+    #[must_use]
+    pub fn is_held(&self) -> bool {
+        okapi_platform::lock_is_live(&self.lock)
     }
 }
 
@@ -518,6 +620,8 @@ pub(crate) struct GroupAttributes {
     pub(crate) cache_reset: bool,
     pub(crate) selected_by_default: bool,
     pub(crate) needs_admin: bool,
+    /// The locks of the browsers it empties, those of every rule it gathers.
+    pub(crate) locks: BTreeSet<BrowserLock>,
 }
 
 impl GroupAttributes {
@@ -528,6 +632,7 @@ impl GroupAttributes {
         self.cache_reset |= other.cache_reset;
         self.selected_by_default &= other.selected_by_default;
         self.needs_admin |= other.needs_admin;
+        self.locks.extend(other.locks);
     }
 }
 
@@ -668,7 +773,7 @@ mod tests {
             .iter()
             .map(|category| category.name())
             .collect();
-        assert_eq!(names, ["system", "apps", "gaming", "gpu"]);
+        assert_eq!(names, ["system", "browsers", "apps", "gaming", "gpu"]);
     }
 
     #[test]

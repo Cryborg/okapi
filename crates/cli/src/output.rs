@@ -6,7 +6,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use okapi_engine::{Category, CleanReceipt, CleanResult, ItemId, Origin, ScanGroup, ScanReport};
-use okapi_rules::Language;
+use okapi_rules::{ChromiumBrowserKind, Language};
 use okapi_store::HistoryOutcome;
 use serde::Serialize;
 
@@ -17,6 +17,9 @@ use crate::text::{Message, text};
 /// A group as the command line shows it and decides about it.
 #[derive(Debug, Serialize)]
 pub struct GroupSummary {
+    /// The browser whose cache it is, by its key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser: Option<ChromiumBrowserKind>,
     pub label: String,
     pub rules: Vec<String>,
     pub entries: Vec<EntrySummary>,
@@ -49,6 +52,7 @@ pub fn summaries(report: &ScanReport, categories: &BTreeSet<Category>) -> Vec<Gr
 
 fn summary(group: &ScanGroup, categories: &BTreeSet<Category>) -> GroupSummary {
     GroupSummary {
+        browser: group.browser(),
         label: group.label().to_string(),
         rules: group.origins().iter().map(qualified_rule_name).collect(),
         entries: group
@@ -177,6 +181,7 @@ impl Shown<'_> {
         if !quiet {
             for group in self.shown() {
                 output.line(&say(&Message::Group {
+                    browser: group.browser,
                     label: &group.label,
                     entries: group.entries.len(),
                     bytes: group.bytes,

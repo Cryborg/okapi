@@ -1,19 +1,25 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use okapi_platform::FileIdentity;
+use std::collections::BTreeMap;
+use std::ffi::OsString;
+
+use okapi_platform::{CHROMIUM_LOCK, FileIdentity};
 use okapi_rules::{
-    AgeDays, AppCacheRule, CleanTarget, Effect, MiscRules, PathMatcher, RelativePath,
-    SingleFileTarget, TemplatePath, TemplateVariables,
+    AgeDays, AppCacheRule, ChromiumBrowser, ChromiumBrowserKind, ChromiumCacheDirectory,
+    CleanTarget, Effect, MiscRules, Name, PathMatcher, RelativePath, SingleFileTarget,
+    TemplatePath, TemplateVariables,
 };
 
 use crate::options::ScanOptions;
 use crate::paths::is_absent;
 use crate::protection::ProtectedRoots;
 use crate::report::{
-    AppFile, Category, EntryKind, GroupAttributes, Origin, ScanIssue, ScanStats, UnsafeReason,
+    AppFile, BrowserLock, Category, EntryKind, GroupAttributes, Origin, ScanIssue, ScanStats,
+    UnsafeReason,
 };
 use crate::walk::{Found, Readers, by_name};
 
@@ -26,6 +32,13 @@ pub(crate) enum RuleEntry<'a> {
         file: AppFile,
         rule: &'a AppCacheRule,
     },
+    /// A cache directory of a browser, in each profile or, `shared`, once
+    /// for all of them.
+    Browser {
+        browser: &'a ChromiumBrowser,
+        directory: &'a ChromiumCacheDirectory,
+        shared: bool,
+    },
 }
 
 impl RuleEntry<'_> {
@@ -33,6 +46,7 @@ impl RuleEntry<'_> {
         match self {
             Self::Target(_) | Self::File(_) => Category::System,
             Self::App { file, .. } => Category::of_file(*file),
+            Self::Browser { .. } => Category::Browsers,
         }
     }
 
@@ -42,8 +56,28 @@ impl RuleEntry<'_> {
             Self::Target(target) => target.is_selected_by_default(),
             Self::File(target) => target.is_selected_by_default(),
             Self::App { rule, .. } => rule.is_selected_by_default(),
+            Self::Browser { directory, .. } => directory.is_selected_by_default(),
         }
     }
+}
+
+/// The first profile of a Chromium-based browser.
+const DEFAULT_PROFILE: &str = "Default";
+/// How the other profiles are named (`Profile 2`); `System Profile` and
+/// `Guest Profile` are no user's.
+const OTHER_PROFILES: &str = "Profile ";
+
+/// Where a browser keeps what its caches are found under, read once for all
+/// its directories.
+#[derive(Debug, Clone)]
+pub(crate) struct BrowserBases {
+    /// The user-data directory, canonical, and its device.
+    base: PathBuf,
+    base_device: Option<u64>,
+    /// Where the OS keeps its disk caches apart, if it does.
+    cache: Option<(PathBuf, Option<u64>)>,
+    /// The profiles' names; none when the browser keeps all at its base.
+    profiles: Vec<OsString>,
 }
 
 /// What a planned root is.
@@ -107,6 +141,8 @@ pub(crate) struct Planner<'a> {
     pub(crate) readers: Readers,
     pub(crate) issues: Vec<ScanIssue>,
     pub(crate) stats: ScanStats,
+    /// The bases of each browser met, `None` when it has none to scan.
+    pub(crate) browsers: BTreeMap<ChromiumBrowserKind, Option<BrowserBases>>,
 }
 
 impl Planner<'_> {
@@ -115,6 +151,142 @@ impl Planner<'_> {
             RuleEntry::Target(target) => self.plan_target(target),
             RuleEntry::File(target) => self.plan_file(target).into_iter().collect(),
             RuleEntry::App { file, rule } => self.plan_app(file, rule),
+            RuleEntry::Browser {
+                browser,
+                directory,
+                shared,
+            } => self.plan_browser(browser, directory, shared),
+        }
+    }
+
+    fn plan_browser(
+        &mut self,
+        browser: &ChromiumBrowser,
+        directory: &ChromiumCacheDirectory,
+        shared: bool,
+    ) -> Vec<PlannedRoot> {
+        let origin = Origin::Browser {
+            browser: browser.kind(),
+            directory: directory.directory().clone(),
+        };
+        let Some(bases) = self.browser_bases(&origin, browser) else {
+            return Vec::new();
+        };
+        let Some((first, rest)) = directory.directory().segments().split_first() else {
+            return Vec::new();
+        };
+        let attributes = GroupAttributes {
+            origins: vec![origin.clone()],
+            label: directory.label().clone(),
+            rule_group: None,
+            cache_reset: directory.is_cache_reset(),
+            selected_by_default: directory.is_selected_by_default(),
+            needs_admin: false,
+            locks: BTreeSet::from([BrowserLock::new(
+                browser.kind(),
+                bases.base.join(CHROMIUM_LOCK),
+                bases.base.clone(),
+            )]),
+        };
+        // A shared directory is under the base only; a profile's, under the
+        // base and the cache, in each profile (or at their roots without any).
+        let homes = std::iter::once((&bases.base, bases.base_device)).chain(
+            bases
+                .cache
+                .as_ref()
+                .filter(|_| !shared)
+                .map(|(cache, device)| (cache, *device)),
+        );
+        let mut roots = Vec::new();
+        for (home, device) in homes {
+            if shared || bases.profiles.is_empty() {
+                roots.extend(self.reach(&origin, home.join(first.as_str()), rest, device));
+            } else {
+                for profile in &bases.profiles {
+                    let segments = directory.directory().segments();
+                    roots.extend(self.reach(&origin, home.join(profile), segments, device));
+                }
+            }
+        }
+        self.check_roots(&origin, roots, None, &attributes)
+    }
+
+    /// The bases of `browser`, read the first time one of its directories is
+    /// planned: a base that cannot be used is reported once.
+    fn browser_bases(
+        &mut self,
+        origin: &Origin,
+        browser: &ChromiumBrowser,
+    ) -> Option<BrowserBases> {
+        if let Some(known) = self.browsers.get(&browser.kind()) {
+            return known.clone();
+        }
+        let bases = self.read_browser_bases(origin, browser);
+        self.browsers.insert(browser.kind(), bases.clone());
+        bases
+    }
+
+    fn read_browser_bases(
+        &mut self,
+        origin: &Origin,
+        browser: &ChromiumBrowser,
+    ) -> Option<BrowserBases> {
+        let base = self.open_base(origin, browser.base())?;
+        let base_device = self.device(origin, &base).ok()?;
+        let cache = match browser.cache() {
+            Some(cache) => self.open_base(origin, cache).and_then(|cache| {
+                let device = self.device(origin, &cache).ok()?;
+                Some((cache, device))
+            }),
+            None => None,
+        };
+        let entries = match fs::read_dir(&base) {
+            Ok(entries) => entries,
+            Err(error) if is_absent(&error) => return None,
+            Err(error) => return self.unreadable(origin, base, error.kind()),
+        };
+        // By name only: `reach` judges each one as any segment.
+        let mut profiles: Vec<OsString> = entries
+            .filter_map(|entry| match entry {
+                Ok(entry) => Some(entry.file_name()),
+                Err(error) => {
+                    tracing::debug!(base = %base.display(), %error, "browser base entry unreadable");
+                    self.stats.unreadable += 1;
+                    None
+                }
+            })
+            .filter(|name| {
+                name == DEFAULT_PROFILE
+                    || name
+                        .to_str()
+                        .is_some_and(|name| name.starts_with(OTHER_PROFILES))
+            })
+            .collect();
+        profiles.sort();
+        tracing::debug!(
+            browser = browser.kind().key(),
+            base = %base.display(),
+            profiles = profiles.len(),
+            "browser bases"
+        );
+        Some(BrowserBases {
+            base,
+            base_device,
+            cache,
+            profiles,
+        })
+    }
+
+    /// The device of the directory `base`, `None` when it is not known; an
+    /// error when `base` is gone or unreadable (reported).
+    fn device(&mut self, origin: &Origin, base: &Path) -> Result<Option<u64>, ()> {
+        match fs::symlink_metadata(base) {
+            Ok(metadata) => Ok((self.readers.identity)(&metadata).map(FileIdentity::device)),
+            Err(error) if is_absent(&error) => Err(()),
+            Err(error) => {
+                self.unreadable::<()>(origin, base.to_path_buf(), error.kind());
+                Err(())
+            }
         }
     }
 
@@ -133,6 +305,7 @@ impl Planner<'_> {
             cache_reset: deletion.is_cache_reset(),
             selected_by_default: target.is_selected_by_default(),
             needs_admin: target.needs_admin(),
+            locks: BTreeSet::new(),
         };
         let Some(base) = self.open_base(&origin, deletion.path()) else {
             return Vec::new();
@@ -168,6 +341,7 @@ impl Planner<'_> {
             cache_reset: deletion.is_cache_reset(),
             selected_by_default: rule.is_selected_by_default(),
             needs_admin: false,
+            locks: BTreeSet::new(),
         };
         let mut roots = Vec::new();
         for path in deletion.paths() {
@@ -252,6 +426,7 @@ impl Planner<'_> {
             cache_reset: false,
             selected_by_default: target.is_selected_by_default(),
             needs_admin: false,
+            locks: BTreeSet::new(),
         };
         // A bind mount of a file: never offered by this rule, it still joins
         // the rules that share it (invariant 5, strictest age).
@@ -340,13 +515,8 @@ impl Planner<'_> {
         base: &Path,
         subdirectory: &RelativePath,
     ) -> Vec<Candidate> {
-        let device = match fs::symlink_metadata(base) {
-            Ok(metadata) => (self.readers.identity)(&metadata).map(FileIdentity::device),
-            Err(error) if is_absent(&error) => return Vec::new(),
-            Err(error) => {
-                self.unreadable::<()>(origin, base.to_path_buf(), error.kind());
-                return Vec::new();
-            }
+        let Ok(device) = self.device(origin, base) else {
+            return Vec::new();
         };
         let entries = match fs::read_dir(base) {
             Ok(entries) => entries,
@@ -377,7 +547,8 @@ impl Planner<'_> {
             // A link is judged by `reach`, as any segment: withheld, it still
             // joins the rules that reach its target directly.
             if (file_type.is_dir() || file_type.is_symlink())
-                && let Some(root) = self.reach(origin, entry.path(), subdirectory, device)
+                && let Some(root) =
+                    self.reach(origin, entry.path(), subdirectory.segments(), device)
             {
                 roots.push(root);
             }
@@ -385,7 +556,7 @@ impl Planner<'_> {
         roots
     }
 
-    /// `<child>/<subdirectory>`: a candidate walked when the child and every
+    /// `<child>/<segments>`: a candidate walked when the child and every
     /// segment is a plain directory on the base's device, withheld from the
     /// first one that is a link, another device or a mount
     /// ([`Self::segment`]; the segments after it are not judged), none when
@@ -394,13 +565,13 @@ impl Planner<'_> {
         &mut self,
         origin: &Origin,
         child: PathBuf,
-        subdirectory: &RelativePath,
+        segments: &[Name],
         device: Option<u64>,
     ) -> Option<Candidate> {
-        // The child first, as segment zero: the listing only gave its type.
+        // The child first, as segment zero: a listing gives only its type.
         let mut path = child;
         let mut withheld = false;
-        for segment in std::iter::once(None).chain(subdirectory.segments().iter().map(Some)) {
+        for segment in std::iter::once(None).chain(segments.iter().map(Some)) {
             if let Some(segment) = segment {
                 path.push(segment.as_str());
             }

@@ -7,8 +7,8 @@ import {
     Line, Title,
 } from "widgets.slint";
 import {
-    CheckState, Cleaner, IssueKind, IssueShown, ProblemBanner, ResultBadge, ResultRow,
-    SetupProblem, Words,
+    BrowserStep, CheckState, Cleaner, IssueKind, IssueShown, ProblemBanner, ResultBadge, ResultRow,
+    RowKind, SetupProblem, Words,
 } from "cleaner-model.slint";
 
 // The button that folds or unfolds a category.
@@ -57,9 +57,9 @@ component Fold inherits Rectangle {
     }
 }
 
-// One line of the results: a category (its fold and its checkbox) or one of
-// its groups (a checkbox), indented below it. A layout of its own height: a
-// hidden line takes no room and no focus.
+// One line of the results: a category or a browser (its fold and its
+// checkbox) or a group (a checkbox), each indented below the one above. A
+// layout of its own height: a hidden line takes no room and no focus.
 component ResultLine inherits VerticalLayout {
     in property <ResultRow> line;
     in property <int> index;
@@ -69,7 +69,8 @@ component ResultLine inherits VerticalLayout {
     // A group left to the user has no badge: its note, a warning, says why.
     property <string> badge-text: line.badge == ResultBadge.preselected ? @tr("Présélectionné")
         : @tr("Administrateur");
-    property <string> name: line.is-category ? Words.category(line.category) : line.label;
+    property <bool> is-group: line.kind == RowKind.group;
+    property <string> name: line.kind == RowKind.category ? Words.category(line.category) : line.label;
     // Why a group is left to the user, or out of reach.
     property <string> note: line.badge == ResultBadge.to-choose
         ? @tr("Le prochain démarrage sera plus lent, le temps de recréer ce cache.")
@@ -89,16 +90,20 @@ component ResultLine inherits VerticalLayout {
             padding-top: Theme.spacing-m;
             padding-bottom: Theme.spacing-m;
             spacing: Theme.spacing-m;
-            if line.is-category: Fold {
+            // A browser's fold sits further in than its category's, a group's
+            // checkbox further in than the fold above it.
+            if line.kind == RowKind.browser: Rectangle {
+                width: Theme.results-indent;
+            }
+            if !root.is-group: Fold {
                 folded: line.folded;
                 category: root.name;
                 clicked => {
                     Cleaner.fold(root.index);
                 }
             }
-            // A group's checkbox sits further in than its category's.
-            if !line.is-category: Rectangle {
-                width: Theme.icon-box + Theme.results-indent;
+            if root.is-group: Rectangle {
+                width: Theme.icon-box + (line.nested ? 2 : 1) * Theme.results-indent;
             }
             check := Rectangle {
                 horizontal-stretch: 1;
@@ -108,7 +113,7 @@ component ResultLine inherits VerticalLayout {
                 accessible-enabled: line.enabled;
                 accessible-label: root.name;
                 accessible-description: line.state == CheckState.partial ? @tr("sélection partielle")
-                    : line.is-category ? (line.enabled ? "" : @tr("À choisir groupe par groupe"))
+                    : !root.is-group ? (line.enabled ? "" : @tr("À choisir groupe par groupe"))
                     : line.badge == ResultBadge.preselected ? root.badge-text
                     : line.badge == ResultBadge.to-choose ? root.note
                     : @tr("{} : {}", root.badge-text, root.note);
@@ -156,7 +161,7 @@ component ResultLine inherits VerticalLayout {
                         enabled: line.enabled;
                         y: (parent.height - self.height) / 2;
                     }
-                    if line.is-category: Icon {
+                    if line.kind == RowKind.category: Icon {
                         source: Words.icon(line.category);
                         colorize: Theme.text-2;
                         y: (parent.height - self.height) / 2;
@@ -173,11 +178,11 @@ component ResultLine inherits VerticalLayout {
                                 accessible-role: none;
                                 color: Theme.text;
                                 font-size: Theme.font-label;
-                                font-weight: line.is-category ? Theme.weight-semibold : Theme.weight-medium;
+                                font-weight: root.is-group ? Theme.weight-medium : Theme.weight-semibold;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
-                            if !line.is-category && line.badge != ResultBadge.to-choose: Badge {
+                            if root.is-group && line.badge != ResultBadge.to-choose: Badge {
                                 text: root.badge-text;
                                 icon: line.badge == ResultBadge.preselected ? @image-url("../assets/icons/check.svg")
                                     : @image-url("../assets/icons/shield.svg");
@@ -186,12 +191,12 @@ component ResultLine inherits VerticalLayout {
                                 accessible-role: none;
                             }
                         }
-                        if !line.is-category && line.badge == ResultBadge.to-choose: IconNote {
+                        if root.is-group && line.badge == ResultBadge.to-choose: IconNote {
                             text: root.note;
                             icon: @image-url("../assets/icons/triangle-alert.svg");
                             tone: Theme.warning;
                         }
-                        if !line.is-category && line.badge == ResultBadge.admin: Detail {
+                        if root.is-group && line.badge == ResultBadge.admin: Detail {
                             text: root.note;
                             accessible-role: none;
                         }
@@ -361,6 +366,121 @@ component Confirmation inherits PopupWindow {
     }
 }
 
+// A browser open when its caches are to be cleaned: leave them out this time,
+// or have Okapi close it and go on. Closed by its buttons or Escape (which
+// cancels the cleaning), never by a click outside.
+component BrowserQuestion inherits PopupWindow {
+    close-policy: no-auto-close;
+    // Its buttons change with what it says, and with the browser asked
+    // about: the focus goes back to Ignorer, never left on a Fermer.
+    property <BrowserStep> step: Cleaner.browser-step;
+    changed step => {
+        ignore.focus();
+    }
+    property <string> name: Cleaner.browser-name;
+    changed name => {
+        ignore.focus();
+    }
+
+    keys := FocusScope {
+        focus-on-tab-navigation: false;
+        init => {
+            ignore.focus();
+        }
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                Cleaner.cancel-browser();
+                return accept;
+            }
+            reject
+        }
+        Rectangle {
+            background: Theme.surface;
+            border-radius: Theme.radius-large;
+            border-color: Theme.border;
+            border-width: Theme.border-width;
+            drop-shadow-color: Theme.shadow-1;
+            drop-shadow-blur: Theme.shadow-1-blur;
+            drop-shadow-offset-y: Theme.shadow-1-offset;
+            accessible-role: groupbox;
+            accessible-label: title.text;
+            VerticalLayout {
+                padding: Theme.spacing-xl;
+                spacing: Theme.spacing-l;
+                HorizontalLayout {
+                    alignment: start;
+                    Rectangle {
+                        width: Theme.icon-box;
+                        height: Theme.icon-box;
+                        border-radius: Theme.radius-medium;
+                        background: Theme.warning-soft;
+                        Icon {
+                            source: @image-url("../assets/icons/globe.svg");
+                            colorize: Theme.warning;
+                        }
+                    }
+                }
+                title := Text {
+                    text: @tr("{} est ouvert", Cleaner.browser-name);
+                    accessible-role: none;
+                    color: Theme.text;
+                    font-size: Theme.font-title;
+                    font-weight: Theme.weight-semibold;
+                }
+                Detail {
+                    text: @tr("{} se sert encore de son cache. Fermez-le pour que ce cache soit nettoyé, ou laissez-le de côté cette fois : le reste du nettoyage continue.", Cleaner.browser-name);
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: Theme.spacing-m;
+                    Line {
+                        horizontal-stretch: 1;
+                        text: @tr("{} : {}", Cleaner.browser-name, Cleaner.browser-caches);
+                        wrap: word-wrap;
+                    }
+                    Line {
+                        text: Words.size(Cleaner.browser-size);
+                        horizontal-alignment: right;
+                    }
+                }
+                if Cleaner.browser-step != BrowserStep.ask: Line {
+                    text: Cleaner.browser-step == BrowserStep.closing ? @tr("Fermeture de {}…", Cleaner.browser-name)
+                        : Cleaner.browser-step == BrowserStep.not-closed ? @tr("{} ne s'est pas fermé : fermez-le, puis relancez le nettoyage.", Cleaner.browser-name)
+                        : Cleaner.browser-step == BrowserStep.refused ? @tr("Le système a refusé de demander à {} de se fermer : fermez-le, puis relancez le nettoyage.", Cleaner.browser-name)
+                        : @tr("Okapi ne peut pas fermer {} lui-même : fermez-le, puis relancez le nettoyage.", Cleaner.browser-name);
+                    color: Cleaner.browser-step == BrowserStep.closing ? Theme.text-2 : Theme.warning;
+                    wrap: word-wrap;
+                    accessible-live-region: polite;
+                }
+                Detail {
+                    text: @tr("Échap annule le nettoyage");
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Theme.spacing-s;
+                    ignore := ActionButton {
+                        text: @tr("Ignorer {}", Cleaner.browser-name);
+                        kind: ButtonKind.ghost;
+                        clicked => {
+                            Cleaner.ignore-browser();
+                        }
+                    }
+                    // Asked once only: a second request could end it at once,
+                    // in the middle of saving its session.
+                    if Cleaner.browser-step == BrowserStep.ask || Cleaner.browser-step == BrowserStep.closing: ActionButton {
+                        text: @tr("Fermer {} et continuer", Cleaner.browser-name);
+                        kind: ButtonKind.primary;
+                        enabled: Cleaner.browser-step != BrowserStep.closing;
+                        clicked => {
+                            Cleaner.close-browser();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component ResultsPage inherits VerticalLayout {
     property <bool> notes-shown;
     // Opened and closed by Rust, which keeps what it confirms; a page built
@@ -370,6 +490,9 @@ export component ResultsPage inherits VerticalLayout {
         if self.confirming {
             confirmation.show();
         }
+        if self.asking {
+            question.show();
+        }
     }
     changed confirming => {
         if self.confirming {
@@ -377,6 +500,21 @@ export component ResultsPage inherits VerticalLayout {
         } else {
             confirmation.close();
         }
+    }
+    // Opened and closed by Rust too, after the confirmation.
+    property <bool> asking: Cleaner.browser-asking;
+    changed asking => {
+        if self.asking {
+            question.show();
+        } else {
+            question.close();
+        }
+    }
+
+    question := BrowserQuestion {
+        x: (root.width - Theme.modal-width) / 2;
+        y: root.height / 4;
+        width: Theme.modal-width;
     }
 
     confirmation := Confirmation {

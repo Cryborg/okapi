@@ -59,7 +59,8 @@ pub fn exit_code<'a>(
             | KeepReason::Changed
             | KeepReason::Excluded
             | KeepReason::Protected
-            | KeepReason::Cancelled => PARTIAL,
+            | KeepReason::Cancelled
+            | KeepReason::BrowserOpen => PARTIAL,
         };
         code = if code == PERMISSION_DENIED || this == PERMISSION_DENIED {
             PERMISSION_DENIED
@@ -139,6 +140,11 @@ mod tests {
             exit_code(&[], 2, [CleanResult::Kept(KeepReason::Cancelled)]),
             PARTIAL,
             "an entry left by a cancellation is not removed"
+        );
+        assert_eq!(
+            exit_code(&[], 2, [CleanResult::Kept(KeepReason::BrowserOpen)]),
+            PARTIAL,
+            "an open browser's cache is not removed"
         );
         assert_eq!(exit_code(&[Stop::Cancelled], 2, []), FAILURE);
         assert_eq!(

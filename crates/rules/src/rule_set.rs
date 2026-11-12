@@ -523,6 +523,34 @@ mod tests {
     }
 
     #[test]
+    fn the_performance_caches_of_browsers_are_never_preselected() {
+        let resets = [
+            "Code Cache",
+            "GPUCache",
+            "Service Worker/CacheStorage",
+            "DawnWebGPUCache",
+            "DawnGraphiteCache",
+            "GrShaderCache",
+            "ShaderCache",
+            "GraphiteDawnCache",
+            "GPUPersistentCache",
+            "PnaclTranslationCache",
+        ];
+        for os in Os::ALL {
+            let rules = RuleSet::embedded(os).unwrap();
+            let directories = rules.browsers().chromium_cache_directories();
+            for directory in directories.profile().iter().chain(directories.shared()) {
+                let name = directory.directory().to_string();
+                assert_eq!(
+                    directory.is_cache_reset(),
+                    resets.contains(&name.as_str()),
+                    "{os}: {name}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn the_linux_font_caches_are_never_preselected() {
         let rules = RuleSet::embedded(Os::Linux).unwrap();
         let fonts: Vec<(String, bool)> = rules

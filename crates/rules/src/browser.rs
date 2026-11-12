@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::ValidationError;
 use crate::name::RelativePath;
@@ -13,6 +13,10 @@ pub struct ChromiumCacheDirectory {
     #[serde(rename = "dir")]
     directory: RelativePath,
     label: Label,
+    /// A cache of performance, rebuilt on demand: never selected by default
+    /// (D-4, invariant 5).
+    #[serde(default, rename = "cacheReset")]
+    cache_reset: bool,
     description: Option<String>,
 }
 
@@ -26,6 +30,18 @@ impl ChromiumCacheDirectory {
     #[must_use]
     pub const fn label(&self) -> &Label {
         &self.label
+    }
+
+    #[must_use]
+    pub const fn is_cache_reset(&self) -> bool {
+        self.cache_reset
+    }
+
+    /// Whether it is selected before the user chooses: never a performance
+    /// cache (invariant 5).
+    #[must_use]
+    pub const fn is_selected_by_default(&self) -> bool {
+        !self.cache_reset
     }
 
     #[must_use]
@@ -68,15 +84,18 @@ impl TryFrom<RawChromiumCacheDirectories> for ChromiumCacheDirectories {
     type Error = ValidationError;
 
     fn try_from(raw: RawChromiumCacheDirectories) -> Result<Self, Self::Error> {
-        for (field, directories) in [("profile", &raw.profile[..]), ("shared", &raw.shared[..])] {
-            if let Some(duplicate) =
-                first_duplicate(directories.iter().map(ChromiumCacheDirectory::directory))
-            {
-                return Err(ValidationError::DuplicateEntry {
-                    field,
-                    value: duplicate.to_string(),
-                });
-            }
+        // A directory names a group of every browser: listed once, in one
+        // list or the other.
+        if let Some(duplicate) = first_duplicate(
+            raw.profile
+                .iter()
+                .chain(&raw.shared)
+                .map(ChromiumCacheDirectory::directory),
+        ) {
+            return Err(ValidationError::DuplicateEntry {
+                field: "chromiumCacheDirs",
+                value: duplicate.to_string(),
+            });
         }
         Ok(Self {
             profile: raw.profile,
@@ -85,8 +104,8 @@ impl TryFrom<RawChromiumCacheDirectories> for ChromiumCacheDirectories {
     }
 }
 
-/// A Chromium-based browser that rules know about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+/// A Chromium-based browser that rules know about; written by its key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ChromiumBrowserKind {
     Chrome,
@@ -103,6 +122,64 @@ pub enum ChromiumBrowserKind {
     Helium,
     Cromite,
     Catsxp,
+}
+
+impl ChromiumBrowserKind {
+    pub const ALL: [Self; 13] = [
+        Self::Chrome,
+        Self::Edge,
+        Self::Brave,
+        Self::Opera,
+        Self::OperaGx,
+        Self::Vivaldi,
+        Self::Arc,
+        Self::Chromium,
+        Self::Thorium,
+        Self::Supermium,
+        Self::Helium,
+        Self::Cromite,
+        Self::Catsxp,
+    ];
+
+    /// Its name as shown: a product's name, never translated.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Chrome => "Chrome",
+            Self::Edge => "Edge",
+            Self::Brave => "Brave",
+            Self::Opera => "Opera",
+            Self::OperaGx => "Opera GX",
+            Self::Vivaldi => "Vivaldi",
+            Self::Arc => "Arc",
+            Self::Chromium => "Chromium",
+            Self::Thorium => "Thorium",
+            Self::Supermium => "Supermium",
+            Self::Helium => "Helium",
+            Self::Cromite => "Cromite",
+            Self::Catsxp => "CatsXP",
+        }
+    }
+
+    /// Its stable key, as the rules write it (`operaGX`).
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Chrome => "chrome",
+            Self::Edge => "edge",
+            Self::Brave => "brave",
+            Self::Opera => "opera",
+            Self::OperaGx => "operaGX",
+            Self::Vivaldi => "vivaldi",
+            Self::Arc => "arc",
+            Self::Chromium => "chromium",
+            Self::Thorium => "thorium",
+            Self::Supermium => "supermium",
+            Self::Helium => "helium",
+            Self::Cromite => "cromite",
+            Self::Catsxp => "catsxp",
+        }
+    }
 }
 
 /// Where one Chromium-based browser keeps its data.
@@ -212,6 +289,20 @@ impl SafariPaths {
     }
 }
 
+/// The browsers of `chromium`, each listed once: one key names one browser.
+fn browsers_once<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<ChromiumBrowser>, D::Error> {
+    let browsers = Vec::<ChromiumBrowser>::deserialize(deserializer)?;
+    match first_duplicate(browsers.iter().map(ChromiumBrowser::kind)) {
+        Some(duplicate) => Err(serde::de::Error::custom(ValidationError::DuplicateEntry {
+            field: "chromium",
+            value: duplicate.key().to_owned(),
+        })),
+        None => Ok(browsers),
+    }
+}
+
 /// The content of `browsers.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -220,6 +311,7 @@ pub struct BrowserRules {
     pub(crate) kind: RuleFileKind,
     #[serde(rename = "chromiumCacheDirs")]
     chromium_cache_directories: ChromiumCacheDirectories,
+    #[serde(deserialize_with = "browsers_once")]
     chromium: Vec<ChromiumBrowser>,
     firefox: FirefoxPaths,
     #[serde(default)]
@@ -311,6 +403,45 @@ mod tests {
     }
 
     #[test]
+    fn each_browser_has_its_own_name_and_the_key_of_the_rules() {
+        let names: std::collections::BTreeSet<&str> = ChromiumBrowserKind::ALL
+            .map(ChromiumBrowserKind::name)
+            .into();
+        assert_eq!(names.len(), ChromiumBrowserKind::ALL.len());
+        for browser in ChromiumBrowserKind::ALL {
+            let read: ChromiumBrowserKind =
+                serde_json::from_value(serde_json::Value::from(browser.key())).unwrap();
+            assert_eq!(read, browser);
+            assert_eq!(serde_json::to_value(browser).unwrap(), browser.key());
+        }
+    }
+
+    #[test]
+    fn a_browser_is_listed_once() {
+        let error = error_of::<BrowserRules>(
+            r#"{"type": "browsers",
+                "chromiumCacheDirs": {"profile": [{"dir": "Cache", "label": "Cache"}]},
+                "chromium": [{"key": "chrome", "base": "${CONFIG}/a"}, {"key": "chrome", "base": "${CONFIG}/b"}],
+                "firefox": {"base": "${HOME}/f", "cache": "${CACHE}/f"},
+                "safari": null}"#,
+        );
+        assert!(error.contains("duplicate value"), "{error}");
+        assert!(error.contains("chrome"), "{error}");
+    }
+
+    #[test]
+    fn a_cache_directory_is_a_cache_reset_only_when_said() {
+        let plain: ChromiumCacheDirectory =
+            serde_json::from_str(r#"{"dir": "Cache", "label": "Cache"}"#).unwrap();
+        assert!(!plain.is_cache_reset());
+        let reset: ChromiumCacheDirectory = serde_json::from_str(
+            r#"{"dir": "Code Cache", "label": "Code Cache", "cacheReset": true}"#,
+        )
+        .unwrap();
+        assert!(reset.is_cache_reset());
+    }
+
+    #[test]
     fn rejects_an_unknown_browser() {
         let error = error_of::<ChromiumBrowser>(r#"{"key": "netscape", "base": "${CONFIG}/x"}"#);
         assert!(error.starts_with("unknown variant `netscape`"), "{error}");
@@ -334,30 +465,17 @@ mod tests {
         assert!(escape.contains("not a relative path"), "{escape}");
         let empty = error_of::<ChromiumCacheDirectories>(r#"{"profile": []}"#);
         assert!(empty.starts_with("empty list"), "{empty}");
-        for (field, json) in [
-            (
-                "profile",
-                r#"{"profile": [{"dir": "Cache", "label": "A"}, {"dir": "Cache", "label": "B"}]}"#,
-            ),
-            (
-                "shared",
-                r#"{"profile": [{"dir": "Cache", "label": "A"}],
-                    "shared": [{"dir": "ShaderCache", "label": "B"}, {"dir": "ShaderCache", "label": "C"}]}"#,
-            ),
+        for json in [
+            r#"{"profile": [{"dir": "Cache", "label": "A"}, {"dir": "Cache", "label": "B"}]}"#,
+            r#"{"profile": [{"dir": "Cache", "label": "A"}],
+                "shared": [{"dir": "ShaderCache", "label": "B"}, {"dir": "ShaderCache", "label": "C"}]}"#,
+            r#"{"profile": [{"dir": "Cache", "label": "A"}],
+                "shared": [{"dir": "Cache", "label": "B"}]}"#,
         ] {
             let error = error_of::<ChromiumCacheDirectories>(json);
             assert!(error.starts_with("duplicate value"), "{error}");
-            assert!(error.contains(&format!("in `{field}`")), "{error}");
+            assert!(error.contains("in `chromiumCacheDirs`"), "{error}");
         }
-        let both: ChromiumCacheDirectories = serde_json::from_str(
-            r#"{"profile": [{"dir": "Cache", "label": "A"}], "shared": [{"dir": "Cache", "label": "B"}]}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            both.profile().len() + both.shared().len(),
-            2,
-            "the two lists have different bases"
-        );
     }
 
     #[test]

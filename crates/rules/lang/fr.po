@@ -497,3 +497,59 @@ msgstr "Zoom"
 msgctxt "label"
 msgid "Zypper Package Cache"
 msgstr "Cache des paquets Zypper"
+
+msgctxt "label"
+msgid "Cache"
+msgstr "Cache"
+
+msgctxt "label"
+msgid "Code Cache"
+msgstr "Cache du code"
+
+msgctxt "label"
+msgid "GPU Cache"
+msgstr "Cache GPU"
+
+msgctxt "label"
+msgid "Shared Dictionary Cache"
+msgstr "Cache des dictionnaires partagés"
+
+msgctxt "label"
+msgid "Service Worker Cache"
+msgstr "Cache des service workers"
+
+msgctxt "label"
+msgid "WebGPU Shader Cache"
+msgstr "Cache des shaders WebGPU"
+
+msgctxt "label"
+msgid "Graphite Shader Cache"
+msgstr "Cache des shaders Graphite"
+
+msgctxt "label"
+msgid "Component Extension Cache"
+msgstr "Cache des extensions intégrées"
+
+msgctxt "label"
+msgid "Extension Update Cache"
+msgstr "Cache des mises à jour d'extensions"
+
+msgctxt "label"
+msgid "Skia Shader Cache"
+msgstr "Cache des shaders Skia"
+
+msgctxt "label"
+msgid "Shader Cache"
+msgstr "Cache des shaders"
+
+msgctxt "label"
+msgid "Graphite Pipeline Cache"
+msgstr "Cache des pipelines Graphite"
+
+msgctxt "label"
+msgid "Persistent GPU Cache"
+msgstr "Cache GPU persistant"
+
+msgctxt "label"
+msgid "PNaCl Translation Cache"
+msgstr "Cache de traduction PNaCl"

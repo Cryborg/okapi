@@ -62,6 +62,8 @@ pub enum Kept {
     Protected,
     Refused,
     Cancelled,
+    /// Its browser was open.
+    BrowserOpen,
     /// An identifier from another report: a fault of the interface.
     Unknown,
 }
@@ -76,6 +78,7 @@ impl Kept {
             KeepReason::Protected => Self::Protected,
             KeepReason::Failed { .. } => Self::Refused,
             KeepReason::Cancelled => Self::Cancelled,
+            KeepReason::BrowserOpen => Self::BrowserOpen,
             KeepReason::UnknownItem => Self::Unknown,
         }
     }
@@ -302,6 +305,7 @@ mod tests {
                 Kept::Refused,
             ),
             (KeepReason::Cancelled, Kept::Cancelled),
+            (KeepReason::BrowserOpen, Kept::BrowserOpen),
             (KeepReason::UnknownItem, Kept::Unknown),
         ];
         for (reason, kept) in reasons {

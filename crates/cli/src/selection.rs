@@ -46,6 +46,7 @@ pub fn rule_name(origin: &Origin) -> String {
             subcategory.to_string()
         }
         Origin::App { id, .. } => id.to_string(),
+        Origin::Browser { browser, directory } => format!("{}/{directory}", browser.key()),
     }
 }
 

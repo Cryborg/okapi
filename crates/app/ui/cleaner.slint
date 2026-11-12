@@ -34,6 +34,14 @@ component CategoryCard inherits Rectangle {
     }
     forward-focus: keys;
 
+    // Back from an analysis, the focus returns to the first card.
+    init => {
+        if root.index == 0 && Cleaner.back-from-analysis {
+            Cleaner.back-from-analysis = false;
+            keys.focus();
+        }
+    }
+
     keys := FocusScope {
         key-pressed(event) => {
             if event.text == Key.Space && !event.repeat {
@@ -124,13 +132,6 @@ component Spared inherits Rectangle {
 
 // Before the analysis: the categories, what is spared, and the start.
 component Choosing inherits VerticalLayout {
-    init => {
-        if Cleaner.back-from-analysis {
-            Cleaner.back-from-analysis = false;
-            first.focus();
-        }
-    }
-
     VerticalLayout {
         vertical-stretch: 1;
         padding: Theme.spacing-xxl;
@@ -145,36 +146,16 @@ component Choosing inherits VerticalLayout {
             }
         }
         if Cleaner.problem != SetupProblem.none: ProblemBanner { }
+        // Two columns of one width, whatever each card says.
         GridLayout {
             spacing: Theme.spacing-l;
-            Row {
-                first := CategoryCard {
-                    index: 0;
-                    // Columns of one width, whatever each card says.
-                    min-width: 0px;
-                    preferred-width: 0px;
-                    horizontal-stretch: 1;
-                }
-                CategoryCard {
-                    index: 1;
-                    min-width: 0px;
-                    preferred-width: 0px;
-                    horizontal-stretch: 1;
-                }
-            }
-            Row {
-                CategoryCard {
-                    index: 2;
-                    min-width: 0px;
-                    preferred-width: 0px;
-                    horizontal-stretch: 1;
-                }
-                CategoryCard {
-                    index: 3;
-                    min-width: 0px;
-                    preferred-width: 0px;
-                    horizontal-stretch: 1;
-                }
+            for choice[index] in Cleaner.choices: CategoryCard {
+                index: index;
+                row: Math.floor(index / 2);
+                col: Math.mod(index, 2);
+                min-width: 0px;
+                preferred-width: 0px;
+                horizontal-stretch: 1;
             }
         }
         // What the settings spare, once they are read.

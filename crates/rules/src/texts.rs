@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::sync::OnceLock;
 
+use crate::ChromiumBrowserKind;
+
 /// The French of the labels, as written by hand from the data.
 const FRENCH: &str = include_str!("../lang/fr.po");
 
@@ -184,6 +186,23 @@ pub fn label(language: Language, english: &str) -> &str {
     )
 }
 
+/// The label of a group as shown: a browser's cache by the browser's name
+/// and the directory's label (`Chrome : Cache du code`), any other by its
+/// label alone, in `language`.
+#[must_use]
+pub fn group_label(
+    language: Language,
+    browser: Option<ChromiumBrowserKind>,
+    english: &str,
+) -> String {
+    let label = label(language, english);
+    match (browser, language) {
+        (None, _) => label.to_owned(),
+        (Some(browser), Language::French) => format!("{} : {label}", browser.name()),
+        (Some(browser), Language::English) => format!("{}: {label}", browser.name()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -192,7 +211,8 @@ mod tests {
     use crate::{Os, RuleSet};
 
     /// Every label a cleaning shows on Linux: the subcategories of the system
-    /// targets and the names of the application rules.
+    /// targets, the names of the application rules and the labels of the
+    /// browsers' cache directories.
     fn shown_on_linux() -> BTreeSet<String> {
         let rules = RuleSet::embedded(Os::Linux).unwrap();
         let system = rules.system();
@@ -214,6 +234,14 @@ mod tests {
                     .chain(rules.gpu_cache())
                     .map(|rule| rule.name().to_string()),
             )
+            .chain({
+                let directories = rules.browsers().chromium_cache_directories();
+                directories
+                    .profile()
+                    .iter()
+                    .chain(directories.shared())
+                    .map(|directory| directory.label().to_string())
+            })
             .collect()
     }
 
@@ -268,6 +296,23 @@ mod tests {
             label(Language::French, "No Such Rule"),
             "No Such Rule",
             "the English when there is no French"
+        );
+    }
+
+    #[test]
+    fn a_browser_cache_is_named_by_its_browser() {
+        let opera = Some(ChromiumBrowserKind::OperaGx);
+        assert_eq!(
+            group_label(Language::French, opera, "Code Cache"),
+            "Opera GX : Cache du code"
+        );
+        assert_eq!(
+            group_label(Language::English, opera, "Code Cache"),
+            "Opera GX: Code Cache"
+        );
+        assert_eq!(
+            group_label(Language::French, None, "pip Cache"),
+            "Cache de pip"
         );
     }
 

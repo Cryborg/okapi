@@ -626,3 +626,55 @@ msgstr "Unfold {}"
 msgctxt "ReceiptLine"
 msgid "Éléments : {}. Taille : {}."
 msgstr "Entries: {}. Size: {}."
+
+msgctxt "Words"
+msgid "Navigateurs"
+msgstr "Browsers"
+
+msgctxt "Words"
+msgid "Caches de Chrome, Edge, Brave et des autres navigateurs Chromium."
+msgstr "Caches of Chrome, Edge, Brave and the other Chromium browsers."
+
+msgctxt "ReceiptLine"
+msgid "Gardées : leur navigateur est ouvert"
+msgstr "Kept: their browser is open"
+
+msgctxt "BrowserQuestion"
+msgid "{} est ouvert"
+msgstr "{} is open"
+
+msgctxt "BrowserQuestion"
+msgid "{} se sert encore de son cache. Fermez-le pour que ce cache soit nettoyé, ou laissez-le de côté cette fois : le reste du nettoyage continue."
+msgstr "{} still uses its cache. Close it to have this cache cleaned, or leave it out this time: the rest of the cleaning goes on."
+
+msgctxt "BrowserQuestion"
+msgid "{} : {}"
+msgstr "{}: {}"
+
+msgctxt "BrowserQuestion"
+msgid "Fermeture de {}…"
+msgstr "Closing {}…"
+
+msgctxt "BrowserQuestion"
+msgid "{} ne s'est pas fermé : fermez-le, puis relancez le nettoyage."
+msgstr "{} did not close: close it, then start the cleaning again."
+
+msgctxt "BrowserQuestion"
+msgid "Okapi ne peut pas fermer {} lui-même : fermez-le, puis relancez le nettoyage."
+msgstr "Okapi cannot close {} itself: close it, then start the cleaning again."
+
+msgctxt "BrowserQuestion"
+msgid "Échap annule le nettoyage"
+msgstr "Escape cancels the cleaning"
+
+msgctxt "BrowserQuestion"
+msgid "Ignorer {}"
+msgstr "Ignore {}"
+
+msgctxt "BrowserQuestion"
+msgid "Fermer {} et continuer"
+msgstr "Close {} and continue"
+
+msgctxt "BrowserQuestion"
+msgid "Le système a refusé de demander à {} de se fermer : fermez-le, puis relancez le nettoyage."
+msgstr "The system refused to ask {} to close: close it, then start the cleaning again."

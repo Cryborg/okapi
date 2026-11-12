@@ -113,6 +113,7 @@ component ReceiptLine inherits VerticalLayout {
         : line.kind == ReceiptKind.protected ? @tr("Gardées : protégées")
         : line.kind == ReceiptKind.refused ? @tr("Gardées : refus du système")
         : line.kind == ReceiptKind.cancelled ? @tr("Gardées : nettoyage annulé avant leur tour")
+        : line.kind == ReceiptKind.browser-open ? @tr("Gardées : leur navigateur est ouvert")
         : @tr("Gardées : inconnues de cette analyse");
 
     // Its result, how many and how much: a button that unfolds its entries.

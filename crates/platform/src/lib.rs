@@ -1,11 +1,15 @@
 //! Operating system abstractions, one trait per domain and one module per OS.
 
+mod browser;
 mod directory;
 mod identity;
 mod session;
 #[cfg(target_os = "linux")]
 mod variables;
 
+pub use browser::{CHROMIUM_LOCK, lock_is_live};
+#[cfg(target_os = "linux")]
+pub use browser::{Holder, RunningBrowser, UnknownHolder, holder};
 pub use directory::{
     DESCRIPTOR_REMOVAL_SUPPORTED, Directory, EntryStatus, EntryType, Ownership, mount_root,
     sticky_allows, tells_mount_roots,

@@ -260,6 +260,7 @@ fn help_wins_over_cleaning_and_writes_no_journal() {
     assert_eq!(output.status.code(), Some(0));
     let help = String::from_utf8_lossy(&output.stdout);
     assert!(help.contains("Usage"));
+    assert!(help.contains("--system --browsers --apps --gaming --gpu"));
     assert!(
         help.contains(
             &*sandbox
@@ -395,6 +396,58 @@ fn a_french_session_reads_the_labels_in_french_and_scripts_keep_them() {
     let written = String::from_utf8_lossy(&output.stdout);
     assert!(!written.contains("Cache de pip"), "{written}");
     assert!(!written.contains("Cache des miniatures"), "{written}");
+}
+
+#[test]
+fn a_browser_s_caches_are_named_by_the_browser() {
+    let sandbox = Sandbox::new();
+    sandbox.file("config/google-chrome/Default/Code Cache/a");
+    sandbox.file("home/.cache/google-chrome/Default/Cache/b");
+    settle();
+    let asked = ["--browsers", "--min-age", "0"];
+    let text = String::from_utf8_lossy(&sandbox.run_in_french(&asked).stdout).into_owned();
+    assert!(
+        text.contains("Chrome : Cache du code : 1 entrée,"),
+        "{text}"
+    );
+    assert!(text.contains("Chrome : Cache : 1 entrée,"), "{text}");
+    let document = json(&sandbox.run_in_french(&[asked.as_slice(), &["--json"]].concat()));
+    let code_cache = group(&document, "browsers:chrome/Code Cache");
+    assert_eq!(code_cache["label"], "Code Cache");
+    assert_eq!(code_cache["browser"], "chrome");
+    assert_eq!(code_cache["preselected"], false, "a cache reset (D-4)");
+    assert_eq!(
+        group(&document, "browsers:chrome/Cache")["preselected"],
+        true
+    );
+    let english = String::from_utf8_lossy(&sandbox.run(&asked).stdout).into_owned();
+    assert!(
+        english.contains("Chrome: Code Cache: 1 entry,"),
+        "{english}"
+    );
+}
+
+#[test]
+fn an_open_browser_keeps_its_caches_and_the_run_says_so() {
+    let sandbox = Sandbox::new();
+    let cache = sandbox.file("home/.cache/google-chrome/Default/Cache/b");
+    let pip = sandbox.file("home/.cache/pip/http/a");
+    sandbox.file("config/google-chrome/Default/Preferences");
+    // Chrome open: its lock names this machine and this test's process, the
+    // parent of the run, alive.
+    let host = fs::read_to_string("/proc/sys/kernel/hostname").unwrap();
+    std::os::unix::fs::symlink(
+        format!("{}-{}", host.trim(), std::process::id()),
+        sandbox.root.join("config/google-chrome/SingletonLock"),
+    )
+    .unwrap();
+    settle();
+    let output = sandbox.run_in_french(&["--clean", "--browsers", "--apps", "--min-age", "0"]);
+    assert_eq!(output.status.code(), Some(4), "a partial cleaning");
+    assert!(cache.exists());
+    assert!(!pip.exists());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("le navigateur est ouvert"), "{text}");
 }
 
 #[test]

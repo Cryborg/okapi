@@ -22,6 +22,9 @@ mod clean;
 // Its cleaning tests share the cleaning's helpers.
 #[cfg(target_os = "linux")]
 mod watch;
+// The browsers' locks are read on Linux only, and so are their cleanings.
+#[cfg(target_os = "linux")]
+mod browsers;
 
 const HOUR: Duration = Duration::from_hours(1);
 

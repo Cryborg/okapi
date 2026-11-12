@@ -118,12 +118,33 @@ fn entries_of(rules: &RuleSet) -> Vec<RuleEntry<'_>> {
         .iter()
         .map(RuleEntry::Target)
         .chain(system.single_file_targets().iter().map(RuleEntry::File))
+        .chain(browser_entries(rules))
         .chain(
             apps.into_iter().flat_map(|(file, rules)| {
                 rules.iter().map(move |rule| RuleEntry::App { file, rule })
             }),
         )
         .collect()
+}
+
+/// The cache directories of each browser, browser by browser: those of its
+/// profiles, then those it shares among them.
+fn browser_entries(rules: &RuleSet) -> impl Iterator<Item = RuleEntry<'_>> {
+    let directories = rules.browsers().chromium_cache_directories();
+    rules.browsers().chromium().iter().flat_map(move |browser| {
+        let entry = move |shared| {
+            move |directory| RuleEntry::Browser {
+                browser,
+                directory,
+                shared,
+            }
+        };
+        directories
+            .profile()
+            .iter()
+            .map(entry(false))
+            .chain(directories.shared().iter().map(entry(true)))
+    })
 }
 
 /// [`scan_watched`] over an explicit list of rules, with the metadata
@@ -276,6 +297,7 @@ fn plan(
         readers,
         issues: Vec::new(),
         stats: ScanStats::default(),
+        browsers: BTreeMap::new(),
     };
     let roots_by_rule: Vec<(usize, PlannedRoot)> = entries
         .iter()
@@ -478,8 +500,12 @@ mod tests {
         let rules = RuleSet::embedded(Os::Linux).unwrap();
         let entries = entries_of(&rules);
         let system = rules.system();
+        let browsers = rules.browsers();
+        let directories = browsers.chromium_cache_directories();
         let expected = system.clean_targets().len()
             + system.single_file_targets().len()
+            + browsers.chromium().len()
+                * (directories.profile().len() + directories.shared().len())
             + rules.apps().len()
             + rules.gaming().len()
             + rules.gpu_cache().len();
@@ -492,14 +518,36 @@ mod tests {
                 ..
             })
         ));
-        let files: Vec<_> = entries
+        let categories: Vec<Category> = entries.iter().map(RuleEntry::category).collect();
+        assert!(
+            categories.is_sorted(),
+            "system, browsers, apps, gaming, then GPU caches"
+        );
+        // Browser by browser, each one's profile directories before its
+        // shared ones.
+        let browser_entries: Vec<_> = entries
             .iter()
             .filter_map(|entry| match entry {
-                RuleEntry::App { file, .. } => Some(*file),
-                RuleEntry::Target(_) | RuleEntry::File(_) => None,
+                RuleEntry::Browser {
+                    browser, shared, ..
+                } => Some((browser.kind(), *shared)),
+                _ => None,
             })
             .collect();
-        assert!(files.is_sorted(), "apps, then gaming, then GPU caches");
+        let mut by_browser = browser_entries.clone();
+        by_browser.dedup_by_key(|(browser, _)| *browser);
+        assert_eq!(
+            by_browser.len(),
+            browsers.chromium().len(),
+            "each browser once, in a row"
+        );
+        assert_eq!(
+            browser_entries[..=directories.profile().len()]
+                .iter()
+                .map(|(_, shared)| *shared)
+                .collect::<Vec<_>>(),
+            [vec![false; directories.profile().len()], vec![true]].concat()
+        );
         assert!(
             entries
                 .iter()
@@ -517,6 +565,7 @@ mod tests {
         assert_eq!(
             choices,
             [
+                DefaultChoice::Chosen,
                 DefaultChoice::Chosen,
                 DefaultChoice::Chosen,
                 DefaultChoice::Chosen,

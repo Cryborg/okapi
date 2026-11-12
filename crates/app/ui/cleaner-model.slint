@@ -3,7 +3,7 @@
 import { Theme } from "theme.slint";
 import { Icon, Line } from "widgets.slint";
 
-export enum CategoryKind { system, apps, gaming, gpu }
+export enum CategoryKind { system, browsers, apps, gaming, gpu }
 
 export struct CategoryChoice {
     kind: CategoryKind,
@@ -56,10 +56,30 @@ export enum CheckState { checked, unchecked, partial }
 // cache reset, invariant 5), or out of reach without the administrator.
 export enum ResultBadge { preselected, to-choose, admin }
 
-// One line of the results: a category, or one of its groups. The list never
-// changes length: folding a category hides its groups.
+// What a line of the results is: a category, a browser under the browsers'
+// category, or a group.
+export enum RowKind { category, browser, group }
+
+// Where the question about an open browser stands.
+export enum BrowserStep {
+    // Okapi can close it.
+    ask,
+    // Okapi cannot vouch for what holds its lock: it does not close it.
+    unverified,
+    // Asked to close, its lock awaited.
+    closing,
+    // Still open when the wait ended.
+    not-closed,
+    // The system refused to pass it the request.
+    refused,
+}
+
+// One line of the results. The list never changes length: folding a category
+// or a browser hides what is below.
 export struct ResultRow {
-    is-category: bool,
+    kind: RowKind,
+    // A group under its browser's line.
+    nested: bool,
     category: CategoryKind,
     // A group's label, from the rules.
     label: string,
@@ -93,7 +113,7 @@ export enum HistoryState { recorded, failed, unavailable, not-written }
 
 export enum ReceiptKind {
     removed, partial, gone, recent, changed, replaced, excluded, protected, refused, cancelled,
-    unknown,
+    browser-open, unknown,
 }
 
 // An entry of a receipt line, and what kept it, or part of it, if anything.
@@ -146,6 +166,13 @@ export global Cleaner {
     // The checkbox of the confirmation: Rust deletes nothing without it.
     in-out property <bool> understood;
     in property <Size> confirm-size;
+    // The question about an open browser, before a cleaning: the browser,
+    // the labels of its caches the cleaning takes, and their size.
+    in property <bool> browser-asking;
+    in property <string> browser-name;
+    in property <string> browser-caches;
+    in property <Size> browser-size;
+    in property <BrowserStep> browser-step;
 
     // The cleaning under way.
     in property <CleanPassKind> clean-pass;
@@ -168,6 +195,9 @@ export global Cleaner {
     callback toggle(int);
     callback confirm-delete();
     callback cancel-confirmation();
+    callback ignore-browser();
+    callback close-browser();
+    callback cancel-browser();
     callback cancel-cleaning();
     callback finish();
     callback toggle-result(int);
@@ -189,9 +219,13 @@ export global Words {
         if kind == CategoryKind.apps {
             return @tr("Applications");
         }
+        if kind == CategoryKind.browsers {
+            return @tr("Navigateurs");
+        }
         if kind == CategoryKind.gaming {
             return @tr("Jeux");
         }
+        // The GPU caches, the one kind left.
         return @tr("Caches GPU");
     }
 
@@ -201,6 +235,9 @@ export global Words {
         }
         if kind == CategoryKind.apps {
             return @tr("Caches des applications installées.");
+        }
+        if kind == CategoryKind.browsers {
+            return @tr("Caches de Chrome, Edge, Brave et des autres navigateurs Chromium.");
         }
         if kind == CategoryKind.gaming {
             return @tr("Steam, Heroic, Lutris et itch.io : journaux et caches.");
@@ -214,6 +251,9 @@ export global Words {
         }
         if kind == CategoryKind.apps {
             return @image-url("../assets/icons/app-window.svg");
+        }
+        if kind == CategoryKind.browsers {
+            return @image-url("../assets/icons/globe.svg");
         }
         if kind == CategoryKind.gaming {
             return @image-url("../assets/icons/gamepad.svg");

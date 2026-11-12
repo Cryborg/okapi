@@ -9,7 +9,7 @@ use okapi_engine::{
     UnsafeReason,
 };
 use okapi_platform::VariablesError;
-use okapi_rules::{Language, TemplateError, Variable};
+use okapi_rules::{ChromiumBrowserKind, Language, TemplateError, Variable};
 use okapi_store::StoreError;
 
 use crate::args::ArgumentError;
@@ -66,6 +66,7 @@ pub enum Message<'a> {
     JournalRotationFailed(&'a io::Error),
     Issue(&'a ScanIssue),
     Group {
+        browser: Option<ChromiumBrowserKind>,
         label: &'a str,
         entries: usize,
         bytes: u64,
@@ -168,12 +169,13 @@ pub fn text(language: Language, message: &Message<'_>) -> String {
         ),
         Message::Issue(issue) => issue_text(language, issue),
         Message::Group {
+            browser,
             label,
             entries,
             bytes,
             decision,
             clean,
-        } => group_text(language, label, *entries, *bytes, *decision, *clean),
+        } => group_text(language, *browser, label, *entries, *bytes, *decision, *clean),
         Message::Entry { path, bytes } => {
             format!("    {} ({})", shown(path), size(language, *bytes))
         }
@@ -418,13 +420,14 @@ fn failure(
 
 fn group_text(
     language: Language,
+    browser: Option<ChromiumBrowserKind>,
     label: &str,
     entries: usize,
     bytes: u64,
     decision: Decision,
     clean: bool,
 ) -> String {
-    let label = okapi_rules::label(language, label);
+    let label = okapi_rules::group_label(language, browser, label);
     let size = size(language, bytes);
     let mark = decision_mark(language, decision, clean);
     let count = entries_text(language, entries);
@@ -472,6 +475,9 @@ fn not_removed_text(
 
 fn help(language: Language, settings: Option<&Path>, history: Option<&Path>) -> String {
     let default_minutes = okapi_engine::DEFAULT_MIN_AGE_MINUTES;
+    let categories = okapi_engine::Category::ALL
+        .map(|category| format!("--{}", category.name()))
+        .join(" ");
     let unknown = match language {
         Language::French => "inconnu (ni XDG ni HOME absolu)",
         Language::English => "unknown (no absolute XDG nor HOME)",
@@ -490,7 +496,7 @@ Options :
   --clean              nettoie les groupes présélectionnés (jamais les réinitialisations
                        de cache ni ce qui exige l'administrateur)
   --json               un document JSON sur la sortie standard
-  --system --apps --gaming --gpu
+  {categories}
                        seulement ces catégories (toutes par défaut)
   --exclude CHEMIN     ne jamais toucher à ce chemin, ou à *.ext (répétable)
   --min-age MINUTES    âge minimal de ce qui est retiré ; l'emporte sur minAgeMinutes
@@ -518,7 +524,7 @@ Options:
   --clean              clean the preselected groups (never cache resets nor what
                        needs the administrator)
   --json               one JSON document on standard output
-  --system --apps --gaming --gpu
+  {categories}
                        only these categories (all by default)
   --exclude PATH       never touch this path, or *.ext (repeatable)
   --min-age MINUTES    minimum age of what is removed; wins over the settings'
@@ -691,6 +697,9 @@ fn shown_rule(language: Language, origin: &Origin) -> String {
             okapi_rules::label(language, subcategory.as_str()).to_owned()
         }
         Origin::App { .. } => rule_name(origin),
+        // The directory, as an application's identifier: its label is the
+        // group's, not the rule's.
+        Origin::Browser { browser, directory } => format!("{}/{directory}", browser.name()),
     }
 }
 
@@ -888,6 +897,8 @@ fn keep_reason(language: Language, reason: KeepReason) -> String {
         (KeepReason::Protected, false) => "protected",
         (KeepReason::Cancelled, true) => "nettoyage annulé avant son tour",
         (KeepReason::Cancelled, false) => "cleaning cancelled before its turn",
+        (KeepReason::BrowserOpen, true) => "le navigateur est ouvert",
+        (KeepReason::BrowserOpen, false) => "the browser is open",
     };
     text.to_owned()
 }
@@ -1043,6 +1054,15 @@ mod tests {
         assert_eq!(shown_rule(Language::French, &file), "Cache de pip");
         assert_eq!(shown_rule(Language::French, &app), "pip", "its identifier");
         assert_eq!(shown_rule(Language::English, &target), "APT Logs");
+        let browser = Origin::Browser {
+            browser: ChromiumBrowserKind::OperaGx,
+            directory: okapi_rules::RelativePath::try_from("GPUCache".to_owned()).unwrap(),
+        };
+        assert_eq!(
+            shown_rule(Language::French, &browser),
+            "Opera GX/GPUCache",
+            "its directory, not its label"
+        );
     }
 
     #[test]
@@ -1128,6 +1148,7 @@ mod tests {
             Message::JournalRotationFailed(&error),
             Message::Issue(&issue),
             Message::Group {
+                browser: Some(ChromiumBrowserKind::Chrome),
                 label: "pip Cache",
                 entries: 1,
                 bytes: 10,
@@ -1189,6 +1210,14 @@ mod tests {
         assert_eq!(
             keep_reason(Language::English, KeepReason::Cancelled),
             "cleaning cancelled before its turn"
+        );
+        assert_eq!(
+            keep_reason(Language::French, KeepReason::BrowserOpen),
+            "le navigateur est ouvert"
+        );
+        assert_eq!(
+            keep_reason(Language::English, KeepReason::BrowserOpen),
+            "the browser is open"
         );
     }
 

@@ -52,7 +52,8 @@ fn row(
     checked: bool,
 ) -> ui::ResultRow {
     ui::ResultRow {
-        is_category: false,
+        kind: ui::RowKind::Group,
+        nested: false,
         category,
         // In French, as the window: the longer labels of the two.
         label: okapi_rules::label(okapi_rules::Language::French, label).into(),
@@ -72,7 +73,8 @@ fn row(
 
 fn header(category: ui::CategoryKind, folded: bool) -> ui::ResultRow {
     ui::ResultRow {
-        is_category: true,
+        kind: ui::RowKind::Category,
+        nested: false,
         category,
         label: "".into(),
         state: ui::CheckState::Partial,
@@ -85,9 +87,20 @@ fn header(category: ui::CategoryKind, folded: bool) -> ui::ResultRow {
     }
 }
 
+/// The results, and the question about Chrome, open.
+fn browser(window: &ui::AppWindow) {
+    results(window, true);
+    let cleaner = window.global::<ui::Cleaner>();
+    cleaner.set_browser_name("Chrome".into());
+    cleaner.set_browser_caches("Cache, Cache du code".into());
+    cleaner.set_browser_size(size(548, 0, ui::SizeUnit::Megabyte));
+    cleaner.set_browser_step(ui::BrowserStep::Ask);
+    cleaner.set_browser_asking(true);
+}
+
 /// The results, the system category folded when `folded`.
 fn results(window: &ui::AppWindow, folded: bool) {
-    use ui::CategoryKind::{Apps, System};
+    use ui::CategoryKind::{Apps, Browsers, System};
     use ui::ResultBadge::{Admin, Preselected, ToChoose};
     let system = [
         ("Thumbnail Cache", Preselected, true),
@@ -108,6 +121,26 @@ fn results(window: &ui::AppWindow, folded: bool) {
         line.hidden = folded;
         line
     }));
+    rows.push(header(Browsers, false));
+    let browser = |name: &str, folded| ui::ResultRow {
+        kind: ui::RowKind::Browser,
+        label: name.into(),
+        folded,
+        ..header(Browsers, false)
+    };
+    let cache = |label, badge, checked, hidden| ui::ResultRow {
+        nested: true,
+        hidden,
+        ..row(Browsers, label, badge, checked)
+    };
+    rows.extend([
+        browser("Chrome", false),
+        cache("Cache", Preselected, true, false),
+        cache("Code Cache", ToChoose, false, false),
+        cache("GPU Cache", ToChoose, false, false),
+        browser("Opera GX", true),
+        cache("Cache", Preselected, true, true),
+    ]);
     rows.push(header(Apps, false));
     rows.extend([
         row(Apps, "npm Cache", Preselected, true),
@@ -167,7 +200,7 @@ fn receipt(window: &ui::AppWindow) {
 
 /// The categories, before the analysis.
 fn choosing(window: &ui::AppWindow) {
-    use ui::CategoryKind::{Apps, Gaming, Gpu, System};
+    use ui::CategoryKind::{Apps, Browsers, Gaming, Gpu, System};
     let choice = |kind, checked, to_choose| ui::CategoryChoice {
         kind,
         checked,
@@ -176,11 +209,12 @@ fn choosing(window: &ui::AppWindow) {
     let cleaner = window.global::<ui::Cleaner>();
     cleaner.set_choices(ModelRc::new(VecModel::from(vec![
         choice(System, true, false),
+        choice(Browsers, true, false),
         choice(Apps, true, false),
         choice(Gaming, true, false),
         choice(Gpu, false, true),
     ])));
-    cleaner.set_chosen_count(3);
+    cleaner.set_chosen_count(4);
     cleaner.set_min_age_minutes(60);
     cleaner.set_step(ui::CleanerStep::Idle);
     window.set_page(ui::Page::Cleaner);
@@ -247,13 +281,14 @@ fn main() {
     match screen.as_str() {
         "results" => results(&app, false),
         "folded" => results(&app, true),
+        "browser" => browser(&app),
         "receipt" => receipt(&app),
         "choosing" => choosing(&app),
         "scanning" => scanning(&app),
         "cleaning" => cleaning(&app),
         "ended" => ended(&app),
         other => panic!(
-            "no screen {other}: results, folded, receipt, choosing, scanning, cleaning, ended"
+            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended"
         ),
     }
     window.set_size(PhysicalSize::new(WIDTH, HEIGHT));

@@ -13,7 +13,7 @@ use okapi_rules::{MiscRules, RuleSet, TemplateVariables};
 use crate::options::ScanOptions;
 use crate::preconditions::{Stop, protection, stops_before_reading};
 use crate::protection::ProtectedRoots;
-use crate::report::{EntryKind, FoundItem, ItemId, ScanReport};
+use crate::report::{BrowserLock, EntryKind, FoundItem, ItemId, ScanReport};
 use crate::walk::{HoldBack, Limits, Observed, Readers, WalkContext, by_name};
 use crate::watch::{Progress, Watch};
 
@@ -46,6 +46,9 @@ pub enum KeepReason {
     /// untouched. Never the reason of a partial removal: an entry is removed
     /// whole or not at all.
     Cancelled,
+    /// The browser whose cache it is runs: its lock is in its user-data
+    /// directory.
+    BrowserOpen,
 }
 
 impl KeepReason {
@@ -61,6 +64,7 @@ impl KeepReason {
             Self::Protected => "protected",
             Self::Failed { .. } => "failed",
             Self::Cancelled => "cancelled",
+            Self::BrowserOpen => "browser_open",
         }
     }
 }
@@ -227,7 +231,9 @@ impl CleanReceipt {
 ///
 /// Remaining risks: a file renamed over, or written in place, between its last
 /// check and its removal is removed; a directory moved elsewhere while it is
-/// being emptied keeps being emptied where it went.
+/// being emptied keeps being emptied where it went; a browser started while
+/// an entry of its cache is being removed sees it go (its lock is read before
+/// each entry, in each pass).
 #[must_use]
 pub fn clean(
     report: &ScanReport,
@@ -285,7 +291,8 @@ pub fn clean_watched(
 enum Checked<'a> {
     Unknown,
     Refused(&'a FoundItem, Outcome),
-    Ready(&'a FoundItem),
+    /// Checked, with the locks of the browsers its group empties.
+    Ready(&'a FoundItem, &'a BTreeSet<BrowserLock>),
     /// Cancelled before its check.
     Cancelled(&'a FoundItem),
 }
@@ -338,15 +345,17 @@ pub(crate) fn clean_items(
                 Checked::Unknown => (None, (CleanResult::Kept(KeepReason::UnknownItem), None)),
                 Checked::Refused(item, outcome) => (Some(item), outcome),
                 Checked::Cancelled(item) => (Some(item), cancelled_outcome),
-                Checked::Ready(item) if watch.is_cancelled() => (Some(item), cancelled_outcome),
-                Checked::Ready(item) => (
+                Checked::Ready(item, _) if watch.is_cancelled() => (Some(item), cancelled_outcome),
+                Checked::Ready(item, locks) => (
                     Some(item),
-                    cleaner
-                        .run(item, CleanPass::Remove, &mut dates)
-                        .map_or_else(
-                            |outcome| outcome,
-                            |bytes| (CleanResult::Removed { bytes }, None),
-                        ),
+                    held(locks, id).unwrap_or_else(|| {
+                        cleaner
+                            .run(item, CleanPass::Remove, &mut dates)
+                            .map_or_else(
+                                |outcome| outcome,
+                                |bytes| (CleanResult::Removed { bytes }, None),
+                            )
+                    }),
                 ),
             };
             if result == CleanResult::Kept(KeepReason::Cancelled) && !cancelled {
@@ -381,6 +390,17 @@ pub(crate) fn clean_items(
     }
 }
 
+/// The entry `id` kept, when one of the browsers whose cache it is in runs.
+fn held(locks: &BTreeSet<BrowserLock>, id: ItemId) -> Option<Outcome> {
+    let lock = locks.iter().find(|lock| lock.is_held())?;
+    // Each outcome is traced with its reason: this says which lock.
+    tracing::debug!(?id, browser = lock.browser().key(), lock = %lock.lock().display(), "browser open: entry kept");
+    Some((
+        CleanResult::Kept(KeepReason::BrowserOpen),
+        Some(lock.lock().to_path_buf()),
+    ))
+}
+
 /// The check pass over `ids`, each once: an identifier of another report is
 /// always told (invariant 1); an entry reached after the token is cancelled
 /// is not checked.
@@ -397,7 +417,7 @@ fn check_all<'r>(
         .map(|(index, id)| {
             let checked = match cleaner.report.find(id) {
                 None => Checked::Unknown,
-                Some((_, item)) => {
+                Some((group, item)) => {
                     let item = item.found_item();
                     if watch.is_cancelled() {
                         if !cancelled_seen {
@@ -409,9 +429,11 @@ fn check_all<'r>(
                             );
                         }
                         Checked::Cancelled(item)
+                    } else if let Some(outcome) = held(group.locks(), id) {
+                        Checked::Refused(item, outcome)
                     } else {
                         match cleaner.run(item, CleanPass::Check, dates) {
-                            Ok(_) => Checked::Ready(item),
+                            Ok(_) => Checked::Ready(item, group.locks()),
                             Err(outcome) => Checked::Refused(item, outcome),
                         }
                     }

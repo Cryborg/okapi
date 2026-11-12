@@ -78,6 +78,7 @@ dependencies = [
  "okapi-engine",
  "okapi-platform",
  "okapi-rules",
+ "okapi-store",
  "serde",
  "serde_json",
  "tempfile",
@@ -113,6 +114,7 @@ dependencies = [
  "rustix",
  "tempfile",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]
@@ -127,6 +129,14 @@ dependencies = [
 [[package]]
 name = "okapi-store"
 version = "0.1.0"
+dependencies = [
+ "okapi-platform",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+]
 
 [[package]]
 name = "okapi-tools"

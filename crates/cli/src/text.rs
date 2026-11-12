@@ -11,6 +11,7 @@ use okapi_engine::{
 };
 use okapi_platform::VariablesError;
 use okapi_rules::{TemplateError, Variable};
+use okapi_store::StoreError;
 
 use crate::args::{ArgumentError, SECONDS_PER_MINUTE};
 use crate::selection::{Decision, rule_name};
@@ -66,11 +67,27 @@ pub fn language(read: impl Fn(&str) -> Option<OsString>) -> Language {
 /// Something the command line says.
 #[derive(Debug)]
 pub enum Message<'a> {
-    Help,
+    /// The help, with where the settings and the history are read and kept.
+    Help {
+        settings: Option<&'a Path>,
+        history: Option<&'a Path>,
+    },
     Version,
     Argument(&'a ArgumentError),
     Exclusion(&'a ExclusionError),
     ExclusionMissing(&'a Path),
+    /// An exclusion of the settings file (first) that does not exist as
+    /// written.
+    SettingsExclusionMissing(&'a Path, &'a Path),
+    /// The cleaning is done, but its history line could not be written.
+    HistoryNotRecorded(&'a StoreError),
+    Store(&'a StoreError),
+    SettingsExclusion(&'a Path, &'a ExclusionError),
+    SettingsMinAge(&'a Path, u64),
+    DeletionLogUnavailable,
+    SettingsDirectoryUnknown,
+    HistoryDirectoryUnknown,
+    HistoryContinues,
     InternalDefect,
     Variables(&'a VariablesError),
     RulesUnavailable,
@@ -117,17 +134,47 @@ pub enum Message<'a> {
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// `message` in `language`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per message, the long ones delegated: a table, not logic"
+)]
 pub fn text(language: Language, message: &Message<'_>) -> String {
     let french = language == Language::French;
     let pick = |fr: String, en: String| if french { fr } else { en };
     match message {
-        Message::Help => help(language),
+        Message::Help { settings, history } => help(language, *settings, *history),
         Message::Version => format!("okapi {VERSION}"),
         Message::Argument(error) => argument_text(language, error),
         Message::Exclusion(error) => exclusion(language, error),
-        Message::ExclusionMissing(path) => pick(
-            format!("Attention : l'exclusion {} n'existe pas telle quelle (faute de frappe ?).", shown(path)),
-            format!("Warning: the exclusion {} does not exist as written (a typing mistake?).", shown(path)),
+        Message::ExclusionMissing(path) => exclusion_missing(language, path),
+        Message::SettingsExclusionMissing(settings, path) => {
+            in_settings(language, settings, &exclusion_missing(language, path))
+        }
+        Message::HistoryNotRecorded(error) => {
+            let error = store_text(language, error);
+            pick(
+                format!("La ligne d'historique de ce nettoyage manque. {error}"),
+                format!("This cleaning's history line is missing. {error}"),
+            )
+        }
+        Message::Store(error) => store_text(language, error),
+        Message::SettingsExclusion(path, error) => settings_exclusion(language, path, error),
+        Message::SettingsMinAge(path, minutes) => settings_min_age(language, path, *minutes),
+        Message::SettingsDirectoryUnknown => pick(
+            "Dossier des réglages inconnu (ni XDG_CONFIG_HOME ni HOME absolu) : rien n'est fait.".to_owned(),
+            "No settings directory (no absolute XDG_CONFIG_HOME nor HOME): nothing is done.".to_owned(),
+        ),
+        Message::HistoryDirectoryUnknown => pick(
+            "Dossier de l'historique inconnu (ni XDG_STATE_HOME ni HOME absolu).".to_owned(),
+            "No history directory (no absolute XDG_STATE_HOME nor HOME).".to_owned(),
+        ),
+        Message::HistoryContinues => pick(
+            "Ce nettoyage ne sera pas inscrit à l'historique.".to_owned(),
+            "This cleaning will not be added to the history.".to_owned(),
+        ),
+        Message::DeletionLogUnavailable => pick(
+            "Le journal des suppressions est demandé mais ne peut pas être tenu : rien n'est nettoyé.".to_owned(),
+            "A deletion log is asked for but cannot be kept: nothing is cleaned.".to_owned(),
         ),
         Message::InternalDefect => pick(
             "Un identifiant inconnu a été transmis au nettoyage : c'est un défaut d'Okapi.".to_owned(),
@@ -193,8 +240,8 @@ pub fn text(language: Language, message: &Message<'_>) -> String {
         ),
         Message::JournalUnavailable(path, error) => journal_unavailable(language, path, error),
         Message::StateDirectoryUnknown => pick(
-            "Journal indisponible : dossier d'état inconnu (ni XDG_STATE_HOME ni HOME). Okapi continue sans.".to_owned(),
-            "Journal unavailable: no state directory (neither XDG_STATE_HOME nor HOME). Running without it.".to_owned(),
+            "Journal indisponible : dossier d'état inconnu (ni XDG_STATE_HOME ni HOME absolu). Okapi continue sans.".to_owned(),
+            "Journal unavailable: no state directory (no absolute XDG_STATE_HOME nor HOME). Running without it.".to_owned(),
         ),
         Message::JournalWriteFailed(error) => failure(
             language,
@@ -244,6 +291,132 @@ fn argument_text(language: Language, error: &ArgumentError) -> String {
                 "--verbose et --quiet ne vont pas ensemble.".to_owned()
             } else {
                 "--verbose and --quiet cannot go together.".to_owned()
+            }
+        }
+    }
+}
+
+fn exclusion_missing(language: Language, path: &Path) -> String {
+    match language {
+        Language::French => format!(
+            "Attention : l'exclusion {} n'existe pas telle quelle (faute de frappe ?).",
+            shown(path)
+        ),
+        Language::English => format!(
+            "Warning: the exclusion {} does not exist as written (a typing mistake?).",
+            shown(path)
+        ),
+    }
+}
+
+/// `message`, said of the settings file at `path`.
+fn in_settings(language: Language, path: &Path, message: &str) -> String {
+    match language {
+        Language::French => format!("Dans les réglages {} : {message}", shown(path)),
+        Language::English => format!("In the settings {}: {message}", shown(path)),
+    }
+}
+
+fn settings_exclusion(language: Language, path: &Path, error: &ExclusionError) -> String {
+    in_settings(language, path, &exclusion(language, error))
+}
+
+fn settings_min_age(language: Language, path: &Path, minutes: u64) -> String {
+    match language {
+        Language::French => format!(
+            "Dans les réglages {} : minAgeMinutes ({minutes}) dépasse ce que l'horloge peut compter.",
+            shown(path)
+        ),
+        Language::English => format!(
+            "In the settings {}: minAgeMinutes ({minutes}) is beyond what the clock can count.",
+            shown(path)
+        ),
+    }
+}
+
+fn store_text(language: Language, error: &StoreError) -> String {
+    let french = language == Language::French;
+    let pick = |fr: String, en: String| if french { fr } else { en };
+    match error {
+        StoreError::Unreadable { path, error } => {
+            let error = error_text(language, error.kind(), error.raw_os_error());
+            if french {
+                format!(
+                    "Impossible de lire {} : {error}. Rien n'est fait.",
+                    shown(path)
+                )
+            } else {
+                format!("{} cannot be read: {error}. Nothing is done.", shown(path))
+            }
+        }
+        StoreError::BrokenLink { path } => pick(
+            format!(
+                "{} est un lien qui ne mène nulle part : rien n'est fait.",
+                shown(path)
+            ),
+            format!(
+                "{} is a link that leads nowhere: nothing is done.",
+                shown(path)
+            ),
+        ),
+        StoreError::NotAFile { path } => pick(
+            format!(
+                "{} n'est pas un fichier ordinaire : rien n'est fait.",
+                shown(path)
+            ),
+            format!("{} is not a regular file: nothing is done.", shown(path)),
+        ),
+        StoreError::TooLarge { path, limit } => pick(
+            format!(
+                "{} dépasse {} : ce ne sont pas des réglages, rien n'est fait.",
+                shown(path),
+                size(language, *limit)
+            ),
+            format!(
+                "{} is larger than {}: these are no settings, nothing is done.",
+                shown(path),
+                size(language, *limit)
+            ),
+        ),
+        StoreError::Invalid { path, error } => {
+            // The parser's own words (in English) say which field is wrong;
+            // its position is said once, in the user's language.
+            let (line, column) = (error.line(), error.column());
+            let full = error.to_string();
+            let error = full
+                .strip_suffix(&format!(" at line {line} column {column}"))
+                .unwrap_or(&full);
+            if french {
+                format!(
+                    "{} est invalide (ligne {line}, colonne {column} : {error}) : rien n'est fait.",
+                    shown(path)
+                )
+            } else {
+                format!(
+                    "{} is invalid (line {line}, column {column}: {error}): nothing is done.",
+                    shown(path)
+                )
+            }
+        }
+        StoreError::UnsupportedVersion { path, version } => {
+            if french {
+                format!(
+                    "{} est en version {version}, que cet Okapi ne lit pas : rien n'est fait.",
+                    shown(path)
+                )
+            } else {
+                format!(
+                    "{} is in version {version}, which this Okapi cannot read: nothing is done.",
+                    shown(path)
+                )
+            }
+        }
+        StoreError::Unwritable { path, error } => {
+            let error = error_text(language, error.kind(), error.raw_os_error());
+            if french {
+                format!("Impossible d'écrire {} : {error}.", shown(path))
+            } else {
+                format!("{} cannot be written: {error}.", shown(path))
             }
         }
     }
@@ -327,8 +500,14 @@ fn not_removed_text(
     line
 }
 
-fn help(language: Language) -> String {
+fn help(language: Language, settings: Option<&Path>, history: Option<&Path>) -> String {
     let default_minutes = okapi_engine::DEFAULT_MIN_AGE.as_secs() / SECONDS_PER_MINUTE;
+    let unknown = match language {
+        Language::French => "inconnu (ni XDG ni HOME absolu)",
+        Language::English => "unknown (no absolute XDG nor HOME)",
+    };
+    let settings = settings.map_or_else(|| unknown.to_owned(), shown);
+    let history = history.map_or_else(|| unknown.to_owned(), shown);
     match language {
         Language::French => format!(
             "okapi {VERSION} : trouve et nettoie ce que les applis laissent derrière elles.
@@ -344,14 +523,19 @@ Options :
   --system --apps --gaming --gpu
                        seulement ces catégories (toutes par défaut)
   --exclude CHEMIN     ne jamais toucher à ce chemin, ou à *.ext (répétable)
-  --min-age MINUTES    âge minimal de ce qui est retiré (défaut : {default_minutes})
+  --min-age MINUTES    âge minimal de ce qui est retiré ; l'emporte sur minAgeMinutes
+                       des réglages (défaut : {default_minutes})
   -v, --verbose        liste chaque entrée ; le détail aussi sur la sortie d'erreur
   -q, --quiet          seulement le résultat
   -h, --help           cette aide
   -V, --version        la version
 
-Codes de sortie : 0 succès, 1 échec, 2 arguments invalides, 3 permission refusée,
-4 nettoyage partiel, 5 rien trouvé."
+Réglages : {settings}
+  (exclusions, ajoutées à --exclude ; minAgeMinutes ; deletionLog)
+Historique des nettoyages : {history}
+
+Codes de sortie : 0 succès, 1 échec, 2 arguments ou réglages invalides,
+3 permission refusée, 4 nettoyage partiel, 5 rien trouvé."
         ),
         Language::English => format!(
             "okapi {VERSION}: finds and cleans what applications leave behind.
@@ -367,14 +551,19 @@ Options:
   --system --apps --gaming --gpu
                        only these categories (all by default)
   --exclude PATH       never touch this path, or *.ext (repeatable)
-  --min-age MINUTES    minimum age of what is removed (default: {default_minutes})
+  --min-age MINUTES    minimum age of what is removed; wins over the settings'
+                       minAgeMinutes (default: {default_minutes})
   -v, --verbose        list every entry; the detail on standard error too
   -q, --quiet          only the result
   -h, --help           this help
   -V, --version        the version
 
-Exit codes: 0 success, 1 failure, 2 invalid arguments, 3 permission denied,
-4 partial cleaning, 5 nothing found."
+Settings: {settings}
+  (exclusions, added to --exclude; minAgeMinutes; deletionLog)
+Cleaning history: {history}
+
+Exit codes: 0 success, 1 failure, 2 invalid arguments or settings,
+3 permission denied, 4 partial cleaning, 5 nothing found."
         ),
     }
 }
@@ -416,8 +605,12 @@ fn exclusion(language: Language, error: &ExclusionError) -> String {
 fn variables(language: Language, error: &VariablesError) -> String {
     match error {
         VariablesError::NoHome => match language {
-            Language::French => "Dossier personnel introuvable : HOME n'est pas défini.".to_owned(),
-            Language::English => "Home directory not found: HOME is not set.".to_owned(),
+            Language::French => {
+                "Dossier personnel introuvable : HOME n'est pas défini ou n'est pas un chemin absolu.".to_owned()
+            }
+            Language::English => {
+                "Home directory not found: HOME is not set or not an absolute path.".to_owned()
+            }
         },
         VariablesError::Invalid(error) => template_error(language, error),
     }
@@ -814,18 +1007,37 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one sample of every message: a table, not logic"
+    )]
     fn no_text_holds_an_em_dash_nor_is_empty() {
         let path = PathBuf::from("/data/x");
         let error = io::Error::from(io::ErrorKind::PermissionDenied);
         let exclusion = ExclusionError::Invalid { path: path.clone() };
         let variables = VariablesError::NoHome;
         let stop = Stop::MinAgeBeyondClock;
+        let unreadable = StoreError::Unreadable {
+            path: path.clone(),
+            error: io::Error::from(io::ErrorKind::PermissionDenied),
+        };
+        let unwritable = StoreError::Unwritable {
+            path: path.clone(),
+            error: io::Error::from(io::ErrorKind::StorageFull),
+        };
+        let invalid = StoreError::Invalid {
+            path: path.clone(),
+            error: serde_json::from_str::<u8>("x").unwrap_err(),
+        };
         let issue = ScanIssue::Excluded {
             origins: Vec::new(),
             path: path.clone(),
         };
         let messages = [
-            Message::Help,
+            Message::Help {
+                settings: Some(&path),
+                history: None,
+            },
             Message::Version,
             Message::Argument(&ArgumentError::Unknown("--x".to_owned())),
             Message::Argument(&ArgumentError::MissingValue("--exclude")),
@@ -834,6 +1046,26 @@ mod tests {
             Message::Exclusion(&exclusion),
             Message::ExclusionMissing(&path),
             Message::InternalDefect,
+            Message::Store(&StoreError::UnsupportedVersion {
+                path: path.clone(),
+                version: 2,
+            }),
+            Message::Store(&unreadable),
+            Message::Store(&StoreError::BrokenLink { path: path.clone() }),
+            Message::Store(&StoreError::NotAFile { path: path.clone() }),
+            Message::Store(&StoreError::TooLarge {
+                path: path.clone(),
+                limit: 10,
+            }),
+            Message::Store(&invalid),
+            Message::HistoryNotRecorded(&unwritable),
+            Message::SettingsExclusionMissing(&path, &path),
+            Message::SettingsExclusion(&path, &exclusion),
+            Message::SettingsMinAge(&path, 1),
+            Message::DeletionLogUnavailable,
+            Message::SettingsDirectoryUnknown,
+            Message::HistoryDirectoryUnknown,
+            Message::HistoryContinues,
             Message::Variables(&variables),
             Message::RulesUnavailable,
             Message::RunningAsRoot,
@@ -884,6 +1116,18 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn invalid_settings_say_their_position_once() {
+        let invalid = StoreError::Invalid {
+            path: PathBuf::from("/c/settings.json"),
+            error: serde_json::from_str::<u8>("x").unwrap_err(),
+        };
+        assert_eq!(
+            text(Language::English, &Message::Store(&invalid)),
+            "/c/settings.json is invalid (line 1, column 1: expected value): nothing is done."
+        );
     }
 
     #[test]

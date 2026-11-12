@@ -10,6 +10,7 @@ repository.workspace = true
 okapi-engine = { workspace = true }
 okapi-platform = { workspace = true }
 okapi-rules = { workspace = true }
+okapi-store = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }

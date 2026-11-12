@@ -9,6 +9,7 @@ use std::time::SystemTime;
 use okapi_engine::{
     CleanOutcome, CleanReceipt, CleanResult, ItemId, KeepReason, Origin, ScanGroup, ScanReport,
 };
+use okapi_store::{HistoryEntry, HistoryOutcome};
 use serde::Serialize;
 
 use crate::args::Verbosity;
@@ -306,39 +307,27 @@ struct CleanJson {
     stops: Vec<String>,
     removed_bytes: u64,
     complete: bool,
-    outcomes: Vec<OutcomeJson>,
-}
-
-#[derive(Serialize)]
-struct OutcomeJson {
-    path: Option<String>,
-    result: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    bytes: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reason: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    code: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    blocked: Option<String>,
+    outcomes: Vec<HistoryOutcome>,
 }
 
 fn clean_json(receipt: &CleanReceipt) -> CleanJson {
     CleanJson {
-        stops: receipt
-            .stops()
-            .iter()
-            .map(|stop| format!("{stop:?}"))
-            .collect(),
+        stops: receipt.stops().iter().map(stop_name).collect(),
         removed_bytes: receipt.removed_bytes(),
         complete: receipt.is_complete(),
-        outcomes: receipt.outcomes().iter().map(outcome_json).collect(),
+        outcomes: receipt.outcomes().iter().map(outcome).collect(),
     }
 }
 
-fn outcome_json(outcome: &CleanOutcome) -> OutcomeJson {
+/// What became of one entry, in the form scripts and the history read.
+fn outcome(outcome: &CleanOutcome) -> HistoryOutcome {
+    let inexact = [outcome.path(), outcome.blocked()]
+        .into_iter()
+        .flatten()
+        .any(|path| path.to_str().is_none());
+    if inexact {
+        tracing::warn!(path = ?outcome.path(), "a name not in UTF-8 is recorded inexactly");
+    }
     let lossy = |path: &Path| path.to_string_lossy().into_owned();
     let (result, bytes, reason) = match outcome.result() {
         CleanResult::Removed { bytes } => ("removed", Some(bytes), None),
@@ -350,7 +339,7 @@ fn outcome_json(outcome: &CleanOutcome) -> OutcomeJson {
         Some(KeepReason::Failed { kind, code }) => (Some(format!("{kind:?}")), code),
         _ => (None, None),
     };
-    OutcomeJson {
+    HistoryOutcome {
         path: outcome.path().map(lossy),
         result,
         bytes,
@@ -358,7 +347,43 @@ fn outcome_json(outcome: &CleanOutcome) -> OutcomeJson {
         error,
         code,
         blocked: outcome.blocked().map(lossy),
+        inexact,
     }
+}
+
+/// The history line of a cleaning that ended at `now`, with every entry when
+/// the user keeps a deletion log.
+pub fn history_entry(receipt: &CleanReceipt, now: SystemTime, deletion_log: bool) -> HistoryEntry {
+    let count = |wanted: fn(&CleanResult) -> bool| {
+        receipt
+            .outcomes()
+            .iter()
+            .filter(|outcome| wanted(&outcome.result()))
+            .count()
+    };
+    HistoryEntry {
+        time: seconds(now),
+        stops: receipt.stops().iter().map(stop_name).collect(),
+        removed_bytes: receipt.removed_bytes(),
+        removed: count(|result| matches!(result, CleanResult::Removed { .. })),
+        partial: count(|result| matches!(result, CleanResult::Partial { .. })),
+        gone: count(|result| matches!(result, CleanResult::Gone)),
+        kept: count(|result| matches!(result, CleanResult::Kept(_))),
+        complete: receipt.is_complete(),
+        entries: deletion_log.then(|| receipt.outcomes().iter().map(outcome).collect()),
+    }
+}
+
+/// A stop as scripts and the history keep it.
+fn stop_name(stop: &okapi_engine::Stop) -> String {
+    use okapi_engine::Stop;
+    match stop {
+        Stop::UnsupportedSystem => "unsupportedSystem",
+        Stop::MissingVariable { .. } => "missingVariable",
+        Stop::UnreadableVariable { .. } => "unreadableVariable",
+        Stop::MinAgeBeyondClock => "minAgeBeyondClock",
+    }
+    .to_owned()
 }
 
 /// A stable name for scripts.
@@ -377,6 +402,26 @@ const fn reason_name(reason: KeepReason) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stops_keep_their_names_in_the_history_whatever_they_carry() {
+        use okapi_engine::Stop;
+        use okapi_rules::Variable;
+        let stop = Stop::UnreadableVariable {
+            variable: Variable::Config,
+            path: "/home/ana/.config".into(),
+            error: std::io::ErrorKind::PermissionDenied,
+        };
+        assert_eq!(stop_name(&stop), "unreadableVariable");
+        assert_eq!(
+            stop_name(&Stop::MissingVariable {
+                variable: Variable::Config
+            }),
+            "missingVariable"
+        );
+        assert_eq!(stop_name(&Stop::MinAgeBeyondClock), "minAgeBeyondClock");
+        assert_eq!(stop_name(&Stop::UnsupportedSystem), "unsupportedSystem");
+    }
 
     #[test]
     fn dates_are_signed_seconds() {

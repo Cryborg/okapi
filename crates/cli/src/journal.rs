@@ -1,9 +1,8 @@
 //! The journal: every run's traces, one JSON line per event, in a file the
 //! developer reads back after a test.
 
-use std::fs::{self, DirBuilder, File};
+use std::fs::{self, File};
 use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,8 +20,6 @@ const ROTATED_NAME: &str = "okapi.log.1";
 /// Beyond this size the journal starts afresh, the previous one kept aside
 /// (a full scan writes a few megabytes of detail).
 pub const ROTATION_SIZE: u64 = 64 * 1024 * 1024;
-/// Only its owner reads the journal's directory: the journal lists file names.
-const PRIVATE_DIRECTORY: u32 = 0o700;
 
 /// The journal could not be opened.
 #[derive(Debug)]
@@ -106,14 +103,7 @@ fn open() -> Result<(File, PathBuf, Rotation), Unavailable> {
         path: path.clone(),
         error,
     };
-    DirBuilder::new()
-        .recursive(true)
-        .mode(PRIVATE_DIRECTORY)
-        .create(&directory)
-        .and_then(|()| {
-            fs::set_permissions(&directory, fs::Permissions::from_mode(PRIVATE_DIRECTORY))
-        })
-        .map_err(unopenable)?;
+    okapi_platform::create_private_directory(&directory).map_err(unopenable)?;
     let size = fs::symlink_metadata(&path)
         .ok()
         .filter(fs::Metadata::is_file)

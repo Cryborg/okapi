@@ -1,6 +1,6 @@
 use std::env;
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use okapi_rules::{TemplateError, TemplateVariables, Variable};
 use thiserror::Error;
@@ -8,18 +8,18 @@ use thiserror::Error;
 /// Where temporary files go when `TMPDIR` is not set (POSIX).
 const DEFAULT_TEMP_DIRECTORY: &str = "/tmp";
 
-/// The XDG base directories, with their environment variable and their
-/// default below the home directory (XDG Base Directory Specification).
-const XDG_DIRECTORIES: [(Variable, &str, &str); 3] = [
-    (Variable::Config, "XDG_CONFIG_HOME", ".config"),
-    (Variable::Cache, "XDG_CACHE_HOME", ".cache"),
-    (Variable::LocalShare, "XDG_DATA_HOME", ".local/share"),
+/// The XDG base directories the rules' variables stand for (XDG Base
+/// Directory Specification).
+const XDG_DIRECTORIES: [(Variable, XdgBase); 3] = [
+    (Variable::Config, CONFIG),
+    (Variable::Cache, CACHE),
+    (Variable::LocalShare, DATA),
 ];
 
 /// The values of the rules' variables cannot be read from this session.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum VariablesError {
-    #[error("the home directory cannot be found: `HOME` is not set")]
+    #[error("the home directory cannot be found: `HOME` is not set or not absolute")]
     NoHome,
 
     #[error(transparent)]
@@ -37,28 +37,91 @@ pub fn template_variables() -> Result<TemplateVariables, VariablesError> {
     variables_from(|name| env::var_os(name), env::home_dir())
 }
 
-/// Where Okapi keeps its state (the journal): `$XDG_STATE_HOME/okapi`, or
-/// `~/.local/state/okapi` when it is not set or not absolute.
+/// Where Okapi keeps its state (the journal, the history):
+/// `$XDG_STATE_HOME/okapi`, or `~/.local/state/okapi` when it is not set or
+/// not absolute.
 #[must_use]
 pub fn state_directory() -> Option<PathBuf> {
-    state_directory_from(|name| env::var_os(name), env::home_dir())
+    xdg_directory_from(STATE, |name| env::var_os(name), env::home_dir())
 }
+
+/// Where Okapi keeps its settings: `$XDG_CONFIG_HOME/okapi`, or
+/// `~/.config/okapi`.
+#[must_use]
+pub fn config_directory() -> Option<PathBuf> {
+    xdg_directory_from(CONFIG, |name| env::var_os(name), env::home_dir())
+}
+
+/// An XDG base directory: its environment variable, and its default below
+/// the home directory.
+#[derive(Clone, Copy)]
+struct XdgBase {
+    variable: &'static str,
+    default: &'static str,
+}
+
+impl XdgBase {
+    /// This directory: the variable when it holds an absolute path (the
+    /// specification ignores an empty or relative value), else the default
+    /// below `home`; `None` when neither is known.
+    fn resolve(
+        self,
+        read: impl Fn(&str) -> Option<OsString>,
+        home: Option<&Path>,
+    ) -> Option<PathBuf> {
+        read(self.variable)
+            .map(PathBuf::from)
+            .filter(|value| {
+                let absolute = value.is_absolute();
+                if !absolute && !value.as_os_str().is_empty() {
+                    tracing::warn!(
+                        variable = self.variable,
+                        value = %value.display(),
+                        "not an absolute path, ignored"
+                    );
+                }
+                absolute
+            })
+            .or_else(|| home.map(|home| home.join(self.default)))
+    }
+}
+
+const STATE: XdgBase = XdgBase {
+    variable: "XDG_STATE_HOME",
+    default: ".local/state",
+};
+
+const CONFIG: XdgBase = XdgBase {
+    variable: "XDG_CONFIG_HOME",
+    default: ".config",
+};
+
+const CACHE: XdgBase = XdgBase {
+    variable: "XDG_CACHE_HOME",
+    default: ".cache",
+};
+
+const DATA: XdgBase = XdgBase {
+    variable: "XDG_DATA_HOME",
+    default: ".local/share",
+};
 
 /// The application's own directory name below the XDG ones.
 const APPLICATION: &str = "okapi";
 
-fn state_directory_from(
+fn xdg_directory_from(
+    base: XdgBase,
     read: impl Fn(&str) -> Option<OsString>,
     home: Option<PathBuf>,
 ) -> Option<PathBuf> {
-    let base = read("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .filter(|value| value.is_absolute())
-        .or_else(|| {
-            home.filter(|home| home.is_absolute())
-                .map(|home| home.join(".local/state"))
-        })?;
-    Some(base.join(APPLICATION))
+    let directory = base.resolve(read, usable_home(home).as_deref())?;
+    Some(directory.join(APPLICATION))
+}
+
+/// The home directory, when it is an absolute path: an empty or relative one
+/// says nothing of where the user's files are.
+fn usable_home(home: Option<PathBuf>) -> Option<PathBuf> {
+    home.filter(|home| home.is_absolute())
 }
 
 /// [`template_variables`], reading the environment through `read`.
@@ -66,16 +129,13 @@ fn variables_from(
     read: impl Fn(&str) -> Option<OsString>,
     home: Option<PathBuf>,
 ) -> Result<TemplateVariables, VariablesError> {
-    let home = home
-        .filter(|home| !home.as_os_str().is_empty())
-        .ok_or(VariablesError::NoHome)?;
+    let home = usable_home(home).ok_or(VariablesError::NoHome)?;
     let mut variables = TemplateVariables::new();
-    for (variable, name, default) in XDG_DIRECTORIES {
-        // The specification ignores an empty or relative value.
-        let value = read(name)
-            .map(PathBuf::from)
-            .filter(|value| value.is_absolute())
-            .unwrap_or_else(|| home.join(default));
+    for (variable, base) in XDG_DIRECTORIES {
+        // Never `None`: the home directory is known.
+        let value = base
+            .resolve(&read, Some(&home))
+            .ok_or(VariablesError::NoHome)?;
         variables.insert(variable, value)?;
     }
     let temp = read("TMPDIR")
@@ -197,6 +257,11 @@ mod tests {
             variables(&[], Some("")).unwrap_err(),
             VariablesError::NoHome
         );
+        assert_eq!(
+            variables(&[], Some("relative/home")).unwrap_err(),
+            VariablesError::NoHome,
+            "the same rule as the settings and state directories"
+        );
     }
 
     #[test]
@@ -210,18 +275,54 @@ mod tests {
             }
         };
         assert_eq!(
-            state_directory_from(read(None), Some(PathBuf::from("/home/ana"))),
+            xdg_directory_from(STATE, read(None), Some(PathBuf::from("/home/ana"))),
             Some(PathBuf::from("/home/ana/.local/state/okapi"))
         );
         assert_eq!(
-            state_directory_from(read(Some("/data/state")), Some(PathBuf::from("/home/ana"))),
+            xdg_directory_from(
+                STATE,
+                read(Some("/data/state")),
+                Some(PathBuf::from("/home/ana"))
+            ),
             Some(PathBuf::from("/data/state/okapi"))
         );
         assert_eq!(
-            state_directory_from(read(Some("relative")), Some(PathBuf::from("/home/ana"))),
+            xdg_directory_from(
+                STATE,
+                read(Some("relative")),
+                Some(PathBuf::from("/home/ana"))
+            ),
             Some(PathBuf::from("/home/ana/.local/state/okapi"))
         );
-        assert_eq!(state_directory_from(read(None), None), None);
+        assert_eq!(xdg_directory_from(STATE, read(None), None), None);
+        let config =
+            |name: &str| (name == "XDG_CONFIG_HOME").then(|| OsString::from("/data/config"));
+        assert_eq!(
+            xdg_directory_from(CONFIG, config, Some(PathBuf::from("/home/ana"))),
+            Some(PathBuf::from("/data/config/okapi"))
+        );
+        assert_eq!(
+            xdg_directory_from(CONFIG, |_| None, Some(PathBuf::from("/home/ana"))),
+            Some(PathBuf::from("/home/ana/.config/okapi"))
+        );
+        for home in ["relative/home", ""] {
+            for base in [STATE, CONFIG] {
+                assert_eq!(
+                    xdg_directory_from(base, |_| None, Some(PathBuf::from(home))),
+                    None,
+                    "{home:?} says nothing of where the user's files are"
+                );
+            }
+        }
+        assert_eq!(
+            xdg_directory_from(
+                STATE,
+                read(Some("/data/state")),
+                Some(PathBuf::from("relative/home"))
+            ),
+            Some(PathBuf::from("/data/state/okapi")),
+            "an absolute variable is enough"
+        );
     }
 
     #[test]

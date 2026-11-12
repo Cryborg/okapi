@@ -11,6 +11,8 @@ pub use directory::{
     tells_mount_roots,
 };
 pub use identity::{FileIdentity, IDENTITY_SUPPORTED, file_identity, last_change, ownership};
-pub use session::{effective_user, open_journal, running_as_root};
+pub use session::{
+    create_private_directory, effective_user, open_for_reading, open_journal, running_as_root,
+};
 #[cfg(target_os = "linux")]
-pub use variables::{VariablesError, state_directory, template_variables};
+pub use variables::{VariablesError, config_directory, state_directory, template_variables};

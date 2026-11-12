@@ -5,8 +5,6 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use okapi_engine::DEFAULT_MIN_AGE;
-
 use crate::selection::Category;
 
 /// What the command line asks for.
@@ -35,7 +33,8 @@ pub struct Run {
     /// Empty means every category.
     pub categories: BTreeSet<Category>,
     pub exclusions: Vec<PathBuf>,
-    pub min_age: Duration,
+    /// `None` leaves the settings' age, or the engine's default.
+    pub min_age: Option<Duration>,
 }
 
 /// What is wrong with the command line.
@@ -77,7 +76,7 @@ pub fn parse(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, A
         verbosity: Verbosity::Normal,
         categories: BTreeSet::new(),
         exclusions: Vec::new(),
-        min_age: DEFAULT_MIN_AGE,
+        min_age: None,
     };
     let mut first = true;
     let (mut verbose, mut quiet) = (false, false);
@@ -107,8 +106,9 @@ pub fn parse(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, A
                 let value = arguments
                     .next()
                     .ok_or(ArgumentError::MissingValue(MIN_AGE))?;
-                run.min_age = minutes(&value.to_string_lossy())
+                let minutes = minutes(&value.to_string_lossy())
                     .ok_or_else(|| ArgumentError::InvalidMinAge(value.to_string_lossy().into()))?;
+                run.min_age = Some(minutes);
             }
             flag => {
                 let category = Category::ALL
@@ -131,7 +131,12 @@ pub fn parse(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, A
 
 /// `text` minutes, if it is a whole number that the clock can hold.
 fn minutes(text: &str) -> Option<Duration> {
-    let minutes: u64 = text.parse().ok()?;
+    duration_of_minutes(text.parse().ok()?)
+}
+
+/// `minutes` as a duration, if the clock can hold it: the one conversion for
+/// the command line and the settings.
+pub fn duration_of_minutes(minutes: u64) -> Option<Duration> {
     Some(Duration::from_secs(
         minutes.checked_mul(SECONDS_PER_MINUTE)?,
     ))
@@ -158,7 +163,7 @@ mod tests {
         assert!(!run.clean && !run.json);
         assert_eq!(run.verbosity, Verbosity::Normal);
         assert!(run.categories.is_empty());
-        assert_eq!(run.min_age, DEFAULT_MIN_AGE);
+        assert_eq!(run.min_age, None);
     }
 
     #[test]
@@ -187,10 +192,10 @@ mod tests {
             run.exclusions,
             [PathBuf::from("/data/keep"), PathBuf::from("*.log")]
         );
-        assert_eq!(run.min_age, Duration::ZERO);
+        assert_eq!(run.min_age, Some(Duration::ZERO));
         assert_eq!(
             parsed_run(&["--min-age", "90"]).min_age,
-            Duration::from_mins(90)
+            Some(Duration::from_mins(90))
         );
         assert_eq!(
             parsed_run(&["-q", "--system", "--gaming"]).verbosity,

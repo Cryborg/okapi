@@ -6,10 +6,12 @@ use okapi_engine::{CleanResult, KeepReason, Stop};
 
 /// The run did what was asked.
 pub const SUCCESS: u8 = 0;
-/// The run failed: a stop (nothing was looked at), an unusable session, an
-/// output that could not be written, an internal fault.
+/// The run failed: a stop (nothing was looked at), an unusable session or
+/// settings file, a deletion log asked for that could not be kept, an output
+/// that could not be written, an internal fault.
 pub const FAILURE: u8 = 1;
-/// The command line is invalid (an argument, an exclusion, an age).
+/// What the user wrote is invalid: an argument, the settings, an exclusion
+/// or an age, from the command line or the settings.
 pub const INVALID_ARGUMENTS: u8 = 2;
 /// The system refused to remove at least one entry.
 pub const PERMISSION_DENIED: u8 = 3;
@@ -28,7 +30,7 @@ pub fn exit_code<'a>(
 ) -> u8 {
     let mut stopped = false;
     for stop in stops {
-        // An age beyond the clock comes from the command line.
+        // An age beyond the clock comes from the command line or the settings.
         if *stop == Stop::MinAgeBeyondClock {
             return INVALID_ARGUMENTS;
         }
@@ -61,6 +63,17 @@ pub fn exit_code<'a>(
     code
 }
 
+/// `code` once the cleaning's history line is known lost (`lost_log`) while
+/// the user asked for a deletion log: the run failed, cleaned or not, unless
+/// the input (command line or settings) was invalid in the first place.
+pub const fn with_deletion_log(code: u8, lost_log: bool) -> u8 {
+    if lost_log && code != INVALID_ARGUMENTS {
+        FAILURE
+    } else {
+        code
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,6 +83,17 @@ mod tests {
             kind: io::ErrorKind::PermissionDenied,
             code: Some(13),
         }
+    }
+
+    #[test]
+    fn a_lost_deletion_log_fails_the_run() {
+        assert_eq!(with_deletion_log(SUCCESS, true), FAILURE);
+        assert_eq!(with_deletion_log(PARTIAL, true), FAILURE);
+        assert_eq!(
+            with_deletion_log(INVALID_ARGUMENTS, true),
+            INVALID_ARGUMENTS
+        );
+        assert_eq!(with_deletion_log(PARTIAL, false), PARTIAL);
     }
 
     #[test]
@@ -97,6 +121,24 @@ mod tests {
             bytes: 1,
             reason: KeepReason::Changed,
         };
+        assert_eq!(exit_code(&[], 2, [partial]), PARTIAL);
+        // Only a refusal of permission is said apart, not every failure.
+        let failed = KeepReason::Failed {
+            kind: io::ErrorKind::NotFound,
+            code: Some(2),
+        };
+        assert_eq!(exit_code(&[], 2, [CleanResult::Kept(failed)]), PARTIAL);
+        assert_eq!(
+            exit_code(
+                &[],
+                2,
+                [CleanResult::Partial {
+                    bytes: 1,
+                    reason: failed
+                }]
+            ),
+            PARTIAL
+        );
         assert_eq!(
             exit_code(&[], 2, [partial, CleanResult::Kept(refused())]),
             PERMISSION_DENIED

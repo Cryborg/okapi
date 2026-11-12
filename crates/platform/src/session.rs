@@ -24,7 +24,33 @@ pub fn running_as_root() -> bool {
     effective_user() == Some(crate::directory::ROOT_USER)
 }
 
-/// Opens the journal at `path` for appending, creating it readable by its
+/// Creates `directory` and its missing parents, `directory` itself readable
+/// by its owner only (it holds the journal and the history, which list file
+/// names), and makes it so if it already existed.
+///
+/// # Errors
+///
+/// The system's error.
+pub fn create_private_directory(directory: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+        /// Only its owner may read or enter it.
+        const PRIVATE: u32 = 0o700;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(PRIVATE)
+            .create(directory)?;
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(PRIVATE))
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(directory)
+    }
+}
+
+/// Opens the journal at `path` for appending (and reading), creating it readable by its
 /// owner only. A link, a pipe or anything but a regular file is refused,
 /// never followed nor waited on.
 ///
@@ -38,7 +64,9 @@ pub fn open_journal(path: &Path) -> io::Result<File> {
 
     /// Readable and writable by its owner only: it lists file names.
     const OWNER_ONLY: Mode = Mode::RUSR.union(Mode::WUSR);
-    let flags = OFlags::WRONLY
+    // Readable too: the history checks how its last line ends through the
+    // descriptor it writes to, never by its path again.
+    let flags = OFlags::RDWR
         | OFlags::APPEND
         | OFlags::CREATE
         | OFlags::NOFOLLOW
@@ -53,7 +81,31 @@ pub fn open_journal(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
-/// Opens the journal at `path` for appending.
+/// Opens the file at `path` for reading, a link followed, without ever
+/// waiting: a pipe opens at once (and is then told apart by its type).
+///
+/// # Errors
+///
+/// The system's error.
+#[cfg(target_os = "linux")]
+pub fn open_for_reading(path: &Path) -> io::Result<File> {
+    use rustix::fs::{CWD, Mode, OFlags, openat};
+
+    let flags = OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    Ok(File::from(openat(CWD, path, flags, Mode::empty())?))
+}
+
+/// Opens the file at `path` for reading.
+///
+/// # Errors
+///
+/// The system's error.
+#[cfg(not(target_os = "linux"))]
+pub fn open_for_reading(path: &Path) -> io::Result<File> {
+    File::open(path)
+}
+
+/// Opens the journal at `path` for appending (and reading).
 ///
 /// # Errors
 ///
@@ -61,6 +113,7 @@ pub fn open_journal(path: &Path) -> io::Result<File> {
 #[cfg(not(target_os = "linux"))]
 pub fn open_journal(path: &Path) -> io::Result<File> {
     std::fs::OpenOptions::new()
+        .read(true)
         .append(true)
         .create(true)
         .open(path)
@@ -87,6 +140,19 @@ mod tests {
         open_journal(&path).unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "made private again");
+    }
+
+    #[test]
+    fn a_private_directory_is_made_private_even_if_it_existed() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join("state/okapi");
+        create_private_directory(&state).unwrap();
+        let mode = std::fs::metadata(&state).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+        std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o755)).unwrap();
+        create_private_directory(&state).unwrap();
+        let mode = std::fs::metadata(&state).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
     }
 
     #[test]

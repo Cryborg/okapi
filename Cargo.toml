@@ -20,6 +20,7 @@ tempfile = "3.27.0"
 okapi-rules = { path = "crates/rules" }
 okapi-platform = { path = "crates/platform" }
 okapi-engine = { path = "crates/engine" }
+okapi-store = { path = "crates/store" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

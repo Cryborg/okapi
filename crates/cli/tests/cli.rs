@@ -50,6 +50,21 @@ impl Sandbox {
         path
     }
 
+    /// Writes the settings file.
+    fn settings(&self, json: &str) {
+        let path = self.root.join("config/okapi/settings.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, json).unwrap();
+    }
+
+    fn history(&self) -> Vec<serde_json::Value> {
+        fs::read_to_string(self.root.join("state/okapi/history.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
     fn journal(&self) -> PathBuf {
         self.root.join("state/okapi/okapi.log")
     }
@@ -67,6 +82,7 @@ impl Sandbox {
             .env("HOME", self.root.join("home"))
             .env("TMPDIR", self.root.join("tmp"))
             .env("XDG_STATE_HOME", state)
+            .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("LC_ALL", "C")
             .args(arguments);
         for target in absolute_targets() {
@@ -267,7 +283,17 @@ fn help_wins_over_cleaning_and_writes_no_journal() {
     let sandbox = Sandbox::new();
     let output = sandbox.run(&["--clean", "--help"]);
     assert_eq!(output.status.code(), Some(0));
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Usage"));
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(help.contains("Usage"));
+    assert!(
+        help.contains(
+            &*sandbox
+                .root
+                .join("config/okapi/settings.json")
+                .to_string_lossy()
+        ),
+        "the help names the settings file in use: {help}"
+    );
     assert!(!sandbox.journal().exists());
 }
 
@@ -402,6 +428,288 @@ fn an_exclusion_that_matches_nothing_is_said() {
         Some(5),
         "nothing to find in an empty sandbox"
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("does not exist as written"));
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(errors.contains("does not exist as written"));
+    assert!(!errors.contains("In the settings"), "{errors}");
     assert!(journal_has(&sandbox.journal(), "exclusion matches nothing"));
+
+    sandbox.settings(&format!(
+        r#"{{"version": 1, "exclusions": ["{}"]}}"#,
+        missing.display()
+    ));
+    let output = sandbox.run(&["--apps"]);
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        errors.contains("In the settings") && errors.contains("does not exist as written"),
+        "a missing exclusion of the settings names them: {errors}"
+    );
+}
+
+#[test]
+fn settings_and_command_line_exclusions_both_apply() {
+    if running_as_root() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let by_settings = sandbox.file("home/.cache/pip/settings-keep");
+    let by_flag = sandbox.file("home/.cache/pip/flag-keep");
+    let witness = sandbox.file("home/.cache/pip/goes");
+    sandbox.settings(&format!(
+        r#"{{"version": 1, "exclusions": ["{}"]}}"#,
+        by_settings.display()
+    ));
+    settle();
+    let flag = by_flag.to_string_lossy().into_owned();
+    let output = sandbox.run(&["--clean", "--apps", "--min-age", "0", "--exclude", &flag]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(by_settings.exists() && by_flag.exists());
+    assert!(!witness.exists());
+}
+
+#[test]
+fn the_settings_age_applies_unless_the_command_line_gives_one() {
+    if running_as_root() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let fresh = sandbox.file("home/.cache/pip/fresh");
+    settle();
+    sandbox.settings(r#"{"version": 1, "minAgeMinutes": 60}"#);
+    let output = sandbox.run(&["--clean", "--apps"]);
+    assert_eq!(
+        output.status.code(),
+        Some(5),
+        "too recent for the settings' age"
+    );
+    assert!(fresh.exists());
+    let output = sandbox.run(&["--clean", "--apps", "--min-age", "0"]);
+    assert_eq!(output.status.code(), Some(0), "the command line wins");
+    assert!(!fresh.exists());
+
+    let again = sandbox.file("home/.cache/pip/again");
+    settle();
+    sandbox.settings(r#"{"version": 1, "minAgeMinutes": 0}"#);
+    let output = sandbox.run(&["--clean", "--apps"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the settings' age, not the default"
+    );
+    assert!(!again.exists());
+}
+
+#[test]
+fn unusable_settings_stop_before_any_scan() {
+    if running_as_root() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    for (json, code) in [
+        (r#"{"version": 1, "exclusion": []}"#, 2),
+        (r#"{"version": 2}"#, 2),
+        (
+            r#"{"version": 1, "minAgeMinutes": 18446744073709551615}"#,
+            2,
+        ),
+        // Fits in a duration, beyond what the clock can go back to.
+        (r#"{"version": 1, "minAgeMinutes": 200000000000000000}"#, 2),
+    ] {
+        sandbox.settings(json);
+        let output = sandbox.run(&["--apps"]);
+        assert_eq!(output.status.code(), Some(code), "{json}");
+        assert_eq!(output.stdout, b"", "{json}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("settings.json"),
+            "{json}: the message names the settings file"
+        );
+    }
+    let dangling = sandbox.root.join("home/dangling");
+    std::os::unix::fs::symlink(sandbox.root.join("nowhere"), &dangling).unwrap();
+    sandbox.settings(&format!(
+        r#"{{"version": 1, "exclusions": ["{}/below"]}}"#,
+        dangling.display()
+    ));
+    let output = sandbox.run(&["--apps"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("settings.json"));
+
+    sandbox.settings(r#"{"version": 1, "exclusions": ["relative/keep"]}"#);
+    let output = sandbox.run(&["--apps"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a settings exclusion refused"
+    );
+    assert_eq!(output.stdout, b"");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("settings.json"));
+
+    fs::remove_file(sandbox.root.join("config/okapi/settings.json")).unwrap();
+    fs::create_dir(sandbox.root.join("config/okapi/settings.json")).unwrap();
+    let output = sandbox.run(&["--apps"]);
+    assert_eq!(output.status.code(), Some(1), "unreadable, not invalid");
+}
+
+#[test]
+fn settings_behind_a_dangling_link_stop_the_cleaning() {
+    if running_as_root() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let kept = sandbox.file("home/.cache/pip/old");
+    settle();
+    let settings = sandbox.root.join("config/okapi/settings.json");
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(sandbox.root.join("dotfiles/settings.json"), &settings).unwrap();
+    let output = sandbox.run(&["--clean", "--apps", "--min-age", "0"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        kept.exists(),
+        "unreachable settings are never taken for none"
+    );
+}
+
+#[test]
+fn each_cleaning_leaves_a_history_line() {
+    if running_as_root() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let file = sandbox.file("home/.cache/pip/old");
+    settle();
+    let output = sandbox.run(&["--clean", "--apps", "--min-age", "0"]);
+    assert_eq!(output.status.code(), Some(0));
+    let history = sandbox.history();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0]["version"], 1);
+    assert_eq!(history[0]["removed"], 1);
+    assert_eq!(
+        history[0].get("entries"),
+        None,
+        "no deletion log by default"
+    );
+
+    sandbox.file("home/.cache/pip/other");
+    settle();
+    sandbox.settings(r#"{"version": 1, "deletionLog": true}"#);
+    let output = sandbox.run(&["--clean", "--apps", "--min-age", "0"]);
+    assert_eq!(output.status.code(), Some(0));
+    let history = sandbox.history();
+    assert_eq!(history.len(), 2);
+    assert_eq!(
+        history[1]["entries"][0].get("inexact"),
+        None,
+        "a name in UTF-8 is exact"
+    );
+    assert_eq!(
+        history[1]["entries"][0]["path"],
+        sandbox
+            .root
+            .join("home/.cache/pip/other")
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert!(!file.exists());
+}
+
+#[test]
+fn the_history_line_counts_what_became_of_each_entry() {
+    use std::os::unix::fs::PermissionsExt;
+    if running_as_root() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let pip = sandbox.root.join("home/.cache/pip");
+    fs::create_dir_all(pip.join("locked")).unwrap();
+    fs::write(pip.join("three"), b"abc").unwrap();
+    fs::write(pip.join("five"), b"abcde").unwrap();
+    fs::write(pip.join("locked/kept"), b"x").unwrap();
+    let read_only = fs::Permissions::from_mode(0o500);
+    fs::set_permissions(pip.join("locked"), read_only).unwrap();
+    settle();
+    let before = seconds_now();
+    let output = sandbox.run(&["--clean", "--apps", "--min-age", "0"]);
+    let after = seconds_now();
+    fs::set_permissions(pip.join("locked"), fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(output.status.code(), Some(3), "a refusal of permission");
+    let line = &sandbox.history()[0];
+    assert_eq!(line["removed"], 2, "{line}");
+    assert_eq!(line["removedBytes"], 8, "{line}");
+    assert_eq!(line["gone"], 0, "{line}");
+    assert_eq!(
+        line["partial"].as_u64().unwrap() + line["kept"].as_u64().unwrap(),
+        1,
+        "the locked directory: {line}"
+    );
+    assert_eq!(line["complete"], false, "{line}");
+    assert_eq!(line["stops"], serde_json::json!([]), "{line}");
+    let time = line["time"].as_i64().unwrap();
+    assert!(
+        (before..=after).contains(&time),
+        "{time} not in {before}..={after}"
+    );
+}
+
+fn seconds_now() -> i64 {
+    let since = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    i64::try_from(since.as_secs()).unwrap()
+}
+
+#[test]
+fn a_name_not_in_utf8_is_marked_inexact_in_the_deletion_log() {
+    use std::os::unix::ffi::OsStrExt;
+    if running_as_root() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let directory = sandbox.root.join("home/.cache/pip");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(
+        directory.join(std::ffi::OsStr::from_bytes(b"bad\xff")),
+        b"x",
+    )
+    .unwrap();
+    settle();
+    sandbox.settings(r#"{"version": 1, "deletionLog": true}"#);
+    sandbox.run(&["--clean", "--apps", "--min-age", "0"]);
+    let entries = &sandbox.history()[0]["entries"];
+    assert_eq!(entries[0]["inexact"], true, "{entries}");
+    assert_eq!(
+        entries[0]["path"],
+        format!("{}/bad\u{fffd}", directory.display())
+    );
+}
+
+#[test]
+fn a_deletion_log_that_cannot_be_kept_stops_before_cleaning() {
+    if running_as_root() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let kept = sandbox.file("home/.cache/pip/old");
+    let not_a_directory = sandbox.file("state-is-a-file");
+    settle();
+    sandbox.settings(r#"{"version": 1, "deletionLog": true}"#);
+    let output = sandbox.run_with_state(&["--clean", "--apps", "--min-age", "0"], &not_a_directory);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(kept.exists(), "nothing removed without the log asked for");
+
+    sandbox.settings(r#"{"version": 1}"#);
+    let output = sandbox.run_with_state(&["--clean", "--apps", "--min-age", "0"], &not_a_directory);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "without a deletion log, it goes on"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("will not be added to the history"),
+        "the missing history line is said"
+    );
+    assert!(!kept.exists());
 }

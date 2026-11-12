@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 okapi-rules = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { workspace = true }

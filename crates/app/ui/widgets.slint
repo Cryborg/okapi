@@ -1,0 +1,205 @@
+// The controls every screen shares, drawn from the mockup's components
+// (docs/design/maquette/project/Components.dc.html).
+import { Theme } from "theme.slint";
+
+export component Card inherits Rectangle {
+    background: Theme.surface;
+    border-color: Theme.border;
+    border-width: Theme.border-width;
+    border-radius: Theme.radius-large;
+    drop-shadow-color: Theme.shadow-1;
+    drop-shadow-blur: Theme.shadow-1-blur;
+    drop-shadow-offset-y: Theme.shadow-1-offset;
+}
+
+export component Line inherits Text {
+    color: Theme.text;
+    font-size: Theme.font-label;
+    font-weight: Theme.weight-medium;
+    wrap: word-wrap;
+}
+
+export component Detail inherits Text {
+    color: Theme.text-2;
+    font-size: Theme.font-small;
+    wrap: word-wrap;
+}
+
+export component Title inherits Text {
+    color: Theme.text;
+    font-size: Theme.font-display;
+    font-weight: Theme.weight-semibold;
+}
+
+// An icon beside words that say the same: never read.
+export component Icon inherits Image {
+    width: Theme.icon;
+    height: Theme.icon;
+    accessible-role: none;
+}
+
+// The ring around the control that has the keyboard focus.
+export component FocusRing inherits Rectangle {
+    in property <bool> shown;
+    border-width: shown ? Theme.focus-width : 0;
+    border-color: Theme.focus;
+}
+
+export enum ButtonKind { primary, secondary, ghost }
+
+// A button with words, and an icon beside them at times. Reached with Tab,
+// pressed with Enter or Space, its focus ring visible; disabled, it is
+// skipped and says so.
+export component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <ButtonKind> kind: ButtonKind.secondary;
+    in property <bool> large;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    forward-focus: keys;
+    height: large ? Theme.control-height-large : Theme.control-height;
+    border-radius: large ? Theme.radius-large : Theme.radius-medium;
+    opacity: enabled ? 1 : Theme.disabled-opacity;
+    background: kind == ButtonKind.primary ? (hovered ? Theme.accent-hover : Theme.accent)
+        : hovered ? Theme.surface-hover
+        : kind == ButtonKind.secondary ? Theme.surface : transparent;
+    border-width: kind == ButtonKind.secondary ? Theme.border-width : 0;
+    border-color: Theme.border-strong;
+    accessible-role: button;
+    accessible-label: text;
+    accessible-enabled: enabled;
+    accessible-action-default => {
+        if enabled {
+            root.clicked();
+        }
+    }
+
+    property <bool> hovered: enabled && touch.has-hover;
+
+        // Always enabled: a disabled scope would also miss losing the focus,
+    // and keep its ring. Tab skips it while disabled.
+    keys := FocusScope {
+        focus-on-tab-navigation: root.enabled;
+        key-pressed(event) => {
+            // A button disabled while it has the focus keeps it.
+            if root.enabled && !event.repeat && (event.text == Key.Return || event.text == Key.Space) {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        // No focus on a click: the ring shows only for the keyboard.
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    FocusRing {
+        shown: keys.has-focus;
+        border-radius: root.border-radius;
+    }
+
+    HorizontalLayout {
+        padding-left: large ? Theme.spacing-xl : Theme.spacing-l;
+        padding-right: self.padding-left;
+        spacing: Theme.spacing-s;
+        alignment: center;
+        if root.icon.width > 0: Icon {
+            source: root.icon;
+            colorize: label.color;
+            y: (parent.height - self.height) / 2;
+        }
+        label := Text {
+            text: root.text;
+            accessible-role: none;
+            color: kind == ButtonKind.primary ? Theme.on-accent
+                : kind == ButtonKind.ghost && !hovered ? Theme.text-2 : Theme.text;
+            font-size: large ? Theme.font-heading : Theme.font-label;
+            font-weight: Theme.weight-medium;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// The box of a checkbox: its state drawn, read by the control around it.
+export component CheckMark inherits Rectangle {
+    in property <bool> checked;
+    width: Theme.checkbox;
+    height: Theme.checkbox;
+    border-radius: Theme.radius-small;
+    border-width: Theme.checkbox-border;
+    border-color: checked ? Theme.accent : Theme.border-strong;
+    background: checked ? Theme.accent : Theme.surface;
+    if checked: Icon {
+        source: @image-url("../assets/icons/check.svg");
+        colorize: Theme.on-accent;
+        width: Theme.icon-badge;
+        height: Theme.icon-badge;
+    }
+}
+
+// What a choice is left to the user for, in the warning colours.
+export component Badge inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    height: Theme.badge-height;
+    border-radius: Theme.radius-pill;
+    background: Theme.warning-soft;
+    HorizontalLayout {
+        padding-left: Theme.spacing-s;
+        padding-right: Theme.spacing-s;
+        spacing: Theme.spacing-xs;
+        Icon {
+            source: root.icon;
+            colorize: Theme.warning;
+            width: Theme.icon-badge;
+            height: Theme.icon-badge;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: root.text;
+            // Read by the control the badge is in.
+            accessible-role: none;
+            color: Theme.warning;
+            font-size: Theme.font-caption;
+            font-weight: Theme.weight-medium;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// How far a piece of work went, from 0 to 1; indeterminate, a sweep that
+// says something runs without saying how far.
+export component ProgressBar inherits Rectangle {
+    in property <float> progress;
+    in property <bool> indeterminate;
+    in property <string> label;
+    height: Theme.bar-height;
+    border-radius: Theme.radius-pill;
+    background: Theme.track;
+    clip: true;
+    accessible-role: progress-indicator;
+    accessible-label: label;
+    accessible-value-minimum: 0;
+    accessible-value-maximum: 100;
+    accessible-value: indeterminate ? "" : "\{round(clamp(progress, 0, 1) * 100)}";
+
+    // The part of a sweep done, from 0 to 1.
+    property <float> sweep: indeterminate
+        ? mod(animation-tick() / 1ms, Theme.indeterminate-sweep / 1ms) / (Theme.indeterminate-sweep / 1ms)
+        : 0;
+
+    Rectangle {
+        x: indeterminate ? (sweep * (1 + Theme.indeterminate-part) - Theme.indeterminate-part) * parent.width : 0;
+        width: indeterminate ? Theme.indeterminate-part * parent.width : clamp(root.progress, 0, 1) * parent.width;
+        height: parent.height;
+        border-radius: parent.border-radius;
+        background: Theme.accent;
+    }
+}

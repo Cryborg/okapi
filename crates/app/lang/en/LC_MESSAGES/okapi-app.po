@@ -46,3 +46,247 @@ msgstr "Licenses"
 msgctxt "NavItem"
 msgid "page affichée"
 msgstr "current page"
+
+msgctxt "Sidebar"
+msgid "Nettoyeur"
+msgstr "Cleaner"
+
+msgctxt "Words"
+msgid "Système"
+msgstr "System"
+
+msgctxt "Words"
+msgid "Applications"
+msgstr "Applications"
+
+msgctxt "Words"
+msgid "Jeux"
+msgstr "Games"
+
+msgctxt "Words"
+msgid "Caches GPU"
+msgstr "GPU caches"
+
+msgctxt "Words"
+msgid "Journaux, fichiers temporaires, miniatures et caches de paquets."
+msgstr "Logs, temporary files, thumbnails and package caches."
+
+msgctxt "Words"
+msgid "Caches des applications installées."
+msgstr "Caches of the installed applications."
+
+msgctxt "Words"
+msgid "Steam, Heroic, Lutris et itch.io : journaux et caches."
+msgstr "Steam, Heroic, Lutris and itch.io: logs and caches."
+
+msgctxt "Words"
+msgid "Shaders Mesa et NVIDIA. Recréés ensuite : le prochain lancement des jeux sera plus lent."
+msgstr "Mesa and NVIDIA shaders. Built again afterwards: games will start more slowly the next time."
+
+msgctxt "Words"
+msgid "o"
+msgstr "B"
+
+msgctxt "Words"
+msgid "ko"
+msgstr "kB"
+
+msgctxt "Words"
+msgid "Mo"
+msgstr "MB"
+
+msgctxt "Words"
+msgid "Go"
+msgstr "GB"
+
+msgctxt "Words"
+msgid "To"
+msgstr "TB"
+
+msgctxt "Words"
+msgid "{},{} {}"
+msgstr "{}.{} {}"
+
+msgctxt "Words"
+msgid "{} {}"
+msgstr "{} {}"
+
+msgctxt "CategoryCard"
+msgid "À choisir : {}"
+msgstr "Your choice: {}"
+
+msgctxt "CategoryCard"
+msgid "À choisir"
+msgstr "Your choice"
+
+msgctxt "Spared"
+msgid "Toujours épargnés : fichiers modifiés depuis moins de {} min. Exclusions : {}."
+msgstr "Always spared: files changed less than {} min ago. Exclusions: {}."
+
+msgctxt "ProblemBanner"
+msgid "Les dossiers de la session sont introuvables : l'analyse ne peut pas démarrer. Le détail est dans le journal."
+msgstr "The session's folders cannot be found: the analysis cannot start. The details are in the log."
+
+msgctxt "ProblemBanner"
+msgid "Les règles de nettoyage sont illisibles : l'analyse ne peut pas démarrer. Le détail est dans le journal."
+msgstr "The cleaning rules cannot be read: the analysis cannot start. The details are in the log."
+
+msgctxt "ProblemBanner"
+msgid "Les réglages sont illisibles : l'analyse ne peut pas démarrer. Le détail est dans le journal."
+msgstr "The settings cannot be read: the analysis cannot start. The details are in the log."
+
+msgctxt "ProblemBanner"
+msgid "L'âge minimal des réglages remonte avant l'horloge : rien ne serait assez ancien."
+msgstr "The minimum age in the settings goes back before the clock: nothing would be old enough."
+
+msgctxt "ProblemBanner"
+msgid "Une exclusion des réglages est refusée : l'analyse ne peut pas démarrer. Le détail est dans le journal."
+msgstr "An exclusion in the settings is refused: the analysis cannot start. The details are in the log."
+
+msgctxt "Choosing"
+msgid "Nettoyeur"
+msgstr "Cleaner"
+
+msgctxt "Choosing"
+msgid "Choisissez ce qu'Okapi doit regarder. L'analyse ne supprime rien : vous décidez ensuite."
+msgstr "Choose what Okapi should look at. The analysis removes nothing: you decide afterwards."
+
+msgctxt "Choosing"
+msgid "Aucune catégorie sélectionnée"
+msgstr "No category selected"
+
+msgctxt "Choosing"
+msgid "Catégories sélectionnées : {} sur {}"
+msgstr "Categories selected: {} of {}"
+
+msgctxt "Choosing"
+msgid "Cocher les recommandées"
+msgstr "Check the recommended ones"
+
+msgctxt "Choosing"
+msgid "Analyser"
+msgstr "Analyze"
+
+msgctxt "ScanRowView"
+msgid "Terminé"
+msgstr "Done"
+
+msgctxt "ScanRowView"
+msgid "En cours"
+msgstr "In progress"
+
+msgctxt "ScanRowView"
+msgid "En attente"
+msgstr "Waiting"
+
+msgctxt "ScanRowView"
+msgid "{} : éléments : {}, {}"
+msgstr "{}: items: {}, {}"
+
+msgctxt "ScanRowView"
+msgid "Éléments : {}"
+msgstr "Items: {}"
+
+msgctxt "Scanning"
+msgid "Annulation de l'analyse"
+msgstr "Cancelling the analysis"
+
+msgctxt "Scanning"
+msgid "Analyse en cours"
+msgstr "Analysis in progress"
+
+msgctxt "Scanning"
+msgid "Catégories terminées : {} sur {}. Rien n'est supprimé pendant l'analyse."
+msgstr "Categories done: {} of {}. Nothing is removed during the analysis."
+
+msgctxt "Scanning"
+msgid "Progression de l'analyse"
+msgstr "Analysis progress"
+
+msgctxt "Scanning"
+msgid "Progression par catégorie"
+msgstr "Progress by category"
+
+msgctxt "Scanning"
+msgid "Remarques de l'analyse : {}"
+msgstr "Analysis notes: {}"
+
+msgctxt "Scanning"
+msgid "Trouvé jusqu'ici"
+msgstr "Found so far"
+
+msgctxt "Scanning"
+msgid "Annuler l'analyse"
+msgstr "Cancel the analysis"
+
+msgctxt "Ended"
+msgid "Nettoyeur"
+msgstr "Cleaner"
+
+msgctxt "Ended"
+msgid "Rien à nettoyer"
+msgstr "Nothing to clean"
+
+msgctxt "Ended"
+msgid "Analyse terminée"
+msgstr "Analysis complete"
+
+msgctxt "Ended"
+msgid "Rien n'a été regardé"
+msgstr "Nothing was looked at"
+
+msgctxt "Ended"
+msgid "L'analyse a échoué"
+msgstr "The analysis failed"
+
+msgctxt "Ended"
+msgid "Okapi a regardé les catégories choisies et n'a rien trouvé de récupérable. Les fichiers récents et vos exclusions ont été laissés de côté, comme toujours."
+msgstr "Okapi looked at the chosen categories and found nothing to reclaim. Recent files and your exclusions were left aside, as always."
+
+msgctxt "Ended"
+msgid "Groupes trouvés : {}. Taille récupérable : {}."
+msgstr "Groups found: {}. Size to reclaim: {}."
+
+msgctxt "Ended"
+msgid "L'analyse s'est arrêtée avant de commencer. Aucun fichier n'a été lu ni modifié : ce n'est pas la même chose que « rien à nettoyer »."
+msgstr "The analysis stopped before it began. No file was read or changed: this is not the same as \"nothing to clean\"."
+
+msgctxt "Ended"
+msgid "L'analyse s'est interrompue sans résultat. Rien n'a été supprimé. Le détail est dans le journal."
+msgstr "The analysis stopped without a result. Nothing was removed. The details are in the log."
+
+msgctxt "Ended"
+msgid "Raisons"
+msgstr "Reasons"
+
+msgctxt "Ended"
+msgid "Ce système ne permet pas de distinguer les points de montage et les fichiers remplacés."
+msgstr "This system cannot tell mount points and replaced files apart."
+
+msgctxt "Ended"
+msgid "La variable {} n'est pas définie : ce qu'elle protège ne peut pas être garanti."
+msgstr "The variable {} is not set: what it protects cannot be vouched for."
+
+msgctxt "Ended"
+msgid "Le dossier de la variable {} est illisible : ce qu'il protège ne peut pas être garanti."
+msgstr "The folder of the variable {} cannot be read: what it protects cannot be vouched for."
+
+msgctxt "Ended"
+msgid "L'âge minimal remonte avant l'horloge : rien ne serait assez ancien."
+msgstr "The minimum age goes back before the clock: nothing would be old enough."
+
+msgctxt "Ended"
+msgid "Choisir d'autres catégories"
+msgstr "Choose other categories"
+
+msgctxt "Ended"
+msgid "Nouvelle analyse"
+msgstr "New analysis"
+
+msgctxt "Ended"
+msgid "Remarques de l'analyse : {}. Le détail est dans le journal."
+msgstr "Analysis notes: {}. The details are in the log."
+
+msgctxt "Ended"
+msgid "Okapi n'a rien trouvé de récupérable dans ce qu'il a pu lire. Les fichiers récents et vos exclusions ont été laissés de côté, comme toujours."
+msgstr "Okapi found nothing to reclaim in what it could read. Recent files and your exclusions were left aside, as always."

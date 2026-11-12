@@ -19,9 +19,8 @@ navigation.
 Lucide
 https://lucide.dev
 
-Used in: crates/app/assets/icons/ (home.svg, info.svg, scale.svg: Lucide's
-paths, taken from the Okapi mockups, drawn in black with a 1.75 stroke so that
-the interface can colour them).
+Used in: every icon of crates/app/assets/icons/ (Lucide's paths, taken from
+the Okapi mockups, drawn in black so that the interface can colour them).
 ================================================================================
 
 ISC License

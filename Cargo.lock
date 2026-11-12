@@ -3105,6 +3105,7 @@ name = "okapi-app"
 version = "0.1.0"
 dependencies = [
  "i-slint-backend-testing",
+ "okapi-engine",
  "okapi-platform",
  "okapi-rules",
  "okapi-store",

@@ -1,8 +1,15 @@
 import { Theme, Brand } from "theme.slint";
 import { Sidebar, Page } from "sidebar.slint";
 import { AboutPage } from "about.slint";
+import {
+    CategoryChoice, CategoryKind, CleanerPage, CleanerStep, Cleaner, OutcomeKind, RowState,
+    ScanRow, SetupProblem, Size, SizeUnit, StopReason, StopShown,
+} from "cleaner.slint";
 
-export { Page }
+export {
+    Page, CategoryChoice, CategoryKind, CleanerStep, Cleaner, OutcomeKind, RowState, ScanRow,
+    SetupProblem, Size, SizeUnit, StopReason, StopShown,
+}
 
 export component AppWindow inherits Window {
     in property <string> version;
@@ -41,6 +48,9 @@ export component AppWindow inherits Window {
                 font-weight: Theme.weight-semibold;
                 horizontal-alignment: center;
                 vertical-alignment: center;
+            }
+            if root.page == Page.cleaner: CleanerPage {
+                vertical-stretch: 1;
             }
             if root.page == Page.about: AboutPage {
                 version: root.version;

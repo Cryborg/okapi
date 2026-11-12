@@ -1,7 +1,7 @@
 import { Theme, Brand } from "theme.slint";
 
 // The screens the sidebar leads to: only those that exist.
-export enum Page { home, about }
+export enum Page { home, cleaner, about }
 
 // One entry of the sidebar: its icon and words carry it, never colour alone.
 // Reached with Tab, chosen with Enter or Space, its focus ring visible.
@@ -108,6 +108,15 @@ export component Sidebar inherits Rectangle {
             active: root.page == Page.home;
             clicked => {
                 root.navigate(Page.home);
+            }
+        }
+
+        NavItem {
+            icon: @image-url("../assets/icons/sparkles.svg");
+            label: @tr("Nettoyeur");
+            active: root.page == Page.cleaner;
+            clicked => {
+                root.navigate(Page.cleaner);
             }
         }
 

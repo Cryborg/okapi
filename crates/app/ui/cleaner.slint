@@ -1,0 +1,710 @@
+// The cleaner: the categories to look at, the analysis under way, and how
+// it ended. Rust keeps the state (src/cleaner.rs): this file draws it.
+import { Theme } from "theme.slint";
+import {
+    ActionButton, ButtonKind, Badge, Card, CheckMark, Detail, FocusRing, Icon, Line, ProgressBar,
+    Title,
+} from "widgets.slint";
+
+export enum CategoryKind { system, apps, gaming, gpu }
+
+export struct CategoryChoice {
+    kind: CategoryKind,
+    checked: bool,
+    // None of its rules is chosen by default: cache resets (invariant 5).
+    to-choose: bool,
+}
+
+// Why the analysis cannot start; the detail is in the journal.
+export enum SetupProblem { none, variables, rules, settings, min-age, exclusion }
+
+export enum CleanerStep { idle, planning, scanning, cancelling, outcome }
+
+export enum SizeUnit { byte, kilobyte, megabyte, gigabyte, terabyte }
+
+// A size scaled by Rust (`okapi_engine::ByteSize`), worded here.
+export struct Size {
+    whole: int,
+    tenths: int,
+    has-tenths: bool,
+    unit: SizeUnit,
+}
+
+export enum RowState { waiting, running, done }
+
+export struct ScanRow {
+    kind: CategoryKind,
+    state: RowState,
+    // How far the running one is, from 0 to 1.
+    progress: float,
+    entries: int,
+    size: Size,
+    // The entry the running one reached.
+    path: string,
+}
+
+export enum OutcomeKind { nothing-looked, nothing-to-clean, found, failed }
+
+export enum StopReason { unsupported-system, missing-variable, unreadable-variable, min-age-beyond-clock }
+
+export struct StopShown {
+    reason: StopReason,
+    // The variable a reason names, as the rules write it (`HOME`).
+    variable: string,
+}
+
+export global Cleaner {
+    in property <CleanerStep> step;
+
+    in property <[CategoryChoice]> choices;
+    in property <int> chosen-count;
+    // The categories checked are exactly the recommended ones.
+    in property <bool> recommended-only;
+    in property <int> min-age-minutes;
+    in property <int> exclusion-count;
+    in property <SetupProblem> problem;
+    // Set when an analysis is left: the focus then goes back to the
+    // categories, once.
+    in-out property <bool> back-from-analysis;
+
+    in property <[ScanRow]> rows;
+    in property <int> rows-done;
+    in property <float> progress;
+    in property <Size> found;
+    in property <int> issues;
+
+    in property <OutcomeKind> outcome;
+    in property <[StopShown]> stops;
+    in property <int> groups;
+
+    callback toggle(int);
+    callback check-recommended();
+    callback analyze();
+    callback cancel();
+    callback choose-again();
+}
+
+// The words and icons of a category, and the words of a size.
+export global Words {
+    pure public function category(kind: CategoryKind) -> string {
+        if kind == CategoryKind.system {
+            return @tr("Système");
+        }
+        if kind == CategoryKind.apps {
+            return @tr("Applications");
+        }
+        if kind == CategoryKind.gaming {
+            return @tr("Jeux");
+        }
+        return @tr("Caches GPU");
+    }
+
+    pure public function description(kind: CategoryKind) -> string {
+        if kind == CategoryKind.system {
+            return @tr("Journaux, fichiers temporaires, miniatures et caches de paquets.");
+        }
+        if kind == CategoryKind.apps {
+            return @tr("Caches des applications installées.");
+        }
+        if kind == CategoryKind.gaming {
+            return @tr("Steam, Heroic, Lutris et itch.io : journaux et caches.");
+        }
+        return @tr("Shaders Mesa et NVIDIA. Recréés ensuite : le prochain lancement des jeux sera plus lent.");
+    }
+
+    pure public function icon(kind: CategoryKind) -> image {
+        if kind == CategoryKind.system {
+            return @image-url("../assets/icons/monitor.svg");
+        }
+        if kind == CategoryKind.apps {
+            return @image-url("../assets/icons/app-window.svg");
+        }
+        if kind == CategoryKind.gaming {
+            return @image-url("../assets/icons/gamepad.svg");
+        }
+        return @image-url("../assets/icons/cpu.svg");
+    }
+
+    pure public function unit(unit: SizeUnit) -> string {
+        if unit == SizeUnit.byte {
+            return @tr("o");
+        }
+        if unit == SizeUnit.kilobyte {
+            return @tr("ko");
+        }
+        if unit == SizeUnit.megabyte {
+            return @tr("Mo");
+        }
+        if unit == SizeUnit.gigabyte {
+            return @tr("Go");
+        }
+        return @tr("To");
+    }
+
+    pure public function size(size: Size) -> string {
+        if size.has-tenths {
+            return @tr("{},{} {}", size.whole, size.tenths, unit(size.unit));
+        }
+        return @tr("{} {}", size.whole, unit(size.unit));
+    }
+}
+
+// A category to look at: a checkbox, reached with Tab, toggled with Space.
+component CategoryCard inherits Rectangle {
+    in property <int> index;
+    property <CategoryChoice> choice: Cleaner.choices[index];
+
+    border-radius: Theme.radius-large;
+    background: Theme.surface;
+    border-width: choice.checked ? 2 * Theme.border-width : Theme.border-width;
+    border-color: choice.checked ? Theme.accent : Theme.border;
+    drop-shadow-color: Theme.shadow-1;
+    drop-shadow-blur: Theme.shadow-1-blur;
+    drop-shadow-offset-y: Theme.shadow-1-offset;
+    accessible-role: checkbox;
+    accessible-checkable: true;
+    accessible-checked: choice.checked;
+    accessible-label: Words.category(choice.kind);
+    accessible-description: choice.to-choose
+        ? @tr("À choisir : {}", Words.description(choice.kind))
+        : Words.description(choice.kind);
+    accessible-action-default => {
+        Cleaner.toggle(index);
+    }
+    forward-focus: keys;
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Space && !event.repeat {
+                Cleaner.toggle(index);
+                return accept;
+            }
+            reject
+        }
+    }
+
+    TouchArea {
+        clicked => {
+            Cleaner.toggle(index);
+        }
+    }
+
+    FocusRing {
+        shown: keys.has-focus;
+        border-radius: root.border-radius;
+    }
+
+    HorizontalLayout {
+        padding: Theme.spacing-l;
+        padding-left: Theme.spacing-xl;
+        spacing: Theme.spacing-m;
+        alignment: stretch;
+        CheckMark {
+            checked: choice.checked;
+            y: Theme.spacing-xxs;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: Theme.spacing-xs;
+            alignment: start;
+            HorizontalLayout {
+                spacing: Theme.spacing-s;
+                alignment: start;
+                Text {
+                    text: Words.category(choice.kind);
+                    accessible-role: none;
+                    color: Theme.text;
+                    font-size: Theme.font-heading;
+                    font-weight: Theme.weight-semibold;
+                }
+                if choice.to-choose: Badge {
+                    text: @tr("À choisir");
+                    icon: @image-url("../assets/icons/hourglass.svg");
+                    accessible-role: none;
+                }
+            }
+            Detail {
+                text: Words.description(choice.kind);
+                accessible-role: none;
+            }
+        }
+        Rectangle {
+            width: Theme.icon-box;
+            height: Theme.icon-box;
+            border-radius: Theme.radius-medium;
+            background: Theme.surface-2;
+            Icon {
+                source: Words.icon(choice.kind);
+                colorize: Theme.text-2;
+            }
+        }
+    }
+}
+
+// What is never offered, and why the analysis cannot start, if it cannot.
+component Spared inherits Rectangle {
+    background: Theme.surface-2;
+    border-color: Theme.border;
+    border-width: Theme.border-width;
+    border-radius: Theme.radius-medium;
+    HorizontalLayout {
+        padding: Theme.spacing-m;
+        padding-left: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        Icon {
+            source: @image-url("../assets/icons/shield.svg");
+            colorize: Theme.text-2;
+            y: (parent.height - self.height) / 2;
+        }
+        Detail {
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+            text: @tr("Toujours épargnés : fichiers modifiés depuis moins de {} min. Exclusions : {}.", Cleaner.min-age-minutes, Cleaner.exclusion-count);
+        }
+    }
+}
+
+component ProblemBanner inherits Rectangle {
+    background: Theme.warning-soft;
+    border-radius: Theme.radius-medium;
+    accessible-role: text;
+    accessible-label: problem.text;
+    accessible-live-region: polite;
+    HorizontalLayout {
+        padding: Theme.spacing-m;
+        padding-left: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        Icon {
+            source: @image-url("../assets/icons/triangle-alert.svg");
+            colorize: Theme.warning;
+            y: (parent.height - self.height) / 2;
+        }
+        problem := Line {
+            horizontal-stretch: 1;
+            accessible-role: none;
+            color: Theme.warning;
+            vertical-alignment: center;
+            text: Cleaner.problem == SetupProblem.variables
+                ? @tr("Les dossiers de la session sont introuvables : l'analyse ne peut pas démarrer. Le détail est dans le journal.")
+                : Cleaner.problem == SetupProblem.rules
+                ? @tr("Les règles de nettoyage sont illisibles : l'analyse ne peut pas démarrer. Le détail est dans le journal.")
+                : Cleaner.problem == SetupProblem.settings
+                ? @tr("Les réglages sont illisibles : l'analyse ne peut pas démarrer. Le détail est dans le journal.")
+                : Cleaner.problem == SetupProblem.min-age
+                ? @tr("L'âge minimal des réglages remonte avant l'horloge : rien ne serait assez ancien.")
+                : @tr("Une exclusion des réglages est refusée : l'analyse ne peut pas démarrer. Le détail est dans le journal.");
+        }
+    }
+}
+
+// The bar under a screen, its actions on the right.
+component Footer inherits Rectangle {
+    height: Theme.footer-height;
+    background: Theme.surface;
+    Rectangle {
+        y: 0;
+        height: Theme.border-width;
+        background: Theme.border;
+    }
+    HorizontalLayout {
+        padding-left: Theme.spacing-xxl;
+        padding-right: Theme.spacing-xxl;
+        spacing: Theme.spacing-m;
+        @children
+    }
+}
+
+// Before the analysis: the categories, what is spared, and the start.
+component Choosing inherits VerticalLayout {
+    init => {
+        if Cleaner.back-from-analysis {
+            Cleaner.back-from-analysis = false;
+            first.focus();
+        }
+    }
+
+    VerticalLayout {
+        vertical-stretch: 1;
+        padding: Theme.spacing-xxl;
+        spacing: Theme.spacing-xl;
+        VerticalLayout {
+            spacing: Theme.spacing-xs;
+            Title {
+                text: @tr("Nettoyeur");
+            }
+            Detail {
+                text: @tr("Choisissez ce qu'Okapi doit regarder. L'analyse ne supprime rien : vous décidez ensuite.");
+            }
+        }
+        if Cleaner.problem != SetupProblem.none: ProblemBanner { }
+        GridLayout {
+            spacing: Theme.spacing-l;
+            Row {
+                first := CategoryCard {
+                    index: 0;
+                }
+                CategoryCard {
+                    index: 1;
+                }
+            }
+            Row {
+                CategoryCard {
+                    index: 2;
+                }
+                CategoryCard {
+                    index: 3;
+                }
+            }
+        }
+        // What the settings spare, once they are read.
+        if Cleaner.problem == SetupProblem.none: Spared { }
+        Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+    Footer {
+        Line {
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+            text: Cleaner.chosen-count == 0
+                ? @tr("Aucune catégorie sélectionnée")
+                : @tr("Catégories sélectionnées : {} sur {}", Cleaner.chosen-count, Cleaner.choices.length);
+        }
+        ActionButton {
+            text: @tr("Cocher les recommandées");
+            kind: ButtonKind.ghost;
+            enabled: !Cleaner.recommended-only;
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                Cleaner.check-recommended();
+            }
+        }
+        ActionButton {
+            text: @tr("Analyser");
+            icon: @image-url("../assets/icons/search.svg");
+            kind: ButtonKind.primary;
+            large: true;
+            enabled: Cleaner.chosen-count > 0 && Cleaner.problem == SetupProblem.none;
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                Cleaner.analyze();
+            }
+        }
+    }
+}
+
+// One chosen category during the analysis: waiting, under way (its bar and
+// the entry reached, never read aloud), or done with what it found.
+component ScanRowView inherits Rectangle {
+    in property <ScanRow> scan;
+    in property <bool> last;
+    property <color> state-color: scan.state == RowState.done ? Theme.success
+        : scan.state == RowState.running ? Theme.accent : Theme.text-3;
+    property <string> state-text: scan.state == RowState.done ? @tr("Terminé")
+        : scan.state == RowState.running ? @tr("En cours") : @tr("En attente");
+
+    background: scan.state == RowState.running ? Theme.surface-2 : transparent;
+    accessible-role: list-item;
+    accessible-label: Words.category(scan.kind);
+    accessible-description: scan.state == RowState.done
+        ? @tr("{} : éléments : {}, {}", state-text, scan.entries, Words.size(scan.size))
+        : state-text;
+
+    if !last: Rectangle {
+        y: parent.height - self.height;
+        height: Theme.border-width;
+        background: Theme.border;
+    }
+
+    HorizontalLayout {
+        padding: Theme.spacing-l;
+        padding-left: Theme.spacing-xl;
+        padding-right: Theme.spacing-xl;
+        spacing: Theme.spacing-l;
+        Icon {
+            source: Words.icon(scan.kind);
+            colorize: scan.state == RowState.waiting ? Theme.text-3 : Theme.text-2;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            width: Theme.row-name-width;
+            text: Words.category(scan.kind);
+            accessible-role: none;
+            color: scan.state == RowState.waiting ? Theme.text-2 : Theme.text;
+            font-size: Theme.font-heading;
+            font-weight: Theme.weight-semibold;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        HorizontalLayout {
+            width: Theme.row-status-width;
+            spacing: Theme.spacing-xs;
+            Icon {
+                source: scan.state == RowState.done ? @image-url("../assets/icons/circle-check.svg")
+                    : scan.state == RowState.running ? @image-url("../assets/icons/loader.svg")
+                    : @image-url("../assets/icons/clock.svg");
+                colorize: state-color;
+                width: Theme.icon-small;
+                height: Theme.icon-small;
+                y: (parent.height - self.height) / 2;
+            }
+            Text {
+                text: state-text;
+                accessible-role: none;
+                color: state-color;
+                font-size: Theme.font-small;
+                font-weight: Theme.weight-medium;
+                vertical-alignment: center;
+            }
+        }
+        if scan.state == RowState.running: VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: Theme.spacing-s;
+            alignment: center;
+            ProgressBar {
+                progress: scan.progress;
+                label: Words.category(scan.kind);
+            }
+            Text {
+                text: scan.path;
+                accessible-role: none;
+                color: Theme.text-3;
+                font-size: Theme.font-small;
+                overflow: elide;
+            }
+        }
+        if scan.state != RowState.running: Detail {
+            horizontal-stretch: 1;
+            accessible-role: none;
+            vertical-alignment: center;
+            text: scan.state == RowState.done ? @tr("Éléments : {}", scan.entries) : "";
+        }
+        Line {
+            width: Theme.row-size-width;
+            accessible-role: none;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            text: scan.state == RowState.done ? Words.size(scan.size) : "";
+        }
+    }
+}
+
+// The analysis under way: what is done, what runs, what is found so far.
+component Scanning inherits VerticalLayout {
+    init => {
+        cancel.focus();
+    }
+
+    VerticalLayout {
+        vertical-stretch: 1;
+        padding: Theme.spacing-xxl;
+        spacing: Theme.spacing-xl;
+        VerticalLayout {
+            spacing: Theme.spacing-m;
+            VerticalLayout {
+                spacing: Theme.spacing-xs;
+                Title {
+                    text: Cleaner.step == CleanerStep.cancelling
+                        ? @tr("Annulation de l'analyse")
+                        : @tr("Analyse en cours");
+                }
+                Detail {
+                    text: @tr("Catégories terminées : {} sur {}. Rien n'est supprimé pendant l'analyse.", Cleaner.rows-done, Cleaner.rows.length);
+                    accessible-live-region: polite;
+                }
+            }
+            ProgressBar {
+                height: Theme.bar-height-large;
+                progress: Cleaner.progress;
+                indeterminate: Cleaner.step == CleanerStep.planning;
+                label: @tr("Progression de l'analyse");
+            }
+        }
+        Card {
+            accessible-role: list;
+            accessible-label: @tr("Progression par catégorie");
+            VerticalLayout {
+                for row[index] in Cleaner.rows: ScanRowView {
+                    scan: row;
+                    last: index == Cleaner.rows.length - 1;
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: Theme.spacing-s;
+            Icon {
+                source: @image-url("../assets/icons/info.svg");
+                colorize: Theme.text-2;
+                width: Theme.icon-small;
+                height: Theme.icon-small;
+                y: (parent.height - self.height) / 2;
+            }
+            Detail {
+                horizontal-stretch: 1;
+                text: @tr("Remarques de l'analyse : {}", Cleaner.issues);
+            }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+    Footer {
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            spacing: Theme.spacing-s;
+            alignment: start;
+            Detail {
+                text: @tr("Trouvé jusqu'ici");
+                vertical-alignment: center;
+            }
+            Text {
+                text: Words.size(Cleaner.found);
+                color: Theme.text;
+                font-size: Theme.font-title;
+                font-weight: Theme.weight-semibold;
+                vertical-alignment: center;
+            }
+        }
+        cancel := ActionButton {
+            text: @tr("Annuler l'analyse");
+            enabled: Cleaner.step != CleanerStep.cancelling;
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                Cleaner.cancel();
+            }
+        }
+    }
+}
+
+// How the analysis ended: never "nothing to clean" for an analysis that
+// looked at nothing.
+component Ended inherits VerticalLayout {
+    init => {
+        if again.enabled {
+            again.focus();
+        } else {
+            other.focus();
+        }
+    }
+
+    // Looked at everything it could: no note to read.
+    property <bool> good: (Cleaner.outcome == OutcomeKind.nothing-to-clean || Cleaner.outcome == OutcomeKind.found)
+        && Cleaner.issues == 0;
+
+    padding: Theme.spacing-xxl;
+    spacing: Theme.spacing-xl;
+    Title {
+        text: @tr("Nettoyeur");
+    }
+    // A new analysis refused: why, here.
+    if Cleaner.problem != SetupProblem.none: ProblemBanner { }
+    HorizontalLayout {
+        vertical-stretch: 1;
+        alignment: center;
+        VerticalLayout {
+            preferred-width: Theme.empty-width;
+            max-width: Theme.empty-width;
+            alignment: center;
+            spacing: Theme.spacing-l;
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    width: Theme.empty-icon-box;
+                    height: Theme.empty-icon-box;
+                    border-radius: Theme.radius-empty-icon;
+                    background: good ? Theme.success-soft : Theme.warning-soft;
+                    Icon {
+                        source: good ? @image-url("../assets/icons/circle-check.svg")
+                            : Cleaner.outcome == OutcomeKind.nothing-looked ? @image-url("../assets/icons/eye-off.svg")
+                            : @image-url("../assets/icons/triangle-alert.svg");
+                        colorize: good ? Theme.success : Theme.warning;
+                        width: Theme.icon-large;
+                        height: Theme.icon-large;
+                    }
+                }
+            }
+            Text {
+                text: Cleaner.outcome == OutcomeKind.nothing-to-clean ? @tr("Rien à nettoyer")
+                    : Cleaner.outcome == OutcomeKind.found ? @tr("Analyse terminée")
+                    : Cleaner.outcome == OutcomeKind.nothing-looked ? @tr("Rien n'a été regardé")
+                    : @tr("L'analyse a échoué");
+                accessible-live-region: polite;
+                color: Theme.text;
+                font-size: Theme.font-title;
+                font-weight: Theme.weight-semibold;
+                horizontal-alignment: center;
+            }
+            Detail {
+                horizontal-alignment: center;
+                text: Cleaner.outcome == OutcomeKind.nothing-to-clean && Cleaner.issues > 0
+                    ? @tr("Okapi n'a rien trouvé de récupérable dans ce qu'il a pu lire. Les fichiers récents et vos exclusions ont été laissés de côté, comme toujours.")
+                    : Cleaner.outcome == OutcomeKind.nothing-to-clean
+                    ? @tr("Okapi a regardé les catégories choisies et n'a rien trouvé de récupérable. Les fichiers récents et vos exclusions ont été laissés de côté, comme toujours.")
+                    : Cleaner.outcome == OutcomeKind.found
+                    ? @tr("Groupes trouvés : {}. Taille récupérable : {}.", Cleaner.groups, Words.size(Cleaner.found))
+                    : Cleaner.outcome == OutcomeKind.nothing-looked
+                    ? @tr("L'analyse s'est arrêtée avant de commencer. Aucun fichier n'a été lu ni modifié : ce n'est pas la même chose que « rien à nettoyer ».")
+                    : @tr("L'analyse s'est interrompue sans résultat. Rien n'a été supprimé. Le détail est dans le journal.");
+            }
+            if (Cleaner.outcome == OutcomeKind.nothing-to-clean || Cleaner.outcome == OutcomeKind.found)
+                && Cleaner.issues > 0: Detail {
+                horizontal-alignment: center;
+                text: @tr("Remarques de l'analyse : {}. Le détail est dans le journal.", Cleaner.issues);
+            }
+            if Cleaner.outcome == OutcomeKind.nothing-looked: Rectangle {
+                background: Theme.surface-2;
+                border-color: Theme.border;
+                border-width: Theme.border-width;
+                border-radius: Theme.radius-medium;
+                VerticalLayout {
+                    padding: Theme.spacing-m;
+                    padding-left: Theme.spacing-l;
+                    spacing: Theme.spacing-xs;
+                    Detail {
+                        text: @tr("Raisons");
+                    }
+                    for stop in Cleaner.stops: Line {
+                        text: stop.reason == StopReason.unsupported-system
+                            ? @tr("Ce système ne permet pas de distinguer les points de montage et les fichiers remplacés.")
+                            : stop.reason == StopReason.missing-variable
+                            ? @tr("La variable {} n'est pas définie : ce qu'elle protège ne peut pas être garanti.", stop.variable)
+                            : stop.reason == StopReason.unreadable-variable
+                            ? @tr("Le dossier de la variable {} est illisible : ce qu'il protège ne peut pas être garanti.", stop.variable)
+                            : @tr("L'âge minimal remonte avant l'horloge : rien ne serait assez ancien.");
+                    }
+                }
+            }
+            HorizontalLayout {
+                alignment: center;
+                spacing: Theme.spacing-s;
+                other := ActionButton {
+                    text: @tr("Choisir d'autres catégories");
+                    clicked => {
+                        Cleaner.choose-again();
+                    }
+                }
+                again := ActionButton {
+                    text: @tr("Nouvelle analyse");
+                    kind: ButtonKind.primary;
+                    enabled: Cleaner.chosen-count > 0 && Cleaner.problem == SetupProblem.none;
+                    clicked => {
+                        Cleaner.analyze();
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component CleanerPage inherits VerticalLayout {
+    if Cleaner.step == CleanerStep.idle: Choosing {
+        vertical-stretch: 1;
+    }
+    if Cleaner.step == CleanerStep.planning || Cleaner.step == CleanerStep.scanning
+        || Cleaner.step == CleanerStep.cancelling: Scanning {
+        vertical-stretch: 1;
+    }
+    if Cleaner.step == CleanerStep.outcome: Ended {
+        vertical-stretch: 1;
+    }
+}

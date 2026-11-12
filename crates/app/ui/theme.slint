@@ -9,11 +9,22 @@ export global Theme {
     out property <color> background: dark ? #151614 : #F5F5F2;
     out property <color> sidebar: dark ? #1A1B19 : #ECEBE6;
     out property <color> surface: dark ? #1F201E : #FFFFFF;
+    out property <color> surface-2: dark ? #262724 : #F0EFEB;
     out property <color> surface-hover: dark ? #2E302C : #E7E5DF;
     out property <color> border: dark ? #34362F : #DCDAD3;
+    out property <color> border-strong: dark ? #55574F : #B9B6AD;
+    out property <color> track: dark ? #33352F : #E4E2DC;
     out property <color> text: dark ? #ECEBE6 : #1C1B19;
     out property <color> text-2: dark ? #B6B3AA : #55524B;
+    out property <color> text-3: dark ? #99958C : #6B675F;
+    out property <color> accent: dark ? #43C6B0 : #0E7466;
+    out property <color> accent-hover: dark ? #66D4C1 : #0A5E53;
     out property <color> accent-soft: dark ? #163D37 : #DCF0EB;
+    out property <color> on-accent: dark ? #06201C : #FFFFFF;
+    out property <color> warning: dark ? #F0C062 : #8A5A00;
+    out property <color> warning-soft: dark ? #382D15 : #FBF0D8;
+    out property <color> success: dark ? #7DD39B : #1D7A3B;
+    out property <color> success-soft: dark ? #183323 : #E1F2E6;
     out property <color> shadow-1: dark ? #00000066 : #1C1B1914;
     // The focus ring, visible everywhere.
     out property <color> focus: dark ? #7EA6FF : #2F6FEB;
@@ -30,13 +41,16 @@ export global Theme {
     out property <length> spacing-xl: 24px;
     out property <length> spacing-xxl: 32px;
 
+    out property <length> radius-small: 4px;
     out property <length> radius-medium: 8px;
+    out property <length> radius-pill: 999px;
     out property <length> radius-large: 12px;
     out property <length> border-width: 1px;
     out property <length> shadow-1-blur: 3px;
     out property <length> shadow-1-offset: 1px;
 
     out property <length> font-display: 28px;
+    out property <length> font-title: 20px;
     out property <length> font-heading: 16px;
     out property <length> font-label: 14px;
     out property <length> font-small: 13px;
@@ -51,7 +65,30 @@ export global Theme {
     out property <length> sidebar-width: 248px;
     out property <length> brand-height: 44px;
     out property <length> control-height: 36px;
+    out property <length> control-height-large: 48px;
+    out property <length> footer-height: 72px;
     out property <length> icon: 20px;
+    out property <length> icon-small: 16px;
+    out property <length> icon-badge: 14px;
+    out property <length> icon-large: 48px;
+    out property <length> icon-box: 40px;
+    out property <length> checkbox: 18px;
+    out property <length> empty-icon-box: 88px;
+    out property <length> radius-empty-icon: 24px;
+    out property <length> empty-width: 560px;
+    // The columns of an analysis row: name, status, size.
+    out property <length> row-name-width: 180px;
+    out property <length> row-status-width: 120px;
+    out property <length> row-size-width: 90px;
+    out property <length> checkbox-border: 1.5px;
+    out property <length> badge-height: 22px;
+    out property <length> bar-height: 6px;
+    out property <length> bar-height-large: 8px;
+    // What a disabled control keeps of its opacity.
+    out property <float> disabled-opacity: 0.45;
+    // One sweep of an indeterminate bar, and the part of the track it covers.
+    out property <duration> indeterminate-sweep: 1400ms;
+    out property <float> indeterminate-part: 0.3;
     out property <length> mark-small: 32px;
     out property <length> mark-large: 96px;
 }

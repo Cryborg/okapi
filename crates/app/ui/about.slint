@@ -1,28 +1,6 @@
 import { AboutSlint, ScrollView } from "std-widgets.slint";
 import { Theme, Brand } from "theme.slint";
-
-component Card inherits Rectangle {
-    background: Theme.surface;
-    border-color: Theme.border;
-    border-width: Theme.border-width;
-    border-radius: Theme.radius-large;
-    drop-shadow-color: Theme.shadow-1;
-    drop-shadow-blur: Theme.shadow-1-blur;
-    drop-shadow-offset-y: Theme.shadow-1-offset;
-}
-
-component Line inherits Text {
-    color: Theme.text;
-    font-size: Theme.font-label;
-    font-weight: Theme.weight-medium;
-    wrap: word-wrap;
-}
-
-component Detail inherits Text {
-    color: Theme.text-2;
-    font-size: Theme.font-small;
-    wrap: word-wrap;
-}
+import { Card, Line, Detail, Title } from "widgets.slint";
 
 // What Okapi is, under which licenses, and what it embeds. Slint's
 // royalty-free license requires AboutSlint on this screen, reached from the
@@ -43,11 +21,8 @@ export component AboutPage inherits Rectangle {
         padding: Theme.spacing-xxl;
         spacing: Theme.spacing-xl;
 
-        Text {
+        Title {
             text: @tr("À propos");
-            color: Theme.text;
-            font-size: Theme.font-display;
-            font-weight: Theme.weight-semibold;
         }
 
         HorizontalLayout {

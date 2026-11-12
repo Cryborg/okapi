@@ -6,6 +6,10 @@ use std::process::ExitCode;
 use okapi_store::journal;
 use slint::ComponentHandle as _;
 
+mod cleaner;
+
+use cleaner::{CleanerScreen, Seams};
+
 /// The interface, as Slint generates it from `ui/`.
 mod ui {
     #![expect(
@@ -25,8 +29,9 @@ const LICENSE: &str = include_str!("../../../LICENSE");
 /// do (`okapi_rules::THIRD_PARTY_NOTICES`).
 const INTERFACE_NOTICES: &str = include_str!("../THIRD_PARTY_NOTICES");
 
-/// The window, filled with what it shows of Okapi itself.
-fn window() -> Result<AppWindow, slint::PlatformError> {
+/// The window, filled with what it shows of Okapi itself, its cleaner
+/// reading and scanning through `seams`.
+fn window(seams: Seams) -> Result<(AppWindow, CleanerScreen), slint::PlatformError> {
     let window = AppWindow::new()?;
     window.set_version(env!("CARGO_PKG_VERSION").into());
     window.set_license_name(env!("CARGO_PKG_LICENSE").into());
@@ -36,10 +41,17 @@ fn window() -> Result<AppWindow, slint::PlatformError> {
             .join("\n\n")
             .into(),
     );
-    let shown = |page: Page| tracing::debug!(?page, "page shown");
-    shown(window.get_page());
-    window.on_page_shown(shown);
-    Ok(window)
+    let screen = CleanerScreen::attach(&window, seams);
+    tracing::debug!(page = ?window.get_page(), "page shown");
+    let cleaner = screen.clone();
+    window.on_page_shown(move |page| {
+        tracing::debug!(?page, "page shown");
+        // The settings may have changed since the screen was last shown.
+        if page == Page::Cleaner {
+            cleaner.refresh();
+        }
+    });
+    Ok((window, screen))
 }
 
 /// A diagnostic for whoever launched the app from a terminal, in English: no
@@ -82,7 +94,7 @@ fn main() -> ExitCode {
         lang = locale("LANG"),
         "app started"
     );
-    let window = match window() {
+    let (window, screen) = match window(Seams::system()) {
         Ok(window) => window,
         Err(error) => {
             tracing::error!(error = %error, detail = ?error, "window not created");
@@ -91,7 +103,9 @@ fn main() -> ExitCode {
         }
     };
     tracing::info!("window created");
-    match window.run() {
+    let ran = window.run();
+    screen.shut_down();
+    match ran {
         Ok(()) => {
             tracing::info!("app closed");
             ExitCode::SUCCESS
@@ -112,29 +126,17 @@ mod tests {
     use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 
     use super::*;
+    use crate::cleaner::tests::{button, press, shows, unnamed_images};
 
-    /// The button labelled `label`: the sidebar's entries, not a title that
-    /// says the same.
-    fn button(window: &AppWindow, label: &str) -> ElementHandle {
-        ElementHandle::find_by_accessible_label(window, label)
-            .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
-            .unwrap_or_else(|| {
-                panic!(
-                    "no button {label} (the element tree exists in debug builds only, see build.rs)"
-                )
-            })
-    }
-
-    fn shows(window: &AppWindow, label: &str) -> bool {
-        ElementHandle::find_by_accessible_label(window, label)
-            .next()
-            .is_some()
+    /// The window, its cleaner reading defaults and never scanning.
+    fn test_window() -> AppWindow {
+        window(cleaner::tests::seams_never_scanning()).unwrap().0
     }
 
     #[test]
     fn the_sidebar_leads_to_the_about_screen_and_its_licenses() {
         i_slint_backend_testing::init_no_event_loop();
-        let window = window().unwrap();
+        let window = test_window();
         // The French source, whatever the machine's language (the bundle is
         // known once a component exists).
         slint::select_bundled_translation("").unwrap();
@@ -145,7 +147,7 @@ mod tests {
         assert_eq!(window.get_page(), Page::Home, "opens on the home screen");
         assert!(!shows(&window, "#MadeWithSlint"));
         // Each entry read once, as a button, the current one selected.
-        for label in ["Accueil", "À propos"] {
+        for label in ["Accueil", "Nettoyeur", "À propos"] {
             assert_eq!(
                 ElementHandle::find_by_accessible_label(&window, label).count(),
                 1,
@@ -167,15 +169,7 @@ mod tests {
             ElementHandle::find_by_accessible_label(&window, "Licences")
                 .any(|element| element.accessible_role() == Some(AccessibleRole::Groupbox))
         );
-        let unnamed_images = ElementHandle::find_by_element_type_name(&window, "Image")
-            .filter(|image| {
-                image.accessible_role() == Some(AccessibleRole::Image)
-                    && image
-                        .accessible_label()
-                        .is_none_or(|label| label.is_empty())
-            })
-            .count();
-        assert_eq!(unnamed_images, 0);
+        assert_eq!(unnamed_images(&window), 0);
         let version = format!("Version {}", env!("CARGO_PKG_VERSION"));
         for text in [
             version.as_str(),
@@ -217,24 +211,18 @@ mod tests {
         );
     }
 
-    fn press(window: &AppWindow, key: slint::platform::Key) {
-        let text = slint::SharedString::from(key);
-        let slint_window = window.window();
-        slint_window
-            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.clone() });
-        slint_window.dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
-    }
-
     #[test]
     fn the_sidebar_is_reached_and_chosen_with_the_keyboard() {
         i_slint_backend_testing::init_no_event_loop();
-        let window = window().unwrap();
-        // Tab to the first entry (home), then the second (about): Enter.
-        press(&window, slint::platform::Key::Tab);
-        press(&window, slint::platform::Key::Tab);
+        let window = test_window();
+        // Tab to the first entry (home), then the third (about): Enter.
+        for _ in 0..3 {
+            press(&window, slint::platform::Key::Tab);
+        }
         press(&window, slint::platform::Key::Return);
         assert_eq!(window.get_page(), Page::About);
         // Backtab goes back to home; Escape does nothing.
+        press(&window, slint::platform::Key::Backtab);
         press(&window, slint::platform::Key::Backtab);
         press(&window, slint::platform::Key::Escape);
         assert_eq!(window.get_page(), Page::About);
@@ -248,10 +236,11 @@ mod tests {
         use slint::platform::Key;
 
         i_slint_backend_testing::init_no_event_loop();
-        let window = window().unwrap();
-        // Home, About (chosen), then the licenses.
-        press(&window, Key::Tab);
-        press(&window, Key::Tab);
+        let window = test_window();
+        // Home, the cleaner, About (chosen), then the licenses.
+        for _ in 0..3 {
+            press(&window, Key::Tab);
+        }
         press(&window, Key::Return);
         press(&window, Key::Tab);
         let top = || {
@@ -296,18 +285,24 @@ mod tests {
             let mut read = 0;
             for line in source.lines() {
                 let declaration = line.trim_start();
-                if let Some(rest) = declaration
-                    .strip_prefix("export component ")
-                    .or_else(|| declaration.strip_prefix("component "))
+                if let Some(rest) = ["export component ", "component ", "export global "]
+                    .iter()
+                    .find_map(|keyword| declaration.strip_prefix(keyword))
                 {
                     component = rest.split_whitespace().next().unwrap().to_owned();
                 }
                 for call in line.split("@tr(\"").skip(1) {
                     let text = call.split('"').next().unwrap();
+                    let after = call[text.len() + 1..].trim_start();
                     assert!(
-                        !text.ends_with('\\')
-                            && !call[text.len() + 1..].trim_start().starts_with("=>"),
+                        !text.ends_with('\\') && !after.starts_with("=>"),
                         "{}: a form of @tr this test cannot read: {line}",
+                        path.display()
+                    );
+                    // Labels say "Label: n", never a plural form.
+                    assert!(
+                        !after.starts_with('|'),
+                        "{}: a plural form: {line}",
                         path.display()
                     );
                     texts.push((component.clone(), text.to_owned()));
@@ -325,7 +320,7 @@ mod tests {
     }
 
     /// Texts the same in both languages.
-    const SAME_IN_ENGLISH: [&str; 1] = ["Version {}"];
+    const SAME_IN_ENGLISH: [&str; 3] = ["Version {}", "{} {}", "Applications"];
 
     #[test]
     fn every_text_is_translated_into_english() {
@@ -333,7 +328,14 @@ mod tests {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("lang/en/LC_MESSAGES/okapi-app.po");
         let po = fs::read_to_string(po_file).unwrap();
         let texts = translatable_texts();
-        for context in ["Sidebar", "AboutPage"] {
+        for context in [
+            "Sidebar",
+            "AboutPage",
+            "Words",
+            "Choosing",
+            "Scanning",
+            "Ended",
+        ] {
             assert!(
                 texts.iter().any(|(component, _)| component == context),
                 "{context}"

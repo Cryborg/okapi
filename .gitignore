@@ -1,0 +1,30 @@
+# Secrets : jamais versionnés, quel que soit le projet
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+keystore.properties
+local.properties
+*-publish-key.json
+*.pem
+*.p12
+credentials*.json
+service-account*.json
+
+# Copies de travail jetables de Claude Code (tout le reste de .claude/ est versionné)
+.claude/worktrees/
+
+# Systèmes
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Éditeurs
+.idea/
+.vscode/
+*.iml
+
+# Rust
+/target/
+**/*.rs.bk

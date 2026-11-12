@@ -1,0 +1,68 @@
+# Okapi
+
+Nettoyeur et outil d'entretien système de bureau, natif en Rust (Linux d'abord, puis Windows et macOS), inspiré de Kudu (Electron, licence MIT).
+
+Ce fichier ne porte que ce qui change le code qu'on écrit. Le « pourquoi » vit dans `docs/regles/`, les décisions dans `docs/TODO.md` § Décisions actées. Il est chargé à chaque session et par chaque sous-agent : chaque ligne se paie, garde-le court.
+
+## Stack
+
+- Rust 1.99, édition 2024, workspace Cargo. Interface en Slint. Textes affichés en français (source) et anglais.
+- Conventions et pièges de la stack : aucune skill pour l'instant (pas de pack `socle-rust`). Ce fichier fait foi.
+
+## Commandes
+
+- Build : `cargo build --workspace`
+- Tests : `cargo test --workspace`
+- Lint : `cargo clippy --workspace --all-targets -- -D warnings` et `cargo fmt --all --check`
+- Lancer en local : `cargo run -p okapi-app` (interface), `cargo run -p okapi -- <args>` (CLI)
+
+## Architecture
+
+- `crates/rules` (`okapi-rules`) : types serde des règles de nettoyage, résolution des variables (`${CACHE}`...), validation. Pas d'E/S hors lecture.
+- `crates/platform` (`okapi-platform`) : traits par domaine (chemins, élévation, démarrage, services, réseau...), un module par OS sous `#[cfg(target_os)]`.
+- `crates/engine` (`okapi-engine`) : scan, cache des résultats par ID, nettoyage sûr, reçus. Progression par channel, annulation par jeton.
+- `crates/store` (`okapi-store`) : réglages, historique, reçus, journal des suppressions.
+- `crates/tools` (`okapi-tools`) : un module par outil (doublons, gros fichiers, disque, malware...), activable par feature Cargo.
+- `crates/helper` (`okapi-helper`) : binaire privilégié lancé via pkexec, liste fermée d'opérations.
+- `crates/cli` (`okapi`) et `crates/app` (`okapi-app`, Slint) : coquilles fines au-dessus d'`engine` et `tools`.
+- `engine`, `tools`, `store` et `rules` ne dépendent jamais de Slint ni de `app`.
+
+## Conventions
+
+- Code et identifiants en anglais, sans abréviation (sauf acronymes usuels et `i`, `j`, `k`).
+- Aucune chaîne affichée en dur, aucun nombre magique : traductions (`@tr()` côté Slint) et constantes nommées.
+- KISS d'abord : pas d'abstraction pour deux cas, imiter l'existant plutôt que créer un mécanisme parallèle.
+- Un commentaire n'existe que pour faire comprendre le code, expliquer une correction contre-intuitive, ou retenir une erreur qu'on referait. Jamais de récit, jamais de compte recopié.
+- Aucun tiret cadratin dans un texte affiché.
+- Une modale ne se ferme jamais par un clic en dehors : seulement par ses boutons, Échap ou retour.
+
+## Invariants stricts
+
+Numérotés, jamais renumérotés (des agents et des tests les citent par numéro). Un invariant retiré garde son numéro, marqué MORT.
+
+1. L'interface et le CLI ne transmettent jamais un chemin à supprimer : seulement des identifiants issus du dernier scan, résolus par `engine`. (test à écrire)
+2. L'âge minimal d'un élément est revérifié juste avant sa suppression, descendants compris. (test à écrire)
+3. Le scan et la suppression ne suivent jamais un lien symbolique ; les exclusions se comparent après résolution du chemin réel. (test à écrire)
+4. Une règle est de la donnée : elle ne fournit jamais de commande, d'exécutable ni d'argument. `okapi-helper` n'exécute que des opérations figées dans son code. (test à écrire)
+5. Les réinitialisations de cache de performance et les maintenances natives sont décochées par défaut. (test à écrire)
+
+## Git
+
+- Conventional Commits `type(scope): description`, en français, un commit par sujet.
+- Jamais d'attribution à l'IA (ni Co-Authored-By, ni « Generated with »).
+- Commit et push via la skill `socle:push-own`. Jamais `stash`, `reset`, `restore`, `checkout -- <fichier>`, `clean`, `add -A`, `commit -a`, `commit --amend` : d'autres sessions travaillent peut-être sur la même copie.
+- Une entrée de `docs/TODO.md` livrée est supprimée dans le commit qui la livre.
+
+## Flux
+
+- Plus de 4 fichiers ou un sujet délicat : skill `socle:livrer` (plan, revue du plan, code, revue).
+- Clôture d'une feature : skill `socle:review-and-fix`.
+- Une correction de Franck ou un piège découvert : skill `socle:lessons`.
+
+## Carte des docs
+
+| Quand | Lire |
+|---|---|
+| avant de toucher un invariant | `docs/regles/INVARIANTS.md` |
+| avant de rouvrir un choix | `docs/TODO.md` § Décisions actées |
+| avant de toucher l'interface | `docs/design/brief-claude-design.md` |

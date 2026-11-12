@@ -1,0 +1,209 @@
+import { AboutSlint, ScrollView } from "std-widgets.slint";
+import { Theme, Brand } from "theme.slint";
+
+component Card inherits Rectangle {
+    background: Theme.surface;
+    border-color: Theme.border;
+    border-width: Theme.border-width;
+    border-radius: Theme.radius-large;
+    drop-shadow-color: Theme.shadow-1;
+    drop-shadow-blur: Theme.shadow-1-blur;
+    drop-shadow-offset-y: Theme.shadow-1-offset;
+}
+
+component Line inherits Text {
+    color: Theme.text;
+    font-size: Theme.font-label;
+    font-weight: Theme.weight-medium;
+    wrap: word-wrap;
+}
+
+component Detail inherits Text {
+    color: Theme.text-2;
+    font-size: Theme.font-small;
+    wrap: word-wrap;
+}
+
+// What Okapi is, under which licenses, and what it embeds. Slint's
+// royalty-free license requires AboutSlint on this screen, reached from the
+// sidebar: never remove it.
+export component AboutPage inherits Rectangle {
+    // Scrolls the license texts by `step` (up when positive); the scroll
+    // view keeps them within their bounds.
+    function scroll-notices(step: length) {
+        notices-view.content-y += step;
+    }
+
+    in property <string> version;
+    in property <string> license-name;
+    in property <string> repository;
+    in property <string> license-texts;
+
+    VerticalLayout {
+        padding: Theme.spacing-xxl;
+        spacing: Theme.spacing-xl;
+
+        Text {
+            text: @tr("À propos");
+            color: Theme.text;
+            font-size: Theme.font-display;
+            font-weight: Theme.weight-semibold;
+        }
+
+        HorizontalLayout {
+            spacing: Theme.spacing-l;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Theme.spacing-l;
+                alignment: start;
+
+                Card {
+                    HorizontalLayout {
+                        padding: Theme.spacing-xl;
+                        spacing: Theme.spacing-xl;
+                        Image {
+                            source: @image-url("../assets/okapi.svg");
+                            width: Theme.mark-large;
+                            height: Theme.mark-large;
+                            // Decorates the name beside it.
+                            accessible-role: none;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: Theme.spacing-xs;
+                            Text {
+                                text: Brand.name;
+                                color: Theme.text;
+                                font-size: Theme.font-display;
+                                font-weight: Theme.weight-semibold;
+                            }
+                            Line {
+                                text: @tr("Version {}", root.version);
+                            }
+                            Detail {
+                                text: @tr("Nettoyeur et outil d'entretien de bureau.");
+                            }
+                        }
+                    }
+                }
+
+                Card {
+                    VerticalLayout {
+                        padding: Theme.spacing-l;
+                        spacing: Theme.spacing-m;
+                        HorizontalLayout {
+                            spacing: Theme.spacing-m;
+                            Image {
+                                source: @image-url("../assets/icons/scale.svg");
+                                colorize: Theme.text-2;
+                                width: Theme.icon;
+                                height: Theme.icon;
+                                accessible-role: none;
+                            }
+                            VerticalLayout {
+                                spacing: Theme.spacing-xs;
+                                Line {
+                                    text: @tr("Licence {}", root.license-name);
+                                }
+                                Detail {
+                                    text: @tr("Okapi est un logiciel libre : vous pouvez l'utiliser, le modifier et le redistribuer.");
+                                }
+                            }
+                        }
+                        Rectangle {
+                            height: Theme.border-width;
+                            background: Theme.border;
+                        }
+                        VerticalLayout {
+                            spacing: Theme.spacing-xs;
+                            Line {
+                                text: @tr("Code source");
+                            }
+                            Detail {
+                                text: root.repository;
+                            }
+                        }
+                    }
+                }
+
+                Card {
+                    HorizontalLayout {
+                        padding: Theme.spacing-l;
+                        spacing: Theme.spacing-l;
+                        AboutSlint { }
+                        Detail {
+                            text: @tr("Interface réalisée avec la boîte à outils Slint.");
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            Card {
+                horizontal-stretch: 1;
+                VerticalLayout {
+                    padding: Theme.spacing-l;
+                    spacing: Theme.spacing-m;
+                    Text {
+                        text: @tr("Licences");
+                        // The group below carries the name for screen readers.
+                        accessible-role: none;
+                        color: Theme.text;
+                        font-size: Theme.font-heading;
+                        font-weight: Theme.weight-semibold;
+                    }
+                    // Reached with Tab, scrolled with the arrows, the pages,
+                    // Home and End.
+                    notices-keys := FocusScope {
+                        accessible-role: groupbox;
+                        accessible-label: @tr("Licences");
+                        key-pressed(event) => {
+                            if event.text == Key.Home {
+                                root.scroll-notices(notices-view.content-height);
+                                return accept;
+                            }
+                            if event.text == Key.End {
+                                root.scroll-notices(-notices-view.content-height);
+                                return accept;
+                            }
+                            if event.text == Key.UpArrow {
+                                root.scroll-notices(Theme.scroll-step);
+                                return accept;
+                            }
+                            if event.text == Key.DownArrow {
+                                root.scroll-notices(-Theme.scroll-step);
+                                return accept;
+                            }
+                            if event.text == Key.PageUp {
+                                root.scroll-notices(notices-view.visible-height);
+                                return accept;
+                            }
+                            if event.text == Key.PageDown {
+                                root.scroll-notices(-notices-view.visible-height);
+                                return accept;
+                            }
+                            reject
+                        }
+                        notices-view := ScrollView {
+                            content-width: self.visible-width;
+                            content-height: notices.preferred-height;
+                            notices := Text {
+                                width: notices-view.visible-width;
+                                text: root.license-texts;
+                                color: Theme.text-2;
+                                font-size: Theme.font-caption;
+                                wrap: word-wrap;
+                            }
+                        }
+                        Rectangle {
+                            border-radius: Theme.radius-medium;
+                            border-width: notices-keys.has-focus ? Theme.focus-width : 0;
+                            border-color: Theme.focus;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

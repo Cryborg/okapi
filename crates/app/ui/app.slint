@@ -1,16 +1,53 @@
 import { Theme, Brand } from "theme.slint";
+import { Sidebar, Page } from "sidebar.slint";
+import { AboutPage } from "about.slint";
+
+export { Page }
 
 export component AppWindow inherits Window {
+    in property <string> version;
+    // Its SPDX identifier (`MIT`), and the full texts of every license.
+    in property <string> license-name;
+    in property <string> license-texts;
+    in property <string> repository;
+    in-out property <Page> page: Page.home;
+    // Told to Rust, which traces it.
+    callback page-shown(Page);
+    changed page => {
+        root.page-shown(self.page);
+    }
+
     title: Brand.name;
     preferred-width: Theme.window-width;
     preferred-height: Theme.window-height;
     background: Theme.background;
 
-    // Stands in for the first screen until the home screen lands.
-    Text {
-        text: Brand.name;
-        color: Theme.text;
-        font-size: Theme.font-display;
-        font-weight: Theme.weight-semibold;
+    HorizontalLayout {
+        Sidebar {
+            page: root.page;
+            navigate(page) => {
+                root.page = page;
+            }
+        }
+
+        // A layout, so that the window's minimum follows the page shown.
+        VerticalLayout {
+            horizontal-stretch: 1;
+            if root.page == Page.home: Text {
+                // Stands in for the home screen until it lands.
+                text: Brand.name;
+                color: Theme.text;
+                font-size: Theme.font-display;
+                font-weight: Theme.weight-semibold;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            if root.page == Page.about: AboutPage {
+                version: root.version;
+                license-name: root.license-name;
+                license-texts: root.license-texts;
+                repository: root.repository;
+            }
+        }
     }
 }

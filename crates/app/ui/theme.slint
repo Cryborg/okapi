@@ -7,14 +7,53 @@ export global Theme {
     out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
 
     out property <color> background: dark ? #151614 : #F5F5F2;
+    out property <color> sidebar: dark ? #1A1B19 : #ECEBE6;
+    out property <color> surface: dark ? #1F201E : #FFFFFF;
+    out property <color> surface-hover: dark ? #2E302C : #E7E5DF;
+    out property <color> border: dark ? #34362F : #DCDAD3;
     out property <color> text: dark ? #ECEBE6 : #1C1B19;
+    out property <color> text-2: dark ? #B6B3AA : #55524B;
+    out property <color> accent-soft: dark ? #163D37 : #DCF0EB;
+    out property <color> shadow-1: dark ? #00000066 : #1C1B1914;
+    // The focus ring, visible everywhere.
+    out property <color> focus: dark ? #7EA6FF : #2F6FEB;
+    out property <length> focus-width: 2px;
+    // What an arrow key scrolls.
+    out property <length> scroll-step: 40px;
+
+    // Spacing scale.
+    out property <length> spacing-xxs: 2px;
+    out property <length> spacing-xs: 4px;
+    out property <length> spacing-s: 8px;
+    out property <length> spacing-m: 12px;
+    out property <length> spacing-l: 16px;
+    out property <length> spacing-xl: 24px;
+    out property <length> spacing-xxl: 32px;
+
+    out property <length> radius-medium: 8px;
+    out property <length> radius-large: 12px;
+    out property <length> border-width: 1px;
+    out property <length> shadow-1-blur: 3px;
+    out property <length> shadow-1-offset: 1px;
+
+    out property <length> font-display: 28px;
+    out property <length> font-heading: 16px;
+    out property <length> font-label: 14px;
+    out property <length> font-small: 13px;
+    out property <length> font-caption: 12px;
+    out property <int> weight-medium: 500;
+    out property <int> weight-semibold: 600;
 
     // The size the mockup draws every screen at.
     out property <length> window-width: 1280px;
     out property <length> window-height: 800px;
 
-    out property <length> font-display: 28px;
-    out property <int> weight-semibold: 600;
+    out property <length> sidebar-width: 248px;
+    out property <length> brand-height: 44px;
+    out property <length> control-height: 36px;
+    out property <length> icon: 20px;
+    out property <length> mark-small: 32px;
+    out property <length> mark-large: 96px;
 }
 
 // What the product is called: a name, never translated.

@@ -1,0 +1,43 @@
+The Okapi interface (okapi-app) also includes material from the following
+third-party projects.
+
+================================================================================
+Slint
+https://slint.dev
+Copyright (c) SixtyFPS GmbH
+
+Used in: okapi-app (the interface toolkit, version 1.18.1), under the Slint
+Royalty-free Desktop, Mobile, and Web Applications License, version 2.0
+(LicenseRef-Slint-Royalty-free-2.0, the file
+LICENSES/LicenseRef-Slint-Royalty-free-2.0.md of
+https://github.com/slint-ui/slint). Its attribution condition is met by the
+AboutSlint widget shown in Okapi's About screen, reached from the main
+navigation.
+================================================================================
+
+================================================================================
+Lucide
+https://lucide.dev
+
+Used in: crates/app/assets/icons/ (home.svg, info.svg, scale.svg: Lucide's
+paths, taken from the Okapi mockups, drawn in black with a 1.75 stroke so that
+the interface can colour them).
+================================================================================
+
+ISC License
+
+Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of
+Feather (MIT). All other copyright (c) for Lucide are held by Lucide
+Contributors 2022.
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
+IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.

@@ -1,0 +1,137 @@
+import { Theme, Brand } from "theme.slint";
+
+// The screens the sidebar leads to: only those that exist.
+export enum Page { home, about }
+
+// One entry of the sidebar: its icon and words carry it, never colour alone.
+// Reached with Tab, chosen with Enter or Space, its focus ring visible.
+component NavItem inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> active;
+    callback clicked;
+
+    height: Theme.control-height;
+    border-radius: Theme.radius-medium;
+    background: active ? Theme.accent-soft : touch.has-hover ? Theme.surface-hover : transparent;
+    accessible-role: button;
+    accessible-label: label;
+    accessible-item-selectable: true;
+    accessible-item-selected: active;
+    // What a screen reader says of the current entry (Orca ignores the
+    // selected state of a button).
+    accessible-description: active ? @tr("page affichée") : "";
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == Key.Space {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    touch := TouchArea {
+        // No focus on a click: the ring shows only for the keyboard.
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    Rectangle {
+        border-radius: root.border-radius;
+        border-width: keys.has-focus ? Theme.focus-width : 0;
+        border-color: Theme.focus;
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.spacing-m;
+        spacing: Theme.spacing-m;
+        Image {
+            source: icon;
+            colorize: active ? Theme.text : Theme.text-2;
+            width: Theme.icon;
+            height: Theme.icon;
+            y: (parent.height - self.height) / 2;
+            accessible-role: none;
+        }
+        Text {
+            text: label;
+            accessible-role: none;
+            color: active ? Theme.text : Theme.text-2;
+            font-size: Theme.font-label;
+            font-weight: active ? Theme.weight-semibold : Theme.weight-medium;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component Sidebar inherits Rectangle {
+    in property <Page> page;
+    callback navigate(Page);
+
+    width: Theme.sidebar-width;
+    background: Theme.sidebar;
+
+    VerticalLayout {
+        padding: Theme.spacing-m;
+        spacing: Theme.spacing-xxs;
+
+        HorizontalLayout {
+            height: Theme.brand-height;
+            spacing: Theme.spacing-m;
+            padding-left: Theme.spacing-xs;
+            Image {
+                source: @image-url("../assets/okapi.svg");
+                width: Theme.mark-small;
+                height: Theme.mark-small;
+                y: (parent.height - self.height) / 2;
+                // Decorates the name beside it.
+                accessible-role: none;
+            }
+            Text {
+                text: Brand.name;
+                color: Theme.text;
+                font-size: Theme.font-heading;
+                font-weight: Theme.weight-semibold;
+                vertical-alignment: center;
+            }
+        }
+
+        NavItem {
+            icon: @image-url("../assets/icons/home.svg");
+            label: @tr("Accueil");
+            active: root.page == Page.home;
+            clicked => {
+                root.navigate(Page.home);
+            }
+        }
+
+        Rectangle { }
+
+        Rectangle {
+            height: Theme.border-width;
+            background: Theme.border;
+        }
+
+        NavItem {
+            icon: @image-url("../assets/icons/info.svg");
+            label: @tr("À propos");
+            active: root.page == Page.about;
+            clicked => {
+                root.navigate(Page.about);
+            }
+        }
+    }
+
+    // Its right edge.
+    Rectangle {
+        x: parent.width - self.width;
+        width: Theme.border-width;
+        background: Theme.border;
+    }
+}

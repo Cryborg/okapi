@@ -2,3 +2,47 @@ msgid ""
 msgstr ""
 "Language: en\n"
 "Content-Type: text/plain; charset=UTF-8\n"
+
+msgctxt "Sidebar"
+msgid "Accueil"
+msgstr "Home"
+
+msgctxt "Sidebar"
+msgid "À propos"
+msgstr "About"
+
+msgctxt "AboutPage"
+msgid "À propos"
+msgstr "About"
+
+msgctxt "AboutPage"
+msgid "Version {}"
+msgstr "Version {}"
+
+msgctxt "AboutPage"
+msgid "Nettoyeur et outil d'entretien de bureau."
+msgstr "Desktop cleaner and maintenance tool."
+
+msgctxt "AboutPage"
+msgid "Licence {}"
+msgstr "{} License"
+
+msgctxt "AboutPage"
+msgid "Okapi est un logiciel libre : vous pouvez l'utiliser, le modifier et le redistribuer."
+msgstr "Okapi is free software: you may use, change and share it."
+
+msgctxt "AboutPage"
+msgid "Code source"
+msgstr "Source code"
+
+msgctxt "AboutPage"
+msgid "Interface réalisée avec la boîte à outils Slint."
+msgstr "Interface built with the Slint toolkit."
+
+msgctxt "AboutPage"
+msgid "Licences"
+msgstr "Licenses"
+
+msgctxt "NavItem"
+msgid "page affichée"
+msgstr "current page"

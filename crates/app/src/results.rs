@@ -6,6 +6,7 @@
 use std::collections::BTreeSet;
 
 use okapi_engine::{Category, ScanGroup};
+use okapi_rules::Language;
 
 /// What the results need of one group of the report.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,10 +23,11 @@ pub struct GroupFacts {
 }
 
 impl GroupFacts {
+    /// What the results need of `group`, its label in `language`.
     #[must_use]
-    pub fn of(group: &ScanGroup) -> Self {
+    pub fn of(group: &ScanGroup, language: Language) -> Self {
         Self {
-            label: group.label().to_string(),
+            label: okapi_rules::label(language, group.label().as_str()).to_owned(),
             categories: Category::of_group(group.origins()),
             preselected: group.is_selected_by_default(),
             needs_admin: group.needs_admin(),

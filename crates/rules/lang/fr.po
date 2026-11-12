@@ -1,0 +1,499 @@
+# French texts of the cleaning rules (D-3): one entry per label shown,
+# its English text as written in crates/rules/data as the key. Product
+# names stay as they are. Checked by the tests of crates/rules/src/texts.rs.
+msgid ""
+msgstr ""
+"Language: fr\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+
+msgctxt "label"
+msgid "1Password"
+msgstr "1Password"
+
+msgctxt "label"
+msgid "Android Studio"
+msgstr "Android Studio"
+
+msgctxt "label"
+msgid "APT Logs"
+msgstr "Journaux d'APT"
+
+msgctxt "label"
+msgid "APT Package Cache"
+msgstr "Cache des paquets APT"
+
+msgctxt "label"
+msgid "Audacious"
+msgstr "Audacious"
+
+msgctxt "label"
+msgid "AWS CLI Cache"
+msgstr "Cache d'AWS CLI"
+
+msgctxt "label"
+msgid "Bitwarden"
+msgstr "Bitwarden"
+
+msgctxt "label"
+msgid "Blender"
+msgstr "Blender"
+
+msgctxt "label"
+msgid "Bun Cache"
+msgstr "Cache de Bun"
+
+msgctxt "label"
+msgid "Cargo/Rust Cache"
+msgstr "Cache de Cargo (Rust)"
+
+msgctxt "label"
+msgid "ccache"
+msgstr "ccache"
+
+msgctxt "label"
+msgid "Claude Desktop Caches"
+msgstr "Caches de Claude Desktop"
+
+msgctxt "label"
+msgid "Claude Logs"
+msgstr "Journaux de Claude"
+
+msgctxt "label"
+msgid "Codex Cache"
+msgstr "Cache de Codex"
+
+msgctxt "label"
+msgid "Codex Temporary Files"
+msgstr "Fichiers temporaires de Codex"
+
+msgctxt "label"
+msgid "Composer Cache"
+msgstr "Cache de Composer"
+
+msgctxt "label"
+msgid "Conda Package Cache"
+msgstr "Cache des paquets Conda"
+
+msgctxt "label"
+msgid "Core Dumps"
+msgstr "Vidages mémoire"
+
+msgctxt "label"
+msgid "Crash Reports"
+msgstr "Rapports de plantage"
+
+msgctxt "label"
+msgid "CUDA Compute Cache"
+msgstr "Cache de calcul CUDA"
+
+msgctxt "label"
+msgid "Cursor IDE"
+msgstr "Cursor"
+
+msgctxt "label"
+msgid "DaVinci Resolve"
+msgstr "DaVinci Resolve"
+
+msgctxt "label"
+msgid "Deno Cache"
+msgstr "Cache de Deno"
+
+msgctxt "label"
+msgid "Discord"
+msgstr "Discord"
+
+msgctxt "label"
+msgid "Discord Canary"
+msgstr "Discord Canary"
+
+msgctxt "label"
+msgid "Discord PTB"
+msgstr "Discord PTB"
+
+msgctxt "label"
+msgid "DNF Package Cache"
+msgstr "Cache des paquets DNF"
+
+msgctxt "label"
+msgid "Docker Build Cache"
+msgstr "Cache de construction Docker"
+
+msgctxt "label"
+msgid "Electron Runtime Cache"
+msgstr "Cache d'exécution d'Electron"
+
+msgctxt "label"
+msgid "electron-builder Cache"
+msgstr "Cache d'electron-builder"
+
+msgctxt "label"
+msgid "Figma"
+msgstr "Figma"
+
+msgctxt "label"
+msgid "FileZilla"
+msgstr "FileZilla"
+
+msgctxt "label"
+msgid "Flatpak App Cache"
+msgstr "Cache des applications Flatpak"
+
+msgctxt "label"
+msgid "Flatpak Repo Temp"
+msgstr "Fichiers temporaires du dépôt Flatpak"
+
+msgctxt "label"
+msgid "Font Cache"
+msgstr "Cache des polices"
+
+msgctxt "label"
+msgid "GIMP"
+msgstr "GIMP"
+
+msgctxt "label"
+msgid "GNOME Tracker Cache"
+msgstr "Cache de GNOME Tracker"
+
+msgctxt "label"
+msgid "GNOME Tracker Cache (Legacy)"
+msgstr "Cache de GNOME Tracker (ancien)"
+
+msgctxt "label"
+msgid "Go Build Cache"
+msgstr "Cache de compilation Go"
+
+msgctxt "label"
+msgid "Go Module Cache"
+msgstr "Cache des modules Go"
+
+msgctxt "label"
+msgid "Google Antigravity"
+msgstr "Google Antigravity"
+
+msgctxt "label"
+msgid "Google Cloud CLI Cache"
+msgstr "Cache de Google Cloud CLI"
+
+msgctxt "label"
+msgid "Gradle Cache"
+msgstr "Cache de Gradle"
+
+msgctxt "label"
+msgid "GStreamer Cache"
+msgstr "Cache de GStreamer"
+
+msgctxt "label"
+msgid "HandBrake"
+msgstr "HandBrake"
+
+msgctxt "label"
+msgid "Heroic Games Launcher"
+msgstr "Heroic Games Launcher"
+
+msgctxt "label"
+msgid "Homebrew Cache"
+msgstr "Cache de Homebrew"
+
+msgctxt "label"
+msgid "Hugging Face Xet Cache"
+msgstr "Cache Xet de Hugging Face"
+
+msgctxt "label"
+msgid "Hyper Terminal"
+msgstr "Hyper"
+
+msgctxt "label"
+msgid "Inkscape"
+msgstr "Inkscape"
+
+msgctxt "label"
+msgid "Insomnia"
+msgstr "Insomnia"
+
+msgctxt "label"
+msgid "Installer Logs"
+msgstr "Journaux d'installation"
+
+msgctxt "label"
+msgid "itch.io"
+msgstr "itch.io"
+
+msgctxt "label"
+msgid "Java Runtime Cache"
+msgstr "Cache d'exécution Java"
+
+msgctxt "label"
+msgid "JetBrains IDEs"
+msgstr "IDE JetBrains"
+
+msgctxt "label"
+msgid "Journal Logs"
+msgstr "Journaux de systemd"
+
+msgctxt "label"
+msgid "Kodi"
+msgstr "Kodi"
+
+msgctxt "label"
+msgid "Krita"
+msgstr "Krita"
+
+msgctxt "label"
+msgid "Ledger Live"
+msgstr "Ledger Live"
+
+msgctxt "label"
+msgid "LibreOffice"
+msgstr "LibreOffice"
+
+msgctxt "label"
+msgid "Linear"
+msgstr "Linear"
+
+msgctxt "label"
+msgid "LM Studio"
+msgstr "LM Studio"
+
+msgctxt "label"
+msgid "Loom"
+msgstr "Loom"
+
+msgctxt "label"
+msgid "Lutris"
+msgstr "Lutris"
+
+msgctxt "label"
+msgid "Man Page Cache"
+msgstr "Cache des pages de manuel"
+
+msgctxt "label"
+msgid "Maven Cache"
+msgstr "Cache de Maven"
+
+msgctxt "label"
+msgid "Mesa Shader Cache"
+msgstr "Cache des shaders Mesa"
+
+msgctxt "label"
+msgid "Microsoft Teams"
+msgstr "Microsoft Teams"
+
+msgctxt "label"
+msgid "Minecraft Java Edition"
+msgstr "Minecraft Java Edition"
+
+msgctxt "label"
+msgid "node-gyp Cache"
+msgstr "Cache de node-gyp"
+
+msgctxt "label"
+msgid "Notion"
+msgstr "Notion"
+
+msgctxt "label"
+msgid "npm Cache"
+msgstr "Cache de npm"
+
+msgctxt "label"
+msgid "NVIDIA Shader Cache"
+msgstr "Cache des shaders NVIDIA"
+
+msgctxt "label"
+msgid "OBS Studio"
+msgstr "OBS Studio"
+
+msgctxt "label"
+msgid "Obsidian"
+msgstr "Obsidian"
+
+msgctxt "label"
+msgid "Pacman Package Cache"
+msgstr "Cache des paquets Pacman"
+
+msgctxt "label"
+msgid "Persistent Temp Files"
+msgstr "Fichiers temporaires persistants"
+
+msgctxt "label"
+msgid "Pidgin"
+msgstr "Pidgin"
+
+msgctxt "label"
+msgid "pip Cache"
+msgstr "Cache de pip"
+
+msgctxt "label"
+msgid "Pipenv Cache"
+msgstr "Cache de Pipenv"
+
+msgctxt "label"
+msgid "pnpm Unused Packages"
+msgstr "Paquets pnpm inutilisés"
+
+msgctxt "label"
+msgid "Poetry Cache"
+msgstr "Cache de Poetry"
+
+msgctxt "label"
+msgid "Postman"
+msgstr "Postman"
+
+msgctxt "label"
+msgid "qBittorrent"
+msgstr "qBittorrent"
+
+msgctxt "label"
+msgid "Rhythmbox"
+msgstr "Rhythmbox"
+
+msgctxt "label"
+msgid "Ruby Gem Cache"
+msgstr "Cache des gems Ruby"
+
+msgctxt "label"
+msgid "sccache"
+msgstr "sccache"
+
+msgctxt "label"
+msgid "Signal Desktop"
+msgstr "Signal Desktop"
+
+msgctxt "label"
+msgid "Slack"
+msgstr "Slack"
+
+msgctxt "label"
+msgid "Snap App Cache"
+msgstr "Cache des applications Snap"
+
+msgctxt "label"
+msgid "Snap Cache"
+msgstr "Cache de Snap"
+
+msgctxt "label"
+msgid "Spotify"
+msgstr "Spotify"
+
+msgctxt "label"
+msgid "Steam"
+msgstr "Steam"
+
+msgctxt "label"
+msgid "Steam Shader Pre-Cache"
+msgstr "Précache des shaders Steam"
+
+msgctxt "label"
+msgid "Sublime Text"
+msgstr "Sublime Text"
+
+msgctxt "label"
+msgid "System Font Cache"
+msgstr "Cache des polices du système"
+
+msgctxt "label"
+msgid "System Temp Files"
+msgstr "Fichiers temporaires du système"
+
+msgctxt "label"
+msgid "TeamViewer"
+msgstr "TeamViewer"
+
+msgctxt "label"
+msgid "Telegram"
+msgstr "Telegram"
+
+msgctxt "label"
+msgid "Termius"
+msgstr "Termius"
+
+msgctxt "label"
+msgid "Thumbnail Cache"
+msgstr "Cache des miniatures"
+
+msgctxt "label"
+msgid "Thunderbird"
+msgstr "Thunderbird"
+
+msgctxt "label"
+msgid "Todoist"
+msgstr "Todoist"
+
+msgctxt "label"
+msgid "Transmission"
+msgstr "Transmission"
+
+msgctxt "label"
+msgid "TypeScript Typings Cache"
+msgstr "Cache des types TypeScript"
+
+msgctxt "label"
+msgid "Unity Editor"
+msgstr "Unity"
+
+msgctxt "label"
+msgid "Unity Shader Cache"
+msgstr "Cache des shaders Unity"
+
+msgctxt "label"
+msgid "User Temp Files"
+msgstr "Fichiers temporaires de l'utilisateur"
+
+msgctxt "label"
+msgid "uv Unused Packages"
+msgstr "Paquets uv inutilisés"
+
+msgctxt "label"
+msgid "VLC"
+msgstr "VLC"
+
+msgctxt "label"
+msgid "VS Code"
+msgstr "VS Code"
+
+msgctxt "label"
+msgid "VS Code C/C++ IntelliSense Cache"
+msgstr "Cache IntelliSense C/C++ de VS Code"
+
+msgctxt "label"
+msgid "VS Code Insiders"
+msgstr "VS Code Insiders"
+
+msgctxt "label"
+msgid "VSCodium"
+msgstr "VSCodium"
+
+msgctxt "label"
+msgid "WhatsApp Desktop"
+msgstr "WhatsApp Desktop"
+
+msgctxt "label"
+msgid "Windsurf IDE"
+msgstr "Windsurf"
+
+msgctxt "label"
+msgid "Wine"
+msgstr "Wine"
+
+msgctxt "label"
+msgid "X Session Errors"
+msgstr "Erreurs de la session X"
+
+msgctxt "label"
+msgid "Yarn Cache"
+msgstr "Cache de Yarn"
+
+msgctxt "label"
+msgid "Zed Editor"
+msgstr "Zed"
+
+msgctxt "label"
+msgid "Zen Browser"
+msgstr "Zen Browser"
+
+msgctxt "label"
+msgid "Zoom"
+msgstr "Zoom"
+
+msgctxt "label"
+msgid "Zypper Package Cache"
+msgstr "Cache des paquets Zypper"

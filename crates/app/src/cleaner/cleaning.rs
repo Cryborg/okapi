@@ -700,7 +700,10 @@ mod tests {
             found(&window, "Applications").accessible_checked(),
             Some(true)
         );
-        assert_eq!(found(&window, "pip Cache").accessible_checked(), Some(true));
+        assert_eq!(
+            found(&window, "Cache de pip").accessible_checked(),
+            Some(true)
+        );
         assert!(shows(&window, "Éléments : 1 sur 1"));
         confirm(&window);
         watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
@@ -745,8 +748,11 @@ mod tests {
         assert_eq!(step(&window), ui::CleanerStep::Results);
         assert!(window.global::<ui::Cleaner>().get_confirming());
         // Under the confirmation, the results never change.
-        found(&window, "pip Cache").invoke_accessible_default_action();
-        assert_eq!(found(&window, "pip Cache").accessible_checked(), Some(true));
+        found(&window, "Cache de pip").invoke_accessible_default_action();
+        assert_eq!(
+            found(&window, "Cache de pip").accessible_checked(),
+            Some(true)
+        );
         button(&window, "Nouvelle analyse").invoke_accessible_default_action();
         assert_eq!(step(&window), ui::CleanerStep::Results);
         button(&window, "Annuler").invoke_accessible_default_action();
@@ -754,8 +760,11 @@ mod tests {
         assert!(old.exists());
         // The second click of a double click on "Annuler" lands on the
         // results below: they do not change.
-        found(&window, "pip Cache").invoke_accessible_default_action();
-        assert_eq!(found(&window, "pip Cache").accessible_checked(), Some(true));
+        found(&window, "Cache de pip").invoke_accessible_default_action();
+        assert_eq!(
+            found(&window, "Cache de pip").accessible_checked(),
+            Some(true)
+        );
         let_the_screen_settle();
         // A double click on "Analyser" lands on "Nettoyer", in its place.
         screen.settle();
@@ -1005,7 +1014,7 @@ mod tests {
         press(&window, Key::Return);
         assert_eq!(fold().accessible_expanded(), Some(false));
         assert!(
-            ElementHandle::find_by_accessible_label(&window, "pip Cache")
+            ElementHandle::find_by_accessible_label(&window, "Cache de pip")
                 .next()
                 .is_none(),
             "folded away"
@@ -1017,7 +1026,7 @@ mod tests {
         press(&window, Key::Tab);
         press(&window, Key::Space);
         assert_eq!(
-            found(&window, "pip Cache").accessible_checked(),
+            found(&window, "Cache de pip").accessible_checked(),
             Some(false)
         );
     }
@@ -1031,9 +1040,9 @@ mod tests {
         let pipenv = sandbox.file("home/.cache/pipenv/old");
         settle_files();
         let (window, _screen) = on_results(sandbox.read(&sandbox.root.join("state")));
-        found(&window, "pip Cache").invoke_accessible_default_action();
+        found(&window, "Cache de pip").invoke_accessible_default_action();
         assert_eq!(
-            found(&window, "pip Cache").accessible_checked(),
+            found(&window, "Cache de pip").accessible_checked(),
             Some(false)
         );
         assert!(shows(&window, "Éléments : 2 sur 3"));
@@ -1106,13 +1115,13 @@ mod tests {
         assert!(!window.global::<ui::Cleaner>().get_confirming());
         assert!(!screen.is_confirming(), "closed for Rust too");
         let_the_screen_settle();
-        found(&window, "pip Cache").invoke_accessible_default_action();
+        found(&window, "Cache de pip").invoke_accessible_default_action();
         assert_eq!(
-            found(&window, "pip Cache").accessible_checked(),
+            found(&window, "Cache de pip").accessible_checked(),
             Some(false),
             "the results answer again"
         );
-        found(&window, "pip Cache").invoke_accessible_default_action();
+        found(&window, "Cache de pip").invoke_accessible_default_action();
         let_the_screen_settle();
         button(&window, "Nettoyer").invoke_accessible_default_action();
         slint::platform::update_timers_and_animations();
@@ -1239,7 +1248,7 @@ mod tests {
         watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
         // Lines at the top of a list too short for all: never squeezed.
         let (_, system_top, system_height) = place(&window, "Système");
-        let (_, thumbnails_top, thumbnails_height) = place(&window, "Thumbnail Cache");
+        let (_, thumbnails_top, thumbnails_height) = place(&window, "Cache des miniatures");
         assert!(
             thumbnails_top >= system_top + system_height,
             "a line below the one before: {system_top} + {system_height} > {thumbnails_top}"
@@ -1249,13 +1258,13 @@ mod tests {
             applications_top >= thumbnails_top + thumbnails_height,
             "{thumbnails_top} + {thumbnails_height} > {applications_top}"
         );
-        let (_, _, font_height) = place(&window, "Font Cache");
+        let (_, _, font_height) = place(&window, "Cache des polices");
         assert!(
             font_height > thumbnails_height,
             "a line with its note is higher: {font_height} {thumbnails_height}"
         );
         let (category_x, ..) = place(&window, "Système");
-        let (group_x, ..) = place(&window, "Thumbnail Cache");
+        let (group_x, ..) = place(&window, "Cache des miniatures");
         assert!(group_x > category_x, "a group further in than its category");
         // Folded, Système leaves no room: Applications comes right below.
         let_the_screen_settle();
@@ -1264,6 +1273,45 @@ mod tests {
         assert!(
             applications_top - (system_top + system_height) < system_height,
             "folded away: {system_top} {system_height} {applications_top}"
+        );
+    }
+
+    /// The rules' labels and Slint's own texts in one language: `words` are
+    /// two categories to leave out, "Analyser", "Résultats" and pip's label.
+    fn labels_follow(language: okapi_rules::Language, words: [&str; 5]) {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let (window, _screen) =
+            super::super::tests::on_cleaner_in(sandbox.read(&sandbox.root.join("state")), language);
+        let [system, games, analyze, results, pip] = words;
+        for category in [system, games] {
+            checkbox(&window, category).invoke_accessible_default_action();
+        }
+        let_the_screen_settle();
+        button(&window, analyze).invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
+        assert!(shows(&window, results), "{language:?}: Slint's own text");
+        assert_eq!(
+            found(&window, pip).accessible_checked(),
+            Some(true),
+            "{language:?}: the rule's label"
+        );
+    }
+
+    #[test]
+    fn the_labels_are_french_in_a_french_window() {
+        labels_follow(
+            okapi_rules::Language::French,
+            ["Système", "Jeux", "Analyser", "Résultats", "Cache de pip"],
+        );
+    }
+
+    #[test]
+    fn the_labels_are_english_in_an_english_window() {
+        labels_follow(
+            okapi_rules::Language::English,
+            ["System", "Games", "Analyze", "Results", "pip Cache"],
         );
     }
 }

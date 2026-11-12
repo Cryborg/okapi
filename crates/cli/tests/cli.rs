@@ -73,6 +73,15 @@ impl Sandbox {
 
     /// [`Self::run`], with the journal's state directory at `state`.
     fn run_with_state(&self, arguments: &[&str], state: &Path) -> Output {
+        self.run_with(arguments, state, "C")
+    }
+
+    /// [`Self::run`] in a French session.
+    fn run_in_french(&self, arguments: &[&str]) -> Output {
+        self.run_with(arguments, &self.root.join("state"), "fr_FR.UTF-8")
+    }
+
+    fn run_with(&self, arguments: &[&str], state: &Path, locale: &str) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_okapi"));
         command
             .env_clear()
@@ -80,7 +89,7 @@ impl Sandbox {
             .env("TMPDIR", self.root.join("tmp"))
             .env("XDG_STATE_HOME", state)
             .env("XDG_CONFIG_HOME", self.root.join("config"))
-            .env("LC_ALL", "C")
+            .env("LC_ALL", locale)
             .args(arguments);
         for target in absolute_targets() {
             command.arg("--exclude").arg(target);
@@ -360,6 +369,32 @@ fn the_text_output_says_what_was_found_and_cleaned() {
         "no group lines when quiet:\n{text}"
     );
     assert!(text.contains("Cleaned:"), "{text}");
+}
+
+#[test]
+fn a_french_session_reads_the_labels_in_french_and_scripts_keep_them() {
+    let sandbox = Sandbox::new();
+    sandbox.file("home/.cache/pip/http/a");
+    sandbox.file("home/.cache/thumbnails/large/t.png");
+    settle();
+    let asked = ["--apps", "--system", "--min-age", "0"];
+    let text = String::from_utf8_lossy(&sandbox.run_in_french(&asked).stdout).into_owned();
+    assert!(text.contains("Cache de pip : 1 entrée,"), "{text}");
+    assert!(text.contains("Cache des miniatures : 1 entrée,"), "{text}");
+    let output = sandbox.run_in_french(&[asked.as_slice(), &["--json"]].concat());
+    let document = json(&output);
+    assert_eq!(
+        group(&document, "apps:pip")["label"],
+        "pip Cache",
+        "a stable name"
+    );
+    assert_eq!(
+        group(&document, "system:Thumbnail Cache")["label"],
+        "Thumbnail Cache"
+    );
+    let written = String::from_utf8_lossy(&output.stdout);
+    assert!(!written.contains("Cache de pip"), "{written}");
+    assert!(!written.contains("Cache des miniatures"), "{written}");
 }
 
 #[test]

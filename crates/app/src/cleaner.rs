@@ -18,7 +18,7 @@ use okapi_engine::{
     DefaultChoice, Exclusions, Limit, Progress, ScanIssue, ScanOptions, ScanReport, SizeUnit, Stop,
     Watch, clean_watched, scan_watched, settings_min_age,
 };
-use okapi_rules::{Os, RuleSet, TemplateVariables};
+use okapi_rules::{Language, Os, RuleSet, TemplateVariables};
 use okapi_store::Settings;
 use slint::{ComponentHandle as _, Model as _, ModelRc, SharedString, VecModel};
 
@@ -676,6 +676,8 @@ struct Held {
 
 struct State {
     window: slint::Weak<ui::AppWindow>,
+    /// The language of the window, which the rules' labels follow.
+    language: Language,
     seams: Seams,
     rules: Option<Arc<RuleSet>>,
     choices: Choices,
@@ -710,8 +712,8 @@ impl std::fmt::Debug for CleanerScreen {
 
 impl CleanerScreen {
     /// Binds the screen to `window`: the categories as the rules offer them,
-    /// the settings read.
-    pub fn attach(window: &ui::AppWindow, seams: Seams) -> Self {
+    /// the settings read, the rules' labels in `language`.
+    pub fn attach(window: &ui::AppWindow, seams: Seams, language: Language) -> Self {
         let rules = RuleSet::embedded(Os::Linux)
             .inspect_err(|error| tracing::error!(?error, "embedded rules unreadable"))
             .ok()
@@ -719,6 +721,7 @@ impl CleanerScreen {
         let choices = Choices::of(rules.as_deref());
         let state = State {
             window: window.as_weak(),
+            language,
             seams,
             rules,
             choices,
@@ -1108,7 +1111,12 @@ impl CleanerScreen {
                 Task::Cleaning(_) => None,
             })
             .unwrap_or_default();
-        let groups = report.groups().iter().map(GroupFacts::of).collect();
+        let language = state.language;
+        let groups = report
+            .groups()
+            .iter()
+            .map(|group| GroupFacts::of(group, language))
+            .collect();
         let notes: Vec<_> = report.issues().iter().filter_map(note_shown).collect();
         show(&state.note_model, notes);
         state.held = Some(Held {
@@ -1601,10 +1609,18 @@ pub mod tests {
     /// The window on the cleaner, in French, reading and scanning with
     /// `seams`.
     pub fn on_cleaner(seams: Seams) -> (ui::AppWindow, CleanerScreen) {
+        on_cleaner_in(seams, Language::French)
+    }
+
+    /// The window on the cleaner, in `language`.
+    pub fn on_cleaner_in(seams: Seams, language: Language) -> (ui::AppWindow, CleanerScreen) {
         i_slint_backend_testing::init_no_event_loop();
-        let (window, screen) = crate::window(seams).unwrap();
-        slint::select_bundled_translation("").unwrap();
-        button(&window, "Nettoyeur").invoke_accessible_default_action();
+        let (window, screen) = crate::window(seams, language).unwrap();
+        let cleaner = match language {
+            Language::French => "Nettoyeur",
+            Language::English => "Cleaner",
+        };
+        button(&window, cleaner).invoke_accessible_default_action();
         slint::platform::update_timers_and_animations();
         (window, screen)
     }

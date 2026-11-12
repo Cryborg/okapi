@@ -54,7 +54,8 @@ fn row(
     ui::ResultRow {
         is_category: false,
         category,
-        label: label.into(),
+        // In French, as the window: the longer labels of the two.
+        label: okapi_rules::label(okapi_rules::Language::French, label).into(),
         state: if checked {
             ui::CheckState::Checked
         } else {

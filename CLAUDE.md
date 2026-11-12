@@ -18,7 +18,7 @@ Ce fichier ne porte que ce qui change le code qu'on écrit. Le « pourquoi » vi
 
 ## Architecture
 
-- `crates/rules` (`okapi-rules`) : types serde des règles de nettoyage, résolution des variables (`${CACHE}`...), validation. Pas d'E/S hors lecture.
+- `crates/rules` (`okapi-rules`) : types serde des règles de nettoyage, résolution des variables (`${CACHE}`...), validation, textes affichés des règles et langue de la session (`texts`). Pas d'E/S hors lecture.
 - `crates/platform` (`okapi-platform`) : traits par domaine (chemins, élévation, démarrage, services, réseau...), un module par OS sous `#[cfg(target_os)]`.
 - `crates/engine` (`okapi-engine`) : scan, cache des résultats par ID, nettoyage sûr, reçus. Progression par channel, annulation par jeton.
 - `crates/store` (`okapi-store`) : réglages, historique (journal des suppressions compris), journal des traces de chaque binaire (`journal`, crochet de panique).

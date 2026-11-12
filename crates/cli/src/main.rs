@@ -18,19 +18,21 @@ use okapi_engine::{
     CleanOutcome, CleanReceipt, DEFAULT_MIN_AGE, Exclusions, ItemId, ScanIssue, ScanOptions, Stop,
     clean, scan, settings_min_age,
 };
-use okapi_rules::{Os, RuleSet, THIRD_PARTY_NOTICES, TemplateVariables};
+use okapi_rules::{
+    Language, Os, RuleSet, SESSION_VARIABLES, THIRD_PARTY_NOTICES, TemplateVariables,
+};
 use okapi_store::{History, HistoryUnavailable, Opened, Settings, StoreError, journal};
 
 use crate::args::{Command, Run, Verbosity};
 use crate::output::{Output, Shown, error_line, summaries};
 use crate::selection::Decision;
-use crate::text::{Language, Message, language, text};
+use crate::text::{Message, text};
 
 /// Okapi's own license, shown by `okapi licenses`.
 const LICENSE: &str = include_str!("../../../LICENSE");
 
 fn main() -> ExitCode {
-    let language = language(|name| env::var_os(name));
+    let language = Language::of_session(|name| env::var_os(name));
     let say = |message: &Message<'_>| text(language, message);
     let mut output = Output::new();
     let run = match args::parse(env::args_os().skip(1)) {
@@ -93,6 +95,7 @@ fn main() -> ExitCode {
         version = env!("CARGO_PKG_VERSION"),
         arguments = ?env::args_os().skip(1).collect::<Vec<_>>(),
         ?language,
+        session = ?SESSION_VARIABLES.map(|name| (name, env::var_os(name))),
         journal = ?journal,
         "okapi started"
     );

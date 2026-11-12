@@ -1,4 +1,5 @@
-//! Cleaning rules: serde types, template variable resolution and validation.
+//! Cleaning rules: serde types, template variable resolution and validation,
+//! and the texts of the rules as the user reads them ([`label`]).
 //!
 //! The rules are data, embedded at compile time from `data/<os>/*.json` (taken
 //! from Kudu, see `THIRD_PARTY_NOTICES`). Each value is validated while it is
@@ -27,6 +28,7 @@ mod rule_set;
 mod steam;
 mod system;
 mod template;
+mod texts;
 mod values;
 
 pub use app::{
@@ -47,6 +49,7 @@ pub use rule_set::{RuleFileKind, RuleSet};
 pub use steam::SteamRules;
 pub use system::{CleanTarget, SingleFileTarget, SystemRules, TargetDeletion};
 pub use template::{TemplatePath, TemplateVariables, Variable};
+pub use texts::{Language, SESSION_VARIABLES, label};
 pub use values::{Label, NonEmpty, RuleId};
 
 /// The notices of the third-party material embedded here (the rules come from

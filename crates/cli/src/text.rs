@@ -1,8 +1,6 @@
-//! Every text the command line shows, in French and English. The labels of
-//! the rules are shown as the rules write them, in English, until they are
-//! translated.
+//! Every text the command line shows, in French and English; the labels of
+//! the rules come from their catalogue (`okapi_rules::label`).
 
-use std::ffi::OsString;
 use std::io;
 use std::path::Path;
 
@@ -11,7 +9,7 @@ use okapi_engine::{
     UnsafeReason,
 };
 use okapi_platform::VariablesError;
-use okapi_rules::{TemplateError, Variable};
+use okapi_rules::{Language, TemplateError, Variable};
 use okapi_store::StoreError;
 
 use crate::args::ArgumentError;
@@ -33,36 +31,6 @@ fn shown(path: impl AsRef<Path>) -> String {
             escaped
         })
         .collect()
-}
-
-/// The language of the texts shown.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Language {
-    French,
-    English,
-}
-
-/// The language of the session: `LC_ALL`, then `LC_MESSAGES`, then `LANG`,
-/// an empty value being ignored; French when its language code is `fr`,
-/// English otherwise. `LANGUAGE` is not read.
-pub fn language(read: impl Fn(&str) -> Option<OsString>) -> Language {
-    let chosen = ["LC_ALL", "LC_MESSAGES", "LANG"]
-        .into_iter()
-        .filter_map(read)
-        .find(|value| !value.is_empty());
-    // `fr_FR.UTF-8`, `fr.UTF-8`, `fr`: the language code comes first.
-    let french = chosen.is_some_and(|value| {
-        value
-            .to_string_lossy()
-            .split(['_', '.', '@'])
-            .next()
-            .is_some_and(|code| code == "fr")
-    });
-    if french {
-        Language::French
-    } else {
-        Language::English
-    }
 }
 
 /// Something the command line says.
@@ -456,6 +424,7 @@ fn group_text(
     decision: Decision,
     clean: bool,
 ) -> String {
+    let label = okapi_rules::label(language, label);
     let size = size(language, bytes);
     let mark = decision_mark(language, decision, clean);
     let count = entries_text(language, entries);
@@ -714,8 +683,23 @@ fn variable_missing(language: Language, variable: Variable) -> String {
     }
 }
 
-fn origins_text(origins: &[Origin]) -> String {
-    origins.iter().map(rule_name).collect::<Vec<_>>().join(", ")
+/// A rule as the text names it: the label of a system target in the
+/// language, the identifier of an application rule.
+fn shown_rule(language: Language, origin: &Origin) -> String {
+    match origin {
+        Origin::SystemTarget { subcategory, .. } | Origin::SystemFile { subcategory, .. } => {
+            okapi_rules::label(language, subcategory.as_str()).to_owned()
+        }
+        Origin::App { .. } => rule_name(origin),
+    }
+}
+
+fn origins_text(language: Language, origins: &[Origin]) -> String {
+    origins
+        .iter()
+        .map(|origin| shown_rule(language, origin))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn issue_text(language: Language, issue: &ScanIssue) -> String {
@@ -723,7 +707,7 @@ fn issue_text(language: Language, issue: &ScanIssue) -> String {
     match issue {
         ScanIssue::Stopped(stop) => stop_text(language, stop, false),
         ScanIssue::AgeBeyondClock { origin } => {
-            let origin = rule_name(origin);
+            let origin = shown_rule(language, origin);
             if french {
                 format!("{origin} : l'âge de la règle remonte avant l'origine de l'horloge.")
             } else {
@@ -731,7 +715,7 @@ fn issue_text(language: Language, issue: &ScanIssue) -> String {
             }
         }
         ScanIssue::Unsupported { origin } => {
-            let origin = rule_name(origin);
+            let origin = shown_rule(language, origin);
             if french {
                 format!("{origin} : règle pas encore prise en charge.")
             } else {
@@ -741,7 +725,7 @@ fn issue_text(language: Language, issue: &ScanIssue) -> String {
         ScanIssue::Unresolvable { origin, error } => {
             format!(
                 "{} : {}",
-                rule_name(origin),
+                shown_rule(language, origin),
                 template_error(language, error)
             )
         }
@@ -751,7 +735,7 @@ fn issue_text(language: Language, issue: &ScanIssue) -> String {
             error,
         } => {
             let (origins, path, error) = (
-                origins_text(origins),
+                origins_text(language, origins),
                 shown(path),
                 error_text(language, *error, None),
             );
@@ -766,7 +750,7 @@ fn issue_text(language: Language, issue: &ScanIssue) -> String {
             path,
             reason,
         } => {
-            let (origins, path) = (origins_text(origins), shown(path));
+            let (origins, path) = (origins_text(language, origins), shown(path));
             let reason = unsafe_reason(language, *reason);
             if french {
                 format!("{origins} : {path} écarté, {reason}.")
@@ -779,7 +763,11 @@ fn issue_text(language: Language, issue: &ScanIssue) -> String {
             path,
             variable,
         } => {
-            let (origins, path, name) = (origins_text(origins), shown(path), variable.name());
+            let (origins, path, name) = (
+                origins_text(language, origins),
+                shown(path),
+                variable.name(),
+            );
             if french {
                 format!("{origins} : {path} contient le dossier de {name}, jamais touché.")
             } else {
@@ -787,7 +775,7 @@ fn issue_text(language: Language, issue: &ScanIssue) -> String {
             }
         }
         ScanIssue::Excluded { origins, path } => {
-            let (origins, path) = (origins_text(origins), shown(path));
+            let (origins, path) = (origins_text(language, origins), shown(path));
             if french {
                 format!("{origins} : {path} exclu.")
             } else {
@@ -799,7 +787,7 @@ fn issue_text(language: Language, issue: &ScanIssue) -> String {
             root,
             limit,
         } => {
-            let (origins, root) = (origins_text(origins), shown(root));
+            let (origins, root) = (origins_text(language, origins), shown(root));
             let limit = match (limit, french) {
                 (Limit::Depth, true) => "trop de niveaux de dossiers",
                 (Limit::Depth, false) => "too many directory levels",
@@ -969,44 +957,92 @@ mod tests {
 
     use super::*;
 
-    fn session(
-        values: &'static [(&'static str, &'static str)],
-    ) -> impl Fn(&str) -> Option<OsString> {
-        move |name| {
-            values
-                .iter()
-                .find(|(key, _)| *key == name)
-                .map(|(_, value)| OsString::from(value))
+    #[test]
+    fn every_issue_names_a_system_rule_in_the_language() {
+        let target = Origin::SystemTarget {
+            subcategory: okapi_rules::Label::try_from("APT Logs".to_owned()).unwrap(),
+            path: okapi_rules::TemplatePath::try_from("/var/log/apt".to_owned()).unwrap(),
+        };
+        let app = Origin::App {
+            file: okapi_engine::AppFile::Apps,
+            id: okapi_rules::RuleId::try_from("pip".to_owned()).unwrap(),
+        };
+        let path = PathBuf::from("/var/log/apt");
+        let origins = vec![target.clone(), app];
+        let one = [
+            ScanIssue::AgeBeyondClock {
+                origin: target.clone(),
+            },
+            ScanIssue::Unsupported {
+                origin: target.clone(),
+            },
+            ScanIssue::Unresolvable {
+                origin: target,
+                error: TemplateError::MissingVariable {
+                    variable: Variable::Home,
+                },
+            },
+        ];
+        let several = [
+            ScanIssue::UnreadableRoot {
+                origins: origins.clone(),
+                path: path.clone(),
+                error: io::ErrorKind::PermissionDenied,
+            },
+            ScanIssue::UnsafeRoot {
+                origins: origins.clone(),
+                path: path.clone(),
+                reason: UnsafeReason::Link,
+            },
+            ScanIssue::ProtectedRoot {
+                origins: origins.clone(),
+                path: path.clone(),
+                variable: Variable::Home,
+            },
+            ScanIssue::Excluded {
+                origins: origins.clone(),
+                path: path.clone(),
+            },
+            ScanIssue::LimitReached {
+                origins,
+                root: path,
+                limit: Limit::Depth,
+            },
+        ];
+        for (issues, french, english) in [
+            (&one[..], "Journaux d'APT ", "APT Logs"),
+            (&several[..], "Journaux d'APT, pip ", "APT Logs, pip"),
+        ] {
+            for issue in issues {
+                let (in_french, in_english) = (
+                    issue_text(Language::French, issue),
+                    issue_text(Language::English, issue),
+                );
+                assert!(in_french.starts_with(french), "{in_french}");
+                assert!(in_english.starts_with(english), "{in_english}");
+            }
         }
     }
 
     #[test]
-    fn the_language_follows_the_locale_variables_in_order() {
-        assert_eq!(language(session(&[])), Language::English);
-        assert_eq!(
-            language(session(&[("LANG", "fr_FR.UTF-8")])),
-            Language::French
-        );
-        assert_eq!(
-            language(session(&[
-                ("LANG", "fr_FR.UTF-8"),
-                ("LC_MESSAGES", "en_GB.UTF-8")
-            ])),
-            Language::English
-        );
-        assert_eq!(
-            language(session(&[
-                ("LC_ALL", "fr_CA.UTF-8"),
-                ("LC_MESSAGES", "en_GB.UTF-8")
-            ])),
-            Language::French
-        );
-        assert_eq!(
-            language(session(&[("LC_ALL", ""), ("LANG", "fr_FR.UTF-8")])),
-            Language::French,
-            "an empty value is ignored"
-        );
-        assert_eq!(language(session(&[("LANG", "C")])), Language::English);
+    fn a_rule_is_named_by_its_label_or_its_identifier() {
+        let label = |text: &str| okapi_rules::Label::try_from(text.to_owned()).unwrap();
+        let path = |text: &str| okapi_rules::TemplatePath::try_from(text.to_owned()).unwrap();
+        let target = Origin::SystemTarget {
+            subcategory: label("APT Logs"),
+            path: path("/var/log/apt"),
+        };
+        let file = Origin::SystemFile {
+            subcategory: label("pip Cache"),
+            path: path("/var/log/x"),
+        };
+        let app = Origin::App {
+            file: okapi_engine::AppFile::Apps,
+            id: okapi_rules::RuleId::try_from("pip".to_owned()).unwrap(),
+        };
+        assert_eq!(shown_rule(Language::French, &file), "Cache de pip");
+        assert_eq!(shown_rule(Language::French, &app), "pip", "its identifier");
+        assert_eq!(shown_rule(Language::English, &target), "APT Logs");
     }
 
     #[test]

@@ -6,12 +6,13 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use okapi_engine::{Category, CleanReceipt, CleanResult, ItemId, Origin, ScanGroup, ScanReport};
+use okapi_rules::Language;
 use okapi_store::HistoryOutcome;
 use serde::Serialize;
 
 use crate::args::Verbosity;
 use crate::selection::{self, Decision, decide};
-use crate::text::{Language, Message, text};
+use crate::text::{Message, text};
 
 /// A group as the command line shows it and decides about it.
 #[derive(Debug, Serialize)]

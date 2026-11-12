@@ -3,6 +3,7 @@
 use std::io::{self, Write as _};
 use std::process::ExitCode;
 
+use okapi_rules::{Language, SESSION_VARIABLES};
 use okapi_store::journal;
 use slint::ComponentHandle as _;
 
@@ -31,10 +32,22 @@ const LICENSE: &str = include_str!("../../../LICENSE");
 /// do (`okapi_rules::THIRD_PARTY_NOTICES`).
 const INTERFACE_NOTICES: &str = include_str!("../THIRD_PARTY_NOTICES");
 
-/// The window, filled with what it shows of Okapi itself, its cleaner
-/// reading and scanning through `seams`.
-fn window(seams: Seams) -> Result<(AppWindow, CleanerScreen), slint::PlatformError> {
+/// The window in `language`, filled with what it shows of Okapi itself, its
+/// cleaner reading, scanning and cleaning through `seams`.
+fn window(
+    seams: Seams,
+    language: Language,
+) -> Result<(AppWindow, CleanerScreen), slint::PlatformError> {
     let window = AppWindow::new()?;
+    // Slint's own texts in the language of the rules' labels: the French
+    // source is the bundle's empty language. Known once a component exists.
+    let bundle = match language {
+        Language::French => "",
+        Language::English => "en",
+    };
+    if let Err(error) = slint::select_bundled_translation(bundle) {
+        tracing::error!(%error, ?language, "interface language not applied");
+    }
     window.set_version(env!("CARGO_PKG_VERSION").into());
     window.set_license_name(env!("CARGO_PKG_LICENSE").into());
     window.set_repository(env!("CARGO_PKG_REPOSITORY").into());
@@ -43,7 +56,7 @@ fn window(seams: Seams) -> Result<(AppWindow, CleanerScreen), slint::PlatformErr
             .join("\n\n")
             .into(),
     );
-    let screen = CleanerScreen::attach(&window, seams);
+    let screen = CleanerScreen::attach(&window, seams, language);
     let closing = screen.clone();
     window
         .window()
@@ -89,18 +102,15 @@ fn main() -> ExitCode {
         rotation.trace();
     }
     journal::trace_panics();
-    // What the system locale is read from (`LANGUAGE` first); an unknown
-    // language shows the French source.
-    let locale = |name| std::env::var(name).ok();
+    // The language, from the variables gettext reads (D-7).
+    let language = Language::of_session(|name| std::env::var_os(name));
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
-        language = locale("LANGUAGE"),
-        lc_all = locale("LC_ALL"),
-        lc_messages = locale("LC_MESSAGES"),
-        lang = locale("LANG"),
+        ?language,
+        session = ?SESSION_VARIABLES.map(|name| (name, std::env::var_os(name))),
         "app started"
     );
-    let (window, screen) = match window(Seams::system()) {
+    let (window, screen) = match window(Seams::system(), language) {
         Ok(window) => window,
         Err(error) => {
             tracing::error!(error = %error, detail = ?error, "window not created");
@@ -136,16 +146,16 @@ mod tests {
 
     /// The window, its cleaner reading defaults and never scanning.
     fn test_window() -> AppWindow {
-        window(cleaner::tests::seams_never_scanning()).unwrap().0
+        window(cleaner::tests::seams_never_scanning(), Language::French)
+            .unwrap()
+            .0
     }
 
     #[test]
     fn the_sidebar_leads_to_the_about_screen_and_its_licenses() {
         i_slint_backend_testing::init_no_event_loop();
+        // In French, whatever the machine's language.
         let window = test_window();
-        // The French source, whatever the machine's language (the bundle is
-        // known once a component exists).
-        slint::select_bundled_translation("").unwrap();
         let shown = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let recorded = std::rc::Rc::clone(&shown);
         window.on_page_shown(move |page| recorded.borrow_mut().push(page));

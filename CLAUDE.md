@@ -46,12 +46,12 @@ Ce fichier ne porte que ce qui change le code qu'on écrit. Le « pourquoi » vi
 
 Numérotés, jamais renumérotés (des agents et des tests les citent par numéro). Un invariant retiré garde son numéro, marqué MORT.
 
-1. L'interface et le CLI ne transmettent jamais un chemin à supprimer : seulement des identifiants issus du dernier scan, résolus par `engine`. (test à écrire)
+1. L'interface et le CLI ne transmettent jamais un chemin à supprimer : seulement des identifiants issus du dernier scan, résolus par `engine`. (`okapi-engine` : rapport scellé par visibilité, identifiant d'un autre rapport refusé, testé ; résolution à la suppression : TODO-4)
 2. L'âge minimal d'un élément est revérifié juste avant sa suppression, descendants compris. (test à écrire)
-3. Le scan et la suppression ne suivent jamais un lien symbolique ; les exclusions se comparent après résolution du chemin réel. (test à écrire)
+3. Le scan et la suppression ne suivent jamais un lien symbolique ; les exclusions se comparent après résolution du chemin réel. (`okapi-engine`, scan : testé ; suppression : TODO-4)
 4. Une règle est de la donnée : elle ne fournit jamais de commande, d'exécutable ni d'argument. `okapi-helper` n'exécute que des opérations figées dans son code. (test à écrire)
-5. Les réinitialisations de cache de performance et les maintenances natives sont décochées par défaut. (`okapi-rules` : `is_selected_by_default`, testé ; reste à tenir dans le moteur et l'interface)
-6. Une racine de suppression résolue et canonisée n'est jamais égale à la valeur d'une variable (`HOME`, `CONFIG`, `SYSTEMDRIVE`...) ni un de ses ancêtres, `TMPDIR` excepté, que l'on ne vide qu'une fois vérifié qu'il ne contient aucune autre variable. `okapi-rules` n'en fait qu'un contrôle lexical sur les règles ; le moteur le refait sur les chemins réels. (test à écrire dans `okapi-engine`)
+5. Les réinitialisations de cache de performance et les maintenances natives sont décochées par défaut. (`okapi-rules` : `is_selected_by_default`, testé ; `okapi-engine` : ET des règles qui partagent une racine, testé ; interface : à tenir)
+6. Une racine de suppression résolue et canonisée n'est jamais égale à la valeur d'une variable (`HOME`, `CONFIG`, `SYSTEMDRIVE`...) ni un de ses ancêtres, `TMPDIR` excepté, que l'on ne vide qu'une fois vérifié qu'il ne contient aucune autre variable. `okapi-rules` n'en fait qu'un contrôle lexical sur les règles ; le moteur le refait par identité de fichier (périphérique et inode) des valeurs et de leurs ancêtres. (`okapi-engine`, scan : testé ; suppression : TODO-4)
 
 ## Git
 
@@ -71,5 +71,6 @@ Numérotés, jamais renumérotés (des agents et des tests les citent par numér
 | Quand | Lire |
 |---|---|
 | avant de toucher un invariant | `docs/regles/INVARIANTS.md` |
+| avant de toucher le scan | `docs/designs/TODO-3.md` |
 | avant de rouvrir un choix | `docs/TODO.md` § Décisions actées |
 | avant de toucher l'interface | `docs/design/brief-claude-design.md` |

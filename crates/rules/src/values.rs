@@ -7,7 +7,7 @@ use serde::{Deserialize, Deserializer};
 use crate::error::ValidationError;
 
 /// A text shown to the user, such as a rule name or a label: never blank.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "String")]
 pub struct Label(String);
 

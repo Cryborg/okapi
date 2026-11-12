@@ -7,6 +7,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+okapi-platform = { workspace = true }
+okapi-rules = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

@@ -345,6 +345,13 @@ impl TemplateVariables {
         Ok(())
     }
 
+    /// Every variable that has a value, with that value.
+    pub fn iter(&self) -> impl Iterator<Item = (Variable, &Path)> {
+        self.0
+            .iter()
+            .map(|(variable, value)| (*variable, value.as_path()))
+    }
+
     fn ensure_temp_directory_holds_no_variable(
         &self,
         variable: Variable,
@@ -724,6 +731,23 @@ mod tests {
         assert_eq!(
             template("${HOME}").unwrap().resolve(&variables).unwrap(),
             absolute("h")
+        );
+    }
+
+    #[test]
+    fn iter_gives_every_value_set() {
+        let variables = variables(&[(Variable::Home, "h"), (Variable::Cache, "c")]);
+        let mut values: Vec<(Variable, PathBuf)> = variables
+            .iter()
+            .map(|(variable, value)| (variable, value.to_path_buf()))
+            .collect();
+        values.sort();
+        assert_eq!(
+            values,
+            [
+                (Variable::Home, absolute("h")),
+                (Variable::Cache, absolute("c"))
+            ]
         );
     }
 

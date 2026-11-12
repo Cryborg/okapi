@@ -65,11 +65,12 @@ impl Directory {
     ///
     /// # Errors
     ///
-    /// [`io::ErrorKind::PermissionDenied`] when it may not, or the system's
-    /// error while reading the directory.
+    /// [`io::ErrorKind::PermissionDenied`] when it may not, the system's error
+    /// while reading the directory, or [`io::ErrorKind::Unsupported`] were the
+    /// effective user unknown (never on Linux).
     pub fn ensure_removable(&self, entry: &EntryStatus) -> io::Result<()> {
         self.ensure_modifiable()?;
-        let user = rustix::process::geteuid().as_raw();
+        let user = crate::effective_user().ok_or(io::ErrorKind::Unsupported)?;
         if removal_allowed(user, &self.status()?, entry) {
             Ok(())
         } else {
@@ -218,7 +219,7 @@ fn status(stat: &Statx) -> io::Result<EntryStatus> {
         size: stat.stx_size,
         links: u64::from(stat.stx_nlink),
         owner: stat.stx_uid,
-        sticky: mode.contains(Mode::SVTX),
+        sticky: kind == EntryType::Directory && mode.contains(Mode::SVTX),
         locked,
         mount_root,
     })
@@ -293,9 +294,15 @@ mod tests {
         assert!(directory.status_of(OsStr::new("shared")).unwrap().sticky);
         fs::write(temporary.path().join("one"), b"x").unwrap();
         fs::hard_link(temporary.path().join("one"), temporary.path().join("two")).unwrap();
+        fs::set_permissions(
+            temporary.path().join("one"),
+            fs::Permissions::from_mode(0o1644),
+        )
+        .unwrap();
         let one = directory.status_of(OsStr::new("one")).unwrap();
         assert_eq!(one.links, 2);
-        assert!(!one.sticky && !one.locked);
+        assert!(!one.sticky, "only a directory is sticky");
+        assert!(!one.locked);
         directory.ensure_removable(&one).unwrap();
     }
 

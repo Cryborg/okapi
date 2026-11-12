@@ -2,19 +2,26 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 
-/// Whether the process runs as root: the command line refuses to run then,
-/// removals that need the administrator go through the privileged helper.
+/// The user the process acts as (its effective user), who removes what a
+/// cleaning removes.
 #[cfg(target_os = "linux")]
 #[must_use]
-pub fn running_as_root() -> bool {
-    rustix::process::geteuid().is_root()
+pub fn effective_user() -> Option<u32> {
+    Some(rustix::process::geteuid().as_raw())
 }
 
-/// Whether the process runs as the administrator: not detected here yet.
+/// The user the process acts as: unknown here yet.
 #[cfg(not(target_os = "linux"))]
 #[must_use]
-pub const fn running_as_root() -> bool {
-    false
+pub const fn effective_user() -> Option<u32> {
+    None
+}
+
+/// Whether the process runs as root: the command line refuses to run then,
+/// removals that need the administrator go through the privileged helper.
+#[must_use]
+pub fn running_as_root() -> bool {
+    effective_user() == Some(crate::directory::ROOT_USER)
 }
 
 /// Opens the journal at `path` for appending, creating it readable by its

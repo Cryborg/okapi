@@ -54,20 +54,58 @@ pub struct EntryStatus {
 }
 
 /// The user that may remove anything in a sticky directory.
-const ROOT_USER: u32 = 0;
+pub(crate) const ROOT_USER: u32 = 0;
+
+/// Who owns an object, and for a directory whether it is sticky.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ownership {
+    pub owner: u32,
+    /// Its entries may only be removed by their owner, its own, or root
+    /// (`/tmp`).
+    pub sticky: bool,
+}
+
+impl EntryStatus {
+    #[must_use]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            dead_code,
+            reason = "only the Linux directory removes through descriptors"
+        )
+    )]
+    pub(crate) const fn ownership(&self) -> Ownership {
+        Ownership {
+            owner: self.owner,
+            sticky: self.sticky,
+        }
+    }
+}
+
+/// Whether `user` may remove an entry owned by `entry_owner` from `directory`
+/// as far as the sticky bit goes: in a sticky directory only the entry's
+/// owner, the directory's or root may (root taken to hold `CAP_FOWNER`; a root
+/// without it fails at the removal itself, which the receipt reports).
+#[must_use]
+pub const fn sticky_allows(user: u32, directory: Ownership, entry_owner: u32) -> bool {
+    !directory.sticky || user == ROOT_USER || user == directory.owner || user == entry_owner
+}
 
 /// Whether `user` may remove `entry` from `directory` once allowed to write
-/// in it: neither may be locked, and in a sticky directory `user` must own one
-/// of them or be root.
+/// in it: neither may be locked, and the sticky bit must allow it.
+#[cfg_attr(
+    not(target_os = "linux"),
+    expect(
+        dead_code,
+        reason = "only the Linux directory removes through descriptors"
+    )
+)]
 pub(crate) const fn removal_allowed(
     user: u32,
     directory: &EntryStatus,
     entry: &EntryStatus,
 ) -> bool {
-    if directory.locked || entry.locked {
-        return false;
-    }
-    !directory.sticky || user == ROOT_USER || user == directory.owner || user == entry.owner
+    !directory.locked && !entry.locked && sticky_allows(user, directory.ownership(), entry.owner)
 }
 
 #[cfg(test)]
@@ -99,6 +137,27 @@ mod tests {
         assert!(removal_allowed(0, &sticky, &others));
         assert!(removal_allowed(2, &status(2, true, false), &mine));
         assert!(removal_allowed(1, &status(0, false, false), &others));
+    }
+
+    #[test]
+    fn the_sticky_rule_names_who_may_remove() {
+        let sticky = Ownership {
+            owner: 0,
+            sticky: true,
+        };
+        assert!(!sticky_allows(1, sticky, 2), "a stranger's entry");
+        assert!(sticky_allows(1, sticky, 1), "one's own entry");
+        assert!(sticky_allows(0, sticky, 2), "root");
+        let mine = Ownership {
+            owner: 1,
+            sticky: true,
+        };
+        assert!(sticky_allows(1, mine, 2), "one's own sticky directory");
+        let plain = Ownership {
+            owner: 0,
+            sticky: false,
+        };
+        assert!(sticky_allows(1, plain, 2), "no sticky bit, no restriction");
     }
 
     #[test]

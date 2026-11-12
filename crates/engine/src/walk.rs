@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use okapi_platform::{EntryType, FileIdentity};
+use okapi_platform::{EntryType, FileIdentity, Ownership, sticky_allows};
 use okapi_rules::MiscRules;
 
 use crate::options::Exclusions;
@@ -23,12 +23,16 @@ pub(crate) struct Readers {
     pub(crate) identity: IdentityReader,
     /// When the object last changed, content or inode.
     pub(crate) last_change: fn(&Metadata) -> Option<SystemTime>,
+    /// Who owns it, and for a directory whether it is sticky (a test cannot
+    /// give a file to another user).
+    pub(crate) ownership: fn(&Metadata) -> Option<Ownership>,
 }
 
 impl Readers {
     pub(crate) const SYSTEM: Self = Self {
         identity: okapi_platform::file_identity,
         last_change: okapi_platform::last_change,
+        ownership: okapi_platform::ownership,
     };
 }
 
@@ -71,6 +75,11 @@ pub(crate) struct WalkContext<'a> {
     pub(crate) roots: &'a BTreeSet<FileIdentity>,
     pub(crate) readers: Readers,
     pub(crate) limits: Limits,
+    /// The user who will remove what is offered, for the sticky bit: an
+    /// entry of another user in a sticky directory (`/tmp`) is held back.
+    /// `None` when that user is root (through the privileged helper) or
+    /// unknown, and in the cleaning, whose walk does not read it.
+    pub(crate) remover: Option<u32>,
 }
 
 /// Why an entry is held back, which keeps its parent directory open.
@@ -90,6 +99,9 @@ pub(crate) enum HoldBack {
     Reserved,
     /// A file changed after the cutoff.
     Recent,
+    /// Another user's entry in a sticky directory: the remover may not remove
+    /// it.
+    NotOwned,
 }
 
 /// What is known of an entry, read without following links. `None` is what
@@ -247,7 +259,8 @@ struct Walker<'a> {
 /// then one entry). Anything else is held back and keeps its parent open: a
 /// link, a special file, another device, a variable's directory or one of its
 /// ancestors, another scan root, an unreadable or recent entry, an excluded or
-/// protected name, a name a running session relies on, or a limit reached.
+/// protected name, a name a running session relies on, an entry the remover
+/// may not remove from a sticky directory, or a limit reached.
 ///
 /// No link is followed: every entry is judged by metadata read without
 /// following links, and a directory is listed only if, once opened, it is
@@ -261,8 +274,8 @@ pub(crate) fn walk(root: &Path, root_identity: FileIdentity, context: WalkContex
         walk: Walk::default(),
     };
     match walker.open_directory(root, root_identity) {
-        Ok(entries) => {
-            let resolved = walker.children(entries, context.limits.depth);
+        Ok((entries, ownership)) => {
+            let resolved = walker.children(entries, context.limits.depth, ownership);
             walker.walk.found = resolved.found;
         }
         Err(problem) => walker.walk.root_problem = Some(problem),
@@ -272,12 +285,13 @@ pub(crate) fn walk(root: &Path, root_identity: FileIdentity, context: WalkContex
 
 impl Walker<'_> {
     /// Lists `directory`, after checking that what was opened is still the
-    /// directory of `identity` (not a link swapped in since it was judged).
+    /// directory of `identity` (not a link swapped in since it was judged);
+    /// gives its ownership too.
     fn open_directory(
         &self,
         directory: &Path,
         identity: FileIdentity,
-    ) -> Result<fs::ReadDir, RootProblem> {
+    ) -> Result<(fs::ReadDir, Option<Ownership>), RootProblem> {
         let entries =
             fs::read_dir(directory).map_err(|error| RootProblem::Unreadable(error.kind()))?;
         let opened = fs::symlink_metadata(directory)
@@ -285,13 +299,19 @@ impl Walker<'_> {
         let unchanged =
             opened.is_dir() && (self.context.readers.identity)(&opened) == Some(identity);
         if unchanged {
-            Ok(entries)
+            Ok((entries, (self.context.readers.ownership)(&opened)))
         } else {
             Err(RootProblem::Replaced)
         }
     }
 
-    fn children(&mut self, entries: fs::ReadDir, depth_left: usize) -> Resolved {
+    /// Resolves the entries of a directory owned as `listed`.
+    fn children(
+        &mut self,
+        entries: fs::ReadDir,
+        depth_left: usize,
+        listed: Option<Ownership>,
+    ) -> Resolved {
         let mut resolved = Resolved {
             found: Vec::new(),
             complete: true,
@@ -299,7 +319,7 @@ impl Walker<'_> {
         };
         for entry in entries {
             let child = match entry {
-                Ok(entry) => self.entry(&entry.path(), depth_left),
+                Ok(entry) => self.entry(&entry.path(), depth_left, listed),
                 Err(error) => {
                     tracing::debug!(%error, "directory entry unreadable");
                     self.walk.stats.unreadable += 1;
@@ -320,7 +340,7 @@ impl Walker<'_> {
         Resolved::held_back()
     }
 
-    fn entry(&mut self, path: &Path, depth_left: usize) -> Resolved {
+    fn entry(&mut self, path: &Path, depth_left: usize, listed: Option<Ownership>) -> Resolved {
         self.visited += 1;
         if self.visited > self.context.limits.entries {
             return self.limit(Limit::Entries);
@@ -348,6 +368,9 @@ impl Walker<'_> {
         if let Some(reason) = by_name(path, is_directory, top_level) {
             return self.held_back(path, reason);
         }
+        if !self.removable_from(listed, &metadata) {
+            return self.held_back(path, HoldBack::NotOwned);
+        }
         if !is_directory {
             return Self::file(path, &metadata, accepted);
         }
@@ -355,6 +378,19 @@ impl Walker<'_> {
             return self.limit(Limit::Depth);
         };
         self.directory(path, accepted.last_change, accepted.identity, depth_left)
+    }
+
+    /// Whether the remover may remove the entry read as `metadata` from a
+    /// directory owned as `listed`, as far as the sticky bit goes. Without a
+    /// known remover or directory, nothing more is held back; an entry whose
+    /// owner cannot be read in a sticky directory is.
+    fn removable_from(&self, listed: Option<Ownership>, metadata: &Metadata) -> bool {
+        let (Some(user), Some(directory)) = (self.context.remover, listed) else {
+            return true;
+        };
+        (self.context.readers.ownership)(metadata).map_or(!directory.sticky, |entry| {
+            sticky_allows(user, directory, entry.owner)
+        })
     }
 
     fn held_back(&mut self, path: &Path, reason: HoldBack) -> Resolved {
@@ -384,8 +420,8 @@ impl Walker<'_> {
         identity: FileIdentity,
         depth_left: usize,
     ) -> Resolved {
-        let entries = match self.open_directory(path, identity) {
-            Ok(entries) => entries,
+        let (entries, ownership) = match self.open_directory(path, identity) {
+            Ok(opened) => opened,
             Err(RootProblem::Replaced) => {
                 tracing::debug!(path = %path.display(), "directory replaced since judged");
                 self.walk.stats.replaced += 1;
@@ -399,7 +435,7 @@ impl Walker<'_> {
                 return Resolved::held_back();
             }
         };
-        let children = self.children(entries, depth_left);
+        let children = self.children(entries, depth_left, ownership);
         if !children.complete {
             return children;
         }

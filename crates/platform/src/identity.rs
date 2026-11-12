@@ -71,6 +71,28 @@ pub fn last_change(metadata: &Metadata) -> Option<SystemTime> {
     metadata.modified().ok()
 }
 
+/// Who owns the object `metadata` was read for, and whether it is a sticky
+/// directory.
+#[cfg(unix)]
+#[must_use]
+pub fn ownership(metadata: &Metadata) -> Option<crate::Ownership> {
+    use std::os::unix::fs::MetadataExt;
+
+    /// The sticky bit of a file mode.
+    const STICKY: u32 = 0o1000;
+    Some(crate::Ownership {
+        owner: metadata.uid(),
+        sticky: metadata.is_dir() && metadata.mode() & STICKY != 0,
+    })
+}
+
+/// Who owns the object `metadata` was read for: unknown here.
+#[cfg(not(unix))]
+#[must_use]
+pub fn ownership(_metadata: &Metadata) -> Option<crate::Ownership> {
+    None
+}
+
 /// Whether [`file_identity`] knows the identity of files on this system.
 pub const IDENTITY_SUPPORTED: bool = cfg!(unix);
 
@@ -116,6 +138,32 @@ mod tests {
         assert_eq!(identity(&root.join("one")), identity(&root.join("one/.")));
         let device = identity(&root.join("one")).device();
         assert_eq!(identity(&root.join("two")).device(), device);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ownership_reads_the_owner_and_the_sticky_bit() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let directory = tempfile::tempdir().unwrap();
+        let shared = directory.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o1777)).unwrap();
+        let metadata = std::fs::symlink_metadata(&shared).unwrap();
+        let read = ownership(&metadata).unwrap();
+        assert!(read.sticky);
+        let creator = std::fs::symlink_metadata(directory.path()).unwrap().uid();
+        assert_eq!(read.owner, creator, "the process created both");
+        // Linux lets anyone set the sticky bit on a file; it means nothing there.
+        if cfg!(target_os = "linux") {
+            let file = directory.path().join("file");
+            std::fs::write(&file, b"x").unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o1644)).unwrap();
+            let file = ownership(&std::fs::symlink_metadata(&file).unwrap()).unwrap();
+            assert!(!file.sticky, "only a directory is sticky");
+        }
+        let plain = ownership(&std::fs::symlink_metadata(directory.path()).unwrap()).unwrap();
+        assert!(!plain.sticky);
     }
 
     #[cfg(unix)]

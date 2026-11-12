@@ -110,6 +110,37 @@ struct Run<'a> {
     options: ScanOptions,
     readers: Readers,
     limits: Limits,
+    /// Who will remove what is offered.
+    user: Option<u32>,
+}
+
+/// The user the tests scan as.
+const TEST_USER: u32 = 1_000;
+/// Another user, owner of the entries marked as foreign.
+const FOREIGN_USER: u32 = 1_001;
+/// A directory marked so is sticky and owned by root, as `/tmp` is.
+const STICKY_MARK: Duration = Duration::from_hours(300_000);
+/// A directory marked so is sticky and owned by the test user.
+const OWN_STICKY_MARK: Duration = Duration::from_hours(300_001);
+/// An entry marked so belongs to another user.
+const FOREIGN_MARK: Duration = Duration::from_hours(300_002);
+/// An entry marked so has an owner that cannot be read.
+const UNKNOWN_OWNER_MARK: Duration = Duration::from_hours(300_003);
+
+/// Ownership as the marks say: by default the test user's, not sticky.
+fn marked_ownership(metadata: &fs::Metadata) -> Option<okapi_platform::Ownership> {
+    let mark = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(SystemTime::UNIX_EPOCH).ok());
+    let (owner, sticky) = match mark {
+        Some(STICKY_MARK) => (0, true),
+        Some(OWN_STICKY_MARK) => (TEST_USER, true),
+        Some(FOREIGN_MARK) => (FOREIGN_USER, false),
+        Some(UNKNOWN_OWNER_MARK) => return None,
+        _ => (TEST_USER, false),
+    };
+    Some(okapi_platform::Ownership { owner, sticky })
 }
 
 impl<'a> Run<'a> {
@@ -124,8 +155,10 @@ impl<'a> Run<'a> {
             readers: Readers {
                 identity: file_identity,
                 last_change: modification_time,
+                ownership: marked_ownership,
             },
             limits: Limits::DEFAULT,
+            user: Some(TEST_USER),
         }
     }
 
@@ -137,6 +170,7 @@ impl<'a> Run<'a> {
             &self.options,
             self.readers,
             self.limits,
+            self.user,
         )
     }
 }
@@ -1033,6 +1067,7 @@ fn a_root_replaced_after_its_check_is_reported() {
         roots: &roots,
         readers: Readers::SYSTEM,
         limits: Limits::DEFAULT,
+        remover: None,
     };
     // The identity checked before does not match what is opened now.
     let walked = crate::walk::walk(&root, FileIdentity::new(0, 0), context);
@@ -1741,10 +1776,12 @@ fn an_entry_whose_date_or_identity_is_unknown_is_held_back() {
         Readers {
             identity: unknown_when_marked,
             last_change: modification_time,
+            ownership: marked_ownership,
         },
         Readers {
             identity: file_identity,
             last_change: no_date_when_marked,
+            ownership: marked_ownership,
         },
     ] {
         let mut run = Run::new(&fixture, vec![RuleEntry::Target(&rule)]);
@@ -2084,6 +2121,7 @@ fn the_policy_holds_back_mount_roots_links_and_recent_files() {
         roots: &roots,
         readers: Readers::SYSTEM,
         limits: Limits::DEFAULT,
+        remover: None,
     };
     let observed = |kind, identity, last_change, mount_root| Observed {
         kind,
@@ -2170,6 +2208,7 @@ fn the_policy_holds_back_an_excluded_directory_by_identity() {
         roots: &roots,
         readers: Readers::SYSTEM,
         limits: Limits::DEFAULT,
+        remover: None,
     };
     // Met at another path (a bind mount shows it elsewhere): the same object.
     let identity = file_identity(&fs::symlink_metadata(&kept).unwrap()).unwrap();
@@ -2205,6 +2244,7 @@ fn the_policy_holds_back_a_variable_directory_and_what_cannot_be_read() {
         roots: &roots,
         readers: Readers::SYSTEM,
         limits: Limits::DEFAULT,
+        remover: None,
     };
     let identity = file_identity(&fs::symlink_metadata(&home).unwrap()).unwrap();
     let observed = Observed {
@@ -2251,4 +2291,147 @@ fn the_policy_holds_back_a_variable_directory_and_what_cannot_be_read() {
             .is_ok(),
         "at the cutoff exactly is old enough"
     );
+}
+
+/// A root `tmp` holding `mine` (the test user's), `theirs` (another user's)
+/// and `their-dir/mine` (another user's directory), all old, the root marked
+/// with `root_mark` if any.
+fn shared_temporary(fixture: &Fixture, root_mark: Option<Duration>) -> PathBuf {
+    let root = fixture.directory("tmp");
+    fixture.file("tmp/mine", 1, 2 * HOUR);
+    let theirs = fixture.file("tmp/theirs", 1, 2 * HOUR);
+    mark(&theirs, FOREIGN_MARK);
+    fixture.file("tmp/their-dir/mine", 1, 2 * HOUR);
+    mark(&fixture.path("tmp/their-dir"), FOREIGN_MARK);
+    if let Some(root_mark) = root_mark {
+        mark(&root, root_mark);
+    }
+    root
+}
+
+#[test]
+fn another_users_entries_in_a_sticky_directory_are_held_back() {
+    let fixture = Fixture::new();
+    let root = shared_temporary(&fixture, Some(STICKY_MARK));
+    let rule = target_at(&root);
+    let report = Run::new(&fixture, vec![RuleEntry::Target(&rule)]).scan();
+    assert_eq!(offered_paths(&report), [fixture.path("tmp/mine")]);
+    assert_eq!(report.stats().not_owned(), 2, "theirs and their directory");
+}
+
+#[test]
+fn without_a_sticky_bit_or_a_known_remover_nothing_more_is_held_back() {
+    let everything = |fixture: &Fixture| {
+        vec![
+            fixture.path("tmp/mine"),
+            fixture.path("tmp/their-dir"),
+            fixture.path("tmp/theirs"),
+        ]
+    };
+    let fixture = Fixture::new();
+    let root = shared_temporary(&fixture, None);
+    let rule = target_at(&root);
+    let report = Run::new(&fixture, vec![RuleEntry::Target(&rule)]).scan();
+    assert_eq!(offered_paths(&report), everything(&fixture));
+    assert_eq!(report.stats().not_owned(), 0);
+
+    let fixture = Fixture::new();
+    let root = shared_temporary(&fixture, Some(STICKY_MARK));
+    let rule = target_at(&root);
+    let mut run = Run::new(&fixture, vec![RuleEntry::Target(&rule)]);
+    run.user = None;
+    assert_eq!(offered_paths(&run.scan()), everything(&fixture));
+
+    let fixture = Fixture::new();
+    let root = shared_temporary(&fixture, Some(OWN_STICKY_MARK));
+    let rule = target_at(&root);
+    let report = Run::new(&fixture, vec![RuleEntry::Target(&rule)]).scan();
+    assert_eq!(
+        offered_paths(&report),
+        everything(&fixture),
+        "the remover owns the sticky directory"
+    );
+}
+
+#[test]
+fn only_the_directory_listed_counts() {
+    // A sticky directory nested in an ordinary root.
+    let fixture = Fixture::new();
+    let root = fixture.directory("data");
+    fixture.file("data/shared/mine", 1, 2 * HOUR);
+    let theirs = fixture.file("data/shared/theirs", 1, 2 * HOUR);
+    mark(&theirs, FOREIGN_MARK);
+    mark(&fixture.path("data/shared"), STICKY_MARK);
+    let rule = target_at(&root);
+    let report = Run::new(&fixture, vec![RuleEntry::Target(&rule)]).scan();
+    assert_eq!(offered_paths(&report), [fixture.path("data/shared/mine")]);
+    assert_eq!(report.stats().not_owned(), 1);
+
+    // An ordinary directory of the remover's in a sticky root: what it holds
+    // is the remover's to remove, another user's file included.
+    let fixture = Fixture::new();
+    let root = fixture.directory("tmp");
+    let theirs = fixture.file("tmp/sub/theirs", 1, 2 * HOUR);
+    mark(&theirs, FOREIGN_MARK);
+    fixture.age(&fixture.path("tmp/sub"), 2 * HOUR);
+    mark(&root, STICKY_MARK);
+    let rule = target_at(&root);
+    let report = Run::new(&fixture, vec![RuleEntry::Target(&rule)]).scan();
+    assert_eq!(offered_paths(&report), [fixture.path("tmp/sub")]);
+}
+
+#[test]
+fn what_needs_the_administrator_is_offered_for_root_to_remove() {
+    let fixture = Fixture::new();
+    let root = shared_temporary(&fixture, Some(STICKY_MARK));
+    let rule = target(&format!(
+        r#"{{"path": "{}", "subcategory": "Crash", "needsAdmin": true}}"#,
+        root.display()
+    ));
+    let report = Run::new(&fixture, vec![RuleEntry::Target(&rule)]).scan();
+    assert_eq!(offered_paths(&report).len(), 3);
+    assert_eq!(report.stats().not_owned(), 0);
+}
+
+#[test]
+fn a_session_name_keeps_its_own_count_in_a_sticky_directory() {
+    let fixture = Fixture::new();
+    let root = fixture.directory("tmp");
+    fixture.directory("tmp/.X11-unix");
+    mark(&fixture.path("tmp/.X11-unix"), FOREIGN_MARK);
+    mark(&root, STICKY_MARK);
+    let rule = target_at(&root);
+    let report = Run::new(&fixture, vec![RuleEntry::Target(&rule)]).scan();
+    assert_eq!(report.stats().protected_names(), 1);
+    assert_eq!(report.stats().not_owned(), 0);
+}
+
+#[test]
+fn an_unreadable_owner_holds_back_only_in_a_sticky_directory() {
+    let fixture = Fixture::new();
+    let root = fixture.directory("tmp");
+    fixture.file("tmp/mine", 1, 2 * HOUR);
+    let unknown = fixture.file("tmp/unknown", 1, 2 * HOUR);
+    mark(&unknown, UNKNOWN_OWNER_MARK);
+    mark(&root, STICKY_MARK);
+    let rule = target_at(&root);
+    let report = Run::new(&fixture, vec![RuleEntry::Target(&rule)]).scan();
+    assert_eq!(offered_paths(&report), [fixture.path("tmp/mine")]);
+    assert_eq!(report.stats().not_owned(), 1);
+
+    // In an ordinary directory, an unreadable owner holds nothing back.
+    let fixture = Fixture::new();
+    let root = fixture.directory("data");
+    let unknown = fixture.file("data/unknown", 1, 2 * HOUR);
+    mark(&unknown, UNKNOWN_OWNER_MARK);
+    let rule = target_at(&root);
+    let report = Run::new(&fixture, vec![RuleEntry::Target(&rule)]).scan();
+    assert_eq!(offered_paths(&report), [unknown]);
+
+    // The listed directory's own owner unreadable: nothing more is held back.
+    let fixture = Fixture::new();
+    let root = shared_temporary(&fixture, Some(UNKNOWN_OWNER_MARK));
+    let rule = target_at(&root);
+    let report = Run::new(&fixture, vec![RuleEntry::Target(&rule)]).scan();
+    assert_eq!(offered_paths(&report).len(), 3);
 }

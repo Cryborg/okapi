@@ -29,7 +29,8 @@ use crate::walk::{Found, Limits, Readers, RootProblem, WalkContext, walk};
 /// matchers are reported as [`ScanIssue::Unsupported`].
 #[must_use]
 pub fn scan(rules: &RuleSet, variables: &TemplateVariables, options: &ScanOptions) -> ScanReport {
-    let _span = tracing::info_span!("scan", os = ?rules.os()).entered();
+    let user = okapi_platform::effective_user();
+    let _span = tracing::info_span!("scan", os = ?rules.os(), effective_user = ?user).entered();
     let started = Instant::now();
     let stops = stops_before_reading(IDENTITY_SUPPORTED, rules.os(), variables);
     let report = if stops.is_empty() {
@@ -40,6 +41,7 @@ pub fn scan(rules: &RuleSet, variables: &TemplateVariables, options: &ScanOption
             options,
             Readers::SYSTEM,
             Limits::DEFAULT,
+            user,
         )
     } else {
         let mut report = ReportBuilder::new();
@@ -85,8 +87,8 @@ fn entries_of(rules: &RuleSet) -> Vec<RuleEntry<'_>> {
         .collect()
 }
 
-/// [`scan`] over an explicit list of rules, with the metadata readers and the
-/// limits given.
+/// [`scan`] over an explicit list of rules, with the metadata readers, the
+/// limits and the user who will remove what is offered given.
 pub(crate) fn scan_entries(
     entries: &[RuleEntry<'_>],
     misc: &MiscRules,
@@ -94,6 +96,7 @@ pub(crate) fn scan_entries(
     options: &ScanOptions,
     readers: Readers,
     limits: Limits,
+    user: Option<u32>,
 ) -> ScanReport {
     let mut report = ReportBuilder::new();
     let protected = match protection(variables, options, readers.identity) {
@@ -137,10 +140,14 @@ pub(crate) fn scan_entries(
     let mut found_by_group: BTreeMap<usize, Vec<FoundItem>> = BTreeMap::new();
     for (rule, root) in roots {
         let group = groups.find(rule);
-        let origins = attributes
-            .get(&group)
+        let group_attributes = attributes.get(&group);
+        let origins = group_attributes
             .map(|attributes| attributes.origins.clone())
             .unwrap_or_default();
+        // What needs the administrator will be removed by root, through the
+        // privileged helper: the sticky bit does not stand in its way.
+        let needs_admin = group_attributes.is_some_and(|attributes| attributes.needs_admin);
+        let remover = if needs_admin { None } else { user };
         let found = match root.kind {
             PlannedKind::File(found) => vec![found],
             PlannedKind::Directory => {
@@ -152,6 +159,7 @@ pub(crate) fn scan_entries(
                     roots: &root_identities,
                     readers,
                     limits,
+                    remover,
                 };
                 walk_root(&mut report, &root, &origins, context)
             }

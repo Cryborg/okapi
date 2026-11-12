@@ -385,6 +385,9 @@ impl Cleaner<'_> {
             roots: self.report.roots(),
             readers: Readers::SYSTEM,
             limits: self.limits,
+            // Not read by the cleaning's walk: `ensure_removable` judges the
+            // right to remove each entry.
+            remover: None,
         }
     }
 
@@ -790,6 +793,12 @@ const fn keep_reason(reason: HoldBack) -> KeepReason {
         HoldBack::Reserved => KeepReason::Protected,
         HoldBack::Unreadable => KeepReason::Failed {
             kind: io::ErrorKind::Unsupported,
+            code: None,
+        },
+        // Never from the cleaning's walk: `by_path` and `by_status` never hold
+        // back for ownership, `ensure_removable` judges the right to remove.
+        HoldBack::NotOwned => KeepReason::Failed {
+            kind: io::ErrorKind::PermissionDenied,
             code: None,
         },
         HoldBack::Excluded

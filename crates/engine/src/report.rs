@@ -130,6 +130,7 @@ pub struct ScanStats {
     pub(crate) recent: u64,
     pub(crate) excluded: u64,
     pub(crate) protected_names: u64,
+    pub(crate) not_owned: u64,
 }
 
 impl ScanStats {
@@ -191,6 +192,13 @@ impl ScanStats {
         self.protected_names
     }
 
+    /// Entries of another user in a sticky directory (`/tmp`): only their
+    /// owner, the directory's or root may remove them.
+    #[must_use]
+    pub const fn not_owned(&self) -> u64 {
+        self.not_owned
+    }
+
     /// Counts one entry held back for `reason`.
     pub(crate) const fn count(&mut self, reason: HoldBack) {
         let counter = match reason {
@@ -202,20 +210,35 @@ impl ScanStats {
             HoldBack::OtherFilesystem => &mut self.other_filesystems,
             HoldBack::Reserved => &mut self.reserved_directories,
             HoldBack::Recent => &mut self.recent,
+            HoldBack::NotOwned => &mut self.not_owned,
         };
         *counter += 1;
     }
 
     pub(crate) const fn add(&mut self, other: &Self) {
-        self.links += other.links;
-        self.special_files += other.special_files;
-        self.other_filesystems += other.other_filesystems;
-        self.reserved_directories += other.reserved_directories;
-        self.unreadable += other.unreadable;
-        self.replaced += other.replaced;
-        self.recent += other.recent;
-        self.excluded += other.excluded;
-        self.protected_names += other.protected_names;
+        // Destructured: a new counter cannot be forgotten here.
+        let Self {
+            links,
+            special_files,
+            other_filesystems,
+            reserved_directories,
+            unreadable,
+            replaced,
+            recent,
+            excluded,
+            protected_names,
+            not_owned,
+        } = *other;
+        self.links += links;
+        self.special_files += special_files;
+        self.other_filesystems += other_filesystems;
+        self.reserved_directories += reserved_directories;
+        self.unreadable += unreadable;
+        self.replaced += replaced;
+        self.recent += recent;
+        self.excluded += excluded;
+        self.protected_names += protected_names;
+        self.not_owned += not_owned;
     }
 }
 

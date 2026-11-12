@@ -482,6 +482,30 @@ mod tests {
     }
 
     #[test]
+    fn the_linux_font_caches_are_never_preselected() {
+        let rules = RuleSet::embedded(Os::Linux).unwrap();
+        let fonts: Vec<(String, bool)> = rules
+            .system()
+            .clean_targets()
+            .iter()
+            .filter(|target| target.template_path().to_string().ends_with("/fontconfig"))
+            .map(|target| {
+                (
+                    target.template_path().to_string(),
+                    target.is_selected_by_default(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            fonts,
+            [
+                ("${CACHE}/fontconfig".to_owned(), false),
+                ("/var/cache/fontconfig".to_owned(), false),
+            ]
+        );
+    }
+
+    #[test]
     fn the_linux_temporary_directories_keep_a_month() {
         let rules = RuleSet::embedded(Os::Linux).unwrap();
         let ages: Vec<(String, Option<u16>)> = rules

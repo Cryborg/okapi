@@ -50,7 +50,8 @@ Numérotés, jamais renumérotés (des agents et des tests les citent par numér
 2. L'âge minimal d'un élément est revérifié juste avant sa suppression, descendants compris. (test à écrire)
 3. Le scan et la suppression ne suivent jamais un lien symbolique ; les exclusions se comparent après résolution du chemin réel. (test à écrire)
 4. Une règle est de la donnée : elle ne fournit jamais de commande, d'exécutable ni d'argument. `okapi-helper` n'exécute que des opérations figées dans son code. (test à écrire)
-5. Les réinitialisations de cache de performance et les maintenances natives sont décochées par défaut. (test à écrire)
+5. Les réinitialisations de cache de performance et les maintenances natives sont décochées par défaut. (`okapi-rules` : `is_selected_by_default`, testé ; reste à tenir dans le moteur et l'interface)
+6. Une racine de suppression résolue et canonisée n'est jamais égale à la valeur d'une variable (`HOME`, `CONFIG`, `SYSTEMDRIVE`...) ni un de ses ancêtres, `TMPDIR` excepté, que l'on ne vide qu'une fois vérifié qu'il ne contient aucune autre variable. `okapi-rules` n'en fait qu'un contrôle lexical sur les règles ; le moteur le refait sur les chemins réels. (test à écrire dans `okapi-engine`)
 
 ## Git
 

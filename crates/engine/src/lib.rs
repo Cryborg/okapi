@@ -17,15 +17,19 @@ mod report;
 mod roots;
 mod scan;
 mod walk;
+mod watch;
 
-pub use clean::{CleanOutcome, CleanReceipt, CleanResult, KeepReason, clean};
+pub use clean::{
+    CleanOutcome, CleanPass, CleanReceipt, CleanResult, KeepReason, clean, clean_watched,
+};
 pub use options::{DEFAULT_MIN_AGE, ExclusionError, Exclusions, ScanOptions};
 pub use preconditions::Stop;
 pub use report::{
-    AppFile, EntryKind, ItemId, Limit, Origin, ScanGroup, ScanIssue, ScanItem, ScanReport,
-    ScanStats, UnsafeReason,
+    AppFile, Category, EntryKind, ItemId, Limit, Origin, ScanGroup, ScanIssue, ScanItem,
+    ScanReport, ScanStats, UnsafeReason,
 };
-pub use scan::scan;
+pub use scan::{scan, scan_watched};
+pub use watch::{Cancel, Progress, Watch};
 
 // The end-to-end tests write rule paths into JSON and create links: Unix only.
 #[cfg(test)]

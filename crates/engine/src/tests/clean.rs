@@ -13,29 +13,33 @@ use crate::clean::{CleanReceipt, CleanResult, KeepReason, clean_items};
 use crate::report::ItemId;
 
 /// The instant the scan and the cleaning take as now.
-fn later(fixture: &Fixture) -> SystemTime {
+pub(super) fn later(fixture: &Fixture) -> SystemTime {
     fixture.now + 2 * HOUR
 }
 
-fn options_later(fixture: &Fixture, min_age: Duration, exclusions: Exclusions) -> ScanOptions {
+pub(super) fn options_later(
+    fixture: &Fixture,
+    min_age: Duration,
+    exclusions: Exclusions,
+) -> ScanOptions {
     ScanOptions::new(later(fixture), min_age, exclusions)
 }
 
 /// Makes `path` changed after the cleaning's cutoff.
-fn make_recent(fixture: &Fixture, path: &Path) {
+pub(super) fn make_recent(fixture: &Fixture, path: &Path) {
     File::open(path)
         .unwrap()
         .set_modified(later(fixture))
         .unwrap();
 }
 
-fn run_later<'a>(fixture: &Fixture, entries: Vec<RuleEntry<'a>>) -> Run<'a> {
+pub(super) fn run_later<'a>(fixture: &Fixture, entries: Vec<RuleEntry<'a>>) -> Run<'a> {
     let mut run = Run::new(fixture, entries);
     run.options = options_later(fixture, HOUR, Exclusions::none());
     run
 }
 
-fn ids(report: &ScanReport) -> Vec<ItemId> {
+pub(super) fn ids(report: &ScanReport) -> Vec<ItemId> {
     report
         .groups()
         .iter()
@@ -44,7 +48,7 @@ fn ids(report: &ScanReport) -> Vec<ItemId> {
         .collect()
 }
 
-fn clean(run: &Run<'_>, report: &ScanReport, ids: &[ItemId]) -> CleanReceipt {
+pub(super) fn clean(run: &Run<'_>, report: &ScanReport, ids: &[ItemId]) -> CleanReceipt {
     clean_items(
         report,
         ids,
@@ -52,6 +56,7 @@ fn clean(run: &Run<'_>, report: &ScanReport, ids: &[ItemId]) -> CleanReceipt {
         &run.variables,
         &run.options,
         run.limits,
+        &run.watch,
     )
 }
 
@@ -66,7 +71,7 @@ fn results(receipt: &CleanReceipt) -> Vec<(PathBuf, CleanResult)> {
 }
 
 /// A root `data` holding `data/file` and the settled directory `data/dir`.
-fn file_and_directory(fixture: &Fixture) -> (PathBuf, CleanTarget) {
+pub(super) fn file_and_directory(fixture: &Fixture) -> (PathBuf, CleanTarget) {
     let root = fixture.directory("data");
     fixture.file("data/file", 3, 2 * HOUR);
     fixture.file("data/dir/a", 5, 2 * HOUR);
@@ -521,7 +526,7 @@ fn empty_now(
             remover: None,
         },
         device: opened.status().unwrap().identity.device(),
-        pass: crate::clean::Pass::Remove,
+        pass: crate::clean::CleanPass::Remove,
         removed: crate::clean::Removed::default(),
         visited: 0,
         dates: &mut dates,
@@ -1080,7 +1085,7 @@ fn a_removal_that_stops_halfway_is_partial_and_names_the_entry() {
             remover: None,
         },
         device: opened.status().unwrap().identity.device(),
-        pass: crate::clean::Pass::Remove,
+        pass: crate::clean::CleanPass::Remove,
         removed: crate::clean::Removed::default(),
         visited: 0,
         dates: &mut dates,

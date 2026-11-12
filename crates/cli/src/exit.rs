@@ -6,9 +6,9 @@ use okapi_engine::{CleanResult, KeepReason, Stop};
 
 /// The run did what was asked.
 pub const SUCCESS: u8 = 0;
-/// The run failed: a stop (nothing was looked at), an unusable session or
-/// settings file, a deletion log asked for that could not be kept, an output
-/// that could not be written, an internal fault.
+/// The run failed: a stop (nothing was looked at or offered), an unusable
+/// session or settings file, a deletion log asked for that could not be kept,
+/// an output that could not be written, an internal fault.
 pub const FAILURE: u8 = 1;
 /// What the user wrote is invalid: an argument, the settings, an exclusion
 /// or an age, from the command line or the settings.
@@ -21,8 +21,9 @@ pub const PARTIAL: u8 = 4;
 pub const NOTHING_FOUND: u8 = 5;
 
 /// The exit code of a run that got as far as scanning: `stops` what kept the
-/// scan or the cleaning from looking at anything, `found` the entries offered
-/// in the categories asked for, `results` what became of each entry cleaned.
+/// scan or the cleaning from looking at or offering anything, `found` the
+/// entries offered in the categories asked for, `results` what became of each
+/// entry cleaned.
 pub fn exit_code<'a>(
     stops: impl IntoIterator<Item = &'a Stop>,
     found: usize,
@@ -52,7 +53,13 @@ pub fn exit_code<'a>(
                 kind: io::ErrorKind::PermissionDenied,
                 ..
             } => PERMISSION_DENIED,
-            _ => PARTIAL,
+            KeepReason::Failed { .. }
+            | KeepReason::Replaced
+            | KeepReason::Recent
+            | KeepReason::Changed
+            | KeepReason::Excluded
+            | KeepReason::Protected
+            | KeepReason::Cancelled => PARTIAL,
         };
         code = if code == PERMISSION_DENIED || this == PERMISSION_DENIED {
             PERMISSION_DENIED
@@ -128,6 +135,12 @@ mod tests {
             code: Some(2),
         };
         assert_eq!(exit_code(&[], 2, [CleanResult::Kept(failed)]), PARTIAL);
+        assert_eq!(
+            exit_code(&[], 2, [CleanResult::Kept(KeepReason::Cancelled)]),
+            PARTIAL,
+            "an entry left by a cancellation is not removed"
+        );
+        assert_eq!(exit_code(&[Stop::Cancelled], 2, []), FAILURE);
         assert_eq!(
             exit_code(
                 &[],

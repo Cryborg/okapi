@@ -7,13 +7,14 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use okapi_engine::{
-    CleanOutcome, CleanReceipt, CleanResult, ItemId, KeepReason, Origin, ScanGroup, ScanReport,
+    Category, CleanOutcome, CleanReceipt, CleanResult, ItemId, KeepReason, Origin, ScanGroup,
+    ScanReport,
 };
 use okapi_store::{HistoryEntry, HistoryOutcome};
 use serde::Serialize;
 
 use crate::args::Verbosity;
-use crate::selection::{self, Category, Decision, decide};
+use crate::selection::{self, Decision, decide};
 use crate::text::{Language, Message, text};
 
 /// A group as the command line shows it and decides about it.
@@ -84,7 +85,7 @@ fn summary(group: &ScanGroup, categories: &BTreeSet<Category>) -> GroupSummary {
 fn qualified_rule_name(origin: &Origin) -> String {
     format!(
         "{}:{}",
-        Category::of(origin).name(),
+        origin.category().name(),
         selection::rule_name(origin)
     )
 }
@@ -382,6 +383,7 @@ fn stop_name(stop: &okapi_engine::Stop) -> String {
         Stop::MissingVariable { .. } => "missingVariable",
         Stop::UnreadableVariable { .. } => "unreadableVariable",
         Stop::MinAgeBeyondClock => "minAgeBeyondClock",
+        Stop::Cancelled => "cancelled",
     }
     .to_owned()
 }
@@ -396,6 +398,7 @@ const fn reason_name(reason: KeepReason) -> &'static str {
         KeepReason::Excluded => "excluded",
         KeepReason::Protected => "protected",
         KeepReason::Failed { .. } => "failed",
+        KeepReason::Cancelled => "cancelled",
     }
 }
 
@@ -421,6 +424,7 @@ mod tests {
         );
         assert_eq!(stop_name(&Stop::MinAgeBeyondClock), "minAgeBeyondClock");
         assert_eq!(stop_name(&Stop::UnsupportedSystem), "unsupportedSystem");
+        assert_eq!(stop_name(&Stop::Cancelled), "cancelled");
     }
 
     #[test]
@@ -434,6 +438,7 @@ mod tests {
     #[test]
     fn reasons_have_stable_names() {
         assert_eq!(reason_name(KeepReason::Recent), "recent");
+        assert_eq!(reason_name(KeepReason::Cancelled), "cancelled");
         assert_eq!(
             reason_name(KeepReason::Failed {
                 kind: io::ErrorKind::PermissionDenied,

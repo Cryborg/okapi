@@ -8,9 +8,9 @@ use crate::options::ScanOptions;
 use crate::protection::ProtectedRoots;
 use crate::walk::IdentityReader;
 
-/// What keeps a scan or a cleaning from looking at anything: the report or
-/// the receipt then holds nothing, which does not mean there is nothing to
-/// clean.
+/// What keeps a scan or a cleaning from looking at anything, or a scan from
+/// offering anything: the report or the receipt then holds nothing offered,
+/// which does not mean there is nothing to clean.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Stop {
     /// This system lacks what the engine needs to tell mount points, bind
@@ -30,6 +30,10 @@ pub enum Stop {
     /// The minimum age reaches before the clock's origin: nothing can be old
     /// enough.
     MinAgeBeyondClock,
+    /// The scan was cancelled ([`crate::Cancel`]): what it found is not
+    /// offered, a directory half read must not pass for whole. Never in a
+    /// cleaning receipt.
+    Cancelled,
 }
 
 /// The stops that need no file to be read: an unsupported system, or the

@@ -352,8 +352,8 @@ fn run_scan(run: &Run, language: Language, journal: Option<&Path>, output: &mut 
         _ => false,
     };
     let clean_stops: &[Stop] = receipt.as_ref().map_or(&[], CleanReceipt::stops);
-    // Said on standard error whatever the verbosity: nothing was looked at,
-    // or nothing was cleaned.
+    // Said on standard error whatever the verbosity: nothing was looked at or
+    // offered, or nothing was cleaned.
     for stop in &scan_stops {
         error_line(&text(language, &Message::Stop(stop)));
     }

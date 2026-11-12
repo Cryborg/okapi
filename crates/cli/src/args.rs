@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::selection::Category;
+use okapi_engine::Category;
 
 /// What the command line asks for.
 #[derive(Debug, PartialEq, Eq)]

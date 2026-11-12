@@ -2,46 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use okapi_engine::{AppFile, Origin};
-
-/// A family of rules the command line can pick.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Category {
-    /// The targets and single files of `system.json`.
-    System,
-    /// `apps.json`.
-    Apps,
-    /// `gaming.json`.
-    Gaming,
-    /// `gpu-cache.json`.
-    Gpu,
-}
-
-impl Category {
-    pub const ALL: [Self; 4] = [Self::System, Self::Apps, Self::Gaming, Self::Gpu];
-
-    /// Its name, in its flag (`--apps`) and in qualified rule names
-    /// (`apps:pip`).
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::System => "system",
-            Self::Apps => "apps",
-            Self::Gaming => "gaming",
-            Self::Gpu => "gpu",
-        }
-    }
-
-    pub const fn of(origin: &Origin) -> Self {
-        match origin {
-            Origin::SystemTarget { .. } | Origin::SystemFile { .. } => Self::System,
-            Origin::App { file, .. } => match file {
-                AppFile::Apps => Self::Apps,
-                AppFile::Gaming => Self::Gaming,
-                AppFile::GpuCache => Self::Gpu,
-            },
-        }
-    }
-}
+use okapi_engine::{Category, Origin};
 
 /// What a run does with a group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -69,7 +30,7 @@ pub fn decide(
     let asked = categories.is_empty()
         || origins
             .iter()
-            .any(|origin| categories.contains(&Category::of(origin)));
+            .any(|origin| categories.contains(&origin.category()));
     if !asked {
         Decision::OutsideCategories
     } else if !selected_by_default {
@@ -94,6 +55,7 @@ pub fn rule_name(origin: &Origin) -> String {
 
 #[cfg(test)]
 mod tests {
+    use okapi_engine::AppFile;
     use okapi_rules::RuleId;
 
     use super::*;
@@ -110,29 +72,14 @@ mod tests {
     }
 
     #[test]
-    fn each_rule_file_has_its_category() {
-        assert_eq!(Category::of(&app(AppFile::Apps, "pip")), Category::Apps);
-        assert_eq!(
-            Category::of(&app(AppFile::Gaming, "steam")),
-            Category::Gaming
-        );
-        assert_eq!(Category::of(&app(AppFile::GpuCache, "mesa")), Category::Gpu);
-        let label = okapi_rules::Label::try_from("Temp".to_owned()).unwrap();
-        let path = okapi_rules::TemplatePath::try_from("/tmp".to_owned()).unwrap();
+    fn a_system_target_is_never_cleaned_by_apps() {
         let target = Origin::SystemTarget {
-            subcategory: label.clone(),
-            path: path.clone(),
+            subcategory: okapi_rules::Label::try_from("Temp".to_owned()).unwrap(),
+            path: okapi_rules::TemplatePath::try_from("/tmp".to_owned()).unwrap(),
         };
-        let file = Origin::SystemFile {
-            subcategory: label,
-            path,
-        };
-        assert_eq!(Category::of(&target), Category::System);
-        assert_eq!(Category::of(&file), Category::System);
         assert_eq!(
             decide(&[target], true, false, &categories(&[Category::Apps])),
             Decision::OutsideCategories,
-            "a system target is never cleaned by --apps"
         );
     }
 

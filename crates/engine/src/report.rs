@@ -52,6 +52,50 @@ pub enum Origin {
     App { file: AppFile, id: RuleId },
 }
 
+impl Origin {
+    /// The family of rules it belongs to.
+    #[must_use]
+    pub const fn category(&self) -> Category {
+        match self {
+            Self::SystemTarget { .. } | Self::SystemFile { .. } => Category::System,
+            Self::App { file, .. } => match file {
+                AppFile::Apps => Category::Apps,
+                AppFile::Gaming => Category::Gaming,
+                AppFile::GpuCache => Category::Gpu,
+            },
+        }
+    }
+}
+
+/// A family of rules, one per rule file: what a user picks to scan or clean,
+/// and what the scan's progress is counted by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Category {
+    /// The targets and single files of `system.json`.
+    System,
+    /// `apps.json`.
+    Apps,
+    /// `gaming.json`.
+    Gaming,
+    /// `gpu-cache.json`.
+    Gpu,
+}
+
+impl Category {
+    pub const ALL: [Self; 4] = [Self::System, Self::Apps, Self::Gaming, Self::Gpu];
+
+    /// Its stable key (`apps`), for flags and qualified rule names.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Apps => "apps",
+            Self::Gaming => "gaming",
+            Self::Gpu => "gpu",
+        }
+    }
+}
+
 /// Why a root that exists was not walked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnsafeReason {
@@ -68,7 +112,8 @@ pub enum UnsafeReason {
 /// Something a scan could not do, or chose not to do.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ScanIssue {
-    /// Nothing was scanned.
+    /// Nothing was offered: nothing was scanned, or the scan was cancelled
+    /// (its statistics and other issues then say how far it went).
     Stopped(Stop),
     /// The rule asks for an age reaching before the clock's origin: nothing
     /// can be old enough.
@@ -471,6 +516,28 @@ impl ReportBuilder {
         }
     }
 
+    /// The scan was cancelled after `roots_done` roots of `roots_total`, and
+    /// `entries_seen` entries: no group is offered, the statistics and issues gathered so
+    /// far stay.
+    pub(crate) fn cancel(&mut self, roots_done: usize, roots_total: usize, entries_seen: u64) {
+        tracing::info!(
+            roots_done,
+            roots_total,
+            entries_seen,
+            stats = ?self.report.stats,
+            issues = self.report.issues.len(),
+            "scan cancelled"
+        );
+        self.report.issues.push(ScanIssue::Stopped(Stop::Cancelled));
+    }
+
+    /// How many issues so far.
+    pub(crate) const fn issue_count(&self) -> usize {
+        self.report.issues.len()
+    }
+
+    /// Records `issue`; a cancellation goes through [`Self::cancel`], which
+    /// traces it as such rather than as a failure.
     pub(crate) fn issue(&mut self, issue: ScanIssue) {
         if issue.stops_the_scan() {
             tracing::error!(?issue, "scan stopped");
@@ -521,4 +588,42 @@ fn report_nonce() -> u64 {
     use std::hash::{BuildHasher, RandomState};
 
     RandomState::new().hash_one(SystemTime::now())
+}
+
+#[cfg(test)]
+mod tests {
+    use okapi_rules::{Label, RuleId, TemplatePath};
+
+    use super::*;
+
+    #[test]
+    fn each_rule_file_has_its_category() {
+        let app = |file, id: &str| Origin::App {
+            file,
+            id: RuleId::try_from(id.to_owned()).unwrap(),
+        };
+        assert_eq!(app(AppFile::Apps, "pip").category(), Category::Apps);
+        assert_eq!(app(AppFile::Gaming, "steam").category(), Category::Gaming);
+        assert_eq!(app(AppFile::GpuCache, "mesa").category(), Category::Gpu);
+        let label = Label::try_from("Temp".to_owned()).unwrap();
+        let path = TemplatePath::try_from("/tmp".to_owned()).unwrap();
+        let target = Origin::SystemTarget {
+            subcategory: label.clone(),
+            path: path.clone(),
+        };
+        assert_eq!(target.category(), Category::System);
+        assert_eq!(
+            Origin::SystemFile {
+                subcategory: label,
+                path
+            }
+            .category(),
+            Category::System
+        );
+        let names: Vec<_> = Category::ALL
+            .iter()
+            .map(|category| category.name())
+            .collect();
+        assert_eq!(names, ["system", "apps", "gaming", "gpu"]);
+    }
 }

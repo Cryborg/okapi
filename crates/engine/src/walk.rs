@@ -11,6 +11,7 @@ use crate::options::Exclusions;
 use crate::paths::{is_absent, is_absent_kind, is_session_name};
 use crate::protection::ProtectedRoots;
 use crate::report::{EntryKind, Limit, ScanStats};
+use crate::watch::{PROGRESS_EVERY, Progress, Watch};
 
 /// Reads the identity of a file from its metadata.
 pub(crate) type IdentityReader = fn(&Metadata) -> Option<FileIdentity>;
@@ -248,11 +249,54 @@ impl Resolved {
     }
 }
 
-struct Walker<'a> {
+/// What the whole scan tells its watcher, carried from one root's walk to
+/// the next: the scan's cancel token is read here, never in [`WalkContext`],
+/// which the cleaning shares (an entry being removed is never cut in two).
+#[derive(Debug)]
+pub(crate) struct ScanProgress<'w> {
+    watch: &'w Watch,
+    entries_seen: u64,
+    pub(crate) found_bytes: u64,
+    pub(crate) issues: usize,
+}
+
+impl<'w> ScanProgress<'w> {
+    pub(crate) const fn new(watch: &'w Watch) -> Self {
+        Self {
+            watch,
+            entries_seen: 0,
+            found_bytes: 0,
+            issues: 0,
+        }
+    }
+
+    /// The entries reached so far, in the whole scan.
+    pub(crate) const fn entries_seen(&self) -> u64 {
+        self.entries_seen
+    }
+
+    /// One more entry reached, at `path`: said every [`PROGRESS_EVERY`].
+    fn entry_seen(&mut self, path: &Path) {
+        self.entries_seen += 1;
+        if self.entries_seen.is_multiple_of(PROGRESS_EVERY) {
+            self.watch.emit(Progress::Walking {
+                path: path.to_path_buf(),
+                entries_seen: self.entries_seen,
+                found_bytes: self.found_bytes,
+                issues: self.issues,
+            });
+        }
+    }
+}
+
+struct Walker<'a, 'p, 'w> {
     context: WalkContext<'a>,
     device: u64,
     visited: usize,
     walk: Walk,
+    progress: &'p mut ScanProgress<'w>,
+    /// The scan was cancelled: nothing more is read, nothing is complete.
+    cancelled: bool,
 }
 
 /// Offers what lies below `root`, never `root` itself, which must be a
@@ -276,12 +320,19 @@ struct Walker<'a> {
 /// checks every entry again, through descriptors.
 ///
 /// The root itself is never judged as a mount: it may be one (`/tmp`).
-pub(crate) fn walk(root: &Path, root_identity: FileIdentity, context: WalkContext<'_>) -> Walk {
+pub(crate) fn walk(
+    root: &Path,
+    root_identity: FileIdentity,
+    context: WalkContext<'_>,
+    progress: &mut ScanProgress<'_>,
+) -> Walk {
     let mut walker = Walker {
         context,
         device: root_identity.device(),
         visited: 0,
         walk: Walk::default(),
+        progress,
+        cancelled: false,
     };
     match walker.open_directory(root, root_identity) {
         Ok((entries, ownership)) => {
@@ -293,7 +344,7 @@ pub(crate) fn walk(root: &Path, root_identity: FileIdentity, context: WalkContex
     walker.walk
 }
 
-impl Walker<'_> {
+impl Walker<'_, '_, '_> {
     /// Lists `directory`, after checking that what was opened is still the
     /// directory of `identity` (not a link swapped in since it was judged);
     /// gives its ownership too.
@@ -328,6 +379,10 @@ impl Walker<'_> {
             size: 0,
         };
         for entry in entries {
+            if self.cancelled {
+                resolved.complete = false;
+                break;
+            }
             let child = match entry {
                 Ok(entry) => self.entry(&entry.path(), depth_left, listed),
                 Err(error) => {
@@ -351,6 +406,12 @@ impl Walker<'_> {
     }
 
     fn entry(&mut self, path: &Path, depth_left: usize, listed: Option<Ownership>) -> Resolved {
+        // Before counting: a cancelled scan reads and counts nothing more.
+        if self.progress.watch.is_cancelled() {
+            self.cancelled = true;
+            return Resolved::held_back();
+        }
+        self.progress.entry_seen(path);
         self.visited += 1;
         if self.visited > self.context.limits.entries {
             return self.limit(Limit::Entries);
@@ -385,6 +446,7 @@ impl Walker<'_> {
             return self.held_back(path, HoldBack::NotOwned);
         }
         if !is_directory {
+            self.progress.found_bytes = self.progress.found_bytes.saturating_add(metadata.len());
             return Self::file(path, &metadata, accepted);
         }
         let Some(depth_left) = depth_left.checked_sub(1) else {
@@ -454,6 +516,11 @@ impl Walker<'_> {
         identity: FileIdentity,
         depth_left: usize,
     ) -> Resolved {
+        // Cancelled while this entry was read: not even opened.
+        if self.progress.watch.is_cancelled() {
+            self.cancelled = true;
+            return Resolved::held_back();
+        }
         let (entries, ownership) = match self.open_directory(path, identity) {
             Ok(opened) => opened,
             Err(RootProblem::Replaced) => {

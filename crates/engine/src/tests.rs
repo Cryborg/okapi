@@ -19,6 +19,9 @@ use crate::walk::{Limits, Readers};
 // Cleaning works through directory descriptors, on Linux only.
 #[cfg(target_os = "linux")]
 mod clean;
+// Its cleaning tests share the cleaning's helpers.
+#[cfg(target_os = "linux")]
+mod watch;
 
 const HOUR: Duration = Duration::from_hours(1);
 
@@ -112,6 +115,8 @@ struct Run<'a> {
     limits: Limits,
     /// Who will remove what is offered.
     user: Option<u32>,
+    /// Who watches the scan and the cleaning.
+    watch: crate::watch::Watch,
 }
 
 /// The user the tests scan as.
@@ -160,6 +165,7 @@ impl<'a> Run<'a> {
             },
             limits: Limits::DEFAULT,
             user: Some(TEST_USER),
+            watch: crate::watch::Watch::none(),
         }
     }
 
@@ -172,6 +178,7 @@ impl<'a> Run<'a> {
             self.readers,
             self.limits,
             self.user,
+            &self.watch,
         )
     }
 }
@@ -1071,7 +1078,13 @@ fn a_root_replaced_after_its_check_is_reported() {
         remover: None,
     };
     // The identity checked before does not match what is opened now.
-    let walked = crate::walk::walk(&root, FileIdentity::new(0, 0), context);
+    let watch = crate::watch::Watch::none();
+    let walked = crate::walk::walk(
+        &root,
+        FileIdentity::new(0, 0),
+        context,
+        &mut crate::walk::ScanProgress::new(&watch),
+    );
     assert_eq!(
         walked.root_problem,
         Some(crate::walk::RootProblem::Replaced)

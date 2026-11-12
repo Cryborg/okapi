@@ -8,12 +8,14 @@ use okapi_rules::{MiscRules, RuleSet, TemplateVariables};
 use crate::options::ScanOptions;
 use crate::paths::is_absent_kind;
 use crate::preconditions::{protection, stops_before_reading};
+use crate::protection::ProtectedRoots;
 use crate::report::{
-    AppFile, FoundItem, GroupAttributes, Origin, ReportBuilder, ScanGroup, ScanIssue, ScanReport,
-    ScanStats, UnsafeReason,
+    AppFile, Category, FoundItem, GroupAttributes, Origin, ReportBuilder, ScanGroup, ScanIssue,
+    ScanReport, ScanStats, UnsafeReason,
 };
 use crate::roots::{PlannedKind, PlannedRoot, Planner, RuleEntry};
-use crate::walk::{Found, Limits, Readers, RootProblem, WalkContext, walk};
+use crate::walk::{Found, Limits, Readers, RootProblem, ScanProgress, WalkContext, walk};
+use crate::watch::{Progress, Watch};
 
 /// Scans the system targets and the application rules of `rules` for what
 /// can be cleaned, without privileges and without changing anything.
@@ -29,6 +31,20 @@ use crate::walk::{Found, Limits, Readers, RootProblem, WalkContext, walk};
 /// matchers are reported as [`ScanIssue::Unsupported`].
 #[must_use]
 pub fn scan(rules: &RuleSet, variables: &TemplateVariables, options: &ScanOptions) -> ScanReport {
+    scan_watched(rules, variables, options, &Watch::none())
+}
+
+/// [`scan`], its progress sent to `watch` and cancelled by its token: a
+/// cancelled scan offers nothing (a directory half read must not pass for
+/// whole), its report holding [`Stop::Cancelled`](crate::Stop::Cancelled) and
+/// what it counted so far.
+#[must_use]
+pub fn scan_watched(
+    rules: &RuleSet,
+    variables: &TemplateVariables,
+    options: &ScanOptions,
+    watch: &Watch,
+) -> ScanReport {
     let user = okapi_platform::effective_user();
     let _span = tracing::info_span!("scan", os = ?rules.os(), effective_user = ?user).entered();
     let started = Instant::now();
@@ -42,6 +58,7 @@ pub fn scan(rules: &RuleSet, variables: &TemplateVariables, options: &ScanOption
             Readers::SYSTEM,
             Limits::DEFAULT,
             user,
+            watch,
         )
     } else {
         let mut report = ReportBuilder::new();
@@ -87,8 +104,12 @@ fn entries_of(rules: &RuleSet) -> Vec<RuleEntry<'_>> {
         .collect()
 }
 
-/// [`scan`] over an explicit list of rules, with the metadata readers, the
-/// limits and the user who will remove what is offered given.
+/// [`scan_watched`] over an explicit list of rules, with the metadata
+/// readers, the limits and the user who will remove what is offered given.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each one a seam the tests set apart; a struct would only rename them"
+)]
 pub(crate) fn scan_entries(
     entries: &[RuleEntry<'_>],
     misc: &MiscRules,
@@ -97,13 +118,129 @@ pub(crate) fn scan_entries(
     readers: Readers,
     limits: Limits,
     user: Option<u32>,
+    watch: &Watch,
 ) -> ScanReport {
     let mut report = ReportBuilder::new();
+    if watch.is_cancelled() {
+        report.cancel(0, 0, 0);
+        return report.finish();
+    }
+    let Some((protected, roots_by_rule)) =
+        plan(entries, misc, variables, options, readers, &mut report)
+    else {
+        return report.finish();
+    };
+
+    let Grouped {
+        roots,
+        mut groups,
+        attributes,
+    } = group_rules(roots_by_rule, entries.len());
+    let attributes = merge_attributes(attributes, &mut groups);
+    let root_identities: BTreeSet<_> = roots.iter().map(|(_, root)| root.identity).collect();
+    let roots = categorized(roots, &attributes, &mut groups);
+    let roots_total = roots
+        .iter()
+        .filter(|(_, root, _)| root.kind != PlannedKind::Withheld)
+        .count();
+    watch.emit(Progress::Planned {
+        roots: roots_by_category(&roots),
+    });
+    let mut progress = ScanProgress::new(watch);
+    let mut roots_done = 0;
+    let mut found_by_group: BTreeMap<usize, Vec<FoundItem>> = BTreeMap::new();
+    for (rule, root, categories) in roots {
+        if watch.is_cancelled() {
+            break;
+        }
+        let group = groups.find(rule);
+        let group_attributes = attributes.get(&group);
+        let origins = group_attributes
+            .map(|attributes| attributes.origins.clone())
+            .unwrap_or_default();
+        progress.issues = report.issue_count();
+        // What needs the administrator will be removed by root, through the
+        // privileged helper: the sticky bit does not stand in its way.
+        let needs_admin = group_attributes.is_some_and(|attributes| attributes.needs_admin);
+        let remover = if needs_admin { None } else { user };
+        let withheld = root.kind == PlannedKind::Withheld;
+        let found = match root.kind {
+            PlannedKind::File(found) => {
+                progress.found_bytes = progress.found_bytes.saturating_add(found.size);
+                vec![found]
+            }
+            PlannedKind::Withheld => Vec::new(),
+            PlannedKind::Directory => {
+                let context = WalkContext {
+                    cutoff: root.cutoff,
+                    exclusions: options.exclusions(),
+                    misc,
+                    protected: &protected,
+                    roots: &root_identities,
+                    readers,
+                    limits,
+                    remover,
+                };
+                walk_root(&mut report, &root, &origins, context, &mut progress)
+            }
+        };
+        if watch.is_cancelled() {
+            // Cancelled while or after walking this root: not counted as
+            // done, and nothing of the scan is offered.
+            break;
+        }
+        if !withheld {
+            roots_done += 1;
+            watch.emit(Progress::RootDone {
+                categories,
+                entries: found.len(),
+                bytes: found
+                    .iter()
+                    .map(|found| found.size)
+                    .fold(0, u64::saturating_add),
+                issues: report.issue_count(),
+            });
+        }
+        found_by_group
+            .entry(group)
+            .or_default()
+            .extend(found.into_iter().map(|found| FoundItem {
+                found,
+                root: root.path.clone(),
+                root_identity: root.identity,
+                cutoff: root.cutoff,
+            }));
+    }
+    if watch.is_cancelled() {
+        report.cancel(roots_done, roots_total, progress.entries_seen());
+        return report.finish();
+    }
+    report.roots(root_identities);
+    for (group, attributes) in attributes {
+        report.group(
+            attributes,
+            found_by_group.remove(&group).unwrap_or_default(),
+        );
+    }
+    report.finish()
+}
+
+/// The roots the rules name, checked, each with the rule it comes from; what
+/// kept a root out is recorded in `report`. `None` when the variables'
+/// directories cannot be told (the scan then stops).
+fn plan(
+    entries: &[RuleEntry<'_>],
+    misc: &MiscRules,
+    variables: &TemplateVariables,
+    options: &ScanOptions,
+    readers: Readers,
+    report: &mut ReportBuilder,
+) -> Option<(ProtectedRoots, Vec<(usize, PlannedRoot)>)> {
     let protected = match protection(variables, options, readers.identity) {
         Ok((_, protected)) => protected,
         Err(stop) => {
             report.issue(ScanIssue::Stopped(stop));
-            return report.finish();
+            return None;
         }
     };
     let mut planner = Planner {
@@ -129,60 +266,43 @@ pub(crate) fn scan_entries(
         report.issue(issue);
     }
     report.add_stats(&planner.stats);
+    Some((protected, roots_by_rule))
+}
 
-    let Grouped {
-        roots,
-        mut groups,
-        attributes,
-    } = group_rules(roots_by_rule, entries.len());
-    let attributes = merge_attributes(attributes, &mut groups);
-    let root_identities: BTreeSet<_> = roots.iter().map(|(_, root)| root.identity).collect();
-    let mut found_by_group: BTreeMap<usize, Vec<FoundItem>> = BTreeMap::new();
-    for (rule, root) in roots {
-        let group = groups.find(rule);
-        let group_attributes = attributes.get(&group);
-        let origins = group_attributes
-            .map(|attributes| attributes.origins.clone())
-            .unwrap_or_default();
-        // What needs the administrator will be removed by root, through the
-        // privileged helper: the sticky bit does not stand in its way.
-        let needs_admin = group_attributes.is_some_and(|attributes| attributes.needs_admin);
-        let remover = if needs_admin { None } else { user };
-        let found = match root.kind {
-            PlannedKind::File(found) => vec![found],
-            PlannedKind::Withheld => Vec::new(),
-            PlannedKind::Directory => {
-                let context = WalkContext {
-                    cutoff: root.cutoff,
-                    exclusions: options.exclusions(),
-                    misc,
-                    protected: &protected,
-                    roots: &root_identities,
-                    readers,
-                    limits,
-                    remover,
-                };
-                walk_root(&mut report, &root, &origins, context)
-            }
-        };
-        found_by_group
-            .entry(group)
-            .or_default()
-            .extend(found.into_iter().map(|found| FoundItem {
-                found,
-                root: root.path.clone(),
-                root_identity: root.identity,
-                cutoff: root.cutoff,
-            }));
+/// Each root with its categories: those of its group's rules (the sense a
+/// group is shown in).
+fn categorized(
+    roots: Vec<(usize, PlannedRoot)>,
+    attributes: &BTreeMap<usize, GroupAttributes>,
+    groups: &mut RuleGroups,
+) -> Vec<(usize, PlannedRoot, BTreeSet<Category>)> {
+    roots
+        .into_iter()
+        .map(|(rule, root)| {
+            let categories = attributes
+                .get(&groups.find(rule))
+                .map(|attributes| attributes.origins.iter().map(Origin::category).collect())
+                .unwrap_or_default();
+            (rule, root, categories)
+        })
+        .collect()
+}
+
+/// How many roots a scan walks or offers, by category: a withheld root is
+/// neither, and a root counts for each of its categories.
+fn roots_by_category(
+    roots: &[(usize, PlannedRoot, BTreeSet<Category>)],
+) -> BTreeMap<Category, usize> {
+    let mut counted = BTreeMap::new();
+    for (_, _, categories) in roots
+        .iter()
+        .filter(|(_, root, _)| root.kind != PlannedKind::Withheld)
+    {
+        for category in categories {
+            *counted.entry(*category).or_default() += 1;
+        }
     }
-    report.roots(root_identities);
-    for (group, attributes) in attributes {
-        report.group(
-            attributes,
-            found_by_group.remove(&group).unwrap_or_default(),
-        );
-    }
-    report.finish()
+    counted
 }
 
 /// Walks one directory root and records in `report` what kept it from being
@@ -192,8 +312,9 @@ fn walk_root(
     root: &PlannedRoot,
     origins: &[Origin],
     context: WalkContext<'_>,
+    progress: &mut ScanProgress<'_>,
 ) -> Vec<Found> {
-    let walked = walk(&root.path, root.identity, context);
+    let walked = walk(&root.path, root.identity, context, progress);
     tracing::debug!(
         root = %root.path.display(),
         found = walked.found.len(),

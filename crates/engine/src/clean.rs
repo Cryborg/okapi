@@ -15,6 +15,7 @@ use crate::preconditions::{Stop, protection, stops_before_reading};
 use crate::protection::ProtectedRoots;
 use crate::report::{EntryKind, FoundItem, ItemId, ScanReport};
 use crate::walk::{HoldBack, Limits, Observed, Readers, WalkContext, by_name};
+use crate::watch::{Progress, Watch};
 
 /// Why an entry, or what is left of it, was not removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +42,10 @@ pub enum KeepReason {
         kind: io::ErrorKind,
         code: Option<i32>,
     },
+    /// The cleaning was cancelled ([`crate::Cancel`]) before its turn: it is
+    /// untouched. Never the reason of a partial removal: an entry is removed
+    /// whole or not at all.
+    Cancelled,
 }
 
 /// What became of one entry.
@@ -57,6 +62,17 @@ pub enum CleanResult {
     Gone,
     /// Nothing was touched.
     Kept(KeepReason),
+}
+
+impl CleanResult {
+    /// What it freed: the size of every file removed.
+    #[must_use]
+    pub const fn removed_bytes(self) -> u64 {
+        match self {
+            Self::Removed { bytes } | Self::Partial { bytes, .. } => bytes,
+            Self::Gone | Self::Kept(_) => 0,
+        }
+    }
 }
 
 /// One entry asked for, and what became of it.
@@ -151,10 +167,7 @@ impl CleanReceipt {
     pub fn removed_bytes(&self) -> u64 {
         self.outcomes
             .iter()
-            .map(|outcome| match outcome.result {
-                CleanResult::Removed { bytes } | CleanResult::Partial { bytes, .. } => bytes,
-                CleanResult::Gone | CleanResult::Kept(_) => 0,
-            })
+            .map(|outcome| outcome.result.removed_bytes())
             .fold(0, u64::saturating_add)
     }
 
@@ -195,6 +208,23 @@ pub fn clean(
     variables: &TemplateVariables,
     options: &ScanOptions,
 ) -> CleanReceipt {
+    clean_watched(report, ids, rules, variables, options, &Watch::none())
+}
+
+/// [`clean`], its progress sent to `watch` and cancelled by its token: an
+/// entry not yet removed when the token is cancelled stays, `Kept(Cancelled)`,
+/// unless its check already refused it (it keeps its reason) or its
+/// identifier is not of this report (`UnknownItem`, invariant 1). An entry is
+/// never cut in two: the token is read between entries only.
+#[must_use]
+pub fn clean_watched(
+    report: &ScanReport,
+    ids: &[ItemId],
+    rules: &RuleSet,
+    variables: &TemplateVariables,
+    options: &ScanOptions,
+    watch: &Watch,
+) -> CleanReceipt {
     let _span = tracing::info_span!("clean", requested = ids.len()).entered();
     let started = Instant::now();
     let supported = IDENTITY_SUPPORTED && DESCRIPTOR_REMOVAL_SUPPORTED;
@@ -207,6 +237,7 @@ pub fn clean(
             variables,
             options,
             Limits::DEFAULT,
+            watch,
         )
     } else {
         CleanReceipt::stopped(stops)
@@ -215,6 +246,7 @@ pub fn clean(
         outcomes = receipt.outcomes().len(),
         removed_bytes = receipt.removed_bytes(),
         complete = receipt.is_complete(),
+        cancelled = watch.is_cancelled(),
         elapsed = ?started.elapsed(),
         "cleaning finished"
     );
@@ -226,13 +258,17 @@ enum Checked<'a> {
     Unknown,
     Refused(&'a FoundItem, Outcome),
     Ready(&'a FoundItem),
+    /// Cancelled before its check.
+    Cancelled(&'a FoundItem),
 }
 
 /// What became of an entry, and where inside it the reason lies.
 type Outcome = (CleanResult, Option<PathBuf>);
 
 /// [`clean`] once the system and the variables are known to be complete, with
-/// the walking limits given.
+/// the walking limits given. The token is read between entries, never inside
+/// the walk of one (`Walking` and `WalkContext` do not carry it): an entry is
+/// removed whole or not at all (invariant 2).
 pub(crate) fn clean_items(
     report: &ScanReport,
     ids: &[ItemId],
@@ -240,6 +276,7 @@ pub(crate) fn clean_items(
     variables: &TemplateVariables,
     options: &ScanOptions,
     limits: Limits,
+    watch: &Watch,
 ) -> CleanReceipt {
     if !tells_mount_roots() {
         return CleanReceipt::stopped(vec![Stop::UnsupportedSystem]);
@@ -259,53 +296,54 @@ pub(crate) fn clean_items(
     };
     let mut dates = RemovedDates::new();
     let mut seen = BTreeSet::new();
-    let checked: Vec<(ItemId, Checked<'_>)> = ids
-        .iter()
-        .filter(|id| seen.insert(**id))
-        .map(|&id| {
-            let checked = match report.find(id) {
-                None => Checked::Unknown,
-                Some((_, item)) => {
-                    let item = item.found_item();
-                    match cleaner.run(item, Pass::Check, &mut dates) {
-                        Ok(_) => Checked::Ready(item),
-                        Err(outcome) => Checked::Refused(item, outcome),
-                    }
-                }
-            };
-            (id, checked)
-        })
-        .collect();
+    let unique: Vec<ItemId> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
+    let total = unique.len();
+    let checked = check_all(&cleaner, unique, watch, &mut dates);
+    let mut removed_bytes: u64 = 0;
+    let mut cancelled = false;
     let outcomes = checked
         .into_iter()
-        .map(|(id, checked)| {
-            let (item, (result, blocked)) = match checked {
-                Checked::Unknown => {
-                    let outcome = CleanOutcome {
-                        id,
-                        path: None,
-                        result: CleanResult::Kept(KeepReason::UnknownItem),
-                        blocked: None,
-                    };
-                    outcome.trace();
-                    return outcome;
-                }
-                Checked::Refused(item, outcome) => (item, outcome),
+        .enumerate()
+        .map(|(index, (id, checked))| {
+            let cancelled_outcome = (CleanResult::Kept(KeepReason::Cancelled), None);
+            let (path, (result, blocked)) = match checked {
+                Checked::Unknown => (None, (CleanResult::Kept(KeepReason::UnknownItem), None)),
+                Checked::Refused(item, outcome) => (Some(item), outcome),
+                Checked::Cancelled(item) => (Some(item), cancelled_outcome),
+                Checked::Ready(item) if watch.is_cancelled() => (Some(item), cancelled_outcome),
                 Checked::Ready(item) => (
-                    item,
-                    cleaner.run(item, Pass::Remove, &mut dates).map_or_else(
-                        |outcome| outcome,
-                        |bytes| (CleanResult::Removed { bytes }, None),
-                    ),
+                    Some(item),
+                    cleaner
+                        .run(item, CleanPass::Remove, &mut dates)
+                        .map_or_else(
+                            |outcome| outcome,
+                            |bytes| (CleanResult::Removed { bytes }, None),
+                        ),
                 ),
             };
+            if result == CleanResult::Kept(KeepReason::Cancelled) && !cancelled {
+                cancelled = true;
+                tracing::info!(
+                    reached = index,
+                    total,
+                    removed_bytes,
+                    "cleaning cancelled, the entries left untouched"
+                );
+            }
+            removed_bytes = removed_bytes.saturating_add(result.removed_bytes());
             let outcome = CleanOutcome {
                 id,
-                path: Some(item.found.path.clone()),
+                path: path.map(|item| item.found.path.clone()),
                 result,
                 blocked,
             };
             outcome.trace();
+            watch.emit(Progress::Cleaning {
+                pass: CleanPass::Remove,
+                done: index + 1,
+                total,
+                removed_bytes,
+            });
             outcome
         })
         .collect();
@@ -315,9 +353,57 @@ pub(crate) fn clean_items(
     }
 }
 
-/// Whether a walk only checks, or removes.
+/// The check pass over `ids`, each once: an identifier of another report is
+/// always told (invariant 1); an entry reached after the token is cancelled
+/// is not checked.
+fn check_all<'r>(
+    cleaner: &Cleaner<'r>,
+    ids: Vec<ItemId>,
+    watch: &Watch,
+    dates: &mut RemovedDates,
+) -> Vec<(ItemId, Checked<'r>)> {
+    let total = ids.len();
+    let mut cancelled_seen = false;
+    ids.into_iter()
+        .enumerate()
+        .map(|(index, id)| {
+            let checked = match cleaner.report.find(id) {
+                None => Checked::Unknown,
+                Some((_, item)) => {
+                    let item = item.found_item();
+                    if watch.is_cancelled() {
+                        if !cancelled_seen {
+                            cancelled_seen = true;
+                            tracing::info!(
+                                reached = index,
+                                total,
+                                "cleaning cancelled during its checks"
+                            );
+                        }
+                        Checked::Cancelled(item)
+                    } else {
+                        match cleaner.run(item, CleanPass::Check, dates) {
+                            Ok(_) => Checked::Ready(item),
+                            Err(outcome) => Checked::Refused(item, outcome),
+                        }
+                    }
+                }
+            };
+            watch.emit(Progress::Cleaning {
+                pass: CleanPass::Check,
+                done: index + 1,
+                total,
+                removed_bytes: 0,
+            });
+            (id, checked)
+        })
+        .collect()
+}
+
+/// The two passes of a cleaning: every entry is first checked whole, then
+/// removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Pass {
+pub enum CleanPass {
     Check,
     Remove,
 }
@@ -367,7 +453,7 @@ impl Removed {
 pub(crate) struct Walking<'a> {
     pub(crate) context: WalkContext<'a>,
     pub(crate) device: u64,
-    pub(crate) pass: Pass,
+    pub(crate) pass: CleanPass,
     pub(crate) removed: Removed,
     pub(crate) visited: usize,
     pub(crate) dates: &'a mut RemovedDates,
@@ -391,10 +477,15 @@ impl Cleaner<'_> {
         }
     }
 
-    /// Checks the entry, and with [`Pass::Remove`] removes it, giving the
+    /// Checks the entry, and with [`CleanPass::Remove`] removes it, giving the
     /// bytes removed. The error is the outcome when the entry, or part of it,
     /// stays.
-    fn run(&self, item: &FoundItem, pass: Pass, dates: &mut RemovedDates) -> Result<u64, Outcome> {
+    fn run(
+        &self,
+        item: &FoundItem,
+        pass: CleanPass,
+        dates: &mut RemovedDates,
+    ) -> Result<u64, Outcome> {
         let context = self.context(item);
         let (parent, name, status) = self
             .judge_entry(item, &context, pass, dates)
@@ -421,7 +512,7 @@ impl Cleaner<'_> {
                 depth_left,
                 &mut walking,
             )
-        } else if pass == Pass::Remove {
+        } else if pass == CleanPass::Remove {
             remove_file(&parent, name, &status, &mut walking)
         } else {
             Ok(true)
@@ -442,7 +533,7 @@ impl Cleaner<'_> {
         &self,
         item: &'a FoundItem,
         context: &WalkContext<'_>,
-        pass: Pass,
+        pass: CleanPass,
         dates: &RemovedDates,
     ) -> Result<(Directory, &'a OsStr, EntryStatus), CleanResult> {
         let kept = CleanResult::Kept;
@@ -480,7 +571,7 @@ impl Cleaner<'_> {
         if by_name(&item.found.path, is_directory, depth_below_root(item) <= 1).is_some() {
             return Err(kept(KeepReason::Protected));
         }
-        if pass == Pass::Check {
+        if pass == CleanPass::Check {
             parent
                 .ensure_removable(&status)
                 .map_err(|error| kept(keep(&error)))?;
@@ -635,7 +726,7 @@ fn walk_directory(
         return Ok(false);
     };
     walk_entries(&directory, path, depth_left, walking)?;
-    if walking.pass == Pass::Remove {
+    if walking.pass == CleanPass::Remove {
         if !remove_directory(parent, name, status)? {
             return Ok(false);
         }
@@ -689,13 +780,13 @@ fn walk_entry(
     if let Some(reason) = by_name(path, is_directory, false) {
         return Err(keep_reason(reason));
     }
-    if walking.pass == Pass::Check {
+    if walking.pass == CleanPass::Check {
         directory
             .ensure_removable(&status)
             .map_err(|error| keep(&error))?;
     }
     if !is_directory {
-        if walking.pass == Pass::Remove {
+        if walking.pass == CleanPass::Remove {
             remove_file(directory, name, &status, walking)?;
         }
         return Ok(());

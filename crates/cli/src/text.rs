@@ -651,7 +651,8 @@ fn template_error(language: Language, error: &TemplateError) -> String {
     }
 }
 
-/// Why nothing was looked at, or with `cleaning`, why nothing was cleaned.
+/// Why nothing was looked at or offered, or with `cleaning`, why nothing was
+/// cleaned.
 fn stop_text(language: Language, stop: &Stop, cleaning: bool) -> String {
     let french = language == Language::French;
     let prefix = match (french, cleaning) {
@@ -691,6 +692,14 @@ fn stop_text(language: Language, stop: &Stop, cleaning: bool) -> String {
             } else {
                 "The minimum age reaches before the clock's origin.".to_owned()
             }
+        }
+        // Something may have been looked at: what was found is not offered.
+        Stop::Cancelled => {
+            return if french {
+                "Analyse annulée : rien n'est proposé.".to_owned()
+            } else {
+                "Scan cancelled: nothing is offered.".to_owned()
+            };
         }
     };
     format!("{prefix}{reason}")
@@ -888,6 +897,8 @@ fn keep_reason(language: Language, reason: KeepReason) -> String {
         (KeepReason::Excluded, false) => "excluded",
         (KeepReason::Protected, true) => "protégé",
         (KeepReason::Protected, false) => "protected",
+        (KeepReason::Cancelled, true) => "nettoyage annulé avant son tour",
+        (KeepReason::Cancelled, false) => "cleaning cancelled before its turn",
     };
     text.to_owned()
 }
@@ -1071,6 +1082,12 @@ mod tests {
             Message::RunningAsRoot,
             Message::Stop(&stop),
             Message::CleaningStopped(&stop),
+            Message::Stop(&Stop::Cancelled),
+            Message::NotRemoved {
+                path: &path,
+                result: CleanResult::Kept(KeepReason::Cancelled),
+                blocked: None,
+            },
             Message::JournalRotationFailed(&error),
             Message::Issue(&issue),
             Message::Group {
@@ -1116,6 +1133,26 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_cancelled_scan_says_so_not_that_nothing_was_looked_at() {
+        assert_eq!(
+            text(Language::French, &Message::Stop(&Stop::Cancelled)),
+            "Analyse annulée : rien n'est proposé."
+        );
+        assert_eq!(
+            text(Language::English, &Message::Stop(&Stop::Cancelled)),
+            "Scan cancelled: nothing is offered."
+        );
+        assert_eq!(
+            keep_reason(Language::French, KeepReason::Cancelled),
+            "nettoyage annulé avant son tour"
+        );
+        assert_eq!(
+            keep_reason(Language::English, KeepReason::Cancelled),
+            "cleaning cancelled before its turn"
+        );
     }
 
     #[test]

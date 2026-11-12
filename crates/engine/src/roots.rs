@@ -183,12 +183,14 @@ impl Planner<'_> {
             return None;
         }
         if by_name(&canonical, false, true).is_some() || self.misc.protects(&canonical) {
+            tracing::debug!(path = %canonical.display(), "file target has a protected name");
             self.stats.protected_names += 1;
             return None;
         }
         // The global age was checked before planning: it is within the clock.
         let cutoff = self.options.cutoff(None)?;
         if last_change > cutoff {
+            tracing::trace!(path = %canonical.display(), "file target recent");
             self.stats.recent += 1;
             return None;
         }
@@ -288,10 +290,12 @@ impl Planner<'_> {
                 let file_type = entry.file_type()?;
                 Ok((entry, file_type))
             }) else {
+                tracing::debug!(base = %base.display(), "expanded entry unreadable");
                 self.stats.unreadable += 1;
                 continue;
             };
             if file_type.is_symlink() {
+                tracing::trace!(path = %entry.path().display(), "expanded entry is a link");
                 self.stats.links += 1;
                 continue;
             }
@@ -321,6 +325,7 @@ impl Planner<'_> {
                 Err(error) => return self.unreadable(origin, path, error.kind()),
             };
             if metadata.file_type().is_symlink() {
+                tracing::trace!(path = %path.display(), "expanded segment is a link");
                 self.stats.links += 1;
                 return None;
             }
@@ -328,6 +333,7 @@ impl Planner<'_> {
                 return None;
             }
             if (self.readers.identity)(&metadata).map(FileIdentity::device) != device {
+                tracing::trace!(path = %path.display(), "expanded segment on another device");
                 self.stats.other_filesystems += 1;
                 return None;
             }

@@ -1,5 +1,6 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Instant;
 
 use okapi_platform::IDENTITY_SUPPORTED;
 use okapi_rules::{MiscRules, RuleSet, TemplateVariables};
@@ -8,8 +9,8 @@ use crate::options::ScanOptions;
 use crate::paths::is_absent_kind;
 use crate::preconditions::{protection, stops_before_reading};
 use crate::report::{
-    AppFile, FoundItem, GroupAttributes, Origin, ReportBuilder, ScanIssue, ScanReport, ScanStats,
-    UnsafeReason,
+    AppFile, FoundItem, GroupAttributes, Origin, ReportBuilder, ScanGroup, ScanIssue, ScanReport,
+    ScanStats, UnsafeReason,
 };
 use crate::roots::{PlannedKind, PlannedRoot, Planner, RuleEntry};
 use crate::walk::{Found, Limits, Readers, RootProblem, WalkContext, walk};
@@ -28,22 +29,39 @@ use crate::walk::{Found, Limits, Readers, RootProblem, WalkContext, walk};
 /// matchers are reported as [`ScanIssue::Unsupported`].
 #[must_use]
 pub fn scan(rules: &RuleSet, variables: &TemplateVariables, options: &ScanOptions) -> ScanReport {
+    let _span = tracing::info_span!("scan", os = ?rules.os()).entered();
+    let started = Instant::now();
     let stops = stops_before_reading(IDENTITY_SUPPORTED, rules.os(), variables);
-    if !stops.is_empty() {
+    let report = if stops.is_empty() {
+        scan_entries(
+            &entries_of(rules),
+            rules.misc(),
+            variables,
+            options,
+            Readers::SYSTEM,
+            Limits::DEFAULT,
+        )
+    } else {
         let mut report = ReportBuilder::new();
         for stop in stops {
             report.issue(ScanIssue::Stopped(stop));
         }
-        return report.finish();
-    }
-    scan_entries(
-        &entries_of(rules),
-        rules.misc(),
-        variables,
-        options,
-        Readers::SYSTEM,
-        Limits::DEFAULT,
-    )
+        report.finish()
+    };
+    let groups = report.groups();
+    tracing::info!(
+        groups = groups.len(),
+        entries = groups.iter().map(|group| group.items().len()).sum::<usize>(),
+        bytes = groups
+            .iter()
+            .map(ScanGroup::total_size)
+            .fold(0, u64::saturating_add),
+        issues = report.issues().len(),
+        stats = ?report.stats(),
+        elapsed = ?started.elapsed(),
+        "scan finished"
+    );
+    report
 }
 
 /// The rules [`scan`] handles, in the order of their files.
@@ -167,6 +185,12 @@ fn walk_root(
     context: WalkContext<'_>,
 ) -> Vec<Found> {
     let walked = walk(&root.path, root.identity, context);
+    tracing::debug!(
+        root = %root.path.display(),
+        found = walked.found.len(),
+        limits = ?walked.limits_reached,
+        "root walked"
+    );
     report.add_stats(&walked.stats);
     match walked.root_problem {
         // Gone since it was planned: the normal case of an absent root.

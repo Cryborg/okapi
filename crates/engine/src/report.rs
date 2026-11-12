@@ -449,6 +449,11 @@ impl ReportBuilder {
     }
 
     pub(crate) fn issue(&mut self, issue: ScanIssue) {
+        if issue.stops_the_scan() {
+            tracing::error!(?issue, "scan stopped");
+        } else {
+            tracing::warn!(?issue, "scan issue");
+        }
         self.report.issues.push(issue);
     }
 

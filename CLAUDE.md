@@ -36,6 +36,7 @@ Ce fichier ne porte que ce qui change le code qu'on écrit. Le « pourquoi » vi
 - DRY : chaque connaissance (règle métier, constante, chemin, format) a une seule source. Deux codes qui se ressemblent par hasard ne sont pas une duplication.
 - SOLID : une responsabilité par module et par type ; `engine` et `tools` dépendent des traits d'`okapi-platform`, jamais d'une implémentation d'OS, ce qui les rend testables avec des doublures.
 - Erreurs typées (`thiserror`) dans les bibliothèques, `anyhow` seulement dans les binaires. Pas d'`unwrap`/`expect` hors tests, pas d'erreur avalée.
+- Observabilité soignée : Franck teste, Claude étudie les traces. `tracing` dans les bibliothèques (une portée par opération, des champs structurés : chemin, raison, code d'erreur système, comptes, durées), jamais une erreur ou un refus sans trace ; les binaires écrivent le journal dans un fichier sous `~/.local/state/okapi/` (`tracing-subscriber`).
 - Les lints de `[workspace.lints]` (clippy pedantic, `unsafe_code` interdit...) sont la norme : on ne les affaiblit jamais globalement. Une exception est locale et justifiée : `#[expect(lint, reason = "...")]`.
 - Toute bibliothèque a sa doc de module (`//!`) et ses tests unitaires à côté du code.
 - Un commentaire n'existe que pour faire comprendre le code, expliquer une correction contre-intuitive, ou retenir une erreur qu'on referait. Jamais de récit, jamais de compte recopié.

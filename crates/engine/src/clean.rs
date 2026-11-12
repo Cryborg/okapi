@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use okapi_platform::{
     DESCRIPTOR_REMOVAL_SUPPORTED, Directory, EntryStatus, EntryType, FileIdentity,
@@ -69,6 +69,22 @@ pub struct CleanOutcome {
 }
 
 impl CleanOutcome {
+    /// Records the outcome: a refusal of the system or a removal stopped
+    /// halfway is a warning, anything else an information.
+    fn trace(&self) {
+        let path = self.path.as_deref().map(Path::display);
+        let blocked = self.blocked.as_deref().map(Path::display);
+        let warning = matches!(
+            self.result,
+            CleanResult::Partial { .. } | CleanResult::Kept(KeepReason::Failed { .. })
+        );
+        if warning {
+            tracing::warn!(path = ?path, result = ?self.result, blocked = ?blocked, "entry not removed");
+        } else {
+            tracing::info!(path = ?path, result = ?self.result, blocked = ?blocked, "entry cleaned");
+        }
+    }
+
     #[must_use]
     pub const fn id(&self) -> ItemId {
         self.id
@@ -139,7 +155,10 @@ impl CleanReceipt {
             .fold(0, u64::saturating_add)
     }
 
-    const fn stopped(stops: Vec<Stop>) -> Self {
+    fn stopped(stops: Vec<Stop>) -> Self {
+        for stop in &stops {
+            tracing::error!(?stop, "cleaning stopped");
+        }
         Self {
             stops,
             outcomes: Vec::new(),
@@ -173,19 +192,30 @@ pub fn clean(
     variables: &TemplateVariables,
     options: &ScanOptions,
 ) -> CleanReceipt {
+    let _span = tracing::info_span!("clean", requested = ids.len()).entered();
+    let started = Instant::now();
     let supported = IDENTITY_SUPPORTED && DESCRIPTOR_REMOVAL_SUPPORTED;
     let stops = stops_before_reading(supported, rules.os(), variables);
-    if !stops.is_empty() {
-        return CleanReceipt::stopped(stops);
-    }
-    clean_items(
-        report,
-        ids,
-        rules.misc(),
-        variables,
-        options,
-        Limits::DEFAULT,
-    )
+    let receipt = if stops.is_empty() {
+        clean_items(
+            report,
+            ids,
+            rules.misc(),
+            variables,
+            options,
+            Limits::DEFAULT,
+        )
+    } else {
+        CleanReceipt::stopped(stops)
+    };
+    tracing::info!(
+        outcomes = receipt.outcomes().len(),
+        removed_bytes = receipt.removed_bytes(),
+        complete = receipt.is_complete(),
+        elapsed = ?started.elapsed(),
+        "cleaning finished"
+    );
+    receipt
 }
 
 /// What the check of one identifier found.
@@ -248,12 +278,14 @@ pub(crate) fn clean_items(
         .map(|(id, checked)| {
             let (item, (result, blocked)) = match checked {
                 Checked::Unknown => {
-                    return CleanOutcome {
+                    let outcome = CleanOutcome {
                         id,
                         path: None,
                         result: CleanResult::Kept(KeepReason::UnknownItem),
                         blocked: None,
                     };
+                    outcome.trace();
+                    return outcome;
                 }
                 Checked::Refused(item, outcome) => (item, outcome),
                 Checked::Ready(item) => (
@@ -264,12 +296,14 @@ pub(crate) fn clean_items(
                     ),
                 ),
             };
-            CleanOutcome {
+            let outcome = CleanOutcome {
                 id,
                 path: Some(item.found.path.clone()),
                 result,
                 blocked,
-            }
+            };
+            outcome.trace();
+            outcome
         })
         .collect();
     CleanReceipt {

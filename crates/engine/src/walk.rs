@@ -298,11 +298,13 @@ impl Walker<'_> {
             size: 0,
         };
         for entry in entries {
-            let child = if let Ok(entry) = entry {
-                self.entry(&entry.path(), depth_left)
-            } else {
-                self.walk.stats.unreadable += 1;
-                Resolved::held_back()
+            let child = match entry {
+                Ok(entry) => self.entry(&entry.path(), depth_left),
+                Err(error) => {
+                    tracing::debug!(%error, "directory entry unreadable");
+                    self.walk.stats.unreadable += 1;
+                    Resolved::held_back()
+                }
             };
             resolved.complete &= child.complete;
             resolved.size = resolved.size.saturating_add(child.size);
@@ -324,13 +326,14 @@ impl Walker<'_> {
             return self.limit(Limit::Entries);
         }
         if let Some(reason) = self.context.by_path(path) {
-            return self.held_back(reason);
+            return self.held_back(path, reason);
         }
         let metadata = match fs::symlink_metadata(path) {
             Ok(metadata) => metadata,
             // Gone since it was listed: nothing to count, the parent stays open.
             Err(error) if is_absent(&error) => return Resolved::held_back(),
-            Err(_) => {
+            Err(error) => {
+                tracing::debug!(path = %path.display(), %error, "entry unreadable");
                 self.walk.stats.unreadable += 1;
                 return Resolved::held_back();
             }
@@ -338,12 +341,12 @@ impl Walker<'_> {
         let observed = Observed::from_metadata(&metadata, self.context.readers);
         let accepted = match self.context.by_status(&observed, self.device, None) {
             Ok(accepted) => accepted,
-            Err(reason) => return self.held_back(reason),
+            Err(reason) => return self.held_back(path, reason),
         };
         let is_directory = observed.kind == EntryType::Directory;
         let top_level = depth_left == self.context.limits.depth;
         if let Some(reason) = by_name(path, is_directory, top_level) {
-            return self.held_back(reason);
+            return self.held_back(path, reason);
         }
         if !is_directory {
             return Self::file(path, &metadata, accepted);
@@ -354,7 +357,8 @@ impl Walker<'_> {
         self.directory(path, accepted.last_change, accepted.identity, depth_left)
     }
 
-    fn held_back(&mut self, reason: HoldBack) -> Resolved {
+    fn held_back(&mut self, path: &Path, reason: HoldBack) -> Resolved {
+        tracing::trace!(path = %path.display(), ?reason, "held back");
         self.walk.stats.count(reason);
         Resolved::held_back()
     }
@@ -383,11 +387,13 @@ impl Walker<'_> {
         let entries = match self.open_directory(path, identity) {
             Ok(entries) => entries,
             Err(RootProblem::Replaced) => {
+                tracing::debug!(path = %path.display(), "directory replaced since judged");
                 self.walk.stats.replaced += 1;
                 return Resolved::held_back();
             }
             Err(RootProblem::Unreadable(error)) => {
                 if !is_absent_kind(error) {
+                    tracing::debug!(path = %path.display(), ?error, "directory unreadable");
                     self.walk.stats.unreadable += 1;
                 }
                 return Resolved::held_back();
@@ -401,6 +407,7 @@ impl Walker<'_> {
         // lock taken with `mkdir`), even when everything in it is old: its old
         // entries are still offered one by one, the directory is not.
         if modified > self.context.cutoff {
+            tracing::trace!(path = %path.display(), "directory recent, offered entry by entry");
             self.walk.stats.recent += 1;
             return Resolved {
                 complete: false,

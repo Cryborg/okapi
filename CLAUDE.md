@@ -7,7 +7,7 @@ Ce fichier ne porte que ce qui change le code qu'on écrit. Le « pourquoi » vi
 ## Stack
 
 - Rust 1.99, édition 2024, workspace Cargo. Interface en Slint. Textes affichés en français (source) et anglais.
-- Conventions et pièges de la stack : aucune skill pour l'instant (pas de pack `socle-rust`). Ce fichier fait foi.
+- Conventions et pièges de la stack : skill `socle-rust:rust`. Ce fichier l'emporte en cas de conflit.
 
 ## Commandes
 

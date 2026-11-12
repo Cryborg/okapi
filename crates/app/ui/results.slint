@@ -83,8 +83,9 @@ component ResultLine inherits VerticalLayout {
         HorizontalLayout {
             padding-left: Theme.spacing-s;
             padding-right: Theme.spacing-l;
-            padding-top: Theme.spacing-xs;
-            padding-bottom: Theme.spacing-xs;
+            // Room for a badge and a note, clear of the lines between rows.
+            padding-top: Theme.spacing-m;
+            padding-bottom: Theme.spacing-m;
             spacing: Theme.spacing-m;
             if line.is-category: Fold {
                 folded: line.folded;

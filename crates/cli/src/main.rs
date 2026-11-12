@@ -4,7 +4,6 @@
 
 mod args;
 mod exit;
-mod journal;
 mod output;
 mod selection;
 mod text;
@@ -20,7 +19,7 @@ use okapi_engine::{
     clean, scan,
 };
 use okapi_rules::{Os, RuleSet, THIRD_PARTY_NOTICES, TemplateVariables};
-use okapi_store::{History, Settings, StoreError};
+use okapi_store::{History, Settings, StoreError, journal};
 
 use crate::args::{Command, Run, Verbosity, duration_of_minutes};
 use crate::output::{Output, Shown, error_line, history_entry, summaries};
@@ -67,7 +66,10 @@ fn main() -> ExitCode {
         return ExitCode::from(exit::FAILURE);
     }
     let verbose = matches!(&run, Ok(run) if run.verbosity == Verbosity::Verbose);
-    let (journal, rotation) = match journal::start(verbose, language) {
+    let on_write_failure: journal::WriteFailure = Box::new(move |error| {
+        error_line(&text(language, &Message::JournalWriteFailed(error)));
+    });
+    let (journal, rotation) = match journal::start(journal::CLI_FILE, verbose, on_write_failure) {
         Ok((path, rotation)) => (Some(path), Some(rotation)),
         Err(journal::Unavailable::NoStateDirectory) => {
             error_line(&say(&Message::StateDirectoryUnknown));
@@ -85,12 +87,7 @@ fn main() -> ExitCode {
             error_line(&say(&Message::JournalRotationFailed(error)));
         }
     }
-    let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic| {
-        let backtrace = std::backtrace::Backtrace::force_capture();
-        tracing::error!(%panic, %backtrace, "okapi panicked");
-        default_hook(panic);
-    }));
+    journal::trace_panics();
     let started = Instant::now();
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),

@@ -14,9 +14,6 @@ use std::time::Duration;
 
 use okapi_rules::{Effect, Os, RuleSet};
 
-/// The size beyond which the journal is set aside (`journal::ROTATION_SIZE`).
-const JOURNAL_ROTATION_SIZE: u64 = 64 * 1024 * 1024;
-
 struct Sandbox {
     _directory: tempfile::TempDir,
     root: PathBuf,
@@ -334,13 +331,15 @@ fn a_journal_grown_too_large_is_set_aside() {
     let journal = sandbox.journal();
     fs::create_dir_all(journal.parent().unwrap()).unwrap();
     let grown = fs::File::create(&journal).unwrap();
-    grown.set_len(JOURNAL_ROTATION_SIZE + 1).unwrap();
+    grown
+        .set_len(okapi_store::journal::ROTATION_SIZE + 1)
+        .unwrap();
     let output = sandbox.run(&["--exclude", "relative/path"]);
     assert_eq!(output.status.code(), Some(2));
     let rotated = journal.with_file_name("okapi.log.1");
     assert_eq!(
         fs::metadata(&rotated).unwrap().len(),
-        JOURNAL_ROTATION_SIZE + 1
+        okapi_store::journal::ROTATION_SIZE + 1
     );
     assert!(journal_has(&journal, "journal rotated"));
 }

@@ -1,9 +1,11 @@
-//! Persistent settings and history: what the user set in
-//! `$XDG_CONFIG_HOME/okapi/settings.json`, and one line per cleaning in
-//! `$XDG_STATE_HOME/okapi/history.jsonl`. Nothing here depends on the engine
+//! Persistent settings, history and journal: what the user set in
+//! `$XDG_CONFIG_HOME/okapi/settings.json`, one line per cleaning in
+//! `$XDG_STATE_HOME/okapi/history.jsonl`, and every trace in the journal
+//! beside it. Nothing here depends on the engine
 //! nor on the interface: callers turn their results into these plain types.
 
 mod history;
+pub mod journal;
 mod settings;
 
 use std::io;

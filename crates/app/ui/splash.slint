@@ -1,0 +1,43 @@
+import { Theme } from "theme.slint";
+
+// The studio splash, laid over the first screen: it absorbs every click
+// while it shows, then fades out and leaves the tree of inputs.
+export component Splash inherits Rectangle {
+    background: Theme.splash-background;
+    visible: self.opacity > 0;
+
+    TouchArea { }
+
+    VerticalLayout {
+        padding: Theme.splash-margin;
+        alignment: center;
+        HorizontalLayout {
+            alignment: center;
+            Image {
+                source: @image-url("../assets/wobblebot_studio.png");
+                image-fit: contain;
+                // Never larger than the logo itself, as in the mockup.
+                max-width: self.source.width * 1px;
+                max-height: self.source.height * 1px;
+                accessible-role: image;
+                accessible-label: @tr("Logo de WobbleBot Studio");
+            }
+        }
+    }
+
+    // Set by a timer, not at init: a change made before the first frame
+    // would never be animated (the splash would not show at all).
+    property <bool> fading: false;
+    opacity: fading ? 0 : 1;
+    animate opacity {
+        duration: Theme.splash-fade;
+        easing: Theme.ease;
+    }
+    Timer {
+        interval: Theme.splash-hold;
+        triggered => {
+            root.fading = true;
+            self.running = false;
+        }
+    }
+}

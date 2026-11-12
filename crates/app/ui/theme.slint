@@ -1,0 +1,30 @@
+// The design tokens, mirrored from docs/design/maquette/project/okapi.css:
+// the single source for every colour, size and duration of the interface.
+import { Palette } from "std-widgets.slint";
+
+export global Theme {
+    // Follows the system until the settings let the user choose.
+    out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
+
+    out property <color> background: dark ? #151614 : #F5F5F2;
+    out property <color> text: dark ? #ECEBE6 : #1C1B19;
+
+    // The studio splash is black in both themes.
+    out property <color> splash-background: #000000;
+    out property <length> splash-margin: 48px;
+    out property <duration> splash-hold: 1200ms;
+    out property <duration> splash-fade: 600ms;
+    out property <easing> ease: cubic-bezier(0.2, 0, 0, 1);
+
+    // The size the mockup draws every screen at.
+    out property <length> window-width: 1280px;
+    out property <length> window-height: 800px;
+
+    out property <length> font-display: 28px;
+    out property <int> weight-semibold: 600;
+}
+
+// What the product is called: a name, never translated.
+export global Brand {
+    out property <string> name: "Okapi";
+}

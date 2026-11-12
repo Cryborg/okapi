@@ -1,0 +1,8 @@
+msgid ""
+msgstr ""
+"Language: en\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+
+msgctxt "Splash"
+msgid "Logo de WobbleBot Studio"
+msgstr "WobbleBot Studio logo"

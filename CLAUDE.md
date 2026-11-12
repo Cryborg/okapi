@@ -21,7 +21,7 @@ Ce fichier ne porte que ce qui change le code qu'on écrit. Le « pourquoi » vi
 - `crates/rules` (`okapi-rules`) : types serde des règles de nettoyage, résolution des variables (`${CACHE}`...), validation. Pas d'E/S hors lecture.
 - `crates/platform` (`okapi-platform`) : traits par domaine (chemins, élévation, démarrage, services, réseau...), un module par OS sous `#[cfg(target_os)]`.
 - `crates/engine` (`okapi-engine`) : scan, cache des résultats par ID, nettoyage sûr, reçus. Progression par channel, annulation par jeton.
-- `crates/store` (`okapi-store`) : réglages, historique, reçus, journal des suppressions.
+- `crates/store` (`okapi-store`) : réglages, historique (journal des suppressions compris), journal des traces de chaque binaire (`journal`, crochet de panique).
 - `crates/tools` (`okapi-tools`) : un module par outil (doublons, gros fichiers, disque, malware...), activable par feature Cargo.
 - `crates/helper` (`okapi-helper`) : binaire privilégié lancé via pkexec, liste fermée d'opérations.
 - `crates/cli` (`okapi`) et `crates/app` (`okapi-app`, Slint) : coquilles fines au-dessus d'`engine` et `tools`.
@@ -75,4 +75,4 @@ Numérotés, jamais renumérotés (des agents et des tests les citent par numér
 | avant de toucher le scan | `docs/designs/TODO-3.md` |
 | avant de toucher le nettoyage | `docs/designs/TODO-4.md` |
 | avant de rouvrir un choix | `docs/TODO.md` § Décisions actées |
-| avant de toucher l'interface | `docs/design/brief-claude-design.md` |
+| avant de toucher l'interface | `docs/design/maquette/project/` (jetons : `okapi.css`, à refléter dans `crates/app/ui/theme.slint`), puis `docs/design/brief-claude-design.md` |

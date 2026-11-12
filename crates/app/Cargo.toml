@@ -7,6 +7,16 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+okapi-platform = { workspace = true }
+okapi-store = { workspace = true }
+slint = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+i-slint-backend-testing = { workspace = true }
+
+[build-dependencies]
+slint-build = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,0 +1,26 @@
+import { Theme, Brand } from "theme.slint";
+import { Splash } from "splash.slint";
+
+export component AppWindow inherits Window {
+    title: Brand.name;
+    preferred-width: Theme.window-width;
+    preferred-height: Theme.window-height;
+    background: Theme.background;
+
+    // What the splash shows, read by the tests.
+    out property <float> splash-opacity: splash.opacity;
+    out property <bool> splash-visible: splash.visible;
+
+    // Stands in for the first screen until the home screen lands.
+    Text {
+        text: Brand.name;
+        color: Theme.text;
+        font-size: Theme.font-display;
+        font-weight: Theme.weight-semibold;
+    }
+
+    splash := Splash {
+        width: 100%;
+        height: 100%;
+    }
+}

@@ -15,8 +15,13 @@ serde_json = "1.0.154"
 rustix = { version = "1.1.6", features = ["fs", "process"] }
 thiserror = "2.0.21"
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "json", "std", "registry"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "json", "std", "registry", "tracing-log"] }
 tempfile = "3.27.0"
+# Without the system tray it would bring; the compatibility feature is required.
+slint = { version = "=1.18.1", default-features = false, features = ["std", "backend-default", "renderer-femtovg", "renderer-software", "accessibility", "compat-1-2"] }
+# The testing backend follows no semver: the three move together, exactly.
+slint-build = "=1.18.1"
+i-slint-backend-testing = "=1.18.1"
 okapi-rules = { path = "crates/rules" }
 okapi-platform = { path = "crates/platform" }
 okapi-engine = { path = "crates/engine" }

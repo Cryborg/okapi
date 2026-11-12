@@ -2,11 +2,11 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
 use okapi_platform::IDENTITY_SUPPORTED;
-use okapi_rules::{MiscRules, RuleSet, TemplateVariables, Variable};
+use okapi_rules::{MiscRules, RuleSet, TemplateVariables};
 
 use crate::options::ScanOptions;
 use crate::paths::is_absent_kind;
-use crate::protection::ProtectedRoots;
+use crate::preconditions::{protection, stops_before_reading};
 use crate::report::{
     AppFile, FoundItem, GroupAttributes, Origin, ReportBuilder, ScanIssue, ScanReport, ScanStats,
     UnsafeReason,
@@ -28,22 +28,11 @@ use crate::walk::{Found, Limits, Readers, RootProblem, WalkContext, walk};
 /// matchers are reported as [`ScanIssue::Unsupported`].
 #[must_use]
 pub fn scan(rules: &RuleSet, variables: &TemplateVariables, options: &ScanOptions) -> ScanReport {
-    if !IDENTITY_SUPPORTED {
+    let stops = stops_before_reading(IDENTITY_SUPPORTED, rules.os(), variables);
+    if !stops.is_empty() {
         let mut report = ReportBuilder::new();
-        report.issue(ScanIssue::UnsupportedSystem);
-        return report.finish();
-    }
-    // A variable without a value protects nothing (invariant 6): a rule naming
-    // `/tmp` would then walk into a `${HOME}` placed below it.
-    let missing: Vec<Variable> = Variable::ALL
-        .into_iter()
-        .filter(|variable| variable.is_available_on(rules.os()))
-        .filter(|variable| !variables.iter().any(|(set, _)| set == *variable))
-        .collect();
-    if !missing.is_empty() {
-        let mut report = ReportBuilder::new();
-        for variable in missing {
-            report.issue(ScanIssue::MissingVariable { variable });
+        for stop in stops {
+            report.issue(ScanIssue::Stopped(stop));
         }
         return report.finish();
     }
@@ -89,18 +78,10 @@ pub(crate) fn scan_entries(
     limits: Limits,
 ) -> ScanReport {
     let mut report = ReportBuilder::new();
-    if options.cutoff(None).is_none() {
-        report.issue(ScanIssue::MinAgeBeyondClock);
-        return report.finish();
-    }
-    let protected = match ProtectedRoots::new(variables, readers.identity) {
-        Ok(protected) => protected,
-        Err(unreadable) => {
-            report.issue(ScanIssue::UnreadableVariable {
-                variable: unreadable.variable,
-                path: unreadable.path,
-                error: unreadable.error,
-            });
+    let protected = match protection(variables, options, readers.identity) {
+        Ok((_, protected)) => protected,
+        Err(stop) => {
+            report.issue(ScanIssue::Stopped(stop));
             return report.finish();
         }
     };
@@ -163,9 +144,11 @@ pub(crate) fn scan_entries(
             .extend(found.into_iter().map(|found| FoundItem {
                 found,
                 root: root.path.clone(),
+                root_identity: root.identity,
                 cutoff: root.cutoff,
             }));
     }
+    report.roots(root_identities);
     for (group, attributes) in attributes {
         report.group(
             attributes,
@@ -341,7 +324,10 @@ mod tests {
             crate::Exclusions::none(),
         );
         let report = scan(&rules, &TemplateVariables::new(), &options);
-        assert_eq!(report.issues(), [ScanIssue::UnsupportedSystem]);
+        assert_eq!(
+            report.issues(),
+            [ScanIssue::Stopped(crate::Stop::UnsupportedSystem)]
+        );
         assert!(report.groups().is_empty());
     }
 }

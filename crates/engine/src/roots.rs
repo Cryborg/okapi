@@ -15,7 +15,7 @@ use crate::protection::ProtectedRoots;
 use crate::report::{
     AppFile, EntryKind, GroupAttributes, Origin, ScanIssue, ScanStats, UnsafeReason,
 };
-use crate::walk::{Found, Readers};
+use crate::walk::{Found, Readers, by_name};
 
 /// A rule to scan, from any of the rule files the scan handles.
 #[derive(Debug, Clone, Copy)]
@@ -182,7 +182,7 @@ impl Planner<'_> {
             });
             return None;
         }
-        if self.misc.protects(&canonical) {
+        if by_name(&canonical, false, true).is_some() || self.misc.protects(&canonical) {
             self.stats.protected_names += 1;
             return None;
         }
@@ -380,7 +380,10 @@ impl Planner<'_> {
                 });
                 continue;
             }
-            if self.options.exclusions().excludes(&root) {
+            let exclusions = self.options.exclusions();
+            if exclusions.excludes(&root)
+                || exclusions.excludes_by_identity(&root, self.readers.identity)
+            {
                 self.issues.push(ScanIssue::Excluded {
                     origins: vec![origin.clone()],
                     path: root,

@@ -1,21 +1,26 @@
-//! Scan engine: finds what the cleaning rules can remove and names it by
-//! identifier. Cleaning and receipts are still to come.
+//! Scan and cleaning engine: finds what the cleaning rules can remove, names
+//! it by identifier, and removes what is asked for after checking it again.
 //!
 //! [`scan`] walks the directories the cleaning rules name and reports what can
-//! be removed, as groups of entries identified by [`ItemId`]. Cleaning will
-//! take those identifiers, never a path (invariant 1), and check again, before
-//! removing an entry, that it is the same object and still old enough,
-//! descendants included (invariant 2).
+//! be removed, as groups of entries identified by [`ItemId`]. [`clean`] takes
+//! the report and the identifiers of the entries to remove, never a path
+//! (invariant 1), and checks again, before removing an entry, that it is the
+//! same object and still old enough, descendants included (invariant 2). The
+//! [`CleanReceipt`] says what became of each one.
 
+mod clean;
 mod options;
 mod paths;
+mod preconditions;
 mod protection;
 mod report;
 mod roots;
 mod scan;
 mod walk;
 
+pub use clean::{CleanOutcome, CleanReceipt, CleanResult, KeepReason, clean};
 pub use options::{DEFAULT_MIN_AGE, ExclusionError, Exclusions, ScanOptions};
+pub use preconditions::Stop;
 pub use report::{
     AppFile, EntryKind, ItemId, Limit, Origin, ScanGroup, ScanIssue, ScanItem, ScanReport,
     ScanStats, UnsafeReason,

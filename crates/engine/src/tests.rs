@@ -10,10 +10,15 @@ use okapi_rules::{
 };
 
 use crate::options::{Exclusions, ScanOptions};
+use crate::preconditions::Stop;
 use crate::report::{AppFile, EntryKind, Limit, ScanGroup, ScanIssue, ScanReport};
 use crate::roots::RuleEntry;
 use crate::scan::scan_entries;
 use crate::walk::{Limits, Readers};
+
+// Cleaning works through directory descriptors, on Linux only.
+#[cfg(target_os = "linux")]
+mod clean;
 
 const HOUR: Duration = Duration::from_hours(1);
 
@@ -1302,7 +1307,10 @@ fn ages_beyond_the_clock_and_a_zero_global_age() {
     run.options = ScanOptions::new(fixture.now, Duration::MAX, Exclusions::none());
     let report = run.scan();
     assert_eq!(offered_paths(&report), Vec::<PathBuf>::new());
-    assert_eq!(report.issues(), [ScanIssue::MinAgeBeyondClock]);
+    assert_eq!(
+        report.issues(),
+        [ScanIssue::Stopped(Stop::MinAgeBeyondClock)]
+    );
     assert!(report.issues()[0].stops_the_scan());
 
     // Only the rule's own age reaches before the clock's origin.
@@ -1362,10 +1370,10 @@ fn a_variable_that_cannot_be_located_stops_the_scan() {
     assert_eq!(report.groups(), &[]);
     assert!(matches!(
         report.issues(),
-        [ScanIssue::UnreadableVariable {
+        [ScanIssue::Stopped(Stop::UnreadableVariable {
             variable: Variable::Home,
             ..
-        }]
+        })]
     ));
     assert!(report.issues()[0].stops_the_scan());
 }
@@ -1414,11 +1422,11 @@ fn a_variable_in_an_unreadable_directory_stops_the_scan() {
     assert_eq!(report.groups(), &[]);
     assert!(matches!(
         report.issues(),
-        [ScanIssue::UnreadableVariable {
+        [ScanIssue::Stopped(Stop::UnreadableVariable {
             variable: Variable::Home,
             error: std::io::ErrorKind::PermissionDenied,
             ..
-        }]
+        })]
     ));
     assert!(report.issues()[0].stops_the_scan());
 }
@@ -1683,7 +1691,11 @@ fn the_public_scan_plans_the_embedded_rules() {
     );
     let rules = okapi_rules::RuleSet::embedded(okapi_rules::Os::Linux).unwrap();
     let report = crate::scan(&rules, &variables, &options);
-    assert!(!report.issues().contains(&ScanIssue::UnsupportedSystem));
+    assert!(
+        !report
+            .issues()
+            .contains(&ScanIssue::Stopped(Stop::UnsupportedSystem))
+    );
     assert!(report.issues().iter().any(|issue| matches!(
         issue,
         ScanIssue::Excluded { path, origins } if *path == pip
@@ -1999,12 +2011,12 @@ fn a_scan_without_every_variable_of_the_rules_does_not_start() {
     assert_eq!(
         report.issues(),
         [
-            ScanIssue::MissingVariable {
+            ScanIssue::Stopped(Stop::MissingVariable {
                 variable: Variable::Config
-            },
-            ScanIssue::MissingVariable {
+            }),
+            ScanIssue::Stopped(Stop::MissingVariable {
                 variable: Variable::LocalShare
-            },
+            }),
         ]
     );
     assert!(report.issues().iter().all(ScanIssue::stops_the_scan));
@@ -2050,4 +2062,193 @@ fn a_system_target_keeps_what_is_younger_than_its_own_age() {
     let report = Run::new(&fixture, vec![RuleEntry::Target(&rule)]).scan();
     assert_eq!(offered_paths(&report), [fixture.path("temp/three-days")]);
     assert_eq!(report.stats().recent(), 1);
+}
+
+#[test]
+fn the_policy_holds_back_mount_roots_links_and_recent_files() {
+    use crate::walk::{Accepted, HoldBack, Observed, WalkContext};
+    use okapi_platform::EntryType;
+
+    let protected =
+        crate::protection::ProtectedRoots::new(&TemplateVariables::new(), file_identity).unwrap();
+    let misc = no_protected_names();
+    let file = FileIdentity::new(7, 2);
+    let root = FileIdentity::new(7, 1);
+    let roots = std::collections::BTreeSet::from([root]);
+    let now = SystemTime::now();
+    let context = WalkContext {
+        cutoff: now,
+        exclusions: &Exclusions::none(),
+        misc: &misc,
+        protected: &protected,
+        roots: &roots,
+        readers: Readers::SYSTEM,
+        limits: Limits::DEFAULT,
+    };
+    let observed = |kind, identity, last_change, mount_root| Observed {
+        kind,
+        identity: Some(identity),
+        last_change: Some(last_change),
+        mount_root,
+    };
+    let old = now - HOUR;
+    assert_eq!(
+        context.by_status(&observed(EntryType::File, file, old, Some(false)), 7, None),
+        Ok(Accepted {
+            identity: file,
+            last_change: old
+        })
+    );
+    for (observed, expected) in [
+        (
+            observed(EntryType::File, file, old, Some(true)),
+            HoldBack::OtherFilesystem,
+        ),
+        (
+            observed(EntryType::File, file, old, None),
+            HoldBack::Unreadable,
+        ),
+        (observed(EntryType::Link, file, old, None), HoldBack::Link),
+        (
+            observed(EntryType::Other, file, old, None),
+            HoldBack::Special,
+        ),
+        (
+            observed(EntryType::File, root, old, Some(false)),
+            HoldBack::Reserved,
+        ),
+        (
+            observed(EntryType::File, file, now + HOUR, Some(false)),
+            HoldBack::Recent,
+        ),
+        // A recent file on another device counts as another device.
+        (
+            observed(
+                EntryType::File,
+                FileIdentity::new(8, 2),
+                now + HOUR,
+                Some(false),
+            ),
+            HoldBack::OtherFilesystem,
+        ),
+    ] {
+        assert_eq!(
+            context.by_status(&observed, 7, None),
+            Err(expected),
+            "{observed:?}"
+        );
+    }
+    assert!(
+        context
+            .by_status(
+                &observed(EntryType::File, root, old, Some(false)),
+                7,
+                Some(root)
+            )
+            .is_ok(),
+        "a single file target is not another root to itself"
+    );
+}
+
+#[test]
+fn the_policy_holds_back_an_excluded_directory_by_identity() {
+    use crate::walk::{HoldBack, Observed, WalkContext};
+    use okapi_platform::EntryType;
+
+    let fixture = Fixture::new();
+    let kept = fixture.directory("kept");
+    let exclusions = Exclusions::new([kept.clone()]).unwrap();
+    let protected =
+        crate::protection::ProtectedRoots::new(&TemplateVariables::new(), file_identity).unwrap();
+    let misc = no_protected_names();
+    let roots = std::collections::BTreeSet::new();
+    let context = WalkContext {
+        cutoff: fixture.now,
+        exclusions: &exclusions,
+        misc: &misc,
+        protected: &protected,
+        roots: &roots,
+        readers: Readers::SYSTEM,
+        limits: Limits::DEFAULT,
+    };
+    // Met at another path (a bind mount shows it elsewhere): the same object.
+    let identity = file_identity(&fs::symlink_metadata(&kept).unwrap()).unwrap();
+    let observed = Observed {
+        kind: EntryType::Directory,
+        identity: Some(identity),
+        last_change: Some(fixture.now - HOUR),
+        mount_root: Some(false),
+    };
+    assert_eq!(context.by_path(&fixture.path("elsewhere")), None);
+    assert_eq!(
+        context.by_status(&observed, identity.device(), None),
+        Err(HoldBack::Excluded)
+    );
+}
+
+#[test]
+fn the_policy_holds_back_a_variable_directory_and_what_cannot_be_read() {
+    use crate::walk::{HoldBack, Observed, WalkContext};
+    use okapi_platform::EntryType;
+
+    let fixture = Fixture::new();
+    let home = fixture.directory("home");
+    let variables = fixture.variables(&[(Variable::Home, "home")]);
+    let protected = crate::protection::ProtectedRoots::new(&variables, file_identity).unwrap();
+    let misc = no_protected_names();
+    let roots = std::collections::BTreeSet::new();
+    let context = WalkContext {
+        cutoff: fixture.now,
+        exclusions: &Exclusions::none(),
+        misc: &misc,
+        protected: &protected,
+        roots: &roots,
+        readers: Readers::SYSTEM,
+        limits: Limits::DEFAULT,
+    };
+    let identity = file_identity(&fs::symlink_metadata(&home).unwrap()).unwrap();
+    let observed = Observed {
+        kind: EntryType::Directory,
+        identity: Some(identity),
+        last_change: Some(fixture.now),
+        mount_root: Some(false),
+    };
+    assert_eq!(
+        context.by_status(&observed, identity.device(), None),
+        Err(HoldBack::Reserved)
+    );
+    let unknown = Observed {
+        kind: EntryType::File,
+        identity: None,
+        last_change: Some(fixture.now - HOUR),
+        mount_root: Some(false),
+    };
+    assert_eq!(
+        context.by_status(&unknown, identity.device(), None),
+        Err(HoldBack::Unreadable)
+    );
+    let undated = Observed {
+        identity: Some(FileIdentity::new(identity.device(), 2)),
+        last_change: None,
+        ..unknown
+    };
+    assert_eq!(
+        context.by_status(&undated, identity.device(), None),
+        Err(HoldBack::Unreadable)
+    );
+    assert!(
+        context
+            .by_status(
+                &Observed {
+                    kind: EntryType::File,
+                    identity: Some(FileIdentity::new(identity.device(), 2)),
+                    last_change: Some(fixture.now),
+                    mount_root: Some(false),
+                },
+                identity.device(),
+                None
+            )
+            .is_ok(),
+        "at the cutoff exactly is old enough"
+    );
 }

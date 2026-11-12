@@ -36,13 +36,31 @@ impl FileIdentity {
 #[must_use]
 pub fn last_change(metadata: &Metadata) -> Option<SystemTime> {
     use std::os::unix::fs::MetadataExt;
-    use std::time::Duration;
 
     let modified = metadata.modified().ok()?;
-    let seconds = u64::try_from(metadata.ctime()).ok()?;
     let nanoseconds = u32::try_from(metadata.ctime_nsec()).ok()?;
-    let changed = SystemTime::UNIX_EPOCH.checked_add(Duration::new(seconds, nanoseconds))?;
-    Some(modified.max(changed))
+    let changed = instant(metadata.ctime(), nanoseconds)?;
+    Some(later_of(modified, changed))
+}
+
+/// The instant `seconds` after the clock's origin (before it when negative),
+/// plus `nanoseconds`, as the system writes file dates.
+/// The last change of an object, content or inode: the later of its content
+/// date and its status change date.
+#[cfg(unix)]
+pub(crate) fn later_of(modified: SystemTime, changed: SystemTime) -> SystemTime {
+    modified.max(changed)
+}
+
+#[cfg(unix)]
+pub(crate) fn instant(seconds: i64, nanoseconds: u32) -> Option<SystemTime> {
+    let whole = std::time::Duration::from_secs(seconds.unsigned_abs());
+    let seconds = if seconds >= 0 {
+        SystemTime::UNIX_EPOCH.checked_add(whole)
+    } else {
+        SystemTime::UNIX_EPOCH.checked_sub(whole)
+    };
+    seconds?.checked_add(std::time::Duration::from_nanos(u64::from(nanoseconds)))
 }
 
 /// When the object `metadata` was read for last changed: its modification
@@ -98,6 +116,19 @@ mod tests {
         assert_eq!(identity(&root.join("one")), identity(&root.join("one/.")));
         let device = identity(&root.join("one")).device();
         assert_eq!(identity(&root.join("two")).device(), device);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dates_before_the_clock_origin_are_kept() {
+        assert_eq!(
+            instant(-2, 500_000_000),
+            Some(SystemTime::UNIX_EPOCH - std::time::Duration::from_millis(1_500))
+        );
+        assert_eq!(
+            instant(3, 1),
+            Some(SystemTime::UNIX_EPOCH + std::time::Duration::new(3, 1))
+        );
     }
 
     #[test]

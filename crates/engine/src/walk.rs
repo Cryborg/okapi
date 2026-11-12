@@ -4,11 +4,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use okapi_platform::FileIdentity;
+use okapi_platform::{EntryType, FileIdentity};
 use okapi_rules::MiscRules;
 
 use crate::options::Exclusions;
-use crate::paths::{is_absent, is_absent_kind};
+use crate::paths::{is_absent, is_absent_kind, is_session_name};
 use crate::protection::ProtectedRoots;
 use crate::report::{EntryKind, Limit, ScanStats};
 
@@ -73,6 +73,129 @@ pub(crate) struct WalkContext<'a> {
     pub(crate) limits: Limits,
 }
 
+/// Why an entry is held back, which keeps its parent directory open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HoldBack {
+    Excluded,
+    /// A name the rules protect, or one a running session relies on.
+    ProtectedName,
+    Link,
+    /// A socket, a pipe or a device.
+    Special,
+    /// Its type, identity, date or mount status cannot be read.
+    Unreadable,
+    /// Another device, or the root of a mount.
+    OtherFilesystem,
+    /// Another scan root, or a variable's directory or one of its ancestors.
+    Reserved,
+    /// A file changed after the cutoff.
+    Recent,
+}
+
+/// What is known of an entry, read without following links. `None` is what
+/// could not be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Observed {
+    pub(crate) kind: EntryType,
+    pub(crate) identity: Option<FileIdentity>,
+    pub(crate) last_change: Option<SystemTime>,
+    pub(crate) mount_root: Option<bool>,
+}
+
+impl Observed {
+    /// What the scan reads by path. It does not detect a bind mount of the
+    /// same device, so the entry is taken as no mount root.
+    fn from_metadata(metadata: &Metadata, readers: Readers) -> Self {
+        let file_type = metadata.file_type();
+        let kind = if file_type.is_symlink() {
+            EntryType::Link
+        } else if file_type.is_file() {
+            EntryType::File
+        } else if file_type.is_dir() {
+            EntryType::Directory
+        } else {
+            EntryType::Other
+        };
+        Self {
+            kind,
+            identity: (readers.identity)(metadata),
+            last_change: (readers.last_change)(metadata),
+            mount_root: Some(false),
+        }
+    }
+}
+
+/// Whether a running session relies on the entry `path`, a directory or not,
+/// `top_level` when it lies directly below its scan root.
+pub(crate) fn by_name(path: &Path, is_directory: bool, top_level: bool) -> Option<HoldBack> {
+    path.file_name()
+        .is_some_and(|name| is_session_name(name, is_directory, top_level))
+        .then_some(HoldBack::ProtectedName)
+}
+
+/// An entry the policy accepts, with what it read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Accepted {
+    pub(crate) identity: FileIdentity,
+    pub(crate) last_change: SystemTime,
+}
+
+impl WalkContext<'_> {
+    /// What holds an entry back by its path alone, before anything is read.
+    pub(crate) fn by_path(&self, path: &Path) -> Option<HoldBack> {
+        if self.exclusions.excludes(path) {
+            return Some(HoldBack::Excluded);
+        }
+        self.misc.protects(path).then_some(HoldBack::ProtectedName)
+    }
+
+    /// What holds an entry back by what was read of it, on the device
+    /// `device`. `own_root` is the scan root the entry itself is, which the
+    /// check against the other roots skips (a single file target). A
+    /// directory's own date is judged by the caller: the scan after its
+    /// contents (it may still offer them one by one), the cleaning before it
+    /// touches them.
+    pub(crate) fn by_status(
+        &self,
+        observed: &Observed,
+        device: u64,
+        own_root: Option<FileIdentity>,
+    ) -> Result<Accepted, HoldBack> {
+        match observed.kind {
+            EntryType::Link => return Err(HoldBack::Link),
+            EntryType::Other => return Err(HoldBack::Special),
+            EntryType::File | EntryType::Directory => {}
+        }
+        let (Some(identity), Some(last_change), Some(mount_root)) =
+            (observed.identity, observed.last_change, observed.mount_root)
+        else {
+            return Err(HoldBack::Unreadable);
+        };
+        if self.exclusions.excludes_identity(identity) {
+            return Err(HoldBack::Excluded);
+        }
+        if identity.device() != device || mount_root {
+            return Err(HoldBack::OtherFilesystem);
+        }
+        // Another scan root met here (a file target below a directory root, a
+        // nested root) keeps its own entries.
+        if own_root != Some(identity) && self.roots.contains(&identity) {
+            return Err(HoldBack::Reserved);
+        }
+        if observed.kind == EntryType::File && last_change > self.cutoff {
+            return Err(HoldBack::Recent);
+        }
+        if observed.kind == EntryType::Directory && self.protected.is_protected_directory(identity)
+        {
+            return Err(HoldBack::Reserved);
+        }
+        Ok(Accepted {
+            identity,
+            last_change,
+        })
+    }
+}
+
 /// Why a walk could not even list its root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RootProblem {
@@ -120,10 +243,11 @@ struct Walker<'a> {
 ///
 /// An entry is offered when it is a regular file last changed at or before the
 /// cutoff (content or inode, see [`Readers::last_change`]), or a directory last
-/// changed at or before the cutoff whose whole contents are offered (it is then one entry). Anything else is held back and keeps its
-/// parent open: a link, a special file, another device, a variable's directory
-/// or one of its ancestors, another scan root, an unreadable or recent entry,
-/// an excluded or protected name, or a limit reached.
+/// changed at or before the cutoff whose whole contents are offered (it is
+/// then one entry). Anything else is held back and keeps its parent open: a
+/// link, a special file, another device, a variable's directory or one of its
+/// ancestors, another scan root, an unreadable or recent entry, an excluded or
+/// protected name, a name a running session relies on, or a limit reached.
 ///
 /// No link is followed: every entry is judged by metadata read without
 /// following links, and a directory is listed only if, once opened, it is
@@ -199,13 +323,8 @@ impl Walker<'_> {
         if self.visited > self.context.limits.entries {
             return self.limit(Limit::Entries);
         }
-        if self.context.exclusions.excludes(path) {
-            self.walk.stats.excluded += 1;
-            return Resolved::held_back();
-        }
-        if self.context.misc.protects(path) {
-            self.walk.stats.protected_names += 1;
-            return Resolved::held_back();
+        if let Some(reason) = self.context.by_path(path) {
+            return self.held_back(reason);
         }
         let metadata = match fs::symlink_metadata(path) {
             Ok(metadata) => metadata,
@@ -216,63 +335,38 @@ impl Walker<'_> {
                 return Resolved::held_back();
             }
         };
-        let file_type = metadata.file_type();
-        if file_type.is_symlink() {
-            self.walk.stats.links += 1;
-            return Resolved::held_back();
-        }
-        if !file_type.is_file() && !file_type.is_dir() {
-            self.walk.stats.special_files += 1;
-            return Resolved::held_back();
-        }
-        let (Some(modified), Some(identity)) = (
-            (self.context.readers.last_change)(&metadata),
-            (self.context.readers.identity)(&metadata),
-        ) else {
-            self.walk.stats.unreadable += 1;
-            return Resolved::held_back();
+        let observed = Observed::from_metadata(&metadata, self.context.readers);
+        let accepted = match self.context.by_status(&observed, self.device, None) {
+            Ok(accepted) => accepted,
+            Err(reason) => return self.held_back(reason),
         };
-        if identity.device() != self.device {
-            self.walk.stats.other_filesystems += 1;
-            return Resolved::held_back();
+        let is_directory = observed.kind == EntryType::Directory;
+        let top_level = depth_left == self.context.limits.depth;
+        if let Some(reason) = by_name(path, is_directory, top_level) {
+            return self.held_back(reason);
         }
-        // Another scan root met here (a file target below a directory root, a
-        // nested root) keeps its own entries.
-        if self.context.roots.contains(&identity) {
-            self.walk.stats.reserved_directories += 1;
-            return Resolved::held_back();
-        }
-        if file_type.is_file() {
-            return self.file(path, &metadata, modified, identity);
-        }
-        if self.context.protected.is_protected_directory(identity) {
-            self.walk.stats.reserved_directories += 1;
-            return Resolved::held_back();
+        if !is_directory {
+            return Self::file(path, &metadata, accepted);
         }
         let Some(depth_left) = depth_left.checked_sub(1) else {
             return self.limit(Limit::Depth);
         };
-        self.directory(path, modified, identity, depth_left)
+        self.directory(path, accepted.last_change, accepted.identity, depth_left)
     }
 
-    fn file(
-        &mut self,
-        path: &Path,
-        metadata: &Metadata,
-        modified: SystemTime,
-        identity: FileIdentity,
-    ) -> Resolved {
-        if modified > self.context.cutoff {
-            self.walk.stats.recent += 1;
-            return Resolved::held_back();
-        }
+    fn held_back(&mut self, reason: HoldBack) -> Resolved {
+        self.walk.stats.count(reason);
+        Resolved::held_back()
+    }
+
+    fn file(path: &Path, metadata: &Metadata, accepted: Accepted) -> Resolved {
         Resolved {
             found: vec![Found {
                 path: path.to_path_buf(),
                 size: metadata.len(),
-                last_change: modified,
+                last_change: accepted.last_change,
                 kind: EntryKind::File,
-                identity,
+                identity: accepted.identity,
             }],
             complete: true,
             size: metadata.len(),

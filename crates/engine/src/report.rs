@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -5,7 +6,9 @@ use std::time::SystemTime;
 use okapi_platform::FileIdentity;
 use okapi_rules::{Label, RuleId, TemplateError, TemplatePath, Variable};
 
-use crate::walk::Found;
+use crate::preconditions::Stop;
+
+use crate::walk::{Found, HoldBack};
 
 /// Whether an offered entry is a file or a whole directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -65,22 +68,8 @@ pub enum UnsafeReason {
 /// Something a scan could not do, or chose not to do.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ScanIssue {
-    /// This system gives no file identity, which mount points and bind mounts
-    /// are detected with: nothing is scanned.
-    UnsupportedSystem,
-    /// A variable the rules use has no value: what it would protect cannot be
-    /// vouched for (invariant 6), so nothing is scanned.
-    MissingVariable { variable: Variable },
-    /// A variable's directory, or one of its ancestors, cannot be read: what it
-    /// protects cannot be vouched for (invariant 6), so nothing is scanned.
-    UnreadableVariable {
-        variable: Variable,
-        path: PathBuf,
-        error: io::ErrorKind,
-    },
-    /// The minimum age of the scan reaches before the clock's origin: nothing
-    /// can be old enough, so nothing is scanned.
-    MinAgeBeyondClock,
+    /// Nothing was scanned.
+    Stopped(Stop),
     /// The rule asks for an age reaching before the clock's origin: nothing
     /// can be old enough.
     AgeBeyondClock { origin: Origin },
@@ -124,13 +113,7 @@ impl ScanIssue {
     /// nothing, which does not mean there is nothing to clean.
     #[must_use]
     pub const fn stops_the_scan(&self) -> bool {
-        matches!(
-            self,
-            Self::UnsupportedSystem
-                | Self::MissingVariable { .. }
-                | Self::UnreadableVariable { .. }
-                | Self::MinAgeBeyondClock
-        )
+        matches!(self, Self::Stopped(_))
     }
 }
 
@@ -201,10 +184,26 @@ impl ScanStats {
         self.excluded
     }
 
-    /// Entries whose name the rules protect.
+    /// Entries whose name the rules protect, or one a running session relies
+    /// on (locks, X11 socket directories, private temporary directories).
     #[must_use]
     pub const fn protected_names(&self) -> u64 {
         self.protected_names
+    }
+
+    /// Counts one entry held back for `reason`.
+    pub(crate) const fn count(&mut self, reason: HoldBack) {
+        let counter = match reason {
+            HoldBack::Excluded => &mut self.excluded,
+            HoldBack::ProtectedName => &mut self.protected_names,
+            HoldBack::Link => &mut self.links,
+            HoldBack::Special => &mut self.special_files,
+            HoldBack::Unreadable => &mut self.unreadable,
+            HoldBack::OtherFilesystem => &mut self.other_filesystems,
+            HoldBack::Reserved => &mut self.reserved_directories,
+            HoldBack::Recent => &mut self.recent,
+        };
+        *counter += 1;
     }
 
     pub(crate) const fn add(&mut self, other: &Self) {
@@ -353,6 +352,9 @@ pub struct ScanReport {
     locations: Vec<(usize, usize)>,
     issues: Vec<ScanIssue>,
     stats: ScanStats,
+    /// The identity of every root walked: cleaning judges an entry against
+    /// them as the scan did.
+    roots: BTreeSet<FileIdentity>,
 }
 
 impl ScanReport {
@@ -382,6 +384,16 @@ impl ScanReport {
         let &(group, item) = self.locations.get(id.index)?;
         let group = self.groups.get(group)?;
         Some((group, group.items.get(item)?))
+    }
+
+    pub(crate) const fn roots(&self) -> &BTreeSet<FileIdentity> {
+        &self.roots
+    }
+}
+
+impl ScanItem {
+    pub(crate) const fn found_item(&self) -> &FoundItem {
+        &self.item
     }
 }
 
@@ -413,6 +425,7 @@ impl GroupAttributes {
 pub(crate) struct FoundItem {
     pub(crate) found: Found,
     pub(crate) root: PathBuf,
+    pub(crate) root_identity: FileIdentity,
     pub(crate) cutoff: SystemTime,
 }
 
@@ -430,6 +443,7 @@ impl ReportBuilder {
                 locations: Vec::new(),
                 issues: Vec::new(),
                 stats: ScanStats::default(),
+                roots: BTreeSet::new(),
             },
         }
     }
@@ -461,6 +475,10 @@ impl ReportBuilder {
             })
             .collect();
         self.report.groups.push(ScanGroup { attributes, items });
+    }
+
+    pub(crate) fn roots(&mut self, roots: BTreeSet<FileIdentity>) {
+        self.report.roots = roots;
     }
 
     pub(crate) fn finish(self) -> ScanReport {

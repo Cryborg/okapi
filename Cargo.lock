@@ -93,6 +93,7 @@ name = "okapi-platform"
 version = "0.1.0"
 dependencies = [
  "okapi-rules",
+ "rustix",
  "tempfile",
  "thiserror",
 ]

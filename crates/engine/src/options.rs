@@ -1,11 +1,14 @@
-use std::ffi::OsStr;
+use std::collections::BTreeSet;
+use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use okapi_platform::{FileIdentity, file_identity};
 use thiserror::Error;
 
-use crate::paths::{canonicalize_longest_prefix, starts_with_ignoring_case};
+use crate::paths::{canonicalize_longest_prefix, lowercase, starts_with_ignoring_case};
+use crate::walk::IdentityReader;
 
 /// How old an entry must be to be offered when the user has not chosen.
 pub const DEFAULT_MIN_AGE: Duration = Duration::from_hours(1);
@@ -27,12 +30,16 @@ pub enum ExclusionError {
 }
 
 /// What the user never wants cleaned: paths (and everything below them), and
-/// file extensions written `*.log`. Matching ignores case, which can only
-/// exclude more; Unicode normalization forms are not folded.
+/// extensions written `*.log` (files, and directories with everything below
+/// them, such as a `*.default-release` browser profile). Matching ignores case,
+/// which can only exclude more; Unicode normalization forms are not folded.
+/// An excluded directory that exists is also known by its identity, which
+/// sees through a bind mount that shows it at another path.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Exclusions {
     prefixes: Vec<PathBuf>,
     extensions: Vec<String>,
+    identities: BTreeSet<FileIdentity>,
 }
 
 impl Exclusions {
@@ -70,7 +77,7 @@ impl Exclusions {
                 {
                     exclusions
                         .extensions
-                        .push(format!(".{}", extension.to_lowercase()));
+                        .push(format!(".{}", lowercase(extension)));
                 }
                 None if plain_path => {
                     let real = canonicalize_longest_prefix(&entry).map_err(|error| {
@@ -79,6 +86,12 @@ impl Exclusions {
                             error: error.kind(),
                         }
                     })?;
+                    if let Some(identity) = fs::symlink_metadata(&real)
+                        .ok()
+                        .and_then(|metadata| file_identity(&metadata))
+                    {
+                        exclusions.identities.insert(identity);
+                    }
                     exclusions.prefixes.push(real);
                     exclusions.prefixes.push(entry);
                 }
@@ -88,17 +101,35 @@ impl Exclusions {
         Ok(exclusions)
     }
 
-    /// Whether `path` is excluded, by a prefix or by its extension.
+    /// Whether the object of `identity` is an excluded directory.
+    pub(crate) fn excludes_identity(&self, identity: FileIdentity) -> bool {
+        self.identities.contains(&identity)
+    }
+
+    /// Whether `path` or one of its ancestors is an excluded directory by
+    /// identity: the same directory shown at another path by a bind mount.
+    pub(crate) fn excludes_by_identity(&self, path: &Path, identity_of: IdentityReader) -> bool {
+        !self.identities.is_empty()
+            && path.ancestors().any(|ancestor| {
+                fs::symlink_metadata(ancestor)
+                    .ok()
+                    .and_then(|metadata| identity_of(&metadata))
+                    .is_some_and(|identity| self.identities.contains(&identity))
+            })
+    }
+
+    /// Whether `path` is excluded, by a prefix or by the extension of any of
+    /// its components: an excluded directory covers what lies below it.
     pub(crate) fn excludes(&self, path: &Path) -> bool {
-        let by_extension = path
-            .file_name()
-            .map(OsStr::to_string_lossy)
-            .is_some_and(|name| {
-                let name = name.to_lowercase();
-                self.extensions
-                    .iter()
-                    .any(|extension| name.ends_with(extension.as_str()))
-            });
+        let by_extension = path.components().any(|component| {
+            let Component::Normal(name) = component else {
+                return false;
+            };
+            let name = lowercase(&name.to_string_lossy());
+            self.extensions
+                .iter()
+                .any(|extension| name.ends_with(extension.as_str()))
+        });
         by_extension
             || self
                 .prefixes
@@ -178,7 +209,12 @@ mod tests {
         assert!(exclusions.excludes(Path::new("/data/keep/x/y")));
         assert!(!exclusions.excludes(Path::new("/data/keeper")));
         assert!(exclusions.excludes(Path::new("/tmp/build.LOG")));
+        assert!(
+            exclusions.excludes(Path::new("/tmp/run.log/part")),
+            "below an excluded directory"
+        );
         assert!(!exclusions.excludes(Path::new("/tmp/catalog")));
+        assert!(!exclusions.excludes(Path::new("/tmp/catalog/x")));
         assert!(!Exclusions::none().excludes(Path::new("/data/keep")));
     }
 
@@ -204,6 +240,28 @@ mod tests {
             Exclusions::new([entry.clone()]),
             Err(ExclusionError::Unresolvable { path, .. }) if path == entry
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_excluded_directory_is_known_by_identity_below_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(directory.path()).unwrap();
+        std::fs::create_dir_all(real.join("keep/inner")).unwrap();
+        std::fs::create_dir(real.join("other")).unwrap();
+        let exclusions = Exclusions::new([real.join("keep")]).unwrap();
+        let identity_of_keep =
+            file_identity(&std::fs::symlink_metadata(real.join("keep")).unwrap()).unwrap();
+        assert!(exclusions.excludes_identity(identity_of_keep));
+        assert!(exclusions.excludes_by_identity(&real.join("keep/inner"), file_identity));
+        assert!(!exclusions.excludes_by_identity(&real.join("other"), file_identity));
+        assert!(!Exclusions::none().excludes_by_identity(&real.join("keep"), file_identity));
+    }
+
+    #[test]
+    fn a_final_sigma_extension_still_matches() {
+        let exclusions = exclusions(&["*.Σ"]).unwrap();
+        assert!(exclusions.excludes(Path::new("/cache/foo.Σ")));
     }
 
     #[test]

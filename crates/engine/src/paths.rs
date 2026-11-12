@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -50,6 +51,46 @@ pub(crate) fn canonicalize_longest_prefix(path: &Path) -> io::Result<PathBuf> {
     }
 }
 
+/// Whether `name` is one a running session or service relies on, whatever
+/// its age. A lock file anywhere (`lock`, `*.lck`); and, directly below a scan
+/// root (`top_level`), where `tmpfiles.d` puts them and never cleans them: the
+/// X server's `.X0-lock`, the X11 socket directories, and the private
+/// temporary directories of systemd, snap and ssh. Deleting them breaks what
+/// is running, even as root. A lock protects itself only, not its siblings.
+pub(crate) fn is_session_name(name: &OsStr, is_directory: bool, top_level: bool) -> bool {
+    const EXACT: [&str; 5] = [
+        ".X11-unix",
+        ".ICE-unix",
+        ".XIM-unix",
+        ".font-unix",
+        "snap-private-tmp",
+    ];
+    const PREFIXES: [&str; 2] = ["systemd-private-", "ssh-"];
+    const LOCK_SUFFIX: &[u8] = b".lck";
+    let bytes = name.as_encoded_bytes();
+    let lock_file = !is_directory
+        && (bytes.eq_ignore_ascii_case(b"lock")
+            || bytes
+                .len()
+                .checked_sub(LOCK_SUFFIX.len())
+                .is_some_and(|start| bytes[start..].eq_ignore_ascii_case(LOCK_SUFFIX)));
+    let Some(name) = name.to_str() else {
+        return lock_file;
+    };
+    let session_entry = top_level
+        && ((name.starts_with(".X") && name.ends_with("-lock"))
+            || EXACT.contains(&name)
+            || PREFIXES.iter().any(|prefix| name.starts_with(prefix)));
+    lock_file || session_entry
+}
+
+/// `text` in lower case, one character at a time: `str::to_lowercase` writes a
+/// final sigma differently at the end of a word, so a name and its suffix
+/// would no longer compare.
+pub(crate) fn lowercase(text: &str) -> String {
+    text.chars().flat_map(char::to_lowercase).collect()
+}
+
 /// Whether `path` is `prefix` or below it, comparing whole components and
 /// ignoring case. Used where matching too much is the safe side (exclusions):
 /// the text conversion can only make two different names compare equal.
@@ -57,8 +98,8 @@ pub(crate) fn starts_with_ignoring_case(path: &Path, prefix: &Path) -> bool {
     let mut components = path.components();
     prefix.components().all(|expected| {
         components.next().is_some_and(|component| {
-            component.as_os_str().to_string_lossy().to_lowercase()
-                == expected.as_os_str().to_string_lossy().to_lowercase()
+            lowercase(&component.as_os_str().to_string_lossy())
+                == lowercase(&expected.as_os_str().to_string_lossy())
         })
     })
 }
@@ -85,6 +126,49 @@ mod tests {
             Path::new("/home"),
             Path::new("/home/a")
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_names_are_recognised_where_they_live() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let session = |name: &str, is_directory, top_level| {
+            is_session_name(OsStr::new(name), is_directory, top_level)
+        };
+        assert!(is_session_name(
+            std::ffi::OsStr::from_bytes(b"db\xff.lck"),
+            false,
+            false
+        ));
+        for name in ["lock", "LOCK", "kotlin-daemon.log.lck", "db.LCK", ".lck"] {
+            assert!(session(name, false, false), "{name}");
+            assert!(!session(name, true, true), "a directory named {name}");
+        }
+        for (name, is_directory) in [
+            (".X0-lock", false),
+            (".X11-unix", true),
+            (".ICE-unix", true),
+            (".XIM-unix", true),
+            (".font-unix", true),
+            ("snap-private-tmp", true),
+            ("systemd-private-0a1b-colord.service-xyz", true),
+            ("ssh-XXXXabcd", true),
+        ] {
+            assert!(session(name, is_directory, true), "{name}");
+            assert!(!session(name, is_directory, false), "{name} deeper down");
+        }
+        for name in [
+            "Cargo.lock",
+            "locks",
+            "block",
+            ".X0",
+            "X0-lock",
+            "lck",
+            "systemd",
+        ] {
+            assert!(!session(name, false, true), "{name}");
+        }
     }
 
     #[test]

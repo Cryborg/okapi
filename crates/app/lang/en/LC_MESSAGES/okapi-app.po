@@ -148,14 +148,6 @@ msgid "Aucune catégorie sélectionnée"
 msgstr "No category selected"
 
 msgctxt "Choosing"
-msgid "Catégories sélectionnées : {} sur {}"
-msgstr "Categories selected: {} of {}"
-
-msgctxt "Choosing"
-msgid "Cocher les recommandées"
-msgstr "Check the recommended ones"
-
-msgctxt "Choosing"
 msgid "Analyser"
 msgstr "Analyze"
 
@@ -300,24 +292,52 @@ msgid "L'élément en cours se termine ; ce qui n'est pas encore retiré reste."
 msgstr "The entry under way finishes; what is not yet removed stays."
 
 msgctxt "CleaningPage"
-msgid "Vérification de chaque élément avant de le retirer."
-msgstr "Checking each entry before removing it."
+msgid "Chaque élément est vérifié, puis revérifié juste avant d'être retiré."
+msgstr "Each entry is checked, then checked again just before it is removed."
 
-msgctxt "CleaningPage"
-msgid "Suppression des éléments vérifiés."
-msgstr "Removing the entries checked."
+msgctxt "CleanStepRow"
+msgid "Nettoyage des éléments administrateur"
+msgstr "Cleaning the administrator's items"
 
-msgctxt "CleaningPage"
-msgid "Vérification"
-msgstr "Checking"
+msgctxt "CleanStepRow"
+msgid "Vérification de chaque élément"
+msgstr "Checking each entry"
 
-msgctxt "CleaningPage"
-msgid "Suppression"
-msgstr "Removing"
+msgctxt "CleanStepRow"
+msgid "Suppression des éléments vérifiés"
+msgstr "Removing the entries checked"
 
-msgctxt "CleaningPage"
-msgid "Éléments : {} sur {}"
-msgstr "Entries: {} of {}"
+msgctxt "CleanStepRow"
+msgid "Enregistrement dans l'historique"
+msgstr "Recording in the history"
+
+msgctxt "CleanStepRow"
+msgid "Fait"
+msgstr "Done"
+
+msgctxt "CleanStepRow"
+msgid "Non fait"
+msgstr "Not done"
+
+msgctxt "CleanStepRow"
+msgid "En cours"
+msgstr "Under way"
+
+msgctxt "CleanStepRow"
+msgid "En attente"
+msgstr "Waiting"
+
+msgctxt "CleanStepRow"
+msgid "{}, éléments : {} sur {}"
+msgstr "{}, entries: {} of {}"
+
+msgctxt "CleanStepRow"
+msgid "{} sur {}"
+msgstr "{} of {}"
+
+msgctxt "CleanSteps"
+msgid "Étapes du nettoyage"
+msgstr "Steps of the cleaning"
 
 msgctxt "CleaningPage"
 msgid "Libéré jusqu'ici"
@@ -523,9 +543,6 @@ msgctxt "CleaningPage"
 msgid "Saisissez le mot de passe dans la fenêtre du système. Annuler n'agit qu'une fois cette fenêtre fermée."
 msgstr "Enter the password in the system's window. Cancel only acts once that window is closed."
 
-msgctxt "CleaningPage"
-msgid "Nettoyage des éléments administrateur."
-msgstr "Cleaning the administrator's items."
 
 msgctxt "ReceiptPage"
 msgid "La partie administrateur ne s'est pas terminée. {}"
@@ -540,8 +557,8 @@ msgid "Une partie de ce que l'assistant administrateur devait nettoyer a changé
 msgstr "Part of what the administrator helper was to clean changed since the rights were obtained: it was not cleaned whole. The details are in the log."
 
 msgctxt "Words"
-msgid "La demande a été annulée avant toute suppression."
-msgstr "The request was cancelled before anything was removed."
+msgid "La demande a été annulée avant la fin."
+msgstr "The request was cancelled before it was over."
 
 msgctxt "Words"
 msgid "Les droits administrateur ont été refusés, ou la demande n'a pas pu aboutir. Le détail est dans le journal."

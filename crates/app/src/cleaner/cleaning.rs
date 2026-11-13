@@ -60,12 +60,167 @@ pub struct Cleaned {
 /// The cleaning under way, as its progress tells it.
 #[derive(Debug, Default)]
 struct CleanView {
-    pass: Option<CleanPass>,
-    done: usize,
-    total: usize,
-    freed: u64,
     /// Root's part under way: its question, then its work.
     rights: Option<ElevationStep>,
+    /// Root's part over: whether it was done to its end.
+    admin_done: Option<bool>,
+    /// How far each pass of the user's part went: entries done, of all.
+    check: Option<(usize, usize)>,
+    remove: Option<(usize, usize)>,
+    freed: u64,
+    /// The user cancelled: the passes stay where they were then, the
+    /// entries left after it never counted as gone through.
+    cancel_asked: bool,
+}
+
+impl CleanView {
+    /// Every entry went through the check.
+    fn check_over(&self) -> bool {
+        self.remove.is_some() || matches!(self.check, Some((done, total)) if done == total)
+    }
+
+    /// The steps as they stand: root's part if the cleaning has one, the
+    /// two passes over the user's `entries` if any, then the history line.
+    fn steps(&self, had_admin: bool, entries: usize) -> Vec<ui::CleanStep> {
+        let pass = |kind, reached: Option<(usize, usize)>, over: bool| {
+            let (done, total) = reached.unwrap_or((0, entries));
+            let state = match reached {
+                None => ui::RowState::Waiting,
+                Some(_) if over || done == total => ui::RowState::Done,
+                Some(_) => ui::RowState::Running,
+            };
+            clean_step(kind, state, done, total)
+        };
+        let mut steps = Vec::new();
+        if had_admin {
+            let state = match self.admin_done {
+                None => ui::RowState::Running,
+                Some(true) => ui::RowState::Done,
+                Some(false) => ui::RowState::NotDone,
+            };
+            steps.push(clean_step(ui::CleanStepKind::Admin, state, 0, 0));
+        }
+        if entries > 0 {
+            steps.push(pass(
+                ui::CleanStepKind::Check,
+                self.check,
+                self.check_over(),
+            ));
+            steps.push(pass(ui::CleanStepKind::Remove, self.remove, false));
+        }
+        steps.push(clean_step(
+            ui::CleanStepKind::History,
+            ui::RowState::Waiting,
+            0,
+            0,
+        ));
+        steps
+    }
+
+    /// The steps once the cleaning is over (`ended`, none when its thread
+    /// died): each done to its end, or not done.
+    fn ended_steps(
+        &self,
+        had_admin: bool,
+        entries: usize,
+        ended: Option<Ended>,
+    ) -> Vec<ui::CleanStep> {
+        let mut steps = self.steps(had_admin, entries);
+        let Some(ended) = ended else {
+            // What it had not finished is not done.
+            for step in &mut steps {
+                if step.state != ui::RowState::Done {
+                    step.state = ui::RowState::NotDone;
+                }
+            }
+            return steps;
+        };
+        let Ended {
+            admin_done,
+            user,
+            recorded,
+        } = ended;
+        for step in &mut steps {
+            let done = match step.kind {
+                ui::CleanStepKind::Admin => admin_done,
+                ui::CleanStepKind::Check => match user {
+                    UserEnd::Whole => true,
+                    UserEnd::Cancelled => self.cancel_asked && self.check_over(),
+                    UserEnd::Stopped => false,
+                },
+                ui::CleanStepKind::Remove => user == UserEnd::Whole,
+                ui::CleanStepKind::History => recorded,
+            };
+            if done {
+                // Done to its end, whatever the view held when cancelled
+                // too late.
+                step.done = step.total;
+            }
+            step.state = if done {
+                ui::RowState::Done
+            } else {
+                ui::RowState::NotDone
+            };
+        }
+        steps
+    }
+}
+
+/// What a cleaning that ended says of its steps.
+#[derive(Debug, Clone, Copy)]
+struct Ended {
+    /// Root's part was done to its end.
+    admin_done: bool,
+    user: UserEnd,
+    /// The history line is written.
+    recorded: bool,
+}
+
+/// How the user's part of a cleaning ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UserEnd {
+    /// Every entry went through both passes.
+    Whole,
+    /// Entries were left by a cancellation.
+    Cancelled,
+    /// It stopped before it touched anything.
+    Stopped,
+}
+
+impl Ended {
+    fn of(cleaned: &Cleaned) -> Self {
+        let receipt = &cleaned.receipt;
+        let user = if !receipt.stops().is_empty() {
+            UserEnd::Stopped
+        } else if receipt
+            .outcomes()
+            .iter()
+            .any(|outcome| outcome.result() == CleanResult::Kept(KeepReason::Cancelled))
+        {
+            UserEnd::Cancelled
+        } else {
+            UserEnd::Whole
+        };
+        Self {
+            admin_done: cleaned.admin.as_ref().is_some_and(admin_done),
+            user,
+            recorded: cleaned.history == HistoryWrite::Recorded,
+        }
+    }
+}
+
+fn clean_step(
+    kind: ui::CleanStepKind,
+    state: ui::RowState,
+    done: usize,
+    total: usize,
+) -> ui::CleanStep {
+    ui::CleanStep {
+        kind,
+        state,
+        done: shown(done),
+        total: shown(total),
+    }
 }
 
 /// A cleaning under way. The screen never gives it up: a removal cut short
@@ -74,14 +229,71 @@ struct CleanView {
 pub(super) struct Cleaning {
     pub(super) running: Running<Cleaned>,
     steps: Receiver<ElevationStep>,
+    /// Root's part over: whether it was done to its end.
+    admin_ended: Receiver<bool>,
     view: CleanView,
     report: Arc<ScanReport>,
     /// It had a part of root's.
     had_admin: bool,
+    /// The entries of the user's part.
+    entries: usize,
     /// The user asked for every entry in the history.
     deletion_log: bool,
     /// The window asked to close: it hides once the receipt is in.
     close_when_done: bool,
+}
+
+impl Cleaning {
+    /// Takes in what the cleaning's thread said since the last look.
+    fn take_progress(&mut self) {
+        let view = &mut self.view;
+        if let Some(step) = self.steps.try_iter().last()
+            && view.admin_done.is_none()
+        {
+            view.rights = Some(step);
+        }
+        if let Some(done) = self.admin_ended.try_iter().last() {
+            view.admin_done = Some(done);
+            view.rights = None;
+        }
+        for progress in self.running.progress.try_iter() {
+            if let Progress::Cleaning {
+                pass,
+                done,
+                total,
+                removed_bytes,
+            } = progress
+            {
+                // The user's part: root's is over.
+                view.rights = None;
+                if view.cancel_asked || self.running.cancel.is_cancelled() {
+                    // Cancelled, by the user or by a "no" to the question:
+                    // the entries left run through as cancelled.
+                    continue;
+                }
+                match pass {
+                    CleanPass::Check => view.check = Some((done, total)),
+                    CleanPass::Remove => {
+                        view.remove = Some((done, total));
+                        view.freed = removed_bytes;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Cancels the cleaning, its passes held where they stand now. Whether
+    /// it was the first time.
+    fn cancel(&mut self) -> bool {
+        let first = !self.running.cancel.is_cancelled();
+        if first {
+            self.take_progress();
+            self.view.cancel_asked = true;
+            tracing::info!(check = ?self.view.check, remove = ?self.view.remove, admin_done = ?self.view.admin_done, "where the cleaning stood when cancelled");
+        }
+        self.running.cancel.cancel();
+        first
+    }
 }
 
 /// The confirmation open: what it shows, of which report. The user's part
@@ -146,21 +358,19 @@ struct Prepared {
 
 /// What root's part gave the cleaning: what became of each of its entries,
 /// and why it was not done to its end, if it was not (`RightsProblem::None`
-/// when it was, cancelled entries included: a cancellation alone is said by
-/// them). A run whose end is unknown may have removed entries: said so. Root
-/// is only asked for groups its scan offered without a word: one it says
-/// something about now (withheld, or walked only in part) changed since, and
-/// was not cleaned whole.
+/// when it was). A cancellation leaves entries: never done to its end, what
+/// it removed before is in its outcomes. A run whose end is unknown may have
+/// removed entries: said so. Root is only asked for groups its scan offered
+/// without a word: one it says something about now (withheld, or walked
+/// only in part) changed since, and was not cleaned whole.
 fn admin_part(admin: &AdminDone) -> (&[OutcomeAnswer], ui::RightsProblem) {
     match admin {
         Ok(Reply::Answer(answer)) => {
             let outcomes = answer.outcomes().unwrap_or_default();
             let stops = answer.stops();
-            let cancelled = stops.iter().any(|stop| stop == Stop::Cancelled.key());
             let problem = if stops.iter().any(|stop| stop != Stop::Cancelled.key()) {
                 ui::RightsProblem::Stopped
-            } else if cancelled && outcomes.is_empty() {
-                // Cancelled before its cleaning touched anything.
+            } else if !stops.is_empty() {
                 ui::RightsProblem::Cancelled
             } else if answer
                 .issues()
@@ -178,6 +388,12 @@ fn admin_part(admin: &AdminDone) -> (&[OutcomeAnswer], ui::RightsProblem) {
         Err(failure) if rights::ran_to_an_unknown_end(failure) => (&[], ui::RightsProblem::Unknown),
         Err(failure) => (&[], rights::problem_of(failure)),
     }
+}
+
+/// Whether root's part was done to its end: the one rule of the history
+/// line, the steps and the receipt.
+fn admin_done(admin: &AdminDone) -> bool {
+    admin_part(admin).1 == ui::RightsProblem::None
 }
 
 /// Adds the line of the cleaning to `history`, from the cleaning's thread:
@@ -468,7 +684,9 @@ impl CleanerScreen {
         let had_admin = job.admin.is_some();
         let clean = Arc::clone(&self.0.borrow().seams.clean);
         let elevate = Arc::clone(&self.0.borrow().seams.elevate);
+        let entries = job.ids.len();
         let (step_sender, steps) = mpsc::channel();
+        let (admin_sender, admin_ended) = mpsc::channel();
         let running = Running::start(
             "okapi-cleaning",
             tracing::info_span!("cleaning"),
@@ -483,6 +701,12 @@ impl CleanerScreen {
                     }
                     elevate(Operation::Clean, line, &cancel, &step_sender)
                 });
+                if let Some(admin) = &admin {
+                    let done = admin_done(admin);
+                    if admin_sender.send(done).is_err() {
+                        tracing::debug!("end of root's part not shown: the screen is gone");
+                    }
+                }
                 if matches!(
                     admin,
                     Some(Err(ElevationFailure::Reply(ReplyError::Dismissed)))
@@ -508,20 +732,23 @@ impl CleanerScreen {
         self.0.borrow_mut().task = Some(Task::Cleaning(Cleaning {
             running,
             steps,
+            admin_ended,
             view: CleanView::default(),
             report,
             deletion_log,
             close_when_done: false,
             had_admin,
+            entries,
         }));
         self.settle();
-        self.with_window(|window, _| {
+        self.with_window(|window, state| {
+            show(
+                &state.step_model,
+                CleanView::default().steps(had_admin, entries),
+            );
             let cleaner = window.global::<ui::Cleaner>();
             cleaner.set_clean_cancel_asked(false);
-            cleaner.set_clean_done(0);
-            cleaner.set_clean_total(0);
             cleaner.set_freed(size(0));
-            cleaner.set_clean_pass(ui::CleanPassKind::Check);
             cleaner.set_step(ui::CleanerStep::Cleaning);
         });
         self.watch_task();
@@ -530,52 +757,28 @@ impl CleanerScreen {
 
     /// Takes in the progress of the cleaning, then looks for its receipt.
     pub(super) fn watch_cleaning(&self) {
-        let (result, view) = {
+        let (result, steps, freed, rights) = {
             let mut state = self.0.borrow_mut();
             let Some(Task::Cleaning(cleaning)) = state.task.as_mut() else {
                 return;
             };
-            if let Some(step) = cleaning.steps.try_iter().last() {
-                cleaning.view.rights = Some(step);
-            }
-            for progress in cleaning.running.progress.try_iter() {
-                if let Progress::Cleaning {
-                    pass,
-                    done,
-                    total,
-                    removed_bytes,
-                } = progress
-                {
-                    // The user's part: root's is over.
-                    cleaning.view = CleanView {
-                        pass: Some(pass),
-                        done,
-                        total,
-                        freed: removed_bytes,
-                        rights: None,
-                    };
-                }
-            }
+            cleaning.take_progress();
             let view = &cleaning.view;
             (
                 cleaning.running.result.try_recv(),
-                (view.pass, view.done, view.total, view.freed, view.rights),
+                view.steps(cleaning.had_admin, cleaning.entries),
+                view.freed,
+                view.rights,
             )
         };
-        let (pass, done, total, freed, rights) = view;
-        self.with_window(|window, _| {
+        self.with_window(|window, state| {
+            show(&state.step_model, steps);
             let cleaner = window.global::<ui::Cleaner>();
             cleaner.set_clean_rights(match rights {
                 None => ui::RightsStep::Idle,
                 Some(ElevationStep::Launched) => ui::RightsStep::Authenticating,
                 Some(ElevationStep::Authenticated) => ui::RightsStep::Scanning,
             });
-            cleaner.set_clean_pass(match pass {
-                Some(CleanPass::Remove) => ui::CleanPassKind::Remove,
-                Some(CleanPass::Check) | None => ui::CleanPassKind::Check,
-            });
-            cleaner.set_clean_done(shown(done));
-            cleaner.set_clean_total(shown(total));
             cleaner.set_freed(size(freed));
         });
         match result {
@@ -602,7 +805,7 @@ impl CleanerScreen {
             tracing::error!("a cleaning ended that was not under way");
             return;
         }
-        let Some(Task::Cleaning(cleaning)) = self.0.borrow_mut().task.take() else {
+        let Some(Task::Cleaning(mut cleaning)) = self.0.borrow_mut().task.take() else {
             return;
         };
         {
@@ -611,6 +814,12 @@ impl CleanerScreen {
             state.held = None;
         }
         self.settle();
+        cleaning.take_progress();
+        let steps =
+            cleaning
+                .view
+                .ended_steps(cleaning.had_admin, cleaning.entries, done.map(Ended::of));
+        tracing::info!(steps = ?steps.iter().map(|step| (step.kind, step.state)).collect::<Vec<_>>(), "steps of the cleaning");
         let receipt = done.map(|done| {
             (
                 done,
@@ -637,6 +846,7 @@ impl CleanerScreen {
             tracing::error!("the deletion log asked for is not written");
         }
         self.with_window(|window, state| {
+            show(&state.step_model, steps);
             let shown_to = window.global::<ui::Cleaner>();
             if let Some((done, receipt)) = &receipt {
                 show(
@@ -687,13 +897,11 @@ impl CleanerScreen {
             return;
         }
         let asked = {
-            let state = self.0.borrow();
-            let Some(Task::Cleaning(cleaning)) = &state.task else {
+            let mut state = self.0.borrow_mut();
+            let Some(Task::Cleaning(cleaning)) = state.task.as_mut() else {
                 return;
             };
-            let first = !cleaning.running.cancel.is_cancelled();
-            cleaning.running.cancel.cancel();
-            first
+            cleaning.cancel()
         };
         if asked {
             tracing::info!("cleaning cancelled by the user");
@@ -723,7 +931,7 @@ impl CleanerScreen {
             };
             let insisted = cleaning.close_when_done && !settling;
             cleaning.close_when_done = true;
-            cleaning.running.cancel.cancel();
+            cleaning.cancel();
             insisted
         };
         if insisted {
@@ -1004,6 +1212,17 @@ mod tests {
         assert!(!old.exists(), "removed");
         assert!(shows(&window, "Nettoyage terminé"));
         assert!(shows(&window, "Le reçu est enregistré dans l'historique."));
+        assert_eq!(
+            steps_shown(&window),
+            [
+                (ui::CleanStepKind::Check, ui::RowState::Done),
+                (ui::CleanStepKind::Remove, ui::RowState::Done),
+                (ui::CleanStepKind::History, ui::RowState::Done),
+            ],
+            "no part of root's"
+        );
+        assert!(shows(&window, "Vérification de chaque élément"));
+        assert!(shows(&window, "Suppression des éléments vérifiés"));
         let history = sandbox.history();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0]["removed"], 1);
@@ -1226,6 +1445,69 @@ mod tests {
     }
 
     #[test]
+    fn cancelling_while_removing_keeps_the_check_done_and_the_removal_where_it_was() {
+        let sandbox = Sandbox::new();
+        for name in ["a", "b", "c"] {
+            sandbox.file(&format!("home/.cache/pip/{name}"));
+        }
+        settle_files();
+        let seams = sandbox.read(&sandbox.root.join("state"));
+        let real = Arc::clone(&seams.clean);
+        let (emitted, reached) = std::sync::mpsc::channel::<()>();
+        let (go, gone) = std::sync::mpsc::channel::<()>();
+        let gone = std::sync::Mutex::new(gone);
+        // The check over and one entry removed, as the engine says them;
+        // then the real cleaning, cancelled by then.
+        let clean: super::super::Clean = Arc::new(move |job, cancel, progress| {
+            let total = job.ids.len();
+            for (pass, done) in [
+                (super::CleanPass::Check, total),
+                (super::CleanPass::Remove, 1),
+            ] {
+                progress
+                    .send(super::Progress::Cleaning {
+                        pass,
+                        done,
+                        total,
+                        removed_bytes: 0,
+                    })
+                    .unwrap();
+            }
+            emitted.send(()).unwrap();
+            gone.lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(30))
+                .unwrap();
+            real(job, cancel, progress)
+        });
+        let (window, _screen) = on_results(Seams { clean, ..seams });
+        confirm(&window);
+        reached.recv_timeout(Duration::from_secs(30)).unwrap();
+        let_the_screen_settle();
+        button(&window, "Annuler le nettoyage").invoke_accessible_default_action();
+        go.send(()).unwrap();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        let counted: Vec<_> = {
+            use slint::Model as _;
+            window
+                .global::<ui::Cleaner>()
+                .get_clean_steps()
+                .iter()
+                .map(|step| (step.kind, step.state, step.done, step.total))
+                .collect()
+        };
+        assert_eq!(
+            counted,
+            [
+                (ui::CleanStepKind::Check, ui::RowState::Done, 3, 3),
+                (ui::CleanStepKind::Remove, ui::RowState::NotDone, 1, 3),
+                (ui::CleanStepKind::History, ui::RowState::Done, 0, 0),
+            ],
+            "the entries left after the cancel never counted as gone through"
+        );
+    }
+
+    #[test]
     fn a_cancelled_cleaning_is_never_given_up() {
         let sandbox = Sandbox::new();
         let old = sandbox.file("home/.cache/pip/old");
@@ -1234,6 +1516,15 @@ mod tests {
         let (window, _screen) = on_results(seams);
         confirm(&window);
         let_the_screen_settle();
+        assert_eq!(
+            steps_shown(&window),
+            [
+                (ui::CleanStepKind::Check, ui::RowState::Waiting),
+                (ui::CleanStepKind::Remove, ui::RowState::Waiting),
+                (ui::CleanStepKind::History, ui::RowState::Waiting),
+            ],
+            "every step shown from the start"
+        );
         button(&window, "Annuler le nettoyage").invoke_accessible_default_action();
         assert_eq!(
             button(&window, "Annuler le nettoyage").accessible_enabled(),
@@ -1250,6 +1541,184 @@ mod tests {
         assert!(shows(&window, "Nettoyage annulé"));
         assert!(old.exists());
         assert_eq!(sandbox.history().len(), 1);
+        assert_eq!(
+            steps_shown(&window),
+            [
+                (ui::CleanStepKind::Check, ui::RowState::NotDone),
+                (ui::CleanStepKind::Remove, ui::RowState::NotDone),
+                (ui::CleanStepKind::History, ui::RowState::Done),
+            ],
+            "cancelled before its check"
+        );
+    }
+
+    #[test]
+    fn each_step_keeps_its_bar_as_the_passes_go() {
+        use ui::RowState::{Done, NotDone, Running, Waiting};
+        let states = |view: &super::CleanView| -> Vec<_> {
+            view.steps(true, 3)
+                .iter()
+                .map(|step| (step.state, step.done, step.total))
+                .collect()
+        };
+        let mut view = super::CleanView::default();
+        assert_eq!(
+            states(&view),
+            [
+                (Running, 0, 0),
+                (Waiting, 0, 3),
+                (Waiting, 0, 3),
+                (Waiting, 0, 0)
+            ],
+            "root first, its bar sweeping"
+        );
+        view.admin_done = Some(true);
+        view.check = Some((2, 3));
+        assert_eq!(
+            states(&view),
+            [
+                (Done, 0, 0),
+                (Running, 2, 3),
+                (Waiting, 0, 3),
+                (Waiting, 0, 0)
+            ]
+        );
+        view.check = Some((3, 3));
+        view.remove = Some((1, 3));
+        assert_eq!(
+            states(&view),
+            [(Done, 0, 0), (Done, 3, 3), (Running, 1, 3), (Waiting, 0, 0)],
+            "the check stays shown, full"
+        );
+        view.admin_done = Some(false);
+        assert_eq!(states(&view)[0], (NotDone, 0, 0), "said as soon as known");
+        let kinds =
+            |steps: Vec<ui::CleanStep>| -> Vec<_> { steps.iter().map(|step| step.kind).collect() };
+        assert_eq!(
+            kinds(view.steps(true, 0)),
+            [ui::CleanStepKind::Admin, ui::CleanStepKind::History],
+            "root's part alone: no pass of the user's"
+        );
+        assert_eq!(kinds(view.steps(false, 0)), [ui::CleanStepKind::History]);
+    }
+
+    /// What each step came to (root's, the check, the removal, the history),
+    /// and the entries it shows done.
+    fn ended(view: &super::CleanView, ended: Option<super::Ended>) -> Vec<(ui::RowState, i32)> {
+        view.ended_steps(true, 3, ended)
+            .iter()
+            .map(|step| (step.state, step.done))
+            .collect()
+    }
+
+    const ALL_DONE: super::Ended = super::Ended {
+        admin_done: true,
+        user: super::UserEnd::Whole,
+        recorded: true,
+    };
+
+    #[test]
+    fn a_step_is_done_only_to_its_end() {
+        use ui::RowState::{Done, NotDone};
+        let removing = super::CleanView {
+            admin_done: Some(true),
+            check: Some((3, 3)),
+            remove: Some((1, 3)),
+            ..super::CleanView::default()
+        };
+        assert_eq!(
+            ended(&removing, Some(ALL_DONE)),
+            [(Done, 0), (Done, 3), (Done, 3), (Done, 0)],
+            "a pass done to its end counts every entry"
+        );
+        let cancelled = super::Ended {
+            user: super::UserEnd::Cancelled,
+            ..ALL_DONE
+        };
+        let cancelled_while_removing = super::CleanView {
+            cancel_asked: true,
+            ..removing
+        };
+        assert_eq!(
+            ended(&cancelled_while_removing, Some(cancelled)),
+            [(Done, 0), (Done, 3), (NotDone, 1), (Done, 0)],
+            "cancelled during the removal: the check was over"
+        );
+        let checking = super::CleanView {
+            check: Some((1, 3)),
+            remove: None,
+            ..cancelled_while_removing
+        };
+        assert_eq!(
+            ended(&checking, Some(cancelled)),
+            [(Done, 0), (NotDone, 1), (NotDone, 0), (Done, 0)],
+            "cancelled during the check"
+        );
+        let between = super::CleanView {
+            check: Some((3, 3)),
+            ..checking
+        };
+        assert_eq!(
+            ended(&between, Some(cancelled))[1],
+            (Done, 3),
+            "cancelled once the check was over"
+        );
+        let removing_only = super::CleanView {
+            check: None,
+            remove: Some((1, 3)),
+            ..between
+        };
+        assert_eq!(
+            ended(&removing_only, Some(cancelled))[1],
+            (Done, 3),
+            "the removal begun says the check was over"
+        );
+        let too_late = super::CleanView {
+            check: Some((2, 3)),
+            remove: None,
+            ..removing_only
+        };
+        assert_eq!(
+            ended(&too_late, Some(ALL_DONE)),
+            [(Done, 0), (Done, 3), (Done, 3), (Done, 0)],
+            "cancelled once everything was done: done, every entry counted"
+        );
+        let stopped = super::Ended {
+            admin_done: false,
+            user: super::UserEnd::Stopped,
+            recorded: false,
+        };
+        assert_eq!(
+            ended(&super::CleanView::default(), Some(stopped)),
+            [(NotDone, 0), (NotDone, 0), (NotDone, 0), (NotDone, 0)],
+            "nothing of a stopped cleaning is done"
+        );
+    }
+
+    #[test]
+    fn a_cleaning_whose_thread_dies_keeps_only_what_it_had_finished() {
+        use ui::RowState::{Done, NotDone};
+        let removing = super::CleanView {
+            admin_done: Some(true),
+            check: Some((3, 3)),
+            remove: Some((1, 3)),
+            ..super::CleanView::default()
+        };
+        assert_eq!(
+            ended(&removing, None),
+            [(Done, 0), (Done, 3), (NotDone, 1), (NotDone, 0)]
+        );
+    }
+
+    /// Each step shown, by kind, with its state.
+    fn steps_shown(window: &ui::AppWindow) -> Vec<(ui::CleanStepKind, ui::RowState)> {
+        use slint::Model as _;
+        window
+            .global::<ui::Cleaner>()
+            .get_clean_steps()
+            .iter()
+            .map(|step| (step.kind, step.state))
+            .collect()
     }
 
     #[test]
@@ -1275,6 +1744,12 @@ mod tests {
         );
         assert!(shows(&window, "Nettoyage interrompu"));
         assert!(shows(&window, "L'historique n'a pas été écrit."));
+        assert!(
+            steps_shown(&window)
+                .iter()
+                .all(|(_, state)| *state == ui::RowState::NotDone),
+            "nothing it had not finished is said done"
+        );
         assert!(window.global::<ui::Cleaner>().get_deletion_log_lost());
         assert!(shows_a_text_starting(
             &window,
@@ -2339,6 +2814,16 @@ mod tests {
         assert_eq!(history[0]["removed"], 2);
         assert_eq!(history[0]["admin"], serde_json::json!({ "done": true }));
         assert_eq!(
+            steps_shown(&window),
+            [
+                (ui::CleanStepKind::Admin, ui::RowState::Done),
+                (ui::CleanStepKind::Check, ui::RowState::Done),
+                (ui::CleanStepKind::Remove, ui::RowState::Done),
+                (ui::CleanStepKind::History, ui::RowState::Done),
+            ],
+            "root's part first"
+        );
+        assert_eq!(
             history[0]["entries"][0]["path"],
             crash.display().to_string(),
             "root's first"
@@ -2381,6 +2866,30 @@ mod tests {
             serde_json::json!({ "done": false, "reason": "authDismissed" })
         );
         assert_eq!(history[0]["complete"], false);
+        assert_eq!(
+            steps_shown(&window),
+            [
+                (ui::CleanStepKind::Admin, ui::RowState::NotDone),
+                (ui::CleanStepKind::Check, ui::RowState::NotDone),
+                (ui::CleanStepKind::Remove, ui::RowState::NotDone),
+                (ui::CleanStepKind::History, ui::RowState::Done),
+            ],
+            "a no to the question: nothing done but the history line"
+        );
+        let counted: Vec<_> = {
+            use slint::Model as _;
+            window
+                .global::<ui::Cleaner>()
+                .get_clean_steps()
+                .iter()
+                .map(|step| step.done)
+                .collect()
+        };
+        assert_eq!(
+            counted,
+            [0, 0, 0, 0],
+            "the entries ran through as cancelled: none counted"
+        );
     }
 
     #[test]
@@ -2561,6 +3070,16 @@ mod tests {
         confirm(&window);
         watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
         assert!(!pip.exists(), "{reason}: the user's part goes");
+        assert_eq!(
+            steps_shown(&window),
+            [
+                (ui::CleanStepKind::Admin, ui::RowState::NotDone),
+                (ui::CleanStepKind::Check, ui::RowState::Done),
+                (ui::CleanStepKind::Remove, ui::RowState::Done),
+                (ui::CleanStepKind::History, ui::RowState::Done),
+            ],
+            "{reason}"
+        );
         assert!(
             shows_a_text_starting(&window, "La partie administrateur ne s'est pas terminée."),
             "{reason}"
@@ -2607,6 +3126,28 @@ mod tests {
             "detail": "Entries",
         }]);
         roots_part_fails(0, answer.to_string(), "changed");
+    }
+
+    #[test]
+    fn roots_part_cancelled_on_the_way_is_not_done() {
+        let removed_then_cancelled = serde_json::json!([
+            { "outcome": { "path": "/var/crash/old", "result": "removed", "bytes": 7 }, "scannedBytes": 7 },
+            { "outcome": { "path": "/var/crash/new", "result": "cancelled", "bytes": 0 }, "scannedBytes": 7 },
+        ]);
+        roots_part_fails(
+            1,
+            clean_answer(&["cancelled"], &removed_then_cancelled),
+            "cancelled",
+        );
+    }
+
+    #[test]
+    fn roots_part_cancelled_before_anything_is_not_done() {
+        roots_part_fails(
+            1,
+            clean_answer(&["cancelled"], &serde_json::json!([])),
+            "cancelled",
+        );
     }
 
     #[test]

@@ -42,10 +42,11 @@ pub struct HistoryEntry {
 #[serde(rename_all = "camelCase")]
 pub struct AdminRecord {
     /// It ran to its end over all it was asked for and said what became of
-    /// each entry (cancelled ones included). `false`: it did not (it stopped,
-    /// or part of what it was asked for was left), `reason` says why; its outcomes, if
-    /// any, say what it touched, and when it gave none what it removed may
-    /// still be unknown (its traces in the journal say).
+    /// each entry. `false`: it did not (it stopped, was cancelled even after
+    /// removing entries, or part of what it was asked for was left),
+    /// `reason` says why; its outcomes, if any, say what it touched, and
+    /// when it gave none what it removed may still be unknown (its traces in
+    /// the journal say).
     pub done: bool,
     /// Why it was not done, by a stable name of the caller's.
     #[serde(skip_serializing_if = "Option::is_none")]

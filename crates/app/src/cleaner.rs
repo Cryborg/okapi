@@ -232,20 +232,6 @@ impl Choices {
         }
     }
 
-    /// Checks those not left to the user, and only those.
-    pub fn check_recommended(&mut self) {
-        for choice in &mut self.0 {
-            choice.checked = !choice.to_choose;
-        }
-    }
-
-    #[must_use]
-    pub fn is_recommended(&self) -> bool {
-        self.0
-            .iter()
-            .all(|choice| choice.checked != choice.to_choose)
-    }
-
     #[must_use]
     pub fn chosen(&self) -> BTreeSet<Category> {
         self.0
@@ -783,6 +769,7 @@ struct State {
     asked_to_close: BTreeSet<u32>,
     result_model: Rc<VecModel<ui::ResultRow>>,
     receipt_model: Rc<VecModel<ui::ReceiptLineShown>>,
+    step_model: Rc<VecModel<ui::CleanStep>>,
     note_model: Rc<VecModel<ui::IssueShown>>,
     timer: Rc<slint::Timer>,
     /// Runs for [`SECOND_CLICK`] after the screen changes.
@@ -831,6 +818,7 @@ impl CleanerScreen {
             asked_to_close: BTreeSet::new(),
             result_model: Rc::new(VecModel::default()),
             receipt_model: Rc::new(VecModel::default()),
+            step_model: Rc::new(VecModel::default()),
             note_model: Rc::new(VecModel::default()),
             timer: Rc::new(slint::Timer::default()),
             settling: slint::Timer::default(),
@@ -842,6 +830,7 @@ impl CleanerScreen {
         cleaner.set_results(ModelRc::from(Rc::clone(&state.result_model)));
         cleaner.set_notes(ModelRc::from(Rc::clone(&state.note_model)));
         cleaner.set_receipt_lines(ModelRc::from(Rc::clone(&state.receipt_model)));
+        cleaner.set_clean_steps(ModelRc::from(Rc::clone(&state.step_model)));
         let screen = Self(Rc::new(RefCell::new(state)));
         screen.show_choices();
         screen.refresh();
@@ -861,7 +850,6 @@ impl CleanerScreen {
                 Self(state).toggle(index);
             }
         });
-        cleaner.on_check_recommended(on(Self::check_recommended));
         cleaner.on_analyze(on(Self::analyze));
         cleaner.on_cancel(on(Self::cancel));
         cleaner.on_choose_again(on(Self::back_to_choosing));
@@ -913,7 +901,6 @@ impl CleanerScreen {
             show(&state.choice_model, rows);
             let cleaner = window.global::<ui::Cleaner>();
             cleaner.set_chosen_count(shown(state.choices.chosen().len()));
-            cleaner.set_recommended_only(state.choices.is_recommended());
         });
     }
 
@@ -961,11 +948,6 @@ impl CleanerScreen {
             return;
         };
         self.0.borrow_mut().choices.toggle(index);
-        self.show_choices();
-    }
-
-    fn check_recommended(&self) {
-        self.0.borrow_mut().choices.check_recommended();
         self.show_choices();
     }
 
@@ -1475,19 +1457,10 @@ pub mod tests {
             Category::Apps,
             Category::Gaming,
         ]);
-        assert_eq!(choices.chosen(), all_but_gpu);
-        assert!(choices.is_recommended());
-        choices.toggle(0);
-        assert!(!choices.is_recommended(), "a recommended one left out");
+        assert_eq!(choices.chosen(), all_but_gpu, "never a reset (invariant 5)");
         choices.toggle(4);
         assert!(choices.chosen().contains(&Category::Gpu));
-        assert!(!choices.is_recommended());
-        choices.check_recommended();
-        assert_eq!(
-            choices.chosen(),
-            all_but_gpu,
-            "the GPU caches left out again"
-        );
+        choices.toggle(4);
         choices.toggle(Category::ALL.len());
         assert_eq!(choices.chosen(), all_but_gpu, "beyond the list: nothing");
         assert!(
@@ -1793,26 +1766,13 @@ pub mod tests {
                 .is_some_and(|description| description.ends_with("sera plus lent.")),
             "the warning is read"
         );
-        assert!(shows(&window, "Catégories sélectionnées : 4 sur 5"));
         assert!(shows(
             &window,
             "Toujours épargnés : fichiers modifiés depuis moins de 60 min. Exclusions : 0."
         ));
-        let recommended = || button(&window, "Cocher les recommandées").accessible_enabled();
-        assert_eq!(recommended(), Some(false), "already the case");
         gpu.invoke_accessible_default_action();
-        assert_eq!(gpu.accessible_checked(), Some(true));
-        assert_eq!(recommended(), Some(true));
-        button(&window, "Cocher les recommandées").invoke_accessible_default_action();
-        assert_eq!(
-            gpu.accessible_checked(),
-            Some(false),
-            "never checked for the user"
-        );
-        assert_eq!(
-            checkbox(&window, "Système").accessible_checked(),
-            Some(true)
-        );
+        assert_eq!(gpu.accessible_checked(), Some(true), "the user's to check");
+        gpu.invoke_accessible_default_action();
 
         for label in ["Système", "Navigateurs", "Applications", "Jeux"] {
             checkbox(&window, label).invoke_accessible_default_action();
@@ -2359,11 +2319,7 @@ pub mod tests {
             Some(false),
             "a checkbox takes Space only"
         );
-        // The other four categories, then the recommended ones.
-        for _ in 0..5 {
-            press(&window, Key::Tab);
-        }
-        press(&window, Key::Return);
+        press(&window, Key::Space);
         assert_eq!(
             checkbox(&window, "Système").accessible_checked(),
             Some(true)
@@ -2371,13 +2327,12 @@ pub mod tests {
     }
 
     #[test]
-    fn a_disabled_button_is_skipped_by_the_keyboard() {
+    fn the_keyboard_reaches_analyser_and_a_held_enter_never_cancels() {
         use slint::platform::Key;
 
         let (seams, scan) = scripted(Vec::new());
         let (window, _screen) = on_cleaner(seams);
-        // The sidebar, the five categories, then past the disabled
-        // "Cocher les recommandées" to "Analyser".
+        // The sidebar, the five categories, then "Analyser".
         for _ in 0..9 {
             press(&window, Key::Tab);
         }

@@ -5,11 +5,112 @@ import {
     ActionButton, ButtonKind, Card, Detail, Footer, FocusRing, Icon, Line, ProgressBar, Title,
 } from "widgets.slint";
 import {
-    CleanEnding, CleanPassKind, Cleaner, HistoryState, ReceiptKind, ReceiptLineShown,
-    RightsProblem, RightsStep, Words,
+    CleanEnding, CleanStep, CleanStepKind, Cleaner, HistoryState, ReceiptKind, ReceiptLineShown,
+    RightsProblem, RightsStep, RowState, Words,
 } from "cleaner-model.slint";
 
-// The cleaning under way: its pass, how far, what is freed so far.
+// A step of a cleaning: waiting, under way, done, or not done; the bar of a
+// pass stays shown at every state, and the receipt lists the steps again.
+component CleanStepRow inherits Rectangle {
+    in property <CleanStep> step;
+    in property <bool> last;
+    property <string> name: step.kind == CleanStepKind.admin ? @tr("Nettoyage des éléments administrateur")
+        : step.kind == CleanStepKind.check ? @tr("Vérification de chaque élément")
+        : step.kind == CleanStepKind.remove ? @tr("Suppression des éléments vérifiés")
+        : @tr("Enregistrement dans l'historique");
+    property <color> state-color: step.state == RowState.done ? Theme.success
+        : step.state == RowState.not-done ? Theme.warning
+        : step.state == RowState.running ? Theme.accent : Theme.text-3;
+    property <string> state-text: step.state == RowState.done ? @tr("Fait")
+        : step.state == RowState.not-done ? @tr("Non fait")
+        : step.state == RowState.running ? @tr("En cours") : @tr("En attente");
+    property <bool> counted: step.total > 0;
+
+    background: step.state == RowState.running ? Theme.surface-2 : transparent;
+    accessible-role: list-item;
+    accessible-label: name;
+    accessible-description: counted
+        ? @tr("{}, éléments : {} sur {}", state-text, step.done, step.total)
+        : state-text;
+
+    if !last: Rectangle {
+        y: parent.height - self.height;
+        height: Theme.border-width;
+        background: Theme.border;
+    }
+
+    VerticalLayout {
+        padding: Theme.spacing-l;
+        padding-left: Theme.spacing-xl;
+        padding-right: Theme.spacing-xl;
+        spacing: Theme.spacing-s;
+        HorizontalLayout {
+            spacing: Theme.spacing-m;
+            Icon {
+                source: step.state == RowState.done ? @image-url("../assets/icons/circle-check.svg")
+                    : step.state == RowState.not-done ? @image-url("../assets/icons/triangle-alert.svg")
+                    : step.state == RowState.running ? @image-url("../assets/icons/loader.svg")
+                    : @image-url("../assets/icons/clock.svg");
+                colorize: state-color;
+                width: Theme.icon-small;
+                height: Theme.icon-small;
+                y: (parent.height - self.height) / 2;
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: name;
+                accessible-role: none;
+                color: step.state == RowState.waiting ? Theme.text-2 : Theme.text;
+                font-size: Theme.font-heading;
+                font-weight: Theme.weight-semibold;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                text: state-text;
+                accessible-role: none;
+                color: state-color;
+                font-size: Theme.font-small;
+                font-weight: Theme.weight-medium;
+                vertical-alignment: center;
+            }
+        }
+        if step.kind != CleanStepKind.history: HorizontalLayout {
+            spacing: Theme.spacing-m;
+            ProgressBar {
+                horizontal-stretch: 1;
+                y: (parent.height - self.height) / 2;
+                progress: counted ? step.done / step.total : step.state == RowState.done ? 1 : 0;
+                indeterminate: step.state == RowState.running && !counted;
+                label: name;
+            }
+            // On one line, however many entries.
+            Detail {
+                min-width: Theme.step-count-width;
+                horizontal-stretch: 0;
+                wrap: no-wrap;
+                text: counted ? @tr("{} sur {}", step.done, step.total) : "";
+                accessible-role: none;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// The steps of a cleaning, one under the other.
+component CleanSteps inherits Card {
+    accessible-role: list;
+    accessible-label: @tr("Étapes du nettoyage");
+    VerticalLayout {
+        for step[index] in Cleaner.clean-steps: CleanStepRow {
+            step: step;
+            last: index == Cleaner.clean-steps.length - 1;
+        }
+    }
+}
+
+// The cleaning under way: each step, how far, what is freed so far.
 export component CleaningPage inherits VerticalLayout {
     init => {
         cancel.focus();
@@ -30,23 +131,11 @@ export component CleaningPage inherits VerticalLayout {
                     ? @tr("Saisissez le mot de passe dans la fenêtre du système. Annuler n'agit qu'une fois cette fenêtre fermée.")
                     : Cleaner.clean-cancel-asked
                     ? @tr("L'élément en cours se termine ; ce qui n'est pas encore retiré reste.")
-                    : Cleaner.clean-rights == RightsStep.scanning
-                    ? @tr("Nettoyage des éléments administrateur.")
-                    : Cleaner.clean-pass == CleanPassKind.check
-                    ? @tr("Vérification de chaque élément avant de le retirer.")
-                    : @tr("Suppression des éléments vérifiés.");
+                    : @tr("Chaque élément est vérifié, puis revérifié juste avant d'être retiré.");
                 accessible-live-region: polite;
             }
         }
-        ProgressBar {
-            height: Theme.bar-height-large;
-            progress: Cleaner.clean-total == 0 ? 0 : Cleaner.clean-done / Cleaner.clean-total;
-            indeterminate: Cleaner.clean-total == 0;
-            label: Cleaner.clean-pass == CleanPassKind.check ? @tr("Vérification") : @tr("Suppression");
-        }
-        Detail {
-            text: @tr("Éléments : {} sur {}", Cleaner.clean-done, Cleaner.clean-total);
-        }
+        CleanSteps { }
         Rectangle {
             vertical-stretch: 1;
         }
@@ -290,6 +379,7 @@ export component ReceiptPage inherits VerticalLayout {
                 }
             }
         }
+        CleanSteps { }
         if Cleaner.receipt-lines.length > 0: Card {
             vertical-stretch: 1;
             accessible-role: list;

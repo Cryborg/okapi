@@ -102,6 +102,15 @@ export global DashboardWords {
         return number == 1 ? @tr("1er") : number;
     }
 
+    // A day that is neither today nor yesterday: "5 mars", "30 décembre
+    // 2025" (another year's).
+    pure public function date(at: Moment) -> string {
+        if at.year == 0 {
+            return @tr("{} {}", day(at.day-of-month), month(at.month));
+        }
+        return @tr("{} {} {}", day(at.day-of-month), month(at.month), at.year);
+    }
+
     // A size of a widget.
     pure public function size-name(size: WidgetSize) -> string {
         if size == WidgetSize.small {
@@ -167,7 +176,7 @@ export global DashboardWords {
         if at.day == DayKind.yesterday {
             return @tr("hier à {}", time(at));
         }
-        return @tr("le {} {} à {}", day(at.day-of-month), month(at.month), time(at));
+        return @tr("le {} à {}", date(at), time(at));
     }
 
     // The same, opening a line: "Aujourd'hui à 9 h 12".
@@ -178,7 +187,7 @@ export global DashboardWords {
         if moment.day == DayKind.yesterday {
             return @tr("Hier à {}", time(moment));
         }
-        return @tr("Le {} {} à {}", day(moment.day-of-month), month(moment.month), time(moment));
+        return @tr("Le {} à {}", date(moment), time(moment));
     }
 
     // "Estimation d'aujourd'hui à 9 h 12".
@@ -189,7 +198,7 @@ export global DashboardWords {
         if at.day == DayKind.yesterday {
             return @tr("Estimation d'hier à {}", time(at));
         }
-        return @tr("Estimation du {} {} à {}", day(at.day-of-month), month(at.month), time(at));
+        return @tr("Estimation du {} à {}", date(at), time(at));
     }
 
     // "Nettoyage d'aujourd'hui à 10 h 05."
@@ -200,7 +209,7 @@ export global DashboardWords {
         if moment.day == DayKind.yesterday {
             return @tr("Nettoyage d'hier à {}.", time(moment));
         }
-        return @tr("Nettoyage du {} {} à {}.", day(moment.day-of-month), month(moment.month), time(moment));
+        return @tr("Nettoyage du {} à {}.", date(moment), time(moment));
     }
 }
 

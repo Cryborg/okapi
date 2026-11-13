@@ -406,6 +406,7 @@ fn home(window: &ui::AppWindow) {
         day: ui::DayKind::Today,
         day_of_month: 0,
         month: 0,
+        year: 0,
         hour: 9,
         minute: 12,
     };

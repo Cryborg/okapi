@@ -896,8 +896,8 @@ msgid "hier à {}"
 msgstr "yesterday at {}"
 
 msgctxt "DashboardWords"
-msgid "le {} {} à {}"
-msgstr "on {} {} at {}"
+msgid "le {} à {}"
+msgstr "on {} at {}"
 
 msgctxt "DashboardWords"
 msgid "Aujourd'hui à {}"
@@ -908,8 +908,8 @@ msgid "Hier à {}"
 msgstr "Yesterday at {}"
 
 msgctxt "DashboardWords"
-msgid "Le {} {} à {}"
-msgstr "On {} {} at {}"
+msgid "Le {} à {}"
+msgstr "On {} at {}"
 
 msgctxt "DashboardWords"
 msgid "Nettoyage d'aujourd'hui à {}."
@@ -920,8 +920,8 @@ msgid "Nettoyage d'hier à {}."
 msgstr "Cleaning from yesterday at {}."
 
 msgctxt "DashboardWords"
-msgid "Nettoyage du {} {} à {}."
-msgstr "Cleaning from {} {} at {}."
+msgid "Nettoyage du {} à {}."
+msgstr "Cleaning from {} at {}."
 
 msgctxt "WidgetCard"
 msgid "Lecture en cours"
@@ -1028,8 +1028,8 @@ msgid "Estimation d'hier à {}"
 msgstr "Estimate from yesterday at {}"
 
 msgctxt "DashboardWords"
-msgid "Estimation du {} {} à {}"
-msgstr "Estimate from {} {} at {}"
+msgid "Estimation du {} à {}"
+msgstr "Estimate from {} at {}"
 
 msgctxt "ReclaimableWidget"
 msgid "{}. Éléments trouvés : {}."
@@ -1058,6 +1058,14 @@ msgstr "{} h {} min"
 msgctxt "DashboardWords"
 msgid "1er"
 msgstr "1"
+
+msgctxt "DashboardWords"
+msgid "{} {}"
+msgstr "{} {}"
+
+msgctxt "DashboardWords"
+msgid "{} {} {}"
+msgstr "{} {} {}"
 
 msgctxt "VolumeLine"
 msgid "{} · {}"

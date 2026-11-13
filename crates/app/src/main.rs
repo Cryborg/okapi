@@ -407,9 +407,10 @@ mod tests {
     }
 
     /// Texts the same in both languages.
-    const SAME_IN_ENGLISH: [&str; 6] = [
+    const SAME_IN_ENGLISH: [&str; 7] = [
         "Version {}",
         "{} {}",
+        "{} {} {}",
         "Applications",
         "Distribution",
         "{} · {}",

@@ -1202,15 +1202,16 @@ fn moment(seconds: i64, now: Timestamp, zone: &TimeZone) -> Option<ui::Moment> {
         tracing::warn!(seconds, "an instant no date holds");
         return None;
     };
-    let (day, day_of_month, month) = match moment.day {
-        Day::Today => (ui::DayKind::Today, 0, 0),
-        Day::Yesterday => (ui::DayKind::Yesterday, 0, 0),
-        Day::On { day, month } => (ui::DayKind::Other, day, month),
+    let (day, day_of_month, month, year) = match moment.day {
+        Day::Today => (ui::DayKind::Today, 0, 0, None),
+        Day::Yesterday => (ui::DayKind::Yesterday, 0, 0, None),
+        Day::On { day, month, year } => (ui::DayKind::Other, day, month, year),
     };
     Some(ui::Moment {
         day,
         day_of_month: day_of_month.into(),
         month: month.into(),
+        year: year.map_or(0, i32::from),
         hour: moment.hour.into(),
         minute: moment.minute.into(),
     })
@@ -2102,6 +2103,15 @@ pub mod tests {
             "2026-03-01T08:05:00Z",
             "Estimation du 1er mars à 9 h 05",
             "le 1er mars à 9 h 05",
+        );
+    }
+
+    #[test]
+    fn an_estimate_of_another_year_says_its_year() {
+        estimate_dated(
+            "2025-12-30T08:05:00Z",
+            "Estimation du 30 décembre 2025 à 9 h 05",
+            "le 30 décembre 2025 à 9 h 05",
         );
     }
 

@@ -11,10 +11,12 @@ use jiff::tz::TimeZone;
 pub(crate) enum Day {
     Today,
     Yesterday,
-    /// Another day: its day of the month and its month (1 to 12).
+    /// Another day: its day of the month, its month (1 to 12), and its
+    /// year when it is not this one.
     On {
         day: i8,
         month: i8,
+        year: Option<i16>,
     },
 }
 
@@ -48,6 +50,7 @@ fn day_of(date: Date, today: Date) -> Day {
         Day::On {
             day: date.day(),
             month: date.month(),
+            year: (date.year() != today.year()).then_some(date.year()),
         }
     }
 }
@@ -88,7 +91,11 @@ mod tests {
         assert_eq!(
             moment(at("2026-11-08T09:05:00Z"), now(), &paris()),
             Some(Moment {
-                day: Day::On { day: 8, month: 11 },
+                day: Day::On {
+                    day: 8,
+                    month: 11,
+                    year: None
+                },
                 hour: 10,
                 minute: 5
             })
@@ -140,7 +147,23 @@ mod tests {
         );
         assert_eq!(
             moment(at("2026-12-30T10:00:00Z"), new_year, &paris()).map(|moment| moment.day),
-            Some(Day::On { day: 30, month: 12 })
+            Some(Day::On {
+                day: 30,
+                month: 12,
+                year: Some(2026)
+            }),
+            "a day of another year carries its year"
+        );
+        // 23:30 UTC on 31 December is already 1 January in Paris: this
+        // year, as the day.
+        let new_year_week: Timestamp = "2027-01-05T10:00:00Z".parse().unwrap();
+        assert_eq!(
+            moment(at("2026-12-31T23:30:00Z"), new_year_week, &paris()).map(|moment| moment.day),
+            Some(Day::On {
+                day: 1,
+                month: 1,
+                year: None
+            })
         );
     }
 

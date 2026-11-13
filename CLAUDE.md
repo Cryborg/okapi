@@ -63,6 +63,7 @@ Numérotés, jamais renumérotés (des agents et des tests les citent par numér
 
 ## Flux
 
+- Avant la spec ou le plan de tout chantier : regarder ce qui existe en ligne (outils open source qui font la même chose, Kudu, leurs retours d'utilisateurs) et en tirer le meilleur. Le plan dit ce qui a été regardé, ce qu'on reprend et pourquoi.
 - Plus de 4 fichiers ou un sujet délicat : skill `socle:livrer` (plan, revue du plan, code, revue).
 - Clôture d'une feature : skill `socle:review-and-fix`.
 - Une correction de Franck ou un piège découvert : skill `socle:lessons`.

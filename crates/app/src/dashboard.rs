@@ -15,11 +15,14 @@ use std::time::Duration;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use okapi_store::{DashboardLayout, LastAnalysis, WidgetSize};
-use okapi_tools::monitor::{Command, Sample, Source, SystemReading};
+use okapi_tools::monitor::{
+    ApplicationName, Applications, Command, MemoryStatus, Sample, Source, SystemReading,
+    Unavailable, Volume, VolumeKind, VolumeName, VolumeSpace, nearly_full,
+};
 use slint::{ComponentHandle as _, ModelRc, VecModel};
 
 use crate::dates::{self, Day};
-use crate::shown::{shown, size};
+use crate::shown::{show, shown, size};
 use crate::ui;
 use catalog::WidgetKind;
 use layout::{MAX_COLUMNS, place, shown as widgets_shown};
@@ -27,6 +30,9 @@ use layout::{MAX_COLUMNS, place, shown as widgets_shown};
 /// How often the readings sent are taken in: the fastest source reads
 /// every two seconds.
 const TAKE_SAMPLES_EVERY: Duration = Duration::from_millis(500);
+/// The volumes the small Disques widget names, the fullest first.
+const FULLEST_SHOWN: usize = 2;
+const PERCENT: u128 = 100;
 const SECONDS_PER_DAY: u64 = 86_400;
 const SECONDS_PER_HOUR: u64 = 3600;
 const SECONDS_PER_MINUTE: u64 = 60;
@@ -94,9 +100,23 @@ struct State {
     summary: Summary,
     cleaned: Option<Cleaned>,
     system: Option<SystemReading>,
+    volumes: Option<Result<Vec<Volume>, Unavailable>>,
+    memory: Option<Result<MemoryStatus, Unavailable>>,
+    /// The last list read: they are read less often than the memory.
+    applications: Option<Result<Applications, Unavailable>>,
+    rows: Rows,
     /// The readings no longer reach the page.
     lost: bool,
     timer: slint::Timer,
+}
+
+/// The lines the widgets list, kept from one reading to the next: Slint
+/// keeps a line's element while its row changes in place.
+#[derive(Default)]
+struct Rows {
+    volumes: Rc<VecModel<ui::VolumeShown>>,
+    fullest: Rc<VecModel<ui::VolumeShown>>,
+    applications: Rc<VecModel<ui::ApplicationShown>>,
 }
 
 /// The Home page bound to its window.
@@ -141,6 +161,10 @@ impl DashboardScreen {
             summary,
             cleaned: None,
             system: None,
+            volumes: None,
+            memory: None,
+            applications: None,
+            rows: Rows::default(),
             lost: false,
             timer: slint::Timer::default(),
         })));
@@ -236,8 +260,24 @@ impl DashboardScreen {
                         state.system = Some(reading);
                         changed = true;
                     }
-                    // No widget of this page draws them yet.
-                    Ok(Sample::Volumes(_) | Sample::Memory(_) | Sample::Processor(_)) => {}
+                    Ok(Sample::Volumes(volumes)) => {
+                        state.volumes = Some(volumes);
+                        changed = true;
+                    }
+                    Ok(Sample::Memory(reading)) => {
+                        match reading {
+                            Ok(reading) => {
+                                state.memory = Some(Ok(reading.status));
+                                if let Some(applications) = reading.applications {
+                                    state.applications = Some(applications);
+                                }
+                            }
+                            Err(unavailable) => state.memory = Some(Err(unavailable)),
+                        }
+                        changed = true;
+                    }
+                    // No widget of this page draws it yet.
+                    Ok(Sample::Processor(_)) => {}
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         tracing::error!("dashboard readings cut off: every widget unavailable");
@@ -268,6 +308,12 @@ impl DashboardScreen {
             &state.seams.zone,
         ));
         dashboard.set_system(system(state.system.as_ref()));
+        dashboard.set_disks(disks(state.volumes.as_ref(), &state.rows));
+        dashboard.set_memory(memory(
+            state.memory.as_ref(),
+            state.applications.as_ref(),
+            &state.rows,
+        ));
         dashboard.set_readings_lost(state.lost);
     }
 }
@@ -451,6 +497,163 @@ fn desktop_name(desktop: &str) -> String {
     desktop.strip_prefix("X-").unwrap_or(desktop).to_owned()
 }
 
+/// `part` of `whole`, in whole percents rounded down (0 for nothing): a
+/// volume at 89,6 % says 89 %, never 90 % without its "nearly full" badge.
+fn percent(part: u64, whole: u64) -> i32 {
+    if whole == 0 {
+        return 0;
+    }
+    shown(u128::from(part) * PERCENT / u128::from(whole))
+}
+
+/// What a reading says before its value: not read yet, or unreadable.
+fn reading<T>(read: Option<&Result<T, Unavailable>>) -> Result<&T, ui::ReadingState> {
+    match read {
+        None => Err(ui::ReadingState::Reading),
+        Some(Err(_)) => Err(ui::ReadingState::Unavailable),
+        Some(Ok(value)) => Ok(value),
+    }
+}
+
+fn volume(volume: &Volume) -> ui::VolumeShown {
+    let (naming, name) = match &volume.name {
+        VolumeName::System => (ui::VolumeNaming::System, String::new()),
+        VolumeName::Home => (ui::VolumeNaming::Home, String::new()),
+        VolumeName::Pool(name)
+        | VolumeName::Source(name)
+        | VolumeName::Label(name)
+        | VolumeName::Folder(name) => (ui::VolumeNaming::Own, name.clone()),
+        VolumeName::MountPoint(path) => (ui::VolumeNaming::Own, path.display().to_string()),
+    };
+    let (space, known) = match volume.space {
+        VolumeSpace::Known(space) => (ui::SpaceState::Known, Some(space)),
+        VolumeSpace::NotResponding => (ui::SpaceState::NotResponding, None),
+        VolumeSpace::Failed(_) => (ui::SpaceState::Failed, None),
+    };
+    let space_of = known.unwrap_or_default();
+    ui::VolumeShown {
+        naming,
+        name: name.into(),
+        mount_point: volume.mount_point.display().to_string().into(),
+        filesystem: volume.filesystem.clone().into(),
+        place: match volume.kind {
+            VolumeKind::Local => ui::VolumePlace::Local,
+            VolumeKind::Removable => ui::VolumePlace::Removable,
+            VolumeKind::Network => ui::VolumePlace::Network,
+        },
+        space,
+        free: size(space_of.available),
+        total: size(space_of.total),
+        used: size(space_of.used),
+        percent: percent(space_of.used, space_of.total),
+        nearly_full: known.as_ref().is_some_and(nearly_full),
+    }
+}
+
+/// The volumes read, in `rows`: every one, and the fullest whose space is
+/// known (by the part used, an empty one at 0 %).
+fn disks(volumes: Option<&Result<Vec<Volume>, Unavailable>>, rows: &Rows) -> ui::DisksShown {
+    let volumes = match reading(volumes) {
+        Ok(volumes) => volumes,
+        Err(state) => {
+            return ui::DisksShown {
+                state,
+                ..ui::DisksShown::default()
+            };
+        }
+    };
+    let mut fullest: Vec<(&Volume, u128, u128)> = volumes
+        .iter()
+        .filter_map(|volume| match volume.space {
+            VolumeSpace::Known(space) => Some((
+                volume,
+                u128::from(space.used),
+                u128::from(space.total.max(1)),
+            )),
+            _ => None,
+        })
+        .collect();
+    // By the part used, compared without dividing: used × other total.
+    fullest.sort_by(|(_, left_used, left_total), (_, right_used, right_total)| {
+        (right_used * left_total).cmp(&(left_used * right_total))
+    });
+    fullest.truncate(FULLEST_SHOWN);
+    // Every volume whose space is unknown is among the others.
+    let others = volumes.len() - fullest.len();
+    let not_responding = volumes
+        .iter()
+        .filter(|volume| volume.space == VolumeSpace::NotResponding)
+        .count();
+    show(&rows.volumes, volumes.iter().map(volume).collect());
+    show(
+        &rows.fullest,
+        fullest
+            .into_iter()
+            .map(|(shown, ..)| volume(shown))
+            .collect(),
+    );
+    ui::DisksShown {
+        state: ui::ReadingState::Read,
+        volumes: ModelRc::from(Rc::clone(&rows.volumes)),
+        fullest: ModelRc::from(Rc::clone(&rows.fullest)),
+        others: shown(others),
+        others_not_responding: shown(not_responding),
+    }
+}
+
+/// The memory read, its applications in `rows` (the last list read).
+fn memory(
+    status: Option<&Result<MemoryStatus, Unavailable>>,
+    applications: Option<&Result<Applications, Unavailable>>,
+    rows: &Rows,
+) -> ui::MemoryShown {
+    let status = match reading(status) {
+        Ok(status) => status,
+        Err(state) => {
+            return ui::MemoryShown {
+                state,
+                ..ui::MemoryShown::default()
+            };
+        }
+    };
+    let used = status.total.saturating_sub(status.available);
+    let swap_used = status.swap_total.saturating_sub(status.swap_free);
+    let applications_state = match reading(applications) {
+        Ok(applications) => {
+            show(
+                &rows.applications,
+                applications
+                    .top
+                    .iter()
+                    .map(|application| ui::ApplicationShown {
+                        name: match &application.name {
+                            ApplicationName::Desktop(name) | ApplicationName::Process(name) => {
+                                name.clone().into()
+                            }
+                        },
+                        size: size(application.resident_bytes),
+                    })
+                    .collect(),
+            );
+            ui::ReadingState::Read
+        }
+        Err(state) => state,
+    };
+    ui::MemoryShown {
+        state: ui::ReadingState::Read,
+        used: size(used),
+        total: size(status.total),
+        available: size(status.available),
+        percent: percent(used, status.total),
+        has_swap: status.swap_total > 0,
+        swap_used: size(swap_used),
+        swap_total: size(status.swap_total),
+        swap_percent: percent(swap_used, status.swap_total),
+        applications_state,
+        applications: ModelRc::from(Rc::clone(&rows.applications)),
+    }
+}
+
 /// How a session type is written: `wayland` is Wayland.
 fn session_name(session: &str) -> String {
     match session {
@@ -516,6 +719,8 @@ pub mod tests {
     use i_slint_backend_testing::{AccessibleRole, ElementHandle};
     use okapi_rules::Language;
     use okapi_store::{DashboardWidget, History};
+    use okapi_tools::monitor::Space;
+    use slint::Model as _;
 
     use super::*;
     use crate::cleaner::Seams;
@@ -1333,6 +1538,557 @@ pub mod tests {
         assert!(shows_a_text_starting(
             &window,
             "Estimation d'aujourd'hui à "
+        ));
+    }
+
+    const GB: u64 = 1_000_000_000;
+
+    fn known(name: VolumeName, used: u64, total: u64) -> Volume {
+        Volume {
+            name,
+            mount_point: PathBuf::from("/okapi-test"),
+            filesystem: "ext4".to_owned(),
+            kind: VolumeKind::Local,
+            space: VolumeSpace::Known(Space {
+                total,
+                available: total - used,
+                used,
+            }),
+        }
+    }
+
+    fn silent(name: &str, space: VolumeSpace) -> Volume {
+        Volume {
+            name: VolumeName::Source(name.to_owned()),
+            mount_point: PathBuf::from("/mnt/share"),
+            filesystem: "nfs4".to_owned(),
+            kind: VolumeKind::Network,
+            space,
+        }
+    }
+
+    fn names(model: &ModelRc<ui::VolumeShown>) -> Vec<(ui::VolumeNaming, String)> {
+        model
+            .iter()
+            .map(|volume| (volume.naming, volume.name.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn the_small_widget_names_the_two_fullest_and_counts_the_others() {
+        let volumes = vec![
+            known(VolumeName::System, 39 * GB, 198 * GB),
+            silent("nas:/photos", VolumeSpace::NotResponding),
+            known(VolumeName::Label("KINGSTON".to_owned()), 14 * GB, 15 * GB),
+            known(VolumeName::Home, 222 * GB, 456 * GB),
+            silent(
+                "nas:/films",
+                VolumeSpace::Failed(Unavailable {
+                    kind: std::io::ErrorKind::PermissionDenied,
+                    code: Some(13),
+                }),
+            ),
+        ];
+        let shown = disks(Some(&Ok(volumes)), &Rows::default());
+        assert_eq!(shown.state, ui::ReadingState::Read);
+        assert_eq!(
+            names(&shown.fullest),
+            [
+                (ui::VolumeNaming::Own, "KINGSTON".to_owned()),
+                (ui::VolumeNaming::Home, String::new()),
+            ],
+            "by the part used, not by the bytes"
+        );
+        assert_eq!(
+            (shown.others, shown.others_not_responding),
+            (3, 1),
+            "an unreadable one answered"
+        );
+        assert_eq!(shown.volumes.row_count(), 5, "every one, in order");
+        let kingston = shown.fullest.row_data(0).unwrap();
+        assert_eq!(kingston.percent, 93);
+        assert!(kingston.nearly_full);
+        let home = shown.fullest.row_data(1).unwrap();
+        assert_eq!(home.percent, 48);
+        assert!(!home.nearly_full);
+        let failed = shown.volumes.row_data(4).unwrap();
+        assert_eq!(
+            (failed.space, failed.place),
+            (ui::SpaceState::Failed, ui::VolumePlace::Network)
+        );
+    }
+
+    #[test]
+    fn volumes_not_read_yet_or_unreadable_say_so() {
+        assert_eq!(
+            disks(None, &Rows::default()).state,
+            ui::ReadingState::Reading
+        );
+        let failed = Unavailable {
+            kind: std::io::ErrorKind::Unsupported,
+            code: None,
+        };
+        assert_eq!(
+            disks(Some(&Err(failed)), &Rows::default()).state,
+            ui::ReadingState::Unavailable
+        );
+        let none = disks(Some(&Ok(Vec::new())), &Rows::default());
+        assert_eq!((none.state, none.others), (ui::ReadingState::Read, 0));
+    }
+
+    fn status(swap_total: u64) -> MemoryStatus {
+        MemoryStatus {
+            total: 32 * GB,
+            available: 22 * GB,
+            swap_total,
+            swap_free: swap_total / 4 * 3,
+        }
+    }
+
+    #[test]
+    fn the_memory_used_is_what_applications_cannot_take_any_more() {
+        let shown = memory(Some(&Ok(status(8 * GB))), None, &Rows::default());
+        assert_eq!(shown.state, ui::ReadingState::Read);
+        assert_eq!(shown.used, size(10 * GB));
+        assert_eq!(shown.percent, 31);
+        assert!(shown.has_swap);
+        assert_eq!((shown.swap_used, shown.swap_percent), (size(2 * GB), 25));
+        assert_eq!(shown.applications_state, ui::ReadingState::Reading);
+        assert_eq!(
+            (shown.available, shown.swap_total),
+            (size(22 * GB), size(8 * GB))
+        );
+        assert!(!memory(Some(&Ok(status(0))), None, &Rows::default()).has_swap);
+        assert_eq!(
+            memory(None, None, &Rows::default()).state,
+            ui::ReadingState::Reading
+        );
+        let failed = Unavailable {
+            kind: std::io::ErrorKind::Unsupported,
+            code: None,
+        };
+        assert_eq!(
+            memory(Some(&Err(failed)), None, &Rows::default()).state,
+            ui::ReadingState::Unavailable
+        );
+    }
+
+    #[test]
+    fn the_applications_are_listed_as_read_by_their_name() {
+        let applications = Applications {
+            top: vec![
+                okapi_tools::monitor::ApplicationMemory {
+                    name: ApplicationName::Desktop("Firefox".to_owned()),
+                    resident_bytes: 3 * GB,
+                    processes: 12,
+                },
+                okapi_tools::monitor::ApplicationMemory {
+                    name: ApplicationName::Process("pipewire".to_owned()),
+                    resident_bytes: GB / 10,
+                    processes: 1,
+                },
+            ],
+            unreadable: 0,
+        };
+        let shown = memory(
+            Some(&Ok(status(0))),
+            Some(&Ok(applications)),
+            &Rows::default(),
+        );
+        assert_eq!(shown.applications_state, ui::ReadingState::Read);
+        let listed: Vec<String> = shown
+            .applications
+            .iter()
+            .map(|application| application.name.to_string())
+            .collect();
+        assert_eq!(listed, ["Firefox", "pipewire"]);
+        let failed = Unavailable {
+            kind: std::io::ErrorKind::PermissionDenied,
+            code: None,
+        };
+        assert_eq!(
+            memory(Some(&Ok(status(0))), Some(&Err(failed)), &Rows::default()).applications_state,
+            ui::ReadingState::Unavailable
+        );
+    }
+
+    #[test]
+    fn the_disks_and_the_memory_read_reach_their_widgets() {
+        let directories = Directories::new();
+        kept(
+            &directories.config,
+            &[("disks", WidgetSize::Small), ("memory", WidgetSize::Large)],
+        );
+        let (seams, sampler) = directories.seams();
+        let window = on_home(seams);
+        assert_eq!(
+            said(&window, "Disques").as_deref(),
+            Some("Lecture en cours")
+        );
+        let sink = sampler.sink.as_ref().unwrap();
+        sink.send(Sample::Volumes(Ok(vec![
+            known(VolumeName::System, 39 * GB, 198 * GB),
+            known(VolumeName::Label("KINGSTON".to_owned()), 14 * GB, 15 * GB),
+            silent("nas:/photos", VolumeSpace::NotResponding),
+        ])))
+        .unwrap();
+        sink.send(Sample::Memory(Ok(okapi_tools::monitor::MemoryReading {
+            status: status(8 * GB),
+            applications: Some(Ok(Applications {
+                top: vec![okapi_tools::monitor::ApplicationMemory {
+                    name: ApplicationName::Desktop("Firefox".to_owned()),
+                    resident_bytes: 3 * GB,
+                    processes: 12,
+                }],
+                unreadable: 0,
+            })),
+        })))
+        .unwrap();
+        take_in();
+        assert!(shows(&window, "KINGSTON : 1,0 Go libres, presque plein"));
+        assert!(shows(&window, "Système : 159,0 Go libres"));
+        assert!(shows(&window, "Autres volumes : 1 (sans réponse : 1)"));
+        assert_eq!(
+            said(&window, "Mémoire").as_deref(),
+            Some("10,0 Go occupés sur 32,0 Go")
+        );
+        assert!(shows(&window, "Firefox : environ 3,0 Go"));
+        // A reading of the memory alone keeps the list read before.
+        sink.send(Sample::Memory(Ok(okapi_tools::monitor::MemoryReading {
+            status: status(8 * GB),
+            applications: None,
+        })))
+        .unwrap();
+        take_in();
+        assert!(shows(&window, "Firefox : environ 3,0 Go"));
+    }
+
+    #[test]
+    fn an_empty_volume_sits_last_among_the_fullest() {
+        let volumes = vec![
+            known(VolumeName::Label("A".to_owned()), 50, 100),
+            known(VolumeName::Label("Z".to_owned()), 0, 0),
+            known(VolumeName::Label("C".to_owned()), 90, 100),
+        ];
+        let shown = disks(Some(&Ok(volumes)), &Rows::default());
+        assert_eq!(
+            names(&shown.fullest),
+            [
+                (ui::VolumeNaming::Own, "C".to_owned()),
+                (ui::VolumeNaming::Own, "A".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_volume_says_where_and_what_it_is() {
+        let shown = volume(&Volume {
+            name: VolumeName::MountPoint(PathBuf::from("/media/usb")),
+            mount_point: PathBuf::from("/media/usb"),
+            filesystem: "vfat".to_owned(),
+            kind: VolumeKind::Removable,
+            space: VolumeSpace::Known(Space {
+                total: 16 * GB,
+                available: 4 * GB,
+                used: 12 * GB,
+            }),
+        });
+        assert_eq!(
+            (shown.naming, shown.name.as_str()),
+            (ui::VolumeNaming::Own, "/media/usb")
+        );
+        assert_eq!(shown.filesystem.as_str(), "vfat");
+        assert_eq!(shown.place, ui::VolumePlace::Removable);
+        assert_eq!(
+            (shown.free, shown.used, shown.total, shown.percent),
+            (size(4 * GB), size(12 * GB), size(16 * GB), 75)
+        );
+    }
+
+    /// The window on a dashboard of `widgets`, the volumes and memory sent.
+    fn reading_home(
+        widgets: &[(&str, WidgetSize)],
+        volumes: Vec<Volume>,
+        memory: Option<Result<okapi_tools::monitor::MemoryReading, Unavailable>>,
+    ) -> (ui::AppWindow, Sampler, Directories) {
+        let directories = Directories::new();
+        kept(&directories.config, widgets);
+        let (seams, sampler) = directories.seams();
+        let window = on_home(seams);
+        let sink = sampler.sink.as_ref().unwrap();
+        sink.send(Sample::Volumes(Ok(volumes))).unwrap();
+        if let Some(memory) = memory {
+            sink.send(Sample::Memory(memory)).unwrap();
+        }
+        take_in();
+        (window, sampler, directories)
+    }
+
+    fn six_volumes() -> Vec<Volume> {
+        let mut usb = known(VolumeName::Label("KINGSTON".to_owned()), 14 * GB, 15 * GB);
+        usb.kind = VolumeKind::Removable;
+        let mut local = silent("disque lent", VolumeSpace::NotResponding);
+        local.kind = VolumeKind::Local;
+        vec![
+            known(VolumeName::System, 39 * GB, 198 * GB),
+            known(VolumeName::Home, 222 * GB, 456 * GB),
+            usb,
+            silent("nas:/photos", VolumeSpace::NotResponding),
+            local,
+            silent(
+                "nas:/films",
+                VolumeSpace::Failed(Unavailable {
+                    kind: std::io::ErrorKind::PermissionDenied,
+                    code: Some(13),
+                }),
+            ),
+        ]
+    }
+
+    #[test]
+    fn the_wide_disks_widget_lists_every_volume_free_of_its_total() {
+        let (window, ..) = reading_home(&[("disks", WidgetSize::Wide)], six_volumes(), None);
+        assert!(shows(&window, "Système : 159,0 Go libres sur 198,0 Go"));
+        assert!(shows(
+            &window,
+            "Dossier personnel : 234,0 Go libres sur 456,0 Go"
+        ));
+        assert!(shows(
+            &window,
+            "KINGSTON (amovible) : 1,0 Go libres sur 15,0 Go, presque plein"
+        ));
+        assert!(shows(
+            &window,
+            "nas:/photos (partage réseau) : Le partage réseau n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra."
+        ));
+        assert!(shows(
+            &window,
+            "disque lent : Le volume n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra."
+        ));
+        assert!(shows(
+            &window,
+            "nas:/films (partage réseau) : Sa taille n'a pas pu être lue."
+        ));
+        // A badge for the nearly full one and each silent one; their words
+        // are the control's to say (the sentences above).
+        assert_eq!(
+            ElementHandle::find_by_element_type_name(&window, "Badge").count(),
+            4
+        );
+        assert!(shows(&window, "nfs4, aucune réponse au dernier relevé"));
+        assert!(shows(&window, "Volumes : 6"));
+        assert_eq!(
+            said(&window, "Disques").as_deref(),
+            Some("KINGSTON : 1,0 Go libres"),
+            "the fullest, by its name"
+        );
+    }
+
+    #[test]
+    fn the_tall_disks_widget_says_where_each_volume_is_mounted() {
+        let (window, ..) = reading_home(&[("disks", WidgetSize::Tall)], six_volumes(), None);
+        assert!(shows(
+            &window,
+            "Système (/okapi-test · ext4) : 159,0 Go libres"
+        ));
+        assert!(shows(&window, "/okapi-test · ext4"));
+    }
+
+    #[test]
+    fn the_large_disks_widget_details_each_volume() {
+        let (window, ..) = reading_home(&[("disks", WidgetSize::Large)], six_volumes(), None);
+        assert!(shows(
+            &window,
+            "Système (/okapi-test · ext4) : 159,0 Go libres sur 198,0 Go"
+        ));
+        assert!(shows(&window, "39,0 Go utilisés (19 %)"));
+        assert!(shows(&window, "14,0 Go utilisés (93 %)"));
+    }
+
+    #[test]
+    fn the_small_disks_widget_counts_the_others_apart_from_the_silent_ones() {
+        let (window, ..) = reading_home(&[("disks", WidgetSize::Small)], six_volumes(), None);
+        assert!(shows(&window, "Autres volumes : 4 (sans réponse : 2)"));
+    }
+
+    #[test]
+    fn the_small_disks_widget_counts_the_others_alone_when_all_answer() {
+        let (window, ..) = reading_home(
+            &[("disks", WidgetSize::Small)],
+            six_volumes().into_iter().take(3).collect(),
+            None,
+        );
+        assert!(shows(&window, "Autres volumes : 1"));
+    }
+
+    #[test]
+    fn without_a_volume_the_disks_widget_says_so() {
+        let (window, ..) = reading_home(&[("disks", WidgetSize::Wide)], Vec::new(), None);
+        assert!(shows(&window, "Aucun volume à afficher"));
+    }
+
+    fn reading_of(
+        swap_total: u64,
+        applications: Option<Result<Applications, Unavailable>>,
+    ) -> okapi_tools::monitor::MemoryReading {
+        okapi_tools::monitor::MemoryReading {
+            status: status(swap_total),
+            applications,
+        }
+    }
+
+    fn firefox(gigabytes: u64) -> Applications {
+        Applications {
+            top: vec![okapi_tools::monitor::ApplicationMemory {
+                name: ApplicationName::Desktop("Firefox".to_owned()),
+                resident_bytes: gigabytes * GB,
+                processes: 12,
+            }],
+            unreadable: 0,
+        }
+    }
+
+    #[test]
+    fn the_memory_widget_waits_for_its_list_and_notes_approximate_values_when_large() {
+        let (window, sampler, _directories) = reading_home(
+            &[("memory", WidgetSize::Large)],
+            Vec::new(),
+            Some(Ok(reading_of(0, None))),
+        );
+        assert!(shows(
+            &window,
+            "La liste apparaîtra au prochain relevé, dans quelques secondes."
+        ));
+        assert!(shows(&window, "Pas de swap"));
+        let sink = sampler.sink.as_ref().unwrap();
+        sink.send(Sample::Memory(Ok(reading_of(8 * GB, Some(Ok(firefox(3)))))))
+            .unwrap();
+        take_in();
+        assert!(shows(&window, "Firefox : environ 3,0 Go"));
+        assert!(shows(&window, "Swap : 2,0 Go sur 8,0 Go"));
+        assert!(shows_a_text_starting(&window, "Valeurs approchées"));
+        // A new list replaces the one before.
+        sink.send(Sample::Memory(Ok(reading_of(8 * GB, Some(Ok(firefox(5)))))))
+            .unwrap();
+        take_in();
+        assert!(shows(&window, "Firefox : environ 5,0 Go"));
+    }
+
+    #[test]
+    fn the_wide_memory_widget_has_no_note_and_says_an_unreadable_list() {
+        let failed = Unavailable {
+            kind: std::io::ErrorKind::PermissionDenied,
+            code: None,
+        };
+        let (window, ..) = reading_home(
+            &[("memory", WidgetSize::Wide)],
+            Vec::new(),
+            Some(Ok(reading_of(8 * GB, Some(Err(failed))))),
+        );
+        assert!(shows(&window, "Les applications n'ont pas pu être lues."));
+        assert!(!shows_a_text_starting(&window, "Valeurs approchées"));
+        assert!(shows(&window, "22,0 Go disponibles"));
+    }
+
+    #[test]
+    fn an_unreadable_memory_is_unavailable() {
+        let failed = Unavailable {
+            kind: std::io::ErrorKind::Unsupported,
+            code: None,
+        };
+        let (window, ..) = reading_home(
+            &[("memory", WidgetSize::Small)],
+            Vec::new(),
+            Some(Err(failed)),
+        );
+        assert_eq!(said(&window, "Mémoire").as_deref(), Some("Indisponible"));
+        assert!(shows(
+            &window,
+            "La mémoire n'a pas pu être lue sur ce système."
+        ));
+    }
+
+    #[test]
+    fn an_odd_number_of_volumes_fills_the_two_columns_without_a_ghost() {
+        let volumes: Vec<Volume> = six_volumes().into_iter().take(5).collect();
+        let (window, sampler, _directories) =
+            reading_home(&[("disks", WidgetSize::Wide)], volumes, None);
+        assert!(shows(
+            &window,
+            "disque lent : Le volume n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra."
+        ));
+        assert!(!shows(&window, "Système : 0 o libres sur 0 o"), "no ghost");
+        // Fewer volumes: those gone are no longer said.
+        sampler
+            .sink
+            .as_ref()
+            .unwrap()
+            .send(Sample::Volumes(Ok(six_volumes()
+                .into_iter()
+                .take(3)
+                .collect())))
+            .unwrap();
+        take_in();
+        assert!(!shows(
+            &window,
+            "disque lent : Le volume n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra."
+        ));
+        assert!(!shows(&window, "Système : 0 o libres sur 0 o"), "no ghost");
+        assert!(shows(&window, "Volumes : 3"));
+        assert!(
+            ElementHandle::find_by_accessible_label(&window, "Disques")
+                .any(|element| element.accessible_role() == Some(AccessibleRole::List)),
+            "a list reached by the keyboard"
+        );
+    }
+
+    #[test]
+    fn the_small_memory_widget_sums_up_without_its_applications() {
+        let (window, ..) = reading_home(
+            &[("memory", WidgetSize::Small)],
+            Vec::new(),
+            Some(Ok(reading_of(8 * GB, Some(Ok(firefox(3)))))),
+        );
+        assert_eq!(
+            said(&window, "Mémoire").as_deref(),
+            Some("10,0 Go occupés sur 32,0 Go")
+        );
+        assert!(shows(&window, "22,0 Go disponibles"));
+        assert!(shows(&window, "Swap : 2,0 Go sur 8,0 Go"));
+        assert!(!shows(&window, "Firefox : environ 3,0 Go"));
+    }
+
+    #[test]
+    fn the_wide_memory_widget_lists_its_applications() {
+        let (window, ..) = reading_home(
+            &[("memory", WidgetSize::Wide)],
+            Vec::new(),
+            Some(Ok(reading_of(0, Some(Ok(firefox(3)))))),
+        );
+        assert!(shows(&window, "Firefox : environ 3,0 Go"));
+        assert!(shows(&window, "Pas de swap"));
+    }
+
+    #[test]
+    fn a_placed_volume_says_what_it_is_and_its_mount_point_once() {
+        let mut usb = known(
+            VolumeName::MountPoint(PathBuf::from("/media/usb")),
+            12 * GB,
+            16 * GB,
+        );
+        usb.mount_point = PathBuf::from("/media/usb");
+        usb.filesystem = "vfat".to_owned();
+        usb.kind = VolumeKind::Removable;
+        let mut share = silent("nas:/photos", VolumeSpace::NotResponding);
+        share.mount_point = PathBuf::from("/mnt/photos");
+        let (window, ..) = reading_home(&[("disks", WidgetSize::Tall)], vec![usb, share], None);
+        assert!(shows(
+            &window,
+            "/media/usb (vfat · amovible) : 4,0 Go libres"
+        ));
+        assert!(shows(
+            &window,
+            "nas:/photos (/mnt/photos · nfs4 · partage réseau) : Le partage réseau n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra."
         ));
     }
 }

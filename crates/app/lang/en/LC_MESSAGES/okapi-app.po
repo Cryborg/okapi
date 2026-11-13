@@ -1058,3 +1058,147 @@ msgstr "{} h {} min"
 msgctxt "DashboardWords"
 msgid "1er"
 msgstr "1"
+
+msgctxt "VolumeLine"
+msgid "{} · {}"
+msgstr "{} · {}"
+
+msgctxt "VolumeLine"
+msgid "{} libres sur {}"
+msgstr "{} free of {}"
+
+msgctxt "VolumeLine"
+msgid "{} libres"
+msgstr "{} free"
+
+msgctxt "VolumeLine"
+msgid "Sa taille n'a pas pu être lue."
+msgstr "Its size could not be read."
+
+msgctxt "VolumeLine"
+msgid "Le partage réseau n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra."
+msgstr "The network share did not answer the last reading. Its size will show as soon as it answers."
+
+msgctxt "VolumeLine"
+msgid "Le volume n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra."
+msgstr "The volume did not answer the last reading. Its size will show as soon as it answers."
+
+msgctxt "VolumeLine"
+msgid "{} : {}"
+msgstr "{}: {}"
+
+msgctxt "VolumeLine"
+msgid "{} : {}, presque plein"
+msgstr "{}: {}, nearly full"
+
+msgctxt "VolumeLine"
+msgid "Presque plein"
+msgstr "Nearly full"
+
+msgctxt "VolumeLine"
+msgid "Ne répond pas"
+msgstr "Not answering"
+
+msgctxt "VolumeLine"
+msgid "Illisible"
+msgstr "Unreadable"
+
+msgctxt "VolumeLine"
+msgid "{} utilisés sur {}, soit {} %"
+msgstr "{} used of {}, {}%"
+
+msgctxt "VolumeLine"
+msgid "{} utilisés ({} %)"
+msgstr "{} used ({}%)"
+
+msgctxt "VolumeLine"
+msgid "{}, aucune réponse au dernier relevé"
+msgstr "{}, no answer to the last reading"
+
+msgctxt "DisksWidget"
+msgid "Volumes : {}"
+msgstr "Volumes: {}"
+
+msgctxt "DisksWidget"
+msgid "Aucun volume à afficher"
+msgstr "No volume to show"
+
+msgctxt "DisksWidget"
+msgid "Les volumes apparaissent ici dès qu'ils sont montés."
+msgstr "Volumes show here as soon as they are mounted."
+
+msgctxt "DisksWidget"
+msgid "Autres volumes : {} (sans réponse : {})"
+msgstr "Other volumes: {} (not answering: {})"
+
+msgctxt "DisksWidget"
+msgid "Autres volumes : {}"
+msgstr "Other volumes: {}"
+
+msgctxt "Applications"
+msgid "Applications qui en occupent le plus"
+msgstr "Applications holding the most"
+
+msgctxt "Applications"
+msgid "La liste apparaîtra au prochain relevé, dans quelques secondes."
+msgstr "The list will show at the next reading, in a few seconds."
+
+msgctxt "Applications"
+msgid "Les applications n'ont pas pu être lues."
+msgstr "The applications could not be read."
+
+msgctxt "Applications"
+msgid "{} : environ {}"
+msgstr "{}: about {}"
+
+msgctxt "Applications"
+msgid "environ {}"
+msgstr "about {}"
+
+msgctxt "Applications"
+msgid "Valeurs approchées : une application partage une partie de sa mémoire avec d'autres, leur somme ne tombe donc pas sur le total."
+msgstr "Approximate values: an application shares part of its memory with others, so their sum does not match the total."
+
+msgctxt "MemoryWidget"
+msgid "{} occupés sur {}"
+msgstr "{} used of {}"
+
+msgctxt "MemoryWidget"
+msgid "occupés sur {}"
+msgstr "used of {}"
+
+msgctxt "MemoryWidget"
+msgid "{} occupés sur {}, soit {} %"
+msgstr "{} used of {}, {}%"
+
+msgctxt "MemoryWidget"
+msgid "{} disponibles"
+msgstr "{} available"
+
+msgctxt "MemoryWidget"
+msgid "Swap : {} sur {}"
+msgstr "Swap: {} of {}"
+
+msgctxt "MemoryWidget"
+msgid "Pas de swap"
+msgstr "No swap"
+
+msgctxt "DashboardWords"
+msgid "Dossier personnel"
+msgstr "Home folder"
+
+msgctxt "VolumeLine"
+msgid "{} ({})"
+msgstr "{} ({})"
+
+msgctxt "DisksWidget"
+msgid "{} : {} libres"
+msgstr "{}: {} free"
+
+msgctxt "VolumeLine"
+msgid "amovible"
+msgstr "removable"
+
+msgctxt "VolumeLine"
+msgid "partage réseau"
+msgstr "network share"

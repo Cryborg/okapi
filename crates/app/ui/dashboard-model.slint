@@ -67,6 +67,60 @@ export struct SystemShown {
     uptime-minutes: int,
 }
 
+// How a volume is named: the words for the system's and the home's, its
+// own name for the others.
+export enum VolumeNaming { system, home, own }
+
+export enum VolumePlace { local, removable, network }
+
+// What is known of a volume's space: read, no answer in time, or an error.
+export enum SpaceState { known, not-responding, failed }
+
+export struct VolumeShown {
+    naming: VolumeNaming,
+    name: string,
+    mount-point: string,
+    filesystem: string,
+    place: VolumePlace,
+    space: SpaceState,
+    free: Size,
+    total: Size,
+    used: Size,
+    // Used, from 0 to 100.
+    percent: int,
+    nearly-full: bool,
+}
+
+export struct DisksShown {
+    state: ReadingState,
+    volumes: [VolumeShown],
+    // The two fullest whose space is known, the fullest first.
+    fullest: [VolumeShown],
+    // The volumes beyond those, and how many of them did not answer.
+    others: int,
+    others-not-responding: int,
+}
+
+export struct ApplicationShown {
+    name: string,
+    size: Size,
+}
+
+export struct MemoryShown {
+    state: ReadingState,
+    used: Size,
+    total: Size,
+    available: Size,
+    percent: int,
+    has-swap: bool,
+    swap-used: Size,
+    swap-total: Size,
+    swap-percent: int,
+    // The applications holding the most: reading until a first list comes.
+    applications-state: ReadingState,
+    applications: [ApplicationShown],
+}
+
 export global Dashboard {
     // The placements in 1 to as many columns as the grid may have.
     in property <[Placement]> placements;
@@ -74,6 +128,8 @@ export global Dashboard {
     in property <bool> layout-unreadable;
     in property <Reclaimable> reclaimable;
     in property <SystemShown> system;
+    in property <DisksShown> disks;
+    in property <MemoryShown> memory;
     // No reading reaches the window any more.
     in property <bool> readings-lost;
 

@@ -402,7 +402,137 @@ fn home(window: &ui::AppWindow) {
         uptime_hours: 3,
         uptime_minutes: 12,
     });
+    dashboard.set_disks(disks());
+    dashboard.set_memory(memory());
     window.set_page(ui::Page::Home);
+}
+
+fn volume(
+    naming: ui::VolumeNaming,
+    name: &str,
+    mount_point: &str,
+    place: ui::VolumePlace,
+    space: Option<(i32, i32, i32, i32)>,
+) -> ui::VolumeShown {
+    let gigabytes = |whole| size(whole, 0, ui::SizeUnit::Gigabyte);
+    let (free, total, used, percent) = space.unwrap_or_default();
+    ui::VolumeShown {
+        naming,
+        name: name.into(),
+        mount_point: mount_point.into(),
+        filesystem: if place == ui::VolumePlace::Network {
+            "nfs4"
+        } else {
+            "ext4"
+        }
+        .into(),
+        place,
+        space: if space.is_some() {
+            ui::SpaceState::Known
+        } else {
+            ui::SpaceState::NotResponding
+        },
+        free: gigabytes(free),
+        total: gigabytes(total),
+        used: gigabytes(used),
+        percent,
+        // `okapi_tools::monitor::nearly_full` says it of a space read.
+        nearly_full: percent >= 90,
+    }
+}
+
+fn disks() -> ui::DisksShown {
+    use ui::VolumeNaming::{Home, Own, System};
+    use ui::VolumePlace::{Local, Network, Removable};
+    let volumes = vec![
+        volume(System, "", "/", Local, Some((159, 198, 39, 20))),
+        volume(Home, "", "/home", Local, Some((234, 456, 222, 49))),
+        volume(
+            Own,
+            "Données",
+            "/run/media/ana/Données",
+            Local,
+            Some((287, 289, 2, 1)),
+        ),
+        volume(
+            Own,
+            "KINGSTON",
+            "/run/media/ana/KINGSTON",
+            Removable,
+            Some((1, 15, 14, 92)),
+        ),
+        volume(Own, "nas:/photos", "/mnt/photos", Network, None),
+    ];
+    let fullest = vec![volumes[3].clone(), volumes[1].clone()];
+    ui::DisksShown {
+        state: ui::ReadingState::Read,
+        volumes: ModelRc::new(VecModel::from(volumes)),
+        fullest: ModelRc::new(VecModel::from(fullest)),
+        others: 3,
+        others_not_responding: 1,
+    }
+}
+
+fn memory() -> ui::MemoryShown {
+    let application = |name: &str, whole, tenths| ui::ApplicationShown {
+        name: name.into(),
+        size: size(whole, tenths, ui::SizeUnit::Gigabyte),
+    };
+    ui::MemoryShown {
+        state: ui::ReadingState::Read,
+        used: size(9, 8, ui::SizeUnit::Gigabyte),
+        total: size(31, 2, ui::SizeUnit::Gigabyte),
+        available: size(21, 4, ui::SizeUnit::Gigabyte),
+        percent: 31,
+        has_swap: true,
+        swap_used: size(0, 2, ui::SizeUnit::Gigabyte),
+        swap_total: size(8, 0, ui::SizeUnit::Gigabyte),
+        swap_percent: 3,
+        applications_state: ui::ReadingState::Read,
+        applications: ModelRc::new(VecModel::from(vec![
+            application("Firefox", 3, 1),
+            application("Code", 1, 4),
+            application("GNOME Shell", 0, 6),
+            application("Slack", 0, 5),
+            application("Okapi", 0, 1),
+        ])),
+    }
+}
+
+/// The Home page with only Disques and Mémoire, at their two tallest sizes:
+/// `disks` Large and Memory Tall, or the other way round.
+fn home_tall(window: &ui::AppWindow, disks_large: bool) {
+    home(window);
+    let (large, tall) = if disks_large {
+        (ui::WidgetKind::Disks, ui::WidgetKind::Memory)
+    } else {
+        (ui::WidgetKind::Memory, ui::WidgetKind::Disks)
+    };
+    let cells = vec![
+        ui::WidgetCell {
+            kind: large,
+            size: ui::WidgetSize::Large,
+            column: 0,
+            row: 0,
+            width: 2,
+            height: 2,
+        },
+        ui::WidgetCell {
+            kind: tall,
+            size: ui::WidgetSize::Tall,
+            column: 2,
+            row: 0,
+            width: 1,
+            height: 2,
+        },
+    ];
+    let placement = ui::Placement {
+        cells: ModelRc::new(VecModel::from(cells)),
+        rows: 2,
+    };
+    window
+        .global::<ui::Dashboard>()
+        .set_placements(ModelRc::new(VecModel::from(vec![placement; 4])));
 }
 
 fn main() {
@@ -425,8 +555,10 @@ fn main() {
         "ended" => ended(&app),
         "about" => app.set_page(ui::Page::About),
         "home" | "home-small" => home(&app),
+        "home-disks" => home_tall(&app, true),
+        "home-memory" => home_tall(&app, false),
         other => panic!(
-            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small"
+            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-disks, home-memory"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

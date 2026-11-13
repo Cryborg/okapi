@@ -1,5 +1,6 @@
 // The controls every screen shares, drawn from the mockup's components
 // (docs/design/maquette/project/Components.dc.html).
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 
 export component Card inherits Rectangle {
@@ -215,6 +216,7 @@ export component ProgressBar inherits Rectangle {
     in property <float> progress;
     in property <bool> indeterminate;
     in property <string> label;
+    in property <color> tone: Theme.accent;
     height: Theme.bar-height;
     border-radius: Theme.radius-pill;
     background: Theme.track;
@@ -235,7 +237,7 @@ export component ProgressBar inherits Rectangle {
         width: indeterminate ? Theme.indeterminate-part * parent.width : clamp(root.progress, 0, 1) * parent.width;
         height: parent.height;
         border-radius: parent.border-radius;
-        background: Theme.accent;
+        background: root.tone;
     }
 }
 
@@ -253,5 +255,65 @@ export component Footer inherits Rectangle {
         padding-right: Theme.spacing-xxl;
         spacing: Theme.spacing-m;
         @children
+    }
+}
+
+// What scrolls within a screen, by the keyboard too: Tab reaches it, the
+// arrows, the pages, Home and End move it; with nothing to scroll, the keys
+// go on to what holds it.
+export component ScrolledList inherits FocusScope {
+    in property <string> label;
+    in property <length> content-height;
+    in property <length> ring-radius: Theme.radius-small;
+    out property <length> visible-width: view.visible-width;
+    out property <length> visible-height: view.visible-height;
+
+    function scroll(step: length) {
+        view.content-y += step;
+    }
+
+    accessible-role: list;
+    accessible-label: label;
+    key-pressed(event) => {
+        if view.content-height <= view.visible-height {
+            return reject;
+        }
+        if event.text == Key.Home {
+            root.scroll(view.content-height);
+            return accept;
+        }
+        if event.text == Key.End {
+            root.scroll(-view.content-height);
+            return accept;
+        }
+        if event.text == Key.UpArrow {
+            root.scroll(Theme.scroll-step);
+            return accept;
+        }
+        if event.text == Key.DownArrow {
+            root.scroll(-Theme.scroll-step);
+            return accept;
+        }
+        if event.text == Key.PageUp {
+            root.scroll(view.visible-height);
+            return accept;
+        }
+        if event.text == Key.PageDown {
+            root.scroll(-view.visible-height);
+            return accept;
+        }
+        reject
+    }
+
+    view := ScrollView {
+        content-width: self.visible-width;
+        content-height: root.content-height;
+        @children
+    }
+
+    Rectangle {
+        border-radius: root.ring-radius;
+        border-width: root.has-focus ? Theme.focus-width : 0;
+        border-color: Theme.focus;
     }
 }

@@ -1,10 +1,12 @@
 // The widgets of the Home page, drawn from the mockup's
 // (docs/design/tableau-de-bord/project/Widget.dc.html).
 import { Theme } from "theme.slint";
-import { Card, Detail, Icon, Badge, ProgressBar, ActionButton, ButtonKind } from "widgets.slint";
+import { Card, Detail, Icon, Badge, ProgressBar, ActionButton, ButtonKind, ScrolledList } from "widgets.slint";
 import { Cleaner, CleanerStep, RightsStep, Words } from "cleaner-model.slint";
 import {
-    Dashboard, DayKind, Moment, ReadingState, Reclaimable, ReclaimableState, SystemShown, WidgetKind,
+    Dashboard, DayKind, DisksShown, MemoryShown, Moment, ReadingState, Reclaimable,
+    ReclaimableState, SpaceState, SystemShown, VolumeNaming, VolumePlace, VolumeShown, WidgetKind,
+    WidgetSize,
 } from "dashboard-model.slint";
 
 // The words of the Home page.
@@ -98,6 +100,17 @@ export global DashboardWords {
     // The day of a month: "1er", "12".
     pure public function day(number: int) -> string {
         return number == 1 ? @tr("1er") : number;
+    }
+
+    // How a volume is called.
+    pure public function volume-name(volume: VolumeShown) -> string {
+        if volume.naming == VolumeNaming.system {
+            return @tr("Système");
+        }
+        if volume.naming == VolumeNaming.home {
+            return @tr("Dossier personnel");
+        }
+        return volume.name;
     }
 
     // A minute or an hour on two digits: "05".
@@ -209,12 +222,11 @@ export component WidgetCard inherits Card {
                 overflow: elide;
                 accessible-role: none;
             }
-            Text {
+            if root.note != "": Text {
                 text: root.note;
                 color: Theme.text-3;
                 font-size: Theme.font-caption;
                 vertical-alignment: center;
-                accessible-role: none;
             }
         }
 
@@ -457,3 +469,363 @@ export component SystemWidget inherits WidgetCard {
 export component ReadingWidget inherits WidgetCard {
     state: Dashboard.readings-lost ? ReadingState.unavailable : ReadingState.reading;
 }
+
+component Caption inherits Text {
+    color: Theme.text-3;
+    font-size: Theme.font-caption;
+}
+
+// A volume: its icon, its name, a badge when it is nearly full or does not
+// answer, then, by how much room it has, its bar and what is free.
+component VolumeLine inherits VerticalLayout {
+    in property <VolumeShown> volume;
+    // Its mount point and filesystem under its name.
+    in property <bool> placed;
+    // "sur" the total after what is free.
+    in property <bool> with-total;
+    // The most room: the total beside the name, the used part under the bar.
+    in property <bool> detailed;
+
+    property <string> name: DashboardWords.volume-name(volume);
+    // What it is, when the icon says more than a disk.
+    property <string> nature: volume.place == VolumePlace.removable ? @tr("amovible")
+        : volume.place == VolumePlace.network ? @tr("partage réseau") : "";
+    // Where it is mounted, unless its name says it already, and what.
+    property <string> mounted: volume.name == volume.mount-point ? volume.filesystem
+        : @tr("{} · {}", volume.mount-point, volume.filesystem);
+    property <string> where: nature == "" ? mounted : @tr("{} · {}", mounted, nature);
+    property <string> free: with-total || detailed
+        ? @tr("{} libres sur {}", Words.size(volume.free), Words.size(volume.total))
+        : @tr("{} libres", Words.size(volume.free));
+    property <string> bar-label: @tr("{} utilisés sur {}, soit {} %", Words.size(volume.used), Words.size(volume.total), volume.percent);
+    property <float> part-used: max(volume.percent, 1) / 100;
+    property <string> silent: volume.space == SpaceState.failed ? @tr("Sa taille n'a pas pu être lue.")
+        : volume.place == VolumePlace.network ? @tr("Le partage réseau n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra.")
+        : @tr("Le volume n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra.");
+
+    spacing: Theme.spacing-xs;
+    accessible-role: text;
+    // The mount point and filesystem read where they are shown.
+    property <string> called: placed || detailed ? @tr("{} ({})", name, where)
+        : nature != "" ? @tr("{} ({})", name, nature) : name;
+    accessible-label: volume.space != SpaceState.known ? @tr("{} : {}", called, silent)
+        : volume.nearly-full ? @tr("{} : {}, presque plein", called, free) : @tr("{} : {}", called, free);
+
+    HorizontalLayout {
+        spacing: Theme.spacing-s;
+        Icon {
+            source: root.volume.place == VolumePlace.removable ? @image-url("../assets/icons/usb.svg")
+                : root.volume.place == VolumePlace.network ? @image-url("../assets/icons/server.svg")
+                : @image-url("../assets/icons/hard-drive.svg");
+            colorize: Theme.text-2;
+            width: Theme.icon-small;
+            height: Theme.icon-small;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            horizontal-stretch: root.detailed ? 0 : 1;
+            text: root.name;
+            color: Theme.text;
+            font-size: Theme.font-small;
+            font-weight: Theme.weight-medium;
+            overflow: elide;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+        if root.detailed: Caption {
+            horizontal-stretch: 1;
+            text: root.where;
+            overflow: elide;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+        if root.volume.space == SpaceState.known && root.volume.nearly-full: Badge {
+            y: (parent.height - self.height) / 2;
+            text: @tr("Presque plein");
+            icon: @image-url("../assets/icons/triangle-alert.svg");
+        }
+        if root.volume.space != SpaceState.known: Badge {
+            y: (parent.height - self.height) / 2;
+            text: root.volume.space == SpaceState.failed ? @tr("Illisible") : @tr("Ne répond pas");
+            icon: @image-url("../assets/icons/ban.svg");
+            tone: Theme.text-2;
+            tone-soft: Theme.surface-2;
+        }
+        if root.detailed && root.volume.space == SpaceState.known: Text {
+            text: root.free;
+            color: Theme.text;
+            font-size: Theme.font-small;
+            font-weight: Theme.weight-medium;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+    if root.placed && !root.detailed: Caption {
+        text: root.where;
+        overflow: elide;
+        accessible-role: none;
+    }
+    if root.volume.space == SpaceState.known && !root.detailed: HorizontalLayout {
+        spacing: Theme.spacing-m;
+        ProgressBar {
+            horizontal-stretch: 1;
+            y: (parent.height - self.height) / 2;
+            progress: root.part-used;
+            tone: root.volume.nearly-full ? Theme.warning : Theme.accent;
+            label: root.bar-label;
+        }
+        Text {
+            text: root.free;
+            color: Theme.text;
+            font-size: Theme.font-small;
+            accessible-role: none;
+        }
+    }
+    if root.volume.space == SpaceState.known && root.detailed: ProgressBar {
+        height: Theme.bar-height-large;
+        progress: root.part-used;
+        tone: root.volume.nearly-full ? Theme.warning : Theme.accent;
+        label: root.bar-label;
+    }
+    if root.volume.space == SpaceState.known && root.detailed: Caption {
+        text: @tr("{} utilisés ({} %)", Words.size(root.volume.used), root.volume.percent);
+        accessible-role: none;
+    }
+    if root.volume.space != SpaceState.known && root.detailed: Detail {
+        text: root.silent;
+        accessible-role: none;
+    }
+    // Placed, its filesystem is said just above.
+    if root.volume.space != SpaceState.known && !root.detailed && !root.placed: Caption {
+        text: root.volume.space == SpaceState.failed ? root.silent : @tr("{}, aucune réponse au dernier relevé", root.volume.filesystem);
+        overflow: elide;
+        accessible-role: none;
+    }
+}
+
+// The mounted volumes: the two fullest when small, all of them beyond.
+export component DisksWidget inherits WidgetCard {
+    in property <WidgetSize> size;
+
+    property <DisksShown> shown: Dashboard.disks;
+    property <bool> small: size == WidgetSize.small;
+
+    kind: WidgetKind.disks;
+    state: Dashboard.readings-lost ? ReadingState.unavailable : shown.state;
+    note: !small && shown.state == ReadingState.read ? @tr("Volumes : {}", shown.volumes.length) : "";
+    // The fullest volume, by its name.
+    summary: shown.fullest.length > 0
+        ? @tr("{} : {} libres", DashboardWords.volume-name(shown.fullest[0]), Words.size(shown.fullest[0].free))
+        : "";
+
+    if root.state == ReadingState.read && shown.volumes.length == 0: VerticalLayout {
+        alignment: start;
+        spacing: Theme.spacing-xs;
+        Text {
+            text: @tr("Aucun volume à afficher");
+            color: Theme.text;
+            font-size: Theme.font-label;
+            font-weight: Theme.weight-medium;
+        }
+        Detail {
+            text: @tr("Les volumes apparaissent ici dès qu'ils sont montés.");
+        }
+    }
+
+    if root.state == ReadingState.read && shown.volumes.length > 0 && root.small: VerticalLayout {
+        alignment: start;
+        spacing: Theme.volume-gap;
+        for volume in root.shown.fullest: VolumeLine {
+            volume: volume;
+        }
+        if root.shown.others > 0: Detail {
+            color: Theme.text-3;
+            text: root.shown.others-not-responding > 0
+                ? @tr("Autres volumes : {} (sans réponse : {})", root.shown.others, root.shown.others-not-responding)
+                : @tr("Autres volumes : {}", root.shown.others);
+        }
+    }
+
+    if root.state == ReadingState.read && shown.volumes.length > 0 && !root.small: list := ScrolledList {
+        property <bool> two-columns: root.size == WidgetSize.wide;
+        property <length> room: self.visible-width - (root.shown.volumes.length > Theme.volumes-in-view ? Theme.scroll-gutter : 0);
+        property <length> column-width: two-columns ? (room - Theme.volume-column-gap) / 2 : room;
+        label: DashboardWords.title(WidgetKind.disks);
+        content-height: lines.preferred-height;
+        lines := VerticalLayout {
+            width: list.room;
+            spacing: root.size == WidgetSize.large ? Theme.volume-gap-large : Theme.volume-gap;
+            alignment: start;
+            for row in list.two-columns ? ceil(root.shown.volumes.length / 2) : root.shown.volumes.length: HorizontalLayout {
+                spacing: Theme.volume-column-gap;
+                VolumeLine {
+                    width: list.column-width;
+                    volume: root.shown.volumes[list.two-columns ? row * 2 : row];
+                    placed: root.size == WidgetSize.tall;
+                    with-total: root.size == WidgetSize.wide;
+                    detailed: root.size == WidgetSize.large;
+                }
+                if list.two-columns && row * 2 + 1 < root.shown.volumes.length: VolumeLine {
+                    width: list.column-width;
+                    volume: root.shown.volumes[row * 2 + 1];
+                    with-total: true;
+                }
+            }
+        }
+    }
+}
+
+// The applications holding the most memory, each "environ" its size.
+component Applications inherits VerticalLayout {
+    // Taller lines, a rule under each.
+    in property <bool> ruled;
+    // The note on approximate values.
+    in property <bool> noted;
+    property <length> line: ruled ? Theme.widget-line-large : Theme.widget-line;
+    property <MemoryShown> shown: Dashboard.memory;
+    spacing: Theme.spacing-xs;
+
+    Text {
+        color: Theme.text-2;
+        font-size: Theme.font-caption;
+        text: @tr("Applications qui en occupent le plus");
+        // The list below carries the name for screen readers.
+        accessible-role: none;
+    }
+    if root.shown.applications-state == ReadingState.reading: Detail {
+        text: @tr("La liste apparaîtra au prochain relevé, dans quelques secondes.");
+    }
+    if root.shown.applications-state == ReadingState.unavailable: Detail {
+        text: @tr("Les applications n'ont pas pu être lues.");
+    }
+    if root.shown.applications-state == ReadingState.read: apps := ScrolledList {
+        vertical-stretch: 1;
+        label: @tr("Applications qui en occupent le plus");
+        content-height: rows.preferred-height;
+        rows := VerticalLayout {
+            width: apps.visible-width - (root.shown.applications.length * root.line > apps.visible-height ? Theme.scroll-gutter : 0);
+            alignment: start;
+            for application in root.shown.applications: Rectangle {
+                height: root.line;
+                accessible-role: text;
+                accessible-label: @tr("{} : environ {}", application.name, Words.size(application.size));
+                HorizontalLayout {
+                    spacing: Theme.spacing-s;
+                    Text {
+                        horizontal-stretch: 1;
+                        text: application.name;
+                        color: Theme.text;
+                        font-size: Theme.font-small;
+                        overflow: elide;
+                        vertical-alignment: center;
+                        accessible-role: none;
+                    }
+                    Text {
+                        text: @tr("environ {}", Words.size(application.size));
+                        color: Theme.text-2;
+                        font-size: Theme.font-small;
+                        vertical-alignment: center;
+                        accessible-role: none;
+                    }
+                }
+                if root.ruled: Rectangle {
+                    y: parent.height - self.height;
+                    height: Theme.border-width;
+                    background: Theme.border;
+                }
+            }
+        }
+    }
+    if root.noted && root.shown.applications-state == ReadingState.read: Caption {
+        text: @tr("Valeurs approchées : une application partage une partie de sa mémoire avec d'autres, leur somme ne tombe donc pas sur le total.");
+        wrap: word-wrap;
+    }
+}
+
+// The memory used, and from Wide on, the applications holding the most.
+export component MemoryWidget inherits WidgetCard {
+    in property <WidgetSize> size;
+
+    property <MemoryShown> shown: Dashboard.memory;
+    property <bool> beside: size == WidgetSize.wide || size == WidgetSize.large;
+    property <bool> large: size == WidgetSize.large;
+    property <string> used: @tr("{} occupés sur {}", Words.size(shown.used), Words.size(shown.total));
+    property <string> of-total: @tr("occupés sur {}", Words.size(shown.total));
+    property <string> swap: @tr("Swap : {} sur {}", Words.size(shown.swap-used), Words.size(shown.swap-total));
+
+    kind: WidgetKind.memory;
+    state: Dashboard.readings-lost ? ReadingState.unavailable : shown.state;
+    summary: used;
+
+    if root.state == ReadingState.read: Rectangle {
+        vertical-stretch: 1;
+        layout := HorizontalLayout {
+            spacing: root.beside ? Theme.memory-gap-wide : Theme.memory-gap;
+            VerticalLayout {
+                width: root.large ? Theme.memory-summary-width : (root.beside ? (layout.width - Theme.memory-gap-wide) / 2 : layout.width);
+                alignment: start;
+                spacing: Theme.spacing-xs;
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: Theme.spacing-s;
+                    Text {
+                        text: Words.size(root.shown.used);
+                        color: Theme.text;
+                        font-size: root.large ? Theme.font-hero : Theme.font-title;
+                        font-weight: Theme.weight-semibold;
+                        accessible-role: none;
+                    }
+                    if !root.large: Detail {
+                        vertical-alignment: bottom;
+                        wrap: no-wrap;
+                        text: root.of-total;
+                        accessible-role: none;
+                    }
+                }
+                // Beside the larger figure it would not fit.
+                if root.large: Detail {
+                    text: root.of-total;
+                    accessible-role: none;
+                }
+                ProgressBar {
+                    height: Theme.bar-height-large;
+                    progress: root.shown.percent / 100;
+                    label: @tr("{} occupés sur {}, soit {} %", Words.size(root.shown.used), Words.size(root.shown.total), root.shown.percent);
+                }
+                Detail {
+                    text: @tr("{} disponibles", Words.size(root.shown.available));
+                }
+                if !root.large || !root.shown.has-swap: Caption {
+                    text: root.shown.has-swap ? root.swap : @tr("Pas de swap");
+                }
+                if root.large && root.shown.has-swap: Caption {
+                    text: root.swap;
+                    // Its bar says it.
+                    accessible-role: none;
+                }
+                if root.large && root.shown.has-swap: ProgressBar {
+                    height: Theme.bar-height-small;
+                    progress: root.shown.swap-percent / 100;
+                    label: root.swap;
+                }
+            }
+            if root.size != WidgetSize.small && root.size != WidgetSize.tall: Applications {
+                horizontal-stretch: 1;
+                ruled: root.large;
+                noted: root.large;
+            }
+        }
+        if root.size == WidgetSize.tall: Rectangle {
+            y: layout.preferred-height + Theme.memory-gap;
+            height: Theme.border-width;
+            background: Theme.border;
+        }
+        if root.size == WidgetSize.tall: Applications {
+            y: layout.preferred-height + 2 * Theme.memory-gap;
+            height: parent.height - self.y;
+            width: parent.width;
+            ruled: true;
+        }
+    }
+}
+

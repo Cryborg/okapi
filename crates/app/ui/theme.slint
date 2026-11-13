@@ -124,6 +124,23 @@ export global Theme {
     // The width of the column of the Analyser button, full width and not.
     out property <length> reclaim-actions-full: 240px;
     out property <length> reclaim-actions: 132px;
+    // The lists of a widget: a line of a compact one, of a detailed one,
+    // the space between volumes, and between the two columns of a wide one.
+    out property <length> widget-line: 18px;
+    out property <length> widget-line-large: 28px;
+    out property <length> volume-gap: 12px;
+    out property <length> volume-gap-large: 16px;
+    out property <length> volume-column-gap: 24px;
+    // The memory: the space between its summary and its applications, and
+    // the summary's width beside them at the largest size.
+    out property <length> memory-gap: 12px;
+    out property <length> memory-gap-wide: 28px;
+    out property <length> memory-summary-width: 240px;
+    out property <length> bar-height-small: 4px;
+    // Room left on the right of a list that scrolls, for its bar; the
+    // volumes a widget shows before its list scrolls.
+    out property <length> scroll-gutter: 10px;
+    out property <int> volumes-in-view: 4;
     // The names' column of a key-value list.
     out property <length> key-width: 112px;
     out property <length> font-hero: 40px;

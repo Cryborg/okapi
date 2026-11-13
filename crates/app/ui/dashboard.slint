@@ -1,22 +1,15 @@
 // The Home page: a header, then the widgets of the layout in a grid whose
 // columns follow the width (docs/design/tableau-de-bord/project/Dashboard.dc.html).
-import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { Title, Detail, Icon } from "widgets.slint";
+import { Title, Detail, Icon, ScrolledList } from "widgets.slint";
 import { Dashboard, Placement, ReadingState, ReclaimableState, WidgetKind, WidgetSize } from "dashboard-model.slint";
-import { DashboardWords, ReclaimableWidget, SystemWidget, ReadingWidget } from "dashboard-widgets.slint";
+import { DashboardWords, DisksWidget, MemoryWidget, ReclaimableWidget, SystemWidget, ReadingWidget } from "dashboard-widgets.slint";
 
 export component DashboardPage inherits Rectangle {
     // The window's width, which the page's margin follows.
     in property <length> window-width;
     // "Voir les derniers résultats": the cleaner's page.
     callback open-cleaner();
-
-    // Scrolls the page by `step` (up when positive); the scroll view keeps
-    // it within its bounds.
-    function scroll(step: length) {
-        view.content-y += step;
-    }
 
     property <length> margin: window-width < Theme.dash-narrow-below ? Theme.spacing-xl : Theme.spacing-xxl;
     property <length> grid-width: view.visible-width - 2 * margin;
@@ -35,125 +28,98 @@ export component DashboardPage inherits Rectangle {
         Dashboard.columns-shown(self.columns);
     }
 
-    keys := FocusScope {
-        key-pressed(event) => {
-            if event.text == Key.Home {
-                root.scroll(view.content-height);
-                return accept;
-            }
-            if event.text == Key.End {
-                root.scroll(-view.content-height);
-                return accept;
-            }
-            if event.text == Key.UpArrow {
-                root.scroll(Theme.scroll-step);
-                return accept;
-            }
-            if event.text == Key.DownArrow {
-                root.scroll(-Theme.scroll-step);
-                return accept;
-            }
-            if event.text == Key.PageUp {
-                root.scroll(view.visible-height);
-                return accept;
-            }
-            if event.text == Key.PageDown {
-                root.scroll(-view.visible-height);
-                return accept;
-            }
-            reject
-        }
+    // Reached with Tab, scrolled with the arrows, the pages, Home and End.
+    view := ScrolledList {
+        // A page, not a list: its widgets are its parts.
+        accessible-role: none;
+        content-height: page.preferred-height;
 
-        view := ScrollView {
-            content-width: self.visible-width;
-            content-height: page.preferred-height;
+        page := VerticalLayout {
+            width: view.visible-width;
+            padding: root.margin;
+            spacing: Theme.spacing-xl;
 
-            page := VerticalLayout {
-                width: view.visible-width;
-                padding: root.margin;
-                spacing: Theme.spacing-xl;
-
-                VerticalLayout {
-                    spacing: Theme.spacing-xs;
-                    Title {
-                        text: @tr("Accueil");
-                    }
-                    if root.header-line != "": Detail {
-                        text: root.header-line;
-                    }
+            VerticalLayout {
+                spacing: Theme.spacing-xs;
+                Title {
+                    text: @tr("Accueil");
                 }
-
-                if Dashboard.layout-unreadable: Rectangle {
-                    background: Theme.warning-soft;
-                    border-radius: Theme.radius-medium;
-                    accessible-role: text;
-                    accessible-label: unreadable.text;
-                    HorizontalLayout {
-                        padding: Theme.spacing-m;
-                        padding-left: Theme.spacing-l;
-                        spacing: Theme.spacing-m;
-                        Icon {
-                            source: @image-url("../assets/icons/triangle-alert.svg");
-                            colorize: Theme.warning;
-                            width: Theme.icon-small;
-                            height: Theme.icon-small;
-                            y: (parent.height - self.height) / 2;
-                        }
-                        unreadable := Detail {
-                            horizontal-stretch: 1;
-                            text: @tr("Votre disposition n'a pas pu être lue, la disposition par défaut est affichée.");
-                            color: Theme.text;
-                            accessible-role: none;
-                        }
-                    }
+                if root.header-line != "": Detail {
+                    text: root.header-line;
                 }
+            }
 
-                if root.placement.cells.length == 0: VerticalLayout {
-                    alignment: center;
-                    spacing: Theme.spacing-s;
-                    padding-top: Theme.spacing-xxl;
-                    Text {
-                        text: @tr("Votre tableau de bord est vide");
+            if Dashboard.layout-unreadable: Rectangle {
+                background: Theme.warning-soft;
+                border-radius: Theme.radius-medium;
+                accessible-role: text;
+                accessible-label: unreadable.text;
+                HorizontalLayout {
+                    padding: Theme.spacing-m;
+                    padding-left: Theme.spacing-l;
+                    spacing: Theme.spacing-m;
+                    Icon {
+                        source: @image-url("../assets/icons/triangle-alert.svg");
+                        colorize: Theme.warning;
+                        width: Theme.icon-small;
+                        height: Theme.icon-small;
+                        y: (parent.height - self.height) / 2;
+                    }
+                    unreadable := Detail {
+                        horizontal-stretch: 1;
+                        text: @tr("Votre disposition n'a pas pu être lue, la disposition par défaut est affichée.");
                         color: Theme.text;
-                        font-size: Theme.font-title;
-                        font-weight: Theme.weight-semibold;
-                        horizontal-alignment: center;
-                    }
-                    Detail {
-                        text: @tr("Ajoutez les widgets que vous voulez suivre : espace récupérable, disques, mémoire, processeur ou système.");
-                        horizontal-alignment: center;
-                    }
-                }
-
-                if root.placement.cells.length > 0: Rectangle {
-                    height: root.placement.rows * Theme.dash-row + max(0, root.placement.rows - 1) * Theme.dash-gap;
-
-                    for cell in root.placement.cells: Rectangle {
-                        x: cell.column * (root.column-width + Theme.dash-gap);
-                        y: cell.row * (Theme.dash-row + Theme.dash-gap);
-                        width: cell.width * root.column-width + (cell.width - 1) * Theme.dash-gap;
-                        height: cell.height * Theme.dash-row + (cell.height - 1) * Theme.dash-gap;
-
-                        if cell.kind == WidgetKind.reclaimable: ReclaimableWidget {
-                            // Alone in its row, it keeps a full width's words
-                            // only where they fit beside the button.
-                            full: cell.size == WidgetSize.full && root.columns > 1;
-                            see-results => {
-                                root.open-cleaner();
-                            }
-                        }
-                        if cell.kind == WidgetKind.system: SystemWidget { }
-                        if cell.kind != WidgetKind.reclaimable && cell.kind != WidgetKind.system: ReadingWidget {
-                            kind: cell.kind;
-                        }
+                        accessible-role: none;
                     }
                 }
             }
-        }
 
-        Rectangle {
-            border-width: keys.has-focus ? Theme.focus-width : 0;
-            border-color: Theme.focus;
+            if root.placement.cells.length == 0: VerticalLayout {
+                alignment: center;
+                spacing: Theme.spacing-s;
+                padding-top: Theme.spacing-xxl;
+                Text {
+                    text: @tr("Votre tableau de bord est vide");
+                    color: Theme.text;
+                    font-size: Theme.font-title;
+                    font-weight: Theme.weight-semibold;
+                    horizontal-alignment: center;
+                }
+                Detail {
+                    text: @tr("Ajoutez les widgets que vous voulez suivre : espace récupérable, disques, mémoire, processeur ou système.");
+                    horizontal-alignment: center;
+                }
+            }
+
+            if root.placement.cells.length > 0: Rectangle {
+                height: root.placement.rows * Theme.dash-row + max(0, root.placement.rows - 1) * Theme.dash-gap;
+
+                for cell in root.placement.cells: Rectangle {
+                    x: cell.column * (root.column-width + Theme.dash-gap);
+                    y: cell.row * (Theme.dash-row + Theme.dash-gap);
+                    width: cell.width * root.column-width + (cell.width - 1) * Theme.dash-gap;
+                    height: cell.height * Theme.dash-row + (cell.height - 1) * Theme.dash-gap;
+
+                    if cell.kind == WidgetKind.reclaimable: ReclaimableWidget {
+                        // Alone in its row, it keeps a full width's words
+                        // only where they fit beside the button.
+                        full: cell.size == WidgetSize.full && root.columns > 1;
+                        see-results => {
+                            root.open-cleaner();
+                        }
+                    }
+                    if cell.kind == WidgetKind.system: SystemWidget { }
+                    if cell.kind == WidgetKind.disks: DisksWidget {
+                        size: cell.size;
+                    }
+                    if cell.kind == WidgetKind.memory: MemoryWidget {
+                        size: cell.size;
+                    }
+                    if cell.kind == WidgetKind.processor: ReadingWidget {
+                        kind: cell.kind;
+                    }
+                }
+            }
         }
     }
 }

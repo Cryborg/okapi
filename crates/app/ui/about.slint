@@ -1,17 +1,11 @@
-import { AboutSlint, ScrollView } from "std-widgets.slint";
+import { AboutSlint } from "std-widgets.slint";
 import { Theme, Brand } from "theme.slint";
-import { Card, Line, Detail, Title } from "widgets.slint";
+import { Card, Line, Detail, Title, ScrolledList } from "widgets.slint";
 
 // What Okapi is, under which licenses, and what it embeds. Slint's
 // royalty-free license requires AboutSlint on this screen, reached from the
 // sidebar: never remove it.
 export component AboutPage inherits Rectangle {
-    // Scrolls the license texts by `step` (up when positive); the scroll
-    // view keeps them within their bounds.
-    function scroll-notices(step: length) {
-        notices-view.content-y += step;
-    }
-
     in property <string> version;
     in property <string> license-name;
     in property <string> repository;
@@ -135,51 +129,17 @@ export component AboutPage inherits Rectangle {
                     }
                     // Reached with Tab, scrolled with the arrows, the pages,
                     // Home and End.
-                    notices-keys := FocusScope {
+                    notices-view := ScrolledList {
                         accessible-role: groupbox;
-                        accessible-label: @tr("Licences");
-                        key-pressed(event) => {
-                            if event.text == Key.Home {
-                                root.scroll-notices(notices-view.content-height);
-                                return accept;
-                            }
-                            if event.text == Key.End {
-                                root.scroll-notices(-notices-view.content-height);
-                                return accept;
-                            }
-                            if event.text == Key.UpArrow {
-                                root.scroll-notices(Theme.scroll-step);
-                                return accept;
-                            }
-                            if event.text == Key.DownArrow {
-                                root.scroll-notices(-Theme.scroll-step);
-                                return accept;
-                            }
-                            if event.text == Key.PageUp {
-                                root.scroll-notices(notices-view.visible-height);
-                                return accept;
-                            }
-                            if event.text == Key.PageDown {
-                                root.scroll-notices(-notices-view.visible-height);
-                                return accept;
-                            }
-                            reject
-                        }
-                        notices-view := ScrollView {
-                            content-width: self.visible-width;
-                            content-height: notices.preferred-height;
-                            notices := Text {
-                                width: notices-view.visible-width;
-                                text: root.license-texts;
-                                color: Theme.text-2;
-                                font-size: Theme.font-caption;
-                                wrap: word-wrap;
-                            }
-                        }
-                        Rectangle {
-                            border-radius: Theme.radius-medium;
-                            border-width: notices-keys.has-focus ? Theme.focus-width : 0;
-                            border-color: Theme.focus;
+                        label: @tr("Licences");
+                        ring-radius: Theme.radius-medium;
+                        content-height: notices.preferred-height;
+                        notices := Text {
+                            width: notices-view.visible-width;
+                            text: root.license-texts;
+                            color: Theme.text-2;
+                            font-size: Theme.font-caption;
+                            wrap: word-wrap;
                         }
                     }
                 }

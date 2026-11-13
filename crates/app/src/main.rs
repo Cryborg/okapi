@@ -402,7 +402,14 @@ mod tests {
     }
 
     /// Texts the same in both languages.
-    const SAME_IN_ENGLISH: [&str; 4] = ["Version {}", "{} {}", "Applications", "Distribution"];
+    const SAME_IN_ENGLISH: [&str; 6] = [
+        "Version {}",
+        "{} {}",
+        "Applications",
+        "Distribution",
+        "{} · {}",
+        "{} ({})",
+    ];
 
     #[test]
     fn no_text_shown_has_an_em_dash() {
@@ -443,6 +450,10 @@ mod tests {
             "ReclaimableWidget",
             "SystemWidget",
             "KeyValue",
+            "VolumeLine",
+            "DisksWidget",
+            "Applications",
+            "MemoryWidget",
         ] {
             assert!(
                 texts.iter().any(|(component, _)| component == context),

@@ -52,6 +52,31 @@ pub fn config_directory() -> Option<PathBuf> {
     xdg_directory_from(CONFIG, |name| env::var_os(name), env::home_dir())
 }
 
+/// The `applications` folders `.desktop` files are looked for in, most
+/// personal first: that of `$XDG_DATA_HOME`, then of each `$XDG_DATA_DIRS`.
+pub(crate) fn data_directories() -> Vec<PathBuf> {
+    data_directories_from(|name| env::var_os(name), env::home_dir())
+}
+
+/// The default of `$XDG_DATA_DIRS`.
+const DATA_DIRECTORIES: &str = "/usr/local/share:/usr/share";
+
+/// [`data_directories`], reading the environment through `read`.
+fn data_directories_from(
+    read: impl Fn(&str) -> Option<OsString>,
+    home: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let personal = DATA.resolve(&read, usable_home(home).as_deref());
+    let shared = read("XDG_DATA_DIRS")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| OsString::from(DATA_DIRECTORIES));
+    personal
+        .into_iter()
+        .chain(env::split_paths(&shared).filter(|path| path.is_absolute()))
+        .map(|directory| directory.join("applications"))
+        .collect()
+}
+
 /// An XDG base directory: its environment variable, and its default below
 /// the home directory.
 #[derive(Clone, Copy)]
@@ -328,5 +353,42 @@ mod tests {
     #[test]
     fn the_session_has_its_variables() {
         assert!(template_variables().is_ok());
+    }
+
+    #[test]
+    fn applications_are_looked_for_in_the_personal_data_then_each_shared_one() {
+        let read = |values: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                values
+                    .iter()
+                    .find(|(variable, _)| *variable == name)
+                    .map(|(_, value)| OsString::from(value))
+            }
+        };
+        assert_eq!(
+            data_directories_from(read(&[]), Some(PathBuf::from("/home/ana"))),
+            [
+                PathBuf::from("/home/ana/.local/share/applications"),
+                PathBuf::from("/usr/local/share/applications"),
+                PathBuf::from("/usr/share/applications"),
+            ]
+        );
+        assert_eq!(
+            data_directories_from(
+                read(&[
+                    ("XDG_DATA_HOME", "/data"),
+                    (
+                        "XDG_DATA_DIRS",
+                        "/usr/share/ubuntu:relative:/var/lib/snapd/desktop"
+                    ),
+                ]),
+                None,
+            ),
+            [
+                PathBuf::from("/data/applications"),
+                PathBuf::from("/usr/share/ubuntu/applications"),
+                PathBuf::from("/var/lib/snapd/desktop/applications"),
+            ]
+        );
     }
 }

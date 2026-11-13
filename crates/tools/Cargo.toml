@@ -7,6 +7,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+okapi-platform = { workspace = true, optional = true }
+okapi-rules = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+
+[features]
+# What the dashboard reads of the system, and the thread that reads it.
+monitor = ["dep:okapi-platform", "dep:okapi-rules", "dep:tracing"]
 
 [lints]
 workspace = true

@@ -12,7 +12,7 @@ repository = "https://github.com/Cryborg/okapi"
 [workspace.dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-rustix = { version = "1.1.6", features = ["fs", "process"] }
+rustix = { version = "1.1.6", features = ["fs", "param", "process"] }
 thiserror = "2.0.21"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "json", "std", "registry", "tracing-log"] }
@@ -27,6 +27,7 @@ okapi-rules = { path = "crates/rules" }
 okapi-platform = { path = "crates/platform" }
 okapi-engine = { path = "crates/engine" }
 okapi-store = { path = "crates/store" }
+okapi-tools = { path = "crates/tools" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

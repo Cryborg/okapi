@@ -11,6 +11,7 @@ okapi-engine = { workspace = true }
 okapi-platform = { workspace = true }
 okapi-rules = { workspace = true }
 okapi-store = { workspace = true }
+okapi-tools = { workspace = true, features = ["monitor"] }
 slint = { workspace = true }
 tracing = { workspace = true }
 

@@ -91,6 +91,10 @@ mod linux {
         /// # Errors
         ///
         /// The system's refusal (the process is not the user's).
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the one signal Okapi sends, when the user asks to close a browser; the helper never may"
+        )]
         pub fn terminate(&self) -> io::Result<()> {
             match pidfd_send_signal(&self.process, Signal::TERM) {
                 Ok(()) => Ok(()),
@@ -233,6 +237,11 @@ mod linux {
     }
 
     #[cfg(test)]
+    #[expect(
+        clippy::disallowed_types,
+        clippy::disallowed_methods,
+        reason = "a browser is played by a process these tests start, signal and stop"
+    )]
     mod tests {
         use std::os::unix::fs::symlink;
         use std::os::unix::process::ExitStatusExt;

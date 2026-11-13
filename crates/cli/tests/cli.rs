@@ -6,6 +6,10 @@
     clippy::unwrap_used,
     reason = "an integration test fails by panicking, and clippy only takes #[test] functions for tests, not their helpers"
 )]
+#![expect(
+    clippy::disallowed_types,
+    reason = "these tests run the `okapi` binary itself, in its sandbox"
+)]
 
 use std::fs;
 use std::path::{Path, PathBuf};

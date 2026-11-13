@@ -461,6 +461,8 @@ mod tests {
             "MemoryWidget",
             "ProcessorWidget",
             "EditBar",
+            "Grip",
+            "DropSlot",
             "AddTile",
             "AddDialog",
             "ResetDialog",

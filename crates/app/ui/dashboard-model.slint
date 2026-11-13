@@ -36,9 +36,23 @@ export struct Toast {
     kind: WidgetKind,
 }
 
-// What the focus is asked to go to, once: a widget of a row (its first stop
-// in the mode), the mode's button, or the empty dashboard's "Ajouter".
-export enum FocusPart { none, widget, customize, empty-add }
+// The widget picked up, by the keyboard or the pointer, and the place it
+// is shown at.
+export struct Moving {
+    shown: bool,
+    row: int,
+    to: int,
+    by-pointer: bool,
+}
+
+// Why a move was given up: Escape, the grip's focus gone, the pointer's
+// press taken away, the pointer let go out of the list.
+export enum MoveCancel { escape, focus-lost, pointer, outside }
+
+// What the focus is asked to go to, once: a widget of a row (its grip), the
+// mode's button, the empty dashboard's "Ajouter", or the page (which holds
+// the keys while a widget is dragged).
+export enum FocusPart { none, widget, customize, empty-add, page }
 
 export struct FocusRequest {
     row: int,
@@ -195,6 +209,7 @@ export global Dashboard {
     // The last change of the layout could not be kept.
     in property <bool> save-failed;
     in property <FocusRequest> focus-request;
+    in property <Moving> moving;
 
     callback analyze();
     callback customize(bool);
@@ -208,4 +223,16 @@ export global Dashboard {
     // The toast has the pointer or the focus: it waits.
     callback toast-held(bool);
     callback focus-taken(int);
+    // Picks up the widget of a row (true: by the pointer).
+    callback grab(int, bool);
+    // Shows it so many places further (back below 0).
+    callback move-by(int);
+    // Shows it first, or last (true).
+    callback move-to-end(bool);
+    // Shows it where its card's centre is, in columns and rows of a grid of
+    // so many columns.
+    callback drag-to(float, float, int);
+    // Puts it down where it is shown, or back where it was.
+    callback put-down();
+    callback cancel-move(MoveCancel);
 }

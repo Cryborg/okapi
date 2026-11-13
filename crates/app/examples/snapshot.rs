@@ -608,10 +608,17 @@ fn main() {
         "about" => app.set_page(ui::Page::About),
         "home" | "home-small" => home(&app),
         "home-disks" => home_tall(&app, true),
-        "home-customize" => {
+        "home-customize" | "home-move" => {
             home(&app);
             let dashboard = app.global::<ui::Dashboard>();
             dashboard.set_editing(true);
+            // Disques picked up with the keyboard.
+            dashboard.set_moving(ui::Moving {
+                shown: screen == "home-move",
+                row: 1,
+                to: 1,
+                by_pointer: false,
+            });
             // The tile after Système, in each number of columns.
             dashboard.set_tile(ModelRc::new(VecModel::from(vec![
                 place(0, 5, 1, 1),
@@ -621,13 +628,13 @@ fn main() {
             ])));
             dashboard.set_rows_with_tile(ModelRc::new(VecModel::from(vec![6, 5, 4, 4])));
             dashboard.set_toast(ui::Toast {
-                shown: true,
+                shown: screen == "home-customize",
                 kind: ui::WidgetKind::Disks,
             });
         }
         "home-memory" => home_tall(&app, false),
         other => panic!(
-            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-disks, home-memory, home-customize"
+            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-disks, home-memory, home-customize, home-move"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

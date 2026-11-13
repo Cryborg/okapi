@@ -4,7 +4,7 @@ import { Theme } from "theme.slint";
 import { Card, Detail, Icon, Badge, ProgressBar, ActionButton, ButtonKind, ScrolledList, FocusRing } from "widgets.slint";
 import { Cleaner, CleanerStep, RightsStep, Words } from "cleaner-model.slint";
 import {
-    Dashboard, DayKind, DisksShown, FocusPart, MemoryShown, Moment, ProcessorShown, ReadingState, Reclaimable,
+    Dashboard, DayKind, DisksShown, FocusPart, MemoryShown, Moment, MoveCancel, ProcessorShown, ReadingState, Reclaimable,
     ReclaimableState, SpaceState, SystemShown, VolumeNaming, VolumePlace, VolumeShown, WidgetKind,
     WidgetSize,
 } from "dashboard-model.slint";
@@ -277,13 +277,98 @@ component SizeButton inherits Rectangle {
     }
 }
 
+// What picks a widget up: Enter or Space; then the arrows, Home and End
+// move it, Enter or Space put it down, Escape or leaving it put it back.
+// The pointer drags it from the page (`dashboard.slint`), over this; the
+// page then holds the keys.
+component Grip inherits Rectangle {
+    in property <string> title;
+    in property <int> slot;
+    in property <bool> grabbed;
+
+    // Its place shown, from 1.
+    property <int> place: (grabbed ? Dashboard.moving.to : slot) + 1;
+
+    width: Theme.grip-width;
+    height: Theme.grip-height;
+    border-radius: Theme.radius-medium;
+    forward-focus: keys;
+    accessible-role: button;
+    accessible-label: @tr("Déplacer {}", title);
+    accessible-description: grabbed ? @tr("Saisi, place {} sur {}", place, Dashboard.cells.length)
+        : @tr("Place {} sur {}", place, Dashboard.cells.length);
+    accessible-action-default => {
+        if grabbed {
+            Dashboard.put-down();
+        } else {
+            Dashboard.grab(slot, false);
+        }
+    }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            let pressed = !event.repeat && (event.text == Key.Return || event.text == Key.Space);
+            if !root.grabbed {
+                // Another widget picked up: Rust refuses, and says why.
+                if pressed {
+                    Dashboard.grab(root.slot, false);
+                    return accept;
+                }
+                return reject;
+            }
+            if pressed {
+                Dashboard.put-down();
+                return accept;
+            }
+            if event.text == Key.Escape {
+                Dashboard.cancel-move(MoveCancel.escape);
+                return accept;
+            }
+            if event.text == Key.LeftArrow || event.text == Key.UpArrow {
+                Dashboard.move-by(-1);
+                return accept;
+            }
+            if event.text == Key.RightArrow || event.text == Key.DownArrow {
+                Dashboard.move-by(1);
+                return accept;
+            }
+            if event.text == Key.Home || event.text == Key.End {
+                Dashboard.move-to-end(event.text == Key.End);
+                return accept;
+            }
+            // Tab leaves it, and puts it back.
+            reject
+        }
+        // Dragged, the page has the keys. Another window shown keeps it.
+        focus-lost(reason) => {
+            if root.grabbed && !Dashboard.moving.by-pointer && reason != FocusReason.window-activation {
+                Dashboard.cancel-move(MoveCancel.focus-lost);
+            }
+        }
+    }
+
+    Icon {
+        source: @image-url("../assets/icons/grip-vertical.svg");
+        colorize: root.grabbed ? Theme.accent : Theme.text-2;
+        width: Theme.icon-small;
+        height: Theme.icon-small;
+    }
+
+    FocusRing {
+        shown: keys.has-focus;
+        border-radius: root.border-radius;
+    }
+}
+
 // What a widget offers in the Personnaliser mode, in place of its header:
-// its name, its sizes, "Retirer". Suppr removes it too.
+// its grip, its name, its sizes, "Retirer" (picked up, what moves it).
+// Suppr removes it too.
 component EditBar inherits Rectangle {
     in property <WidgetKind> kind;
     in property <int> slot;
     in property <WidgetSize> size;
     in property <[WidgetSize]> accepted;
+    in property <bool> grabbed;
 
     property <string> title: DashboardWords.title(kind);
     // The focus asked for this widget, once (it may come before the bar).
@@ -292,7 +377,7 @@ component EditBar inherits Rectangle {
 
     function take-focus() {
         if asked > 0 {
-            remove-button.focus();
+            grip.focus();
             Dashboard.focus-taken(asked);
         }
     }
@@ -305,7 +390,7 @@ component EditBar inherits Rectangle {
     }
 
     height: Theme.edit-bar;
-    background: Theme.surface-2;
+    background: grabbed ? Theme.accent-soft : Theme.surface-2;
 
     FocusScope {
         focus-on-tab-navigation: false;
@@ -318,15 +403,14 @@ component EditBar inherits Rectangle {
         }
 
         HorizontalLayout {
-            padding-left: Theme.spacing-m;
+            padding-left: Theme.grip-inset;
             padding-right: Theme.spacing-s;
             spacing: Theme.spacing-s;
-            Icon {
-                source: @image-url("../assets/icons/grip-vertical.svg");
-                colorize: Theme.text-2;
-                width: Theme.icon-small;
-                height: Theme.icon-small;
+            grip := Grip {
                 y: (parent.height - self.height) / 2;
+                title: root.title;
+                slot: root.slot;
+                grabbed: root.grabbed;
             }
             Text {
                 horizontal-stretch: 1;
@@ -338,7 +422,20 @@ component EditBar inherits Rectangle {
                 overflow: elide;
                 accessible-role: none;
             }
-            if root.accepted.length > 1: Rectangle {
+            if root.grabbed && !Dashboard.moving.by-pointer: Text {
+                text: @tr("Flèches, puis Entrée");
+                color: Theme.text-2;
+                font-size: Theme.font-caption;
+                vertical-alignment: center;
+            }
+            if root.grabbed: Badge {
+                y: (parent.height - self.height) / 2;
+                text: @tr("Saisi");
+                icon: @image-url("../assets/icons/grip-vertical.svg");
+                tone: Theme.accent;
+                tone-soft: Theme.surface;
+            }
+            if !root.grabbed && root.accepted.length > 1: Rectangle {
                 accessible-role: groupbox;
                 accessible-label: @tr("Taille de {}", root.title);
                 HorizontalLayout {
@@ -353,13 +450,13 @@ component EditBar inherits Rectangle {
                     }
                 }
             }
-            if root.accepted.length <= 1: Text {
+            if !root.grabbed && root.accepted.length <= 1: Text {
                 text: @tr("Taille unique");
                 color: Theme.text-3;
                 font-size: Theme.font-caption;
                 vertical-alignment: center;
             }
-            remove-button := ActionButton {
+            if !root.grabbed: ActionButton {
                 y: (parent.height - self.height) / 2;
                 kind: ButtonKind.ghost;
                 icon: @image-url("../assets/icons/x.svg");
@@ -392,6 +489,10 @@ export component WidgetCard inherits Card {
     // The essentials of what it shows, read with its title.
     in property <string> summary;
 
+    // Picked up to be moved.
+    property <bool> grabbed: Dashboard.moving.shown && Dashboard.moving.row == slot;
+
+    raised: grabbed;
     accessible-role: groupbox;
     accessible-label: DashboardWords.title(kind);
     accessible-description: state == ReadingState.reading ? @tr("Lecture en cours")
@@ -404,6 +505,7 @@ export component WidgetCard inherits Card {
             slot: root.slot;
             size: root.size;
             accepted: root.accepted;
+            grabbed: root.grabbed;
         }
 
         VerticalLayout {

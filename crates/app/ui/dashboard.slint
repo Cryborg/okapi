@@ -2,7 +2,7 @@
 // columns follow the width (docs/design/tableau-de-bord/project/Dashboard.dc.html).
 import { Theme } from "theme.slint";
 import { Title, Detail, Icon, ScrolledList, ActionButton, ButtonKind, Banner, FocusRing, ModalFrame } from "widgets.slint";
-import { AddableWidget, CellPlace, Dashboard, FocusPart, ReadingState, ReclaimableState, WidgetKind, WidgetSize } from "dashboard-model.slint";
+import { AddableWidget, CellPlace, Dashboard, FocusPart, MoveCancel, ReadingState, ReclaimableState, WidgetKind, WidgetSize } from "dashboard-model.slint";
 import { DashboardWords, DisksWidget, MemoryWidget, ProcessorWidget, ReclaimableWidget, SystemWidget } from "dashboard-widgets.slint";
 
 // The tile that ends the grid in the Personnaliser mode.
@@ -229,6 +229,33 @@ component Toast inherits Rectangle {
     }
 }
 
+// Where the widget dragged would be put down.
+component DropSlot inherits Rectangle {
+    border-radius: Theme.radius-large;
+    border-width: Theme.grab-border;
+    border-color: Theme.accent;
+    background: Theme.accent-soft;
+    accessible-role: none;
+    HorizontalLayout {
+        alignment: center;
+        spacing: Theme.spacing-s;
+        Icon {
+            source: @image-url("../assets/icons/arrow-down.svg");
+            colorize: Theme.accent;
+            width: Theme.icon-small;
+            height: Theme.icon-small;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: @tr("Déposer ici");
+            color: Theme.accent;
+            font-size: Theme.font-small;
+            font-weight: Theme.weight-medium;
+            vertical-alignment: center;
+        }
+    }
+}
+
 export component DashboardPage inherits Rectangle {
     // The window's width, which the page's margin follows.
     in property <length> window-width;
@@ -241,6 +268,13 @@ export component DashboardPage inherits Rectangle {
         floor((grid-width + Theme.dash-gap) / (Theme.dash-column-min + Theme.dash-gap))));
     property <int> rows: Dashboard.rows[columns - 1];
     property <length> column-width: (grid-width - (columns - 1) * Theme.dash-gap) / columns;
+    // How wide, or high, a widget over so many columns, or rows, is.
+    pure function span-width(columns: int) -> length {
+        columns * column-width + (columns - 1) * Theme.dash-gap
+    }
+    pure function span-height(rows: int) -> length {
+        rows * Theme.dash-row + (rows - 1) * Theme.dash-gap
+    }
     property <bool> analyzed: Dashboard.reclaimable.state == ReclaimableState.current
         || Dashboard.reclaimable.state == ReclaimableState.estimate;
     // "Ubuntu 26.04 · dernière analyse aujourd'hui à 9 h 12".
@@ -249,13 +283,30 @@ export component DashboardPage inherits Rectangle {
         : @tr("Dernière analyse {}", DashboardWords.moment(Dashboard.reclaimable.at));
 
     // Ctrl+Z puts back the widget just removed, from wherever the focus is
-    // in the page.
+    // in the page. While a widget is dragged, it has the keys: Escape puts
+    // the widget back.
     FocusScope {
+        // The focus asked for it, once.
+        property <int> asked: Dashboard.focus-request.part == FocusPart.page
+            ? Dashboard.focus-request.generation : 0;
+        function take-focus() {
+            if self.asked > 0 {
+                self.focus();
+                Dashboard.focus-taken(self.asked);
+            }
+        }
+        changed asked => {
+            self.take-focus();
+        }
         focus-on-tab-navigation: false;
         key-pressed(event) => {
             // Ctrl+Maj+Z redoes, by custom: not this. Caps Lock gives "Z".
             if event.modifiers.control && !event.modifiers.shift && (event.text == "z" || event.text == "Z") && Dashboard.toast.shown {
                 Dashboard.undo();
+                return accept;
+            }
+            if event.text == Key.Escape && Dashboard.moving.shown && Dashboard.moving.by-pointer {
+                Dashboard.cancel-move(MoveCancel.escape);
                 return accept;
             }
             reject
@@ -329,7 +380,7 @@ export component DashboardPage inherits Rectangle {
                 }
 
                 if Dashboard.editing && Dashboard.cells.length > 0: Banner {
-                    text: @tr("Mode Personnaliser. Choisissez la taille de chaque widget ou retirez-le ; chaque changement est gardé aussitôt.");
+                    text: @tr("Mode Personnaliser. Glissez un widget par sa poignée, ou placez le focus sur sa poignée et appuyez sur Entrée pour le saisir.");
                 }
 
                 if Dashboard.layout-unreadable: Banner {
@@ -385,9 +436,48 @@ export component DashboardPage inherits Rectangle {
                     }
                 }
 
-                if Dashboard.cells.length > 0: Rectangle {
+                if Dashboard.cells.length > 0: grid := Rectangle {
                     property <int> filled: Dashboard.editing ? Dashboard.rows-with-tile[root.columns - 1] : root.rows;
+                    // A widget dragged by its grip: the pointer and where
+                    // it was pressed, in the window; where it took the
+                    // card; whether it went far enough to be a drag.
+                    property <bool> dragging: Dashboard.moving.shown && Dashboard.moving.by-pointer;
+                    property <length> pointer-x;
+                    property <length> pointer-y;
+                    property <length> pressed-x;
+                    property <length> pressed-y;
+                    property <length> taken-x;
+                    property <length> taken-y;
+                    property <bool> travelled;
+                    property <CellPlace> dragged-at: Dashboard.cells[Dashboard.moving.row].places[root.columns - 1];
+                    // The dragged card's corner, in the grid.
+                    property <length> card-x: self.pointer-x - self.absolute-position.x - self.taken-x;
+                    property <length> card-y: self.pointer-y - self.absolute-position.y - self.taken-y;
+                    // Near the list's edge, it scrolls while it can: up when
+                    // above 0, down below.
+                    property <length> scroll-step: !self.dragging || !self.travelled ? 0
+                        : view.above && self.pointer-y < view.absolute-position.y + Theme.drag-scroll-edge ? Theme.drag-scroll-step
+                        : view.below && self.pointer-y > view.absolute-position.y + view.visible-height - Theme.drag-scroll-edge ? -Theme.drag-scroll-step
+                        : 0;
+
+                    // Shows the dragged widget where its card's centre is.
+                    function drag() {
+                        Dashboard.drag-to(
+                            (self.card-x + root.span-width(self.dragged-at.width) / 2) / (root.column-width + Theme.dash-gap),
+                            (self.card-y + root.span-height(self.dragged-at.height) / 2) / (Theme.dash-row + Theme.dash-gap),
+                            root.columns);
+                    }
+
                     height: self.filled * Theme.dash-row + max(0, self.filled - 1) * Theme.dash-gap;
+
+                    Timer {
+                        interval: Theme.drag-scroll-every;
+                        running: grid.scroll-step != 0;
+                        triggered => {
+                            view.scroll-by(grid.scroll-step);
+                            grid.drag();
+                        }
+                    }
 
                     if Dashboard.editing: AddTile {
                         property <CellPlace> at: Dashboard.tile[root.columns - 1];
@@ -400,47 +490,157 @@ export component DashboardPage inherits Rectangle {
                         }
                     }
 
-                    for cell[index] in Dashboard.cells: Rectangle {
+                    for cell[index] in Dashboard.cells: placed := Rectangle {
                         property <CellPlace> at: cell.places[root.columns - 1];
+                        property <bool> moving: Dashboard.moving.shown && Dashboard.moving.row == index;
+                        property <bool> dragged: self.moving && Dashboard.moving.by-pointer;
                         x: self.at.column * (root.column-width + Theme.dash-gap);
                         y: self.at.row * (Theme.dash-row + Theme.dash-gap);
-                        width: self.at.width * root.column-width + (self.at.width - 1) * Theme.dash-gap;
-                        height: self.at.height * Theme.dash-row + (self.at.height - 1) * Theme.dash-gap;
+                        width: root.span-width(self.at.width);
+                        height: root.span-height(self.at.height);
+                        // Dragged, the card follows the pointer.
+                        property <length> shift-x: self.dragged ? grid.card-x - self.x : 0;
+                        property <length> shift-y: self.dragged ? grid.card-y - self.y : 0;
+                        // What moves floats over the others.
+                        z: self.moving ? 1 : 0;
 
-                        if cell.kind == WidgetKind.reclaimable: ReclaimableWidget {
-                            slot: index;
-                            size: cell.size;
-                            accepted: cell.accepted;
-                            // Alone in its row, it keeps a full width's words
-                            // only where they fit beside the button.
-                            full: cell.size == WidgetSize.full && root.columns > 1;
-                            see-results => {
-                                root.open-cleaner();
+                        function show() {
+                            view.bring-into-view(grid.y + self.y, self.height);
+                        }
+
+                        // Moved by the keyboard, it shows where it goes; put
+                        // back, where it was. Out of view, its grip would
+                        // lose the focus.
+                        changed at => {
+                            if self.moving && !self.dragged {
+                                self.show();
                             }
                         }
-                        if cell.kind == WidgetKind.system: SystemWidget {
-                            slot: index;
-                            size: cell.size;
-                            accepted: cell.accepted;
+                        changed moving => {
+                            if !self.moving {
+                                self.show();
+                            }
                         }
-                        if cell.kind == WidgetKind.disks: DisksWidget {
-                            slot: index;
-                            size: cell.size;
-                            accepted: cell.accepted;
+                        // Drawn anew (put down, added, put back) with the
+                        // focus asked for it: in view, or Slint takes it
+                        // away.
+                        init => {
+                            if Dashboard.focus-request.part == FocusPart.widget && Dashboard.focus-request.row == index {
+                                self.show();
+                            }
                         }
-                        if cell.kind == WidgetKind.memory: MemoryWidget {
-                            slot: index;
-                            size: cell.size;
-                            accepted: cell.accepted;
+
+                        if placed.dragged: DropSlot { }
+
+                        // The card, under the pointer while dragged.
+                        Rectangle {
+                            x: placed.shift-x;
+                            y: placed.shift-y;
+
+                            if cell.kind == WidgetKind.reclaimable: ReclaimableWidget {
+                                slot: index;
+                                size: cell.size;
+                                accepted: cell.accepted;
+                                // Alone in its row, it keeps a full width's
+                                // words only where they fit beside the
+                                // button.
+                                full: cell.size == WidgetSize.full && root.columns > 1;
+                                see-results => {
+                                    root.open-cleaner();
+                                }
+                            }
+                            if cell.kind == WidgetKind.system: SystemWidget {
+                                slot: index;
+                                size: cell.size;
+                                accepted: cell.accepted;
+                            }
+                            if cell.kind == WidgetKind.disks: DisksWidget {
+                                slot: index;
+                                size: cell.size;
+                                accepted: cell.accepted;
+                            }
+                            if cell.kind == WidgetKind.memory: MemoryWidget {
+                                slot: index;
+                                size: cell.size;
+                                accepted: cell.accepted;
+                            }
+                            if cell.kind == WidgetKind.processor: ProcessorWidget {
+                                slot: index;
+                                size: cell.size;
+                                accepted: cell.accepted;
+                            }
                         }
-                        if cell.kind == WidgetKind.processor: ProcessorWidget {
-                            slot: index;
-                            size: cell.size;
-                            accepted: cell.accepted;
+
+                        // Over the card's grip (centred in its bar): it drags
+                        // the widget.
+                        if Dashboard.editing: TouchArea {
+                            x: Theme.grip-inset + placed.shift-x;
+                            y: (Theme.edit-bar - Theme.grip-height) / 2 + placed.shift-y;
+                            width: Theme.grip-width;
+                            height: Theme.grip-height;
+                            mouse-cursor: placed.dragged ? MouseCursor.grabbing : MouseCursor.grab;
+                            pointer-event(event) => {
+                                // Slint gives no button with a press taken away.
+                                if event.kind == PointerEventKind.cancel {
+                                    if placed.dragged {
+                                        Dashboard.cancel-move(MoveCancel.pointer);
+                                    }
+                                    return;
+                                }
+                                if event.button != PointerEventButton.left {
+                                    return;
+                                }
+                                if event.kind == PointerEventKind.down {
+                                    // A drag under way keeps its own; Rust
+                                    // refuses the press, and says why.
+                                    if !Dashboard.moving.shown {
+                                        grid.pointer-x = self.absolute-position.x + self.mouse-x;
+                                        grid.pointer-y = self.absolute-position.y + self.mouse-y;
+                                        grid.pressed-x = grid.pointer-x;
+                                        grid.pressed-y = grid.pointer-y;
+                                        grid.taken-x = self.x + self.mouse-x;
+                                        grid.taken-y = self.y + self.mouse-y;
+                                        grid.travelled = false;
+                                    }
+                                    Dashboard.grab(index, true);
+                                } else if event.kind == PointerEventKind.up && placed.dragged {
+                                    // Let go out of the list: put back.
+                                    if grid.pointer-x < view.absolute-position.x
+                                        || grid.pointer-x > view.absolute-position.x + view.visible-width
+                                        || grid.pointer-y < view.absolute-position.y
+                                        || grid.pointer-y > view.absolute-position.y + view.visible-height {
+                                        Dashboard.cancel-move(MoveCancel.outside);
+                                    } else {
+                                        Dashboard.put-down();
+                                    }
+                                }
+                            }
+                            moved => {
+                                if placed.dragged {
+                                    grid.pointer-x = self.absolute-position.x + self.mouse-x;
+                                    grid.pointer-y = self.absolute-position.y + self.mouse-y;
+                                    // A press that hardly moves is a click: it
+                                    // never scrolls the list.
+                                    grid.travelled = grid.travelled
+                                        || abs(grid.pointer-x - grid.pressed-x) > Theme.drag-threshold
+                                        || abs(grid.pointer-y - grid.pressed-y) > Theme.drag-threshold;
+                                    grid.drag();
+                                }
+                            }
                         }
                     }
                 }
             }
+        }
+
+        // Where the widget picked up is shown, said as it changes; out of
+        // the page's layout, which it would push.
+        if Dashboard.moving.shown: Rectangle {
+            width: 0;
+            height: 0;
+            accessible-role: AccessibleRole.text;
+            accessible-label: @tr("Place {} sur {}", Dashboard.moving.to + 1, Dashboard.cells.length);
+            accessible-live-region: polite;
         }
 
         // In the page's scope: Ctrl+Z works from its buttons too.

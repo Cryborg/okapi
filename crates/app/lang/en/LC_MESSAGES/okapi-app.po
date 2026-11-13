@@ -1271,6 +1271,30 @@ msgctxt "EditBar"
 msgid "Retirer {}"
 msgstr "Remove {}"
 
+msgctxt "EditBar"
+msgid "Flèches, puis Entrée"
+msgstr "Arrows, then Enter"
+
+msgctxt "EditBar"
+msgid "Saisi"
+msgstr "Picked up"
+
+msgctxt "Grip"
+msgid "Déplacer {}"
+msgstr "Move {}"
+
+msgctxt "Grip"
+msgid "Saisi, place {} sur {}"
+msgstr "Picked up, position {} of {}"
+
+msgctxt "Grip"
+msgid "Place {} sur {}"
+msgstr "Position {} of {}"
+
+msgctxt "DropSlot"
+msgid "Déposer ici"
+msgstr "Drop here"
+
 msgctxt "DashboardPage"
 msgid "Terminé"
 msgstr "Done"
@@ -1280,8 +1304,12 @@ msgid "Personnaliser"
 msgstr "Customize"
 
 msgctxt "DashboardPage"
-msgid "Mode Personnaliser. Choisissez la taille de chaque widget ou retirez-le ; chaque changement est gardé aussitôt."
-msgstr "Customize mode. Choose each widget's size or remove it; every change is kept at once."
+msgid "Mode Personnaliser. Glissez un widget par sa poignée, ou placez le focus sur sa poignée et appuyez sur Entrée pour le saisir."
+msgstr "Customize mode. Drag a widget by its handle, or put the focus on its handle and press Enter to pick it up."
+
+msgctxt "DashboardPage"
+msgid "Place {} sur {}"
+msgstr "Position {} of {}"
 
 msgctxt "DashboardPage"
 msgid "Votre disposition n'a pas pu être enregistrée."

@@ -4,13 +4,15 @@ import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 
 export component Card inherits Rectangle {
+    // Picked up: outlined in the accent, floating over the page.
+    in property <bool> raised;
     background: Theme.surface;
-    border-color: Theme.border;
-    border-width: Theme.border-width;
+    border-color: raised ? Theme.accent : Theme.border;
+    border-width: raised ? Theme.grab-border : Theme.border-width;
     border-radius: Theme.radius-large;
-    drop-shadow-color: Theme.shadow-1;
-    drop-shadow-blur: Theme.shadow-1-blur;
-    drop-shadow-offset-y: Theme.shadow-1-offset;
+    drop-shadow-color: raised ? Theme.shadow-3 : Theme.shadow-1;
+    drop-shadow-blur: raised ? Theme.shadow-3-blur : Theme.shadow-1-blur;
+    drop-shadow-offset-y: raised ? Theme.shadow-3-offset : Theme.shadow-1-offset;
 }
 
 export component Line inherits Text {
@@ -269,9 +271,24 @@ export component ScrolledList inherits FocusScope {
     in property <length> ring-radius: Theme.radius-small;
     out property <length> visible-width: view.visible-width;
     out property <length> visible-height: view.visible-height;
+    // Whether it can scroll further towards the top, or the bottom.
+    out property <bool> above: view.content-y < 0;
+    out property <bool> below: view.content-y > view.visible-height - view.content-height;
 
-    function scroll(step: length) {
+    // Scrolls by `step` (towards the top above 0).
+    public function scroll-by(step: length) {
         view.content-y += step;
+    }
+
+    // Scrolls just enough for what lies from `top`, `height` high, in the
+    // list's content to show.
+    public function bring-into-view(top: length, height: length) {
+        if top < -view.content-y {
+            view.content-y = -top;
+        } else if top + height > -view.content-y + view.visible-height {
+            // Its top first, when it is higher than the list.
+            view.content-y = max(-top, view.visible-height - top - height);
+        }
     }
 
     accessible-role: list;
@@ -281,27 +298,27 @@ export component ScrolledList inherits FocusScope {
             return reject;
         }
         if event.text == Key.Home {
-            root.scroll(view.content-height);
+            root.scroll-by(view.content-height);
             return accept;
         }
         if event.text == Key.End {
-            root.scroll(-view.content-height);
+            root.scroll-by(-view.content-height);
             return accept;
         }
         if event.text == Key.UpArrow {
-            root.scroll(Theme.scroll-step);
+            root.scroll-by(Theme.scroll-step);
             return accept;
         }
         if event.text == Key.DownArrow {
-            root.scroll(-Theme.scroll-step);
+            root.scroll-by(-Theme.scroll-step);
             return accept;
         }
         if event.text == Key.PageUp {
-            root.scroll(view.visible-height);
+            root.scroll-by(view.visible-height);
             return accept;
         }
         if event.text == Key.PageDown {
-            root.scroll(-view.visible-height);
+            root.scroll-by(-view.visible-height);
             return accept;
         }
         reject

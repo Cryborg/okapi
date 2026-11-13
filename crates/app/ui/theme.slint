@@ -154,6 +154,22 @@ export global Theme {
     out property <length> size-button: 28px;
     out property <length> size-shape: 16px;
     out property <length> size-shape-border: 1.5px;
+    // A widget's grip, and how far it sits from its bar's left.
+    out property <length> grip-inset: 4px;
+    out property <length> grip-width: 28px;
+    out property <length> grip-height: 32px;
+    // A widget picked up: its border, and the shadow of what floats.
+    out property <length> grab-border: 2px;
+    out property <color> shadow-3: dark ? #00000099 : #1C1B193D;
+    out property <length> shadow-3-blur: dark ? 48px : 40px;
+    out property <length> shadow-3-offset: dark ? 20px : 16px;
+    // How far the pointer goes before a press on a grip is a drag.
+    out property <length> drag-threshold: 4px;
+    // A widget dragged this near the list's edge scrolls it by a step,
+    // every so often.
+    out property <length> drag-scroll-edge: 48px;
+    out property <length> drag-scroll-step: 12px;
+    out property <duration> drag-scroll-every: 16ms;
     // The tile that adds a widget, its round, its border; the dialog that
     // lists the widgets to add; the note of a removal.
     out property <length> add-dot: 40px;

@@ -143,12 +143,22 @@ struct State {
     toast_timer: slint::Timer,
     /// The note has the pointer or the focus: it waits.
     toast_held: bool,
+    /// A widget picked up, and where it would go.
+    moving: Option<Moving>,
     processor: Option<Result<ProcessorReading, Unavailable>>,
     /// The last uses, oldest first, between 0 and 1.
     uses: VecDeque<f64>,
     /// The readings no longer reach the page.
     lost: bool,
     timer: slint::Timer,
+}
+
+/// A widget picked up: from where, and where it is shown to go.
+#[derive(Debug, Clone, Copy)]
+struct Moving {
+    from: usize,
+    to: usize,
+    by_pointer: bool,
 }
 
 /// What the page says of the layout kept.
@@ -230,6 +240,7 @@ impl DashboardScreen {
             removed: None,
             toast_timer: slint::Timer::default(),
             toast_held: false,
+            moving: None,
             processor: None,
             uses: VecDeque::with_capacity(CURVE_READINGS),
             lost: false,
@@ -250,23 +261,21 @@ impl DashboardScreen {
         screen
     }
 
+    /// What a callback of one value calls: `action` on the screen, while
+    /// there is one.
+    fn calling<T>(&self, action: impl Fn(&Self, T) + 'static) -> impl Fn(T) + 'static {
+        let weak = Rc::downgrade(&self.0);
+        move |value| {
+            if let Some(state) = weak.upgrade() {
+                action(&Self(state), value);
+            }
+        }
+    }
+
     /// Binds the page's callbacks to the screen.
     fn bind(&self, dashboard: &ui::Dashboard<'_>) {
-        let on = |action: fn(&Self, i32)| {
-            let weak = Rc::downgrade(&self.0);
-            move |value: i32| {
-                if let Some(state) = weak.upgrade() {
-                    action(&Self(state), value);
-                }
-            }
-        };
-        dashboard.on_remove(on(Self::remove));
-        let weak = Rc::downgrade(&self.0);
-        dashboard.on_add(move |kind| {
-            if let Some(state) = weak.upgrade() {
-                Self(state).add(catalog_kind(kind));
-            }
-        });
+        dashboard.on_remove(self.calling(Self::remove));
+        dashboard.on_add(self.calling(|screen, kind| screen.add(catalog_kind(kind))));
         let on_call = |action: fn(&Self)| {
             let weak = Rc::downgrade(&self.0);
             move || {
@@ -276,21 +285,34 @@ impl DashboardScreen {
             }
         };
         dashboard.on_reset(on_call(Self::reset));
+        dashboard.on_put_down(on_call(Self::put_down));
+        dashboard.on_cancel_move(self.calling(|screen, why| {
+            screen.cancel_by_hand(match why {
+                ui::MoveCancel::Escape => "escape",
+                ui::MoveCancel::FocusLost => "focus lost",
+                ui::MoveCancel::Pointer => "pointer press taken away",
+                ui::MoveCancel::Outside => "let go out of the list",
+            });
+        }));
+        let weak = Rc::downgrade(&self.0);
+        dashboard.on_grab(move |row, by_pointer| {
+            if let Some(state) = weak.upgrade() {
+                Self(state).grab(row, by_pointer);
+            }
+        });
+        dashboard.on_move_by(self.calling(Self::move_by));
+        dashboard.on_move_to_end(self.calling(Self::move_to_end));
+        let weak = Rc::downgrade(&self.0);
+        dashboard.on_drag_to(move |column, row, columns| {
+            if let Some(state) = weak.upgrade() {
+                Self(state).drag_to(f64::from(column), f64::from(row), columns);
+            }
+        });
         dashboard.on_undo(on_call(Self::undo));
         dashboard.on_dismiss_toast(on_call(Self::close_toast));
-        let weak = Rc::downgrade(&self.0);
-        dashboard.on_toast_held(move |held| {
-            if let Some(state) = weak.upgrade() {
-                Self(state).hold_toast(held);
-            }
-        });
-        dashboard.on_focus_taken(on(Self::focus_taken));
-        let weak = Rc::downgrade(&self.0);
-        dashboard.on_customize(move |on| {
-            if let Some(state) = weak.upgrade() {
-                Self(state).customize(on);
-            }
-        });
+        dashboard.on_toast_held(self.calling(Self::hold_toast));
+        dashboard.on_focus_taken(self.calling(Self::focus_taken));
+        dashboard.on_customize(self.calling(Self::customize));
         let weak = Rc::downgrade(&self.0);
         dashboard.on_resize(move |row, size| {
             if let Some(state) = weak.upgrade() {
@@ -300,8 +322,11 @@ impl DashboardScreen {
     }
 
     /// Enters the Personnaliser mode, or leaves it (and the note of the
-    /// last removal with it).
+    /// last removal with it, and a move under way).
     fn customize(&self, on: bool) {
+        if !on {
+            self.cancel_move("mode left");
+        }
         {
             let mut state = self.0.borrow_mut();
             if state.editing == on {
@@ -318,6 +343,9 @@ impl DashboardScreen {
 
     /// Gives the widget of `row` the size `size`.
     fn resize(&self, row: i32, size: WidgetSize) {
+        if self.is_moving("resize") {
+            return;
+        }
         let Ok(index) = usize::try_from(row) else {
             return;
         };
@@ -334,6 +362,9 @@ impl DashboardScreen {
     /// the one before when it was the last, the mode's button when none is
     /// left.
     fn remove(&self, row: i32) {
+        if self.is_moving("remove") {
+            return;
+        }
         let Ok(index) = usize::try_from(row) else {
             return;
         };
@@ -361,6 +392,9 @@ impl DashboardScreen {
 
     /// Adds `kind` at the end, in the mode, the focus on it.
     fn add(&self, kind: WidgetKind) {
+        if self.is_moving("add") {
+            return;
+        }
         let added = {
             let mut state = self.0.borrow_mut();
             let added = editing::add(&mut state.widgets, kind);
@@ -385,6 +419,9 @@ impl DashboardScreen {
 
     /// The default dashboard again.
     fn reset(&self) {
+        if self.is_moving("reset") {
+            return;
+        }
         let reset = {
             let mut state = self.0.borrow_mut();
             let reset = editing::reset(&mut state.widgets);
@@ -403,6 +440,8 @@ impl DashboardScreen {
 
     /// Puts the widget last removed back, at its place and size.
     fn undo(&self) {
+        // Asked while a widget is picked up: that one goes back first.
+        self.cancel_move("undo");
         let restored = {
             let mut state = self.0.borrow_mut();
             let Some(removed) = state.removed.take() else {
@@ -477,6 +516,195 @@ impl DashboardScreen {
         self.show();
     }
 
+    /// Whether a widget is picked up: the change asked is then refused,
+    /// and traced.
+    fn is_moving(&self, change: &'static str) -> bool {
+        let moving = self.0.borrow().moving.is_some();
+        if moving {
+            tracing::debug!(change, "dashboard change refused: a widget is being moved");
+        }
+        moving
+    }
+
+    /// Picks up the widget of `row`, by the keyboard or the pointer.
+    fn grab(&self, row: i32, by_pointer: bool) {
+        let Ok(from) = usize::try_from(row) else {
+            return;
+        };
+        {
+            let mut state = self.0.borrow_mut();
+            let refused = if !state.editing {
+                Some("not in the Personnaliser mode")
+            } else if state.moving.is_some() {
+                Some("a widget is being moved")
+            } else if from >= state.widgets.len() {
+                Some("no such widget")
+            } else {
+                None
+            };
+            if let Some(reason) = refused {
+                tracing::debug!(from, reason, "dashboard widget not picked up");
+                return;
+            }
+            state.moving = Some(Moving {
+                from,
+                to: from,
+                by_pointer,
+            });
+        }
+        tracing::info!(from, by_pointer, "dashboard widget picked up");
+        // Its grip keeps the keys while it moves; dragged, the page does:
+        // out of the list's view, the grip would lose them.
+        self.ask_focus(
+            from,
+            if by_pointer {
+                ui::FocusPart::Page
+            } else {
+                ui::FocusPart::Widget
+            },
+        );
+        self.preview();
+    }
+
+    /// Shows the widget picked up `step` places further (back when below 0).
+    fn move_by(&self, step: i32) {
+        let target = {
+            let state = self.0.borrow();
+            let Some(moving) = state.moving else {
+                return;
+            };
+            let last = state.widgets.len().saturating_sub(1);
+            let to = i64::try_from(moving.to).unwrap_or(i64::MAX) + i64::from(step);
+            usize::try_from(to.max(0)).unwrap_or(0).min(last)
+        };
+        self.show_at(target);
+    }
+
+    /// Shows the widget picked up first, or last.
+    fn move_to_end(&self, last: bool) {
+        let target = if last {
+            self.0.borrow().widgets.len().saturating_sub(1)
+        } else {
+            0
+        };
+        self.show_at(target);
+    }
+
+    /// Shows the widget dragged where its card's centre, at `column` and
+    /// `row` of a grid of `columns`, puts it.
+    fn drag_to(&self, column: f64, row: f64, columns: i32) {
+        let target = {
+            let state = self.0.borrow();
+            let Some(moving) = state.moving else {
+                return;
+            };
+            let columns = usize::try_from(columns).unwrap_or(1).clamp(1, MAX_COLUMNS);
+            editing::drop_index(&state.widgets, moving.from, (column, row), columns)
+        };
+        self.show_at(target);
+    }
+
+    /// Shows the widget picked up at place `to`.
+    fn show_at(&self, to: usize) {
+        {
+            let mut state = self.0.borrow_mut();
+            let Some(moving) = state.moving.as_mut() else {
+                return;
+            };
+            if moving.to == to {
+                return;
+            }
+            moving.to = to;
+        }
+        self.preview();
+    }
+
+    /// Puts the widget picked up down where it is shown: written when it
+    /// moved.
+    fn put_down(&self) {
+        let Some(moving) = self.0.borrow_mut().moving.take() else {
+            return;
+        };
+        let moved = {
+            let mut state = self.0.borrow_mut();
+            let moved = editing::move_to(&mut state.widgets, moving.from, moving.to);
+            // The row itself moves; its card is drawn anew, the focus asked
+            // back below.
+            if moved && let Some(cell) = state.cells.row_data(moving.from) {
+                state.cells.remove(moving.from);
+                state.cells.insert(moving.to, cell);
+            }
+            moved
+        };
+        let kind = self
+            .0
+            .borrow()
+            .widgets
+            .get(moving.to)
+            .map(|(kind, _)| *kind);
+        tracing::info!(
+            from = moving.from,
+            to = moving.to,
+            ?kind,
+            "dashboard widget put down"
+        );
+        if moved {
+            self.dismiss_toast();
+            self.edited();
+        } else {
+            self.reposition();
+            self.show();
+        }
+        self.ask_focus(moving.to, ui::FocusPart::Widget);
+    }
+
+    /// Puts the widget picked up back where it was (`why`): nothing
+    /// written. The move given up, when there was one.
+    fn cancel_move(&self, why: &'static str) -> Option<Moving> {
+        let moving = self.0.borrow_mut().moving.take()?;
+        tracing::info!(from = moving.from, why, "dashboard move cancelled");
+        self.reposition();
+        self.show();
+        Some(moving)
+    }
+
+    /// The move given up from the page (`why`): a widget dragged gives the
+    /// keys back to its grip.
+    fn cancel_by_hand(&self, why: &'static str) {
+        if let Some(moving) = self.cancel_move(why)
+            && moving.by_pointer
+        {
+            self.ask_focus(moving.from, ui::FocusPart::Widget);
+        }
+    }
+
+    /// Shows the places of the list with the widget picked up where it
+    /// would go, the list itself unchanged.
+    fn preview(&self) {
+        {
+            let state = self.0.borrow();
+            let Some(moving) = state.moving else {
+                return;
+            };
+            let preview = editing::moved(&state.widgets, moving.from, moving.to);
+            let (cells, _) = placed(&preview);
+            for (row, (kind, _)) in state.widgets.iter().enumerate() {
+                // A widget is shown once: its kind finds it in the preview.
+                let at = preview.iter().position(|(shown, _)| shown == kind);
+                if let (Some(at), Some(mut cell)) = (at, state.cells.row_data(row)) {
+                    cell.places = cells[at].places.clone();
+                    state.cells.set_row_data(row, cell);
+                }
+            }
+            // The tile after the list, and the rows they fill, as they
+            // would be.
+            if let Some(window) = state.window.upgrade() {
+                show_list_around(&window.global::<ui::Dashboard>(), &preview);
+            }
+        }
+        self.show();
+    }
+
     /// The window took the focus asked for as `generation`: asked no more.
     fn focus_taken(&self, generation: i32) {
         let state = self.0.borrow();
@@ -505,25 +733,30 @@ impl DashboardScreen {
         }
     }
 
+    /// The places of the list shown again, the sizes each widget takes
+    /// kept (the same model keeps their buttons, and the focus on one).
+    fn reposition(&self) {
+        let state = self.0.borrow();
+        let (cells, rows) = placed(&state.widgets);
+        for (index, mut cell) in cells.into_iter().enumerate() {
+            if let Some(shown) = state.cells.row_data(index) {
+                cell.accepted = shown.accepted;
+            }
+            state.cells.set_row_data(index, cell);
+        }
+        if let Some(window) = state.window.upgrade() {
+            let dashboard = window.global::<ui::Dashboard>();
+            dashboard.set_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+            show_list_around(&dashboard, &state.widgets);
+        }
+    }
+
     /// After a change of the list: the places shown again, the sources
     /// followed again, the layout kept.
     fn edited(&self) {
+        self.reposition();
         {
             let mut state = self.0.borrow_mut();
-            let (cells, rows) = placed(&state.widgets);
-            for (index, mut cell) in cells.into_iter().enumerate() {
-                // The sizes it takes never change: the same model keeps
-                // their buttons, and the focus on one of them.
-                if let Some(shown) = state.cells.row_data(index) {
-                    cell.accepted = shown.accepted;
-                }
-                state.cells.set_row_data(index, cell);
-            }
-            if let Some(window) = state.window.upgrade() {
-                let dashboard = window.global::<ui::Dashboard>();
-                dashboard.set_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
-                show_list_around(&dashboard, &state.widgets);
-            }
             let watched = sources(&state.widgets);
             if watched != state.watched {
                 forget_newly_watched(&mut state, &watched);
@@ -728,6 +961,16 @@ impl DashboardScreen {
         dashboard.set_processor(processor(state.processor.as_ref(), &state.uses));
         dashboard.set_readings_lost(state.lost);
         dashboard.set_editing(state.editing);
+        dashboard.set_moving(
+            state
+                .moving
+                .map_or_else(ui::Moving::default, |moving| ui::Moving {
+                    shown: true,
+                    row: shown(moving.from),
+                    to: shown(moving.to),
+                    by_pointer: moving.by_pointer,
+                }),
+        );
         dashboard.set_save_failed(state.banners.save_failed);
         dashboard.set_layout_unreadable(state.banners.unreadable);
         dashboard.set_toast(ui::Toast {
@@ -3030,8 +3273,8 @@ pub mod tests {
             ElementHandle::find_by_accessible_label(&window, "Disques")
                 .all(|element| element.accessible_role() != Some(AccessibleRole::Groupbox))
         );
-        // The focus on the next one's "Retirer": Enter removes it.
-        crate::cleaner::tests::press(&window, slint::platform::Key::Return);
+        // The focus on the next one's grip: Suppr removes it.
+        crate::cleaner::tests::press(&window, slint::platform::Key::Delete);
         slint::platform::update_timers_and_animations();
         until(&window, |_| {
             kept_layout(&directories.config)
@@ -3154,8 +3397,8 @@ pub mod tests {
             !shows(&window, "Disques retiré du tableau de bord"),
             "nothing to put back"
         );
-        // The focus on the widget added: Enter removes it again.
-        crate::cleaner::tests::press(&window, slint::platform::Key::Return);
+        // The focus on the widget added: Suppr removes it again.
+        crate::cleaner::tests::press(&window, slint::platform::Key::Delete);
         slint::platform::update_timers_and_animations();
         until(&window, |_| {
             !kinds_kept(&directories.config).contains(&"disks".to_owned())
@@ -3370,7 +3613,7 @@ pub mod tests {
         customizing(&window);
         button(&window, "Retirer Système").invoke_accessible_default_action();
         slint::platform::update_timers_and_animations();
-        crate::cleaner::tests::press(&window, slint::platform::Key::Return);
+        crate::cleaner::tests::press(&window, slint::platform::Key::Delete);
         slint::platform::update_timers_and_animations();
         until(&window, |_| {
             kinds_kept(&directories.config) == ["reclaimable", "disks", "memory"]
@@ -3493,8 +3736,8 @@ pub mod tests {
                     ("disks".to_owned(), WidgetSize::Tall),
                 ]
         });
-        // The focus on it again: Enter removes it.
-        crate::cleaner::tests::press(&window, slint::platform::Key::Return);
+        // The focus on it again: Suppr removes it.
+        crate::cleaner::tests::press(&window, slint::platform::Key::Delete);
         until(&window, |_| kinds_kept(&directories.config) == ["memory"]);
     }
 
@@ -3543,8 +3786,11 @@ pub mod tests {
         use slint::platform::Key;
         let directories = Directories::new();
         let window = removing_disks(&directories);
-        // The focus on Mémoire's "Retirer"; before it, its sizes.
-        crate::cleaner::tests::press(&window, Key::Backtab);
+        // The focus on Mémoire's grip; after it, its sizes: Petit, Large,
+        // Haut, Grand.
+        for _ in 0..4 {
+            crate::cleaner::tests::press(&window, Key::Tab);
+        }
         crate::cleaner::tests::press(&window, Key::Space);
         slint::platform::update_timers_and_animations();
         until(&window, |_| {
@@ -3678,5 +3924,614 @@ pub mod tests {
         i_slint_backend_testing::mock_elapsed_time(TOAST_SHOWN_FOR);
         slint::platform::update_timers_and_animations();
         assert!(!shows(&window, "Mémoire retiré du tableau de bord"));
+    }
+
+    /// The page at the mockup's size, and the page itself: its writer can
+    /// be let finish, so that what it kept is all there.
+    fn on_home_kept(directories: &Directories) -> (ui::AppWindow, DashboardScreen) {
+        let (seams, _sampler) = directories.seams();
+        let (window, home) = home_screen(seams);
+        window
+            .window()
+            .set_size(slint::PhysicalSize::new(1280, 800));
+        slint::platform::update_timers_and_animations();
+        (window, home)
+    }
+
+    /// The layout kept once every layout handed has been written; none at
+    /// all when nothing was ever written.
+    fn kept_in_the_end(
+        home: &DashboardScreen,
+        directories: &Directories,
+    ) -> Option<Vec<(String, WidgetSize)>> {
+        home.shut_down();
+        DashboardLayout::path(&directories.config)
+            .exists()
+            .then(|| kept_layout(&directories.config))
+    }
+
+    /// How many groups of sizes `title` shows: none when it has only one.
+    fn size_groups(window: &ui::AppWindow, title: &str) -> usize {
+        ElementHandle::find_by_accessible_label(window, &format!("Taille de {title}")).count()
+    }
+
+    /// Presses `key`, then lets the page take it in.
+    fn pressing(window: &ui::AppWindow, key: slint::platform::Key) {
+        crate::cleaner::tests::press(window, key);
+        slint::platform::update_timers_and_animations();
+    }
+
+    /// The widget's grip picked up with Enter.
+    fn picking_up(window: &ui::AppWindow, title: &str) {
+        button(window, &format!("Déplacer {title}")).invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+    }
+
+    fn moving(window: &ui::AppWindow) -> ui::Moving {
+        window.global::<ui::Dashboard>().get_moving()
+    }
+
+    #[test]
+    fn a_widget_moved_with_the_keyboard_is_kept_where_it_is_put_down() {
+        use slint::platform::Key;
+        let directories = Directories::new();
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        customizing(&window);
+        let grip = button(&window, "Déplacer Disques");
+        assert_eq!(
+            grip.accessible_description().as_deref(),
+            Some("Place 2 sur 5")
+        );
+        let (column_one, row_two, _, _) = frame(&window, "Disques");
+        picking_up(&window, "Disques");
+        // Mémoire after it: Disques, two columns wide, goes after Mémoire.
+        pressing(&window, Key::RightArrow);
+        assert_eq!(
+            grip.accessible_description().as_deref(),
+            Some("Saisi, place 3 sur 5")
+        );
+        assert!(shows(&window, "Place 3 sur 5"), "said as it changes");
+        let (x, y, _, _) = frame(&window, "Disques");
+        assert!((y - row_two).abs() < 1.0 && x > column_one, "shown further");
+        assert!(
+            (frame(&window, "Mémoire").0 - column_one).abs() < 1.0,
+            "Mémoire shown in its place"
+        );
+        assert!(shows(&window, "Flèches, puis Entrée"));
+        pressing(&window, Key::Return);
+        until(&window, |_| {
+            kinds_kept(&directories.config)
+                == ["reclaimable", "memory", "disks", "processor", "system"]
+        });
+        assert!(!shows(&window, "Flèches, puis Entrée"));
+        assert!((frame(&window, "Mémoire").0 - column_one).abs() < 1.0);
+        // The focus on its grip again: Suppr removes it.
+        pressing(&window, Key::Delete);
+        until(&window, |_| {
+            kinds_kept(&directories.config) == ["reclaimable", "memory", "processor", "system"]
+        });
+    }
+
+    #[test]
+    fn space_picks_up_and_puts_down_and_the_arrows_move_one_place_at_a_time() {
+        use slint::platform::Key;
+        let directories = Directories::new();
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        customizing(&window);
+        // Picked up and put back: the focus stays on the grip.
+        picking_up(&window, "Processeur");
+        pressing(&window, Key::Escape);
+        pressing(&window, Key::Space);
+        assert!(moving(&window).shown);
+        pressing(&window, Key::DownArrow);
+        assert!(shows(&window, "Place 5 sur 5"));
+        for _ in 0..3 {
+            pressing(&window, Key::UpArrow);
+        }
+        assert!(shows(&window, "Place 2 sur 5"));
+        // Suppr waits too.
+        pressing(&window, Key::Delete);
+        assert!(moving(&window).shown);
+        pressing(&window, Key::Space);
+        until(&window, |_| {
+            kinds_kept(&directories.config)
+                == ["reclaimable", "processor", "disks", "memory", "system"]
+        });
+        // Each widget keeps its own sizes: Système, with only one, shows
+        // none to choose.
+        assert_eq!(
+            (
+                size_groups(&window, "Processeur"),
+                size_groups(&window, "Système")
+            ),
+            (1, 0)
+        );
+    }
+
+    #[test]
+    fn a_widget_put_down_where_it_was_is_not_kept_and_keeps_the_focus() {
+        let directories = Directories::new();
+        let (window, home) = on_home_kept(&directories);
+        customizing(&window);
+        picking_up(&window, "Mémoire");
+        // Its action, as a screen reader gives it, puts it down too.
+        picking_up(&window, "Mémoire");
+        assert!(!moving(&window).shown);
+        pressing(&window, slint::platform::Key::Return);
+        assert!(moving(&window).shown, "picked up again from its grip");
+        // There and back: where it was, nothing to keep.
+        pressing(&window, slint::platform::Key::RightArrow);
+        pressing(&window, slint::platform::Key::LeftArrow);
+        pressing(&window, slint::platform::Key::Return);
+        assert!(!moving(&window).shown);
+        assert_eq!(kept_in_the_end(&home, &directories), None);
+    }
+
+    #[test]
+    fn a_widget_moved_keeps_its_size_and_the_others_theirs() {
+        let directories = Directories::new();
+        let (window, home) = on_home_kept(&directories);
+        customizing(&window);
+        // The first Grand: Disques's, before Mémoire's.
+        button(&window, "Grand").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        picking_up(&window, "Disques");
+        pressing(&window, slint::platform::Key::RightArrow);
+        pressing(&window, slint::platform::Key::Return);
+        assert_eq!(
+            kept_in_the_end(&home, &directories),
+            Some(vec![
+                ("reclaimable".to_owned(), WidgetSize::Full),
+                ("memory".to_owned(), WidgetSize::Small),
+                ("disks".to_owned(), WidgetSize::Large),
+                ("processor".to_owned(), WidgetSize::Wide),
+                ("system".to_owned(), WidgetSize::Small),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_widget_put_down_out_of_view_is_brought_into_it_with_the_focus() {
+        let directories = Directories::new();
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        window
+            .window()
+            .set_size(slint::PhysicalSize::new(1280, u32::from(SHORT)));
+        slint::platform::update_timers_and_animations();
+        customizing(&window);
+        // Récupérable's grip taken down to the list's bottom (the pointer
+        // held still never scrolls): its card's centre over the third row,
+        // which starts below the view.
+        let (_, top, _, _) = frame(&window, "Récupérable");
+        let grip = button(&window, "Déplacer Récupérable");
+        let grip_middle = grip.absolute_position().y + grip.size().height / 2.0;
+        let at = dragging(
+            &window,
+            "Récupérable",
+            (0.0, f32::from(SHORT) - 5.0 - grip_middle),
+        );
+        assert_eq!(moving(&window).to, 3);
+        letting_go(&window, at);
+        assert!(frame(&window, "Récupérable").1 > top, "put down further");
+        assert!(!moving(&window).shown);
+        let (_, y, _, height) = frame(&window, "Récupérable");
+        assert!(y >= 0.0 && y + height <= f32::from(SHORT), "in view");
+        // Its grip kept the focus: Suppr removes it.
+        pressing(&window, slint::platform::Key::Delete);
+        until(&window, |_| {
+            !kinds_kept(&directories.config).contains(&"reclaimable".to_owned())
+        });
+    }
+
+    #[test]
+    fn the_arrows_home_and_end_move_within_the_list_and_escape_puts_it_back() {
+        use slint::platform::Key;
+        let directories = Directories::new();
+        let (window, home) = on_home_kept(&directories);
+        customizing(&window);
+        // Where it sits from Récupérable: the list may scroll.
+        let sitting = |window: &ui::AppWindow| {
+            let (x, y, _, _) = frame(window, "Mémoire");
+            let (left, top, _, _) = frame(window, "Récupérable");
+            (x - left, y - top)
+        };
+        let before = sitting(&window);
+        picking_up(&window, "Mémoire");
+        let grip = button(&window, "Déplacer Mémoire");
+        pressing(&window, Key::Home);
+        assert_eq!(
+            grip.accessible_description().as_deref(),
+            Some("Saisi, place 1 sur 5")
+        );
+        pressing(&window, Key::UpArrow);
+        assert!(shows(&window, "Place 1 sur 5"), "not before the first");
+        pressing(&window, Key::End);
+        pressing(&window, Key::DownArrow);
+        assert!(shows(&window, "Place 5 sur 5"), "not after the last");
+        // Last in three columns, it takes the tile's place: the tile goes
+        // after it.
+        let dashboard = window.global::<ui::Dashboard>();
+        // The places of three columns; Mémoire's row of the model.
+        let (three_columns, memory_row) = (2, 2);
+        let tile = dashboard.get_tile().row_data(three_columns).unwrap();
+        let memory = dashboard
+            .get_cells()
+            .row_data(memory_row)
+            .unwrap()
+            .places
+            .row_data(three_columns)
+            .unwrap();
+        assert!(
+            (tile.row, tile.column) > (memory.row, memory.column),
+            "the tile after Mémoire"
+        );
+        assert!(
+            dashboard
+                .get_rows_with_tile()
+                .row_data(three_columns)
+                .unwrap()
+                > memory.row
+        );
+        pressing(&window, Key::LeftArrow);
+        assert!(shows(&window, "Place 4 sur 5"));
+        pressing(&window, Key::Escape);
+        assert_eq!(sitting(&window), before);
+        assert_eq!(
+            grip.accessible_description().as_deref(),
+            Some("Place 3 sur 5")
+        );
+        assert!(!shows(&window, "Place 4 sur 5"));
+        // Put back: the next Enter picks it up again; Tab leaves it, put
+        // back too.
+        pressing(&window, Key::Return);
+        pressing(&window, Key::Home);
+        assert!(moving(&window).shown);
+        pressing(&window, Key::Tab);
+        assert!(!moving(&window).shown);
+        assert_eq!(sitting(&window), before);
+        assert_eq!(kept_in_the_end(&home, &directories), None, "only shown");
+    }
+    #[test]
+    fn while_a_widget_is_picked_up_the_other_changes_wait() {
+        let directories = Directories::new();
+        let (window, home) = on_home_kept(&directories);
+        customizing(&window);
+        picking_up(&window, "Disques");
+        assert!(
+            ElementHandle::find_by_accessible_label(&window, "Retirer Disques")
+                .next()
+                .is_none(),
+            "its own actions hidden"
+        );
+        button(&window, "Retirer Mémoire").invoke_accessible_default_action();
+        // Disques's sizes hidden: the first Grand is Mémoire's.
+        button(&window, "Grand").invoke_accessible_default_action();
+        button(&window, "Déplacer Processeur").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        // A press on another grip neither.
+        let at = dragging(&window, "Processeur", (0.0, -200.0));
+        assert_eq!(
+            (moving(&window).row, moving(&window).by_pointer),
+            (1, false)
+        );
+        letting_go(&window, at);
+        assert!(moving(&window).shown);
+        assert_eq!(button(&window, "Grand").accessible_checked(), Some(false));
+        // Leaving the mode puts it back.
+        button(&window, "Terminé").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert!(!moving(&window).shown);
+        assert_eq!(kept_in_the_end(&home, &directories), None);
+    }
+
+    #[test]
+    fn annuler_while_a_widget_is_picked_up_puts_it_back_first() {
+        let directories = Directories::new();
+        let (window, home) = on_home_kept(&directories);
+        customizing(&window);
+        button(&window, "Retirer Système").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        picking_up(&window, "Disques");
+        pressing(&window, slint::platform::Key::End);
+        assert!(
+            shows(&window, "Système retiré du tableau de bord"),
+            "the note stays"
+        );
+        button(&window, "Annuler").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert!(!moving(&window).shown);
+        assert_eq!(
+            kept_in_the_end(&home, &directories),
+            Some(
+                catalog::default_widgets()
+                    .into_iter()
+                    .map(|(kind, size)| (kind.name().to_owned(), size))
+                    .collect()
+            ),
+            "Système back, Disques where it was"
+        );
+    }
+
+    #[test]
+    fn another_window_shown_keeps_a_widget_picked_up() {
+        use slint::platform::WindowEvent;
+        let (seams, _sampler) = noting(None);
+        let window = on_home(seams);
+        customizing(&window);
+        picking_up(&window, "Mémoire");
+        window
+            .window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(false));
+        window
+            .window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(true));
+        slint::platform::update_timers_and_animations();
+        assert!(moving(&window).shown);
+        pressing(&window, slint::platform::Key::Home);
+        assert!(shows(&window, "Place 1 sur 5"), "its grip has the keys");
+    }
+
+    #[test]
+    fn leaving_the_page_puts_a_widget_picked_up_back() {
+        use slint::platform::Key;
+        let directories = Directories::new();
+        let (window, home) = on_home_kept(&directories);
+        customizing(&window);
+        let before = frame(&window, "Système");
+        picking_up(&window, "Système");
+        pressing(&window, Key::Home);
+        go_to(&window, "À propos");
+        go_to(&window, "Accueil");
+        customizing(&window);
+        assert!(!moving(&window).shown);
+        assert_eq!(frame(&window, "Système"), before);
+        assert_eq!(kept_in_the_end(&home, &directories), None);
+    }
+
+    /// Presses `title`'s grip, then drags it by `by` (x, y), as a hand
+    /// does, in two steps; the button stays down. Where the pointer is.
+    fn dragging(window: &ui::AppWindow, title: &str, by: (f32, f32)) -> slint::LogicalPosition {
+        use slint::platform::{PointerEventButton, WindowEvent};
+        let grip = button(window, &format!("Déplacer {title}"));
+        let (position, size) = (grip.absolute_position(), grip.size());
+        let from = slint::LogicalPosition::new(
+            position.x + size.width / 2.0,
+            position.y + size.height / 2.0,
+        );
+        let window = window.window();
+        window.dispatch_event(WindowEvent::PointerMoved { position: from });
+        window.dispatch_event(WindowEvent::PointerPressed {
+            position: from,
+            button: PointerEventButton::Left,
+        });
+        slint::platform::update_timers_and_animations();
+        let mut position = from;
+        for part in [0.5, 1.0] {
+            position = slint::LogicalPosition::new(from.x + by.0 * part, from.y + by.1 * part);
+            window.dispatch_event(WindowEvent::PointerMoved { position });
+            slint::platform::update_timers_and_animations();
+        }
+        position
+    }
+
+    /// Lets go of the pointer's button, `at` where it is.
+    fn letting_go(window: &ui::AppWindow, at: slint::LogicalPosition) {
+        use slint::platform::{PointerEventButton, WindowEvent};
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerReleased {
+                position: at,
+                button: PointerEventButton::Left,
+            });
+        slint::platform::update_timers_and_animations();
+    }
+
+    #[test]
+    fn a_widget_dragged_by_its_grip_is_kept_where_it_is_let_go() {
+        let directories = Directories::new();
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        customizing(&window);
+        let (system_x, system_y, width, height) = frame(&window, "Système");
+        let (disks_x, disks_y, _, _) = frame(&window, "Disques");
+        // Système's card over the first column of the second row, where
+        // Disques starts.
+        let at = dragging(&window, "Système", (disks_x - system_x, disks_y - system_y));
+        assert_eq!(
+            (moving(&window).shown, moving(&window).by_pointer),
+            (true, true)
+        );
+        assert!(shows(&window, "Déposer ici"));
+        let (x, y, _, _) = frame(&window, "Système");
+        assert!(
+            (x - disks_x).abs() < 1.0 && (y - disks_y).abs() < 1.0,
+            "the card under the pointer"
+        );
+        assert!(
+            frame(&window, "Disques").0 > disks_x + width / 2.0,
+            "Disques shown after it"
+        );
+        letting_go(&window, at);
+        until(&window, |_| {
+            kinds_kept(&directories.config)
+                == ["reclaimable", "system", "disks", "memory", "processor"]
+        });
+        assert!(!shows(&window, "Déposer ici"));
+        assert_eq!(frame(&window, "Système"), (disks_x, disks_y, width, height));
+        // Each widget keeps its own sizes: Système, with only one, shows
+        // none to choose.
+        assert_eq!(
+            (
+                size_groups(&window, "Système"),
+                size_groups(&window, "Processeur")
+            ),
+            (0, 1)
+        );
+        // The focus on its grip: Suppr removes it.
+        pressing(&window, slint::platform::Key::Delete);
+        until(&window, |_| {
+            kinds_kept(&directories.config) == ["reclaimable", "disks", "memory", "processor"]
+        });
+    }
+    #[test]
+    fn a_widget_dragged_out_of_the_list_goes_back_on_escape_or_when_let_go() {
+        use slint::platform::Key;
+        let directories = Directories::new();
+        let (window, home) = on_home_kept(&directories);
+        customizing(&window);
+        let before = frame(&window, "Système");
+        // Over the sidebar: the grip leaves the list's view, and its focus.
+        let at = dragging(&window, "Système", (-before.0, 0.0));
+        assert_eq!(
+            (moving(&window).shown, moving(&window).by_pointer),
+            (true, true),
+            "only the pointer ends a drag"
+        );
+        pressing(&window, Key::Escape);
+        assert!(!moving(&window).shown);
+        letting_go(&window, at);
+        assert_eq!(frame(&window, "Système"), before);
+        // The keys back on its grip.
+        pressing(&window, Key::Return);
+        assert_eq!(
+            (moving(&window).shown, moving(&window).by_pointer),
+            (true, false)
+        );
+        pressing(&window, Key::Escape);
+        let at = dragging(&window, "Système", (-before.0, 0.0));
+        assert!(moving(&window).shown, "the grip's focus taken by the page");
+        letting_go(&window, at);
+        assert!(!moving(&window).shown);
+        assert_eq!(frame(&window, "Système"), before);
+        pressing(&window, Key::Return);
+        assert!(moving(&window).shown, "the keys back on its grip");
+        pressing(&window, Key::Escape);
+        assert_eq!(kept_in_the_end(&home, &directories), None);
+    }
+
+    #[test]
+    fn escape_puts_a_widget_dragged_back() {
+        let directories = Directories::new();
+        let (window, home) = on_home_kept(&directories);
+        customizing(&window);
+        let before = frame(&window, "Système");
+        let at = dragging(&window, "Système", (-before.2, -before.3));
+        pressing(&window, slint::platform::Key::Escape);
+        assert!(!moving(&window).shown);
+        assert!(!shows(&window, "Déposer ici"));
+        assert_eq!(frame(&window, "Système"), before);
+        // The release after it changes nothing.
+        letting_go(&window, at);
+        assert_eq!(kept_in_the_end(&home, &directories), None);
+    }
+
+    /// The page's height in the tests that scroll.
+    const SHORT: u16 = 500;
+
+    #[test]
+    fn the_list_scrolls_to_a_widget_moved_with_the_keyboard_and_back() {
+        use slint::platform::Key;
+        let directories = Directories::new();
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        window
+            .window()
+            .set_size(slint::PhysicalSize::new(1280, u32::from(SHORT)));
+        slint::platform::update_timers_and_animations();
+        customizing(&window);
+        let top = frame(&window, "Récupérable").1;
+        picking_up(&window, "Récupérable");
+        pressing(&window, Key::End);
+        let (_, y, _, height) = frame(&window, "Récupérable");
+        assert!(y > top && y + height <= f32::from(SHORT), "moved into view");
+        // Put back: just in view again (at the list's top), its grip
+        // keeping the focus.
+        pressing(&window, Key::Escape);
+        assert!(frame(&window, "Récupérable").1.abs() < 1.0);
+        pressing(&window, Key::Return);
+        assert!(moving(&window).shown);
+    }
+    /// The window just high enough for Système's grip to sit near the
+    /// list's bottom edge, well within the band where a drag scrolls.
+    fn system_at_the_bottom_edge() -> ui::AppWindow {
+        /// Below the grip, in pixels.
+        const UNDER_THE_GRIP: f32 = 4.0;
+        let (seams, _sampler) = noting(None);
+        let window = on_home(seams);
+        customizing(&window);
+        let grip = button(&window, "Déplacer Système");
+        let bottom = grip.absolute_position().y + grip.size().height + UNDER_THE_GRIP;
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a window's height, in whole pixels"
+        )]
+        let height = bottom.ceil() as u32;
+        window
+            .window()
+            .set_size(slint::PhysicalSize::new(1280, height));
+        slint::platform::update_timers_and_animations();
+        let grip = button(&window, "Déplacer Système");
+        let middle = grip.absolute_position().y + grip.size().height / 2.0;
+        assert!(bottom - middle < 48.0, "in the band");
+        window
+    }
+
+    #[test]
+    fn a_widget_dragged_to_the_list_s_edge_scrolls_it_while_held() {
+        let window = system_at_the_bottom_edge();
+        let top = frame(&window, "Récupérable").1;
+        // Far enough to be a drag; still near the edge.
+        let at = dragging(&window, "Système", (-200.0, 0.0));
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+        slint::platform::update_timers_and_animations();
+        let scrolled = frame(&window, "Récupérable").1;
+        assert!(scrolled < top, "scrolled down");
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+        slint::platform::update_timers_and_animations();
+        assert!(frame(&window, "Récupérable").1 < scrolled, "still");
+        // At the top edge, it scrolls back up.
+        let lower = frame(&window, "Récupérable").1;
+        let at = slint::LogicalPosition::new(at.x, 8.0);
+        window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::PointerMoved { position: at });
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+        slint::platform::update_timers_and_animations();
+        assert!(frame(&window, "Récupérable").1 > lower, "scrolled up");
+        letting_go(&window, at);
+    }
+
+    #[test]
+    fn a_press_moved_just_past_the_threshold_is_a_drag() {
+        let window = system_at_the_bottom_edge();
+        let top = frame(&window, "Récupérable").1;
+        let at = dragging(&window, "Système", (6.0, 0.0));
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+        slint::platform::update_timers_and_animations();
+        assert!(frame(&window, "Récupérable").1 < top, "scrolled down");
+        letting_go(&window, at);
+    }
+
+    #[test]
+    fn a_click_on_a_grip_near_the_edge_neither_scrolls_nor_moves() {
+        let window = system_at_the_bottom_edge();
+        let top = frame(&window, "Récupérable").1;
+        // Just under the 4 px of a drag, as a hand trembles.
+        let at = dragging(&window, "Système", (3.0, 0.0));
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(200));
+        slint::platform::update_timers_and_animations();
+        assert!((frame(&window, "Récupérable").1 - top).abs() < 1.0);
+        letting_go(&window, at);
+        assert!(!moving(&window).shown);
+        assert_eq!(
+            button(&window, "Déplacer Système")
+                .accessible_description()
+                .as_deref(),
+            Some("Place 5 sur 5")
+        );
     }
 }

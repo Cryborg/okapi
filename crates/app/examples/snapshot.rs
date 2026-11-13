@@ -404,6 +404,8 @@ fn home(window: &ui::AppWindow) {
     });
     dashboard.set_disks(disks());
     dashboard.set_memory(memory());
+    dashboard.set_processor(processor());
+    dashboard.set_curve_span(59);
     window.set_page(ui::Page::Home);
 }
 
@@ -438,6 +440,47 @@ fn volume(
         percent,
         // `okapi_tools::monitor::nearly_full` says it of a space read.
         nearly_full: percent >= 90,
+    }
+}
+
+/// Two minutes of a quiet machine, a spike in the middle, as the mockup.
+fn processor() -> ui::ProcessorShown {
+    let uses: Vec<f64> = (0..60_u32)
+        .map(|index| {
+            let at = f64::from(index);
+            let spike = match index {
+                21 => 19.0,
+                22 => 24.0,
+                23 => 14.0,
+                _ => 0.0,
+            };
+            (9.0 + 3.0 * (at * 0.7).sin() + 2.0 * (at * 1.9 + 1.0).sin() + spike).clamp(2.0, 48.0)
+        })
+        .collect();
+    let line: Vec<String> = uses
+        .iter()
+        .enumerate()
+        .map(|(index, usage)| {
+            format!(
+                "{}{index} {:.1}",
+                if index == 0 { 'M' } else { 'L' },
+                50.0 - usage
+            )
+        })
+        .collect();
+    let line = line.join(" ");
+    ui::ProcessorShown {
+        state: ui::ReadingState::Read,
+        percent: 12,
+        load_known: true,
+        load_whole: 0,
+        load_hundredths: 84,
+        scale: 50,
+        area: format!("{line} L59 50 L0 50 Z").into(),
+        line: line.into(),
+        filling: false,
+        lowest: 4,
+        highest: 34,
     }
 }
 

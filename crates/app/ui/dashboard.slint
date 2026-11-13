@@ -3,7 +3,7 @@
 import { Theme } from "theme.slint";
 import { Title, Detail, Icon, ScrolledList } from "widgets.slint";
 import { Dashboard, Placement, ReadingState, ReclaimableState, WidgetKind, WidgetSize } from "dashboard-model.slint";
-import { DashboardWords, DisksWidget, MemoryWidget, ReclaimableWidget, SystemWidget, ReadingWidget } from "dashboard-widgets.slint";
+import { DashboardWords, DisksWidget, MemoryWidget, ProcessorWidget, ReclaimableWidget, SystemWidget } from "dashboard-widgets.slint";
 
 export component DashboardPage inherits Rectangle {
     // The window's width, which the page's margin follows.
@@ -115,8 +115,8 @@ export component DashboardPage inherits Rectangle {
                     if cell.kind == WidgetKind.memory: MemoryWidget {
                         size: cell.size;
                     }
-                    if cell.kind == WidgetKind.processor: ReadingWidget {
-                        kind: cell.kind;
+                    if cell.kind == WidgetKind.processor: ProcessorWidget {
+                        size: cell.size;
                     }
                 }
             }

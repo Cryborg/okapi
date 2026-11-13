@@ -121,6 +121,26 @@ export struct MemoryShown {
     applications: [ApplicationShown],
 }
 
+export struct ProcessorShown {
+    state: ReadingState,
+    // The use read last, from 0 to 100.
+    percent: int,
+    load-known: bool,
+    // The load average over a minute, as a whole and hundredths.
+    load-whole: int,
+    load-hundredths: int,
+    // The curve of the last uses: its scale (50 or 100), and the commands
+    // of its line and of the area under it, in a box `curve-span` wide and
+    // as high as its scale.
+    scale: int,
+    line: string,
+    area: string,
+    // Fewer readings than the curve holds: it is filling.
+    filling: bool,
+    lowest: int,
+    highest: int,
+}
+
 export global Dashboard {
     // The placements in 1 to as many columns as the grid may have.
     in property <[Placement]> placements;
@@ -130,6 +150,10 @@ export global Dashboard {
     in property <SystemShown> system;
     in property <DisksShown> disks;
     in property <MemoryShown> memory;
+    in property <ProcessorShown> processor;
+    // How many readings the processor's curve holds, minus one: the width
+    // of its box.
+    in property <int> curve-span;
     // No reading reaches the window any more.
     in property <bool> readings-lost;
 

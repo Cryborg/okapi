@@ -6,7 +6,7 @@ mod catalog;
 mod layout;
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -16,8 +16,8 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use okapi_store::{DashboardLayout, LastAnalysis, WidgetSize};
 use okapi_tools::monitor::{
-    ApplicationName, Applications, Command, MemoryStatus, Sample, Source, SystemReading,
-    Unavailable, Volume, VolumeKind, VolumeName, VolumeSpace, nearly_full,
+    ApplicationName, Applications, Command, MemoryStatus, ProcessorReading, Sample, Source,
+    SystemReading, Unavailable, Volume, VolumeKind, VolumeName, VolumeSpace, nearly_full,
 };
 use slint::{ComponentHandle as _, ModelRc, VecModel};
 
@@ -30,6 +30,16 @@ use layout::{MAX_COLUMNS, place, shown as widgets_shown};
 /// How often the readings sent are taken in: the fastest source reads
 /// every two seconds.
 const TAKE_SAMPLES_EVERY: Duration = Duration::from_millis(500);
+/// The uses the processor's curve holds: two minutes at a reading every
+/// two seconds (the "2 min" its words say, in `dashboard-widgets.slint`).
+const CURVE_READINGS: usize = 60;
+/// The curve's scale while every percent said fits under it; beyond, the
+/// whole of it.
+const CURVE_LOW_SCALE: i32 = 50;
+const CURVE_FULL_SCALE: i32 = 100;
+/// A use (0 to 1) in percents; a load average in hundredths.
+const PERCENT_PER_UNIT: f64 = 100.0;
+const HUNDREDTHS_PER_UNIT: i32 = 100;
 /// The volumes the small Disques widget names, the fullest first.
 const FULLEST_SHOWN: usize = 2;
 const PERCENT: u128 = 100;
@@ -105,6 +115,9 @@ struct State {
     /// The last list read: they are read less often than the memory.
     applications: Option<Result<Applications, Unavailable>>,
     rows: Rows,
+    processor: Option<Result<ProcessorReading, Unavailable>>,
+    /// The last uses, oldest first, between 0 and 1.
+    uses: VecDeque<f64>,
     /// The readings no longer reach the page.
     lost: bool,
     timer: slint::Timer,
@@ -144,6 +157,7 @@ impl DashboardScreen {
             .collect();
         dashboard.set_placements(ModelRc::from(Rc::new(VecModel::from(placements))));
         dashboard.on_columns_shown(|columns| tracing::debug!(columns, "dashboard columns"));
+        dashboard.set_curve_span(shown(CURVE_READINGS - 1));
 
         let mut sources: BTreeSet<Source> = widgets
             .iter()
@@ -165,6 +179,8 @@ impl DashboardScreen {
             memory: None,
             applications: None,
             rows: Rows::default(),
+            processor: None,
+            uses: VecDeque::with_capacity(CURVE_READINGS),
             lost: false,
             timer: slint::Timer::default(),
         })));
@@ -186,6 +202,9 @@ impl DashboardScreen {
     pub fn page_shown(&self, page: ui::Page) {
         if page == ui::Page::Home {
             tracing::info!("dashboard shown: readings resumed");
+            // The readings before the pause would be joined to those after
+            // as if two seconds apart: the curve starts again.
+            self.0.borrow_mut().uses.clear();
             (self.0.borrow().seams.commands)(Command::Resume);
             self.judge_outdated();
             self.show();
@@ -276,8 +295,24 @@ impl DashboardScreen {
                         }
                         changed = true;
                     }
-                    // No widget of this page draws it yet.
-                    Ok(Sample::Processor(_)) => {}
+                    Ok(Sample::Processor(reading)) => {
+                        match reading {
+                            Ok(ProcessorReading {
+                                usage: Some(usage), ..
+                            }) => {
+                                if state.uses.len() == CURVE_READINGS {
+                                    state.uses.pop_front();
+                                }
+                                state.uses.push_back(usage);
+                            }
+                            Ok(_) => {}
+                            // The next point would no longer be two seconds
+                            // after the one before: the curve starts again.
+                            Err(_) => state.uses.clear(),
+                        }
+                        state.processor = Some(reading);
+                        changed = true;
+                    }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         tracing::error!("dashboard readings cut off: every widget unavailable");
@@ -314,6 +349,7 @@ impl DashboardScreen {
             state.applications.as_ref(),
             &state.rows,
         ));
+        dashboard.set_processor(processor(state.processor.as_ref(), &state.uses));
         dashboard.set_readings_lost(state.lost);
     }
 }
@@ -651,6 +687,97 @@ fn memory(
         swap_percent: percent(swap_used, status.swap_total),
         applications_state,
         applications: ModelRc::from(Rc::clone(&rows.applications)),
+    }
+}
+
+/// A use between 0 and 1 in whole percents.
+fn percent_of(usage: f64) -> i32 {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a use between 0 and 1 makes 0 to 100"
+    )]
+    let percent = (usage.clamp(0.0, 1.0) * PERCENT_PER_UNIT).round() as i32;
+    percent
+}
+
+/// The commands of the line through `uses` (oldest first) and of the area
+/// under it, at the right of a box `CURVE_READINGS - 1` wide and `scale`
+/// high (y going down); empty below two readings.
+fn curve(uses: &VecDeque<f64>, scale: i32) -> (String, String) {
+    if uses.len() < 2 {
+        return (String::new(), String::new());
+    }
+    let first = CURVE_READINGS.saturating_sub(uses.len());
+    let line = uses
+        .iter()
+        .enumerate()
+        .map(|(index, usage)| {
+            let command = if index == 0 { 'M' } else { 'L' };
+            let height = f64::from(scale) - usage.clamp(0.0, 1.0) * PERCENT_PER_UNIT;
+            format!("{command}{} {height:.1}", first + index)
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let last = CURVE_READINGS - 1;
+    let area = format!("{line} L{last} {scale} L{first} {scale} Z");
+    (line, area)
+}
+
+/// The load average in whole and hundredths.
+fn load_parts(load: f64) -> (i32, i32) {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a load average in hundredths stays far below i32::MAX"
+    )]
+    let hundredths = (load.max(0.0) * f64::from(HUNDREDTHS_PER_UNIT)).round() as i32;
+    (
+        hundredths / HUNDREDTHS_PER_UNIT,
+        hundredths % HUNDREDTHS_PER_UNIT,
+    )
+}
+
+fn processor(
+    read: Option<&Result<ProcessorReading, Unavailable>>,
+    uses: &VecDeque<f64>,
+) -> ui::ProcessorShown {
+    let reading = match reading(read) {
+        Ok(reading) => reading,
+        Err(state) => {
+            return ui::ProcessorShown {
+                state,
+                ..ui::ProcessorShown::default()
+            };
+        }
+    };
+    // The first reading measures nothing: no use until the second.
+    let Some(last) = uses.back() else {
+        return ui::ProcessorShown {
+            state: ui::ReadingState::Reading,
+            ..ui::ProcessorShown::default()
+        };
+    };
+    let highest = percent_of(uses.iter().copied().fold(0.0, f64::max));
+    let lowest = percent_of(uses.iter().copied().fold(1.0, f64::min));
+    // On the percents said, so that the scale never contradicts them.
+    let scale = if highest <= CURVE_LOW_SCALE {
+        CURVE_LOW_SCALE
+    } else {
+        CURVE_FULL_SCALE
+    };
+    let (line, area) = curve(uses, scale);
+    let (load_whole, load_hundredths) = reading.load_average.map_or((0, 0), load_parts);
+    ui::ProcessorShown {
+        state: ui::ReadingState::Read,
+        percent: percent_of(*last),
+        load_known: reading.load_average.is_some(),
+        load_whole,
+        load_hundredths,
+        scale,
+        line: line.into(),
+        area: area.into(),
+        filling: uses.len() < CURVE_READINGS,
+        lowest,
+        highest,
     }
 }
 
@@ -1112,6 +1239,8 @@ pub mod tests {
         take_in();
         assert_eq!(said(&window, "Système").as_deref(), Some("Indisponible"));
         assert_eq!(said(&window, "Disques").as_deref(), Some("Indisponible"));
+        assert_eq!(said(&window, "Mémoire").as_deref(), Some("Indisponible"));
+        assert_eq!(said(&window, "Processeur").as_deref(), Some("Indisponible"));
         assert!(shows(
             &window,
             "Les informations du système n'ont pas pu être lues."
@@ -2089,6 +2218,195 @@ pub mod tests {
         assert!(shows(
             &window,
             "nas:/photos (/mnt/photos · nfs4 · partage réseau) : Le partage réseau n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra."
+        ));
+    }
+
+    fn uses(percents: &[u32]) -> VecDeque<f64> {
+        percents
+            .iter()
+            .map(|percent| f64::from(*percent) / 100.0)
+            .collect()
+    }
+
+    #[test]
+    fn the_curve_ends_at_the_right_of_its_box_and_closes_its_area_below() {
+        let (line, area) = curve(&uses(&[10, 30, 20]), CURVE_LOW_SCALE);
+        assert_eq!(line, "M57 40.0 L58 20.0 L59 30.0");
+        assert_eq!(area, "M57 40.0 L58 20.0 L59 30.0 L59 50 L57 50 Z");
+        assert_eq!(
+            curve(&uses(&[10]), CURVE_LOW_SCALE),
+            (String::new(), String::new()),
+            "one point draws nothing"
+        );
+    }
+
+    #[test]
+    fn the_curve_s_scale_doubles_once_a_use_passes_its_half() {
+        let reading = Ok(ProcessorReading {
+            usage: Some(0.2),
+            load_average: Some(0.845),
+        });
+        let low = processor(Some(&reading), &uses(&[20, 50, 29]));
+        assert_eq!((low.scale, low.lowest, low.highest), (50, 20, 50));
+        assert_eq!(low.percent, 29, "the last one");
+        assert_eq!((low.load_whole, low.load_hundredths), (0, 85));
+        assert!(low.filling);
+        let high = processor(Some(&reading), &uses(&[20, 51, 20]));
+        assert_eq!(high.scale, 100);
+        assert!(high.area.ends_with("L59 100 L57 100 Z"));
+        assert_eq!(load_parts(2.05), (2, 5));
+    }
+
+    #[test]
+    fn the_processor_says_nothing_before_a_use_is_measured() {
+        assert_eq!(
+            processor(None, &VecDeque::new()).state,
+            ui::ReadingState::Reading
+        );
+        let first = Ok(ProcessorReading {
+            usage: None,
+            load_average: None,
+        });
+        assert_eq!(
+            processor(Some(&first), &VecDeque::new()).state,
+            ui::ReadingState::Reading
+        );
+        let failed = Unavailable {
+            kind: std::io::ErrorKind::Unsupported,
+            code: None,
+        };
+        assert_eq!(
+            processor(Some(&Err(failed)), &VecDeque::new()).state,
+            ui::ReadingState::Unavailable
+        );
+        let full = processor(Some(&first), &uses(&[1; CURVE_READINGS]));
+        assert!(!full.filling);
+        assert!(!full.load_known);
+    }
+
+    fn sent(sampler: &Sampler, usage: Option<f64>, load_average: Option<f64>) {
+        sampler
+            .sink
+            .as_ref()
+            .unwrap()
+            .send(Sample::Processor(Ok(ProcessorReading {
+                usage,
+                load_average,
+            })))
+            .unwrap();
+        take_in();
+    }
+
+    fn used(sampler: &Sampler, usage: Option<f64>) {
+        sent(sampler, usage, Some(0.84));
+    }
+
+    #[test]
+    fn the_processor_s_curve_fills_and_starts_again_after_a_pause() {
+        let directories = Directories::new();
+        kept(&directories.config, &[("processor", WidgetSize::Wide)]);
+        let (seams, sampler) = directories.seams();
+        let window = on_home(seams);
+        used(&sampler, None);
+        assert_eq!(
+            said(&window, "Processeur").as_deref(),
+            Some("Lecture en cours")
+        );
+        used(&sampler, Some(0.10));
+        used(&sampler, Some(0.12));
+        assert_eq!(
+            said(&window, "Processeur").as_deref(),
+            Some("Processeur utilisé à 12 %")
+        );
+        assert!(shows(&window, "Charge moyenne 0,84 sur 1 min"));
+        assert!(shows(
+            &window,
+            "Courbe en cours de remplissage, 12 % maintenant"
+        ));
+        assert!(shows(&window, "il y a 2 min"));
+        assert!(shows(&window, "maintenant · la courbe se remplit"));
+        assert!(shows(&window, "50 %"), "the scale");
+        assert_eq!(window.global::<ui::Dashboard>().get_curve_span(), 59);
+        for _ in 1..CURVE_READINGS {
+            used(&sampler, Some(0.3));
+        }
+        used(&sampler, Some(0.4));
+        assert!(shows(
+            &window,
+            "Utilisation sur 2 minutes, entre 30 et 40 %, 40 % maintenant"
+        ));
+        assert!(!shows(&window, "maintenant · la courbe se remplit"));
+        used(&sampler, Some(0.6));
+        assert!(shows(&window, "100 %"), "the scale for the whole");
+        go_to(&window, "À propos");
+        go_to(&window, "Accueil");
+        used(&sampler, None);
+        assert_eq!(
+            said(&window, "Processeur").as_deref(),
+            Some("Lecture en cours"),
+            "the curve starts again"
+        );
+    }
+
+    #[test]
+    fn the_small_processor_widget_shows_its_use_without_a_curve() {
+        let directories = Directories::new();
+        kept(&directories.config, &[("processor", WidgetSize::Small)]);
+        let (seams, sampler) = directories.seams();
+        let window = on_home(seams);
+        sent(&sampler, Some(0.12), Some(2.05));
+        assert_eq!(
+            said(&window, "Processeur").as_deref(),
+            Some("Processeur utilisé à 12 %")
+        );
+        assert!(shows(&window, "Charge moyenne 2,05 sur 1 min"));
+        assert!(!shows(
+            &window,
+            "Courbe en cours de remplissage, 12 % maintenant"
+        ));
+        let bar = ElementHandle::find_by_accessible_label(&window, "Processeur utilisé à 12 %")
+            .find(|element| element.accessible_role() == Some(AccessibleRole::ProgressIndicator))
+            .expect("its bar");
+        assert_eq!(bar.accessible_value().as_deref(), Some("12"));
+    }
+
+    #[test]
+    fn the_processor_s_curve_starts_again_after_a_failed_reading() {
+        let directories = Directories::new();
+        kept(&directories.config, &[("processor", WidgetSize::Wide)]);
+        let (seams, sampler) = directories.seams();
+        let window = on_home(seams);
+        used(&sampler, Some(0.1));
+        used(&sampler, Some(0.2));
+        sampler
+            .sink
+            .as_ref()
+            .unwrap()
+            .send(Sample::Processor(Err(Unavailable {
+                kind: std::io::ErrorKind::InvalidData,
+                code: None,
+            })))
+            .unwrap();
+        take_in();
+        assert_eq!(said(&window, "Processeur").as_deref(), Some("Indisponible"));
+        assert!(shows(
+            &window,
+            "L'utilisation du processeur n'a pas pu être lue."
+        ));
+        used(&sampler, Some(0.3));
+        used(&sampler, Some(0.4));
+        assert!(
+            shows(&window, "Courbe en cours de remplissage, 40 % maintenant"),
+            "two points since the failure"
+        );
+        // 58 points since the failure: still filling, unless the two read
+        // before it were kept (60 then, a full curve from 10 %).
+        for _ in 2..CURVE_READINGS - 2 {
+            used(&sampler, Some(0.3));
+        }
+        assert!(shows(
+            &window,
+            "Courbe en cours de remplissage, 30 % maintenant"
         ));
     }
 }

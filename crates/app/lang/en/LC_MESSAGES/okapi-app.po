@@ -1202,3 +1202,35 @@ msgstr "removable"
 msgctxt "VolumeLine"
 msgid "partage réseau"
 msgstr "network share"
+
+msgctxt "ProcessorWidget"
+msgid "{} %"
+msgstr "{}%"
+
+msgctxt "ProcessorWidget"
+msgid "Processeur utilisé à {} %"
+msgstr "Processor used at {}%"
+
+msgctxt "ProcessorWidget"
+msgid "Charge moyenne {},{} sur 1 min"
+msgstr "Load average {}.{} over 1 min"
+
+msgctxt "ProcessorWidget"
+msgid "Courbe en cours de remplissage, {} % maintenant"
+msgstr "Curve filling, {}% now"
+
+msgctxt "ProcessorWidget"
+msgid "Utilisation sur 2 minutes, entre {} et {} %, {} % maintenant"
+msgstr "Use over 2 minutes, between {} and {}%, {}% now"
+
+msgctxt "ProcessorWidget"
+msgid "il y a 2 min"
+msgstr "2 min ago"
+
+msgctxt "ProcessorWidget"
+msgid "maintenant · la courbe se remplit"
+msgstr "now · the curve is filling"
+
+msgctxt "ProcessorWidget"
+msgid "maintenant"
+msgstr "now"

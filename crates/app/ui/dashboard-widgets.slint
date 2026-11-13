@@ -4,7 +4,7 @@ import { Theme } from "theme.slint";
 import { Card, Detail, Icon, Badge, ProgressBar, ActionButton, ButtonKind, ScrolledList } from "widgets.slint";
 import { Cleaner, CleanerStep, RightsStep, Words } from "cleaner-model.slint";
 import {
-    Dashboard, DayKind, DisksShown, MemoryShown, Moment, ReadingState, Reclaimable,
+    Dashboard, DayKind, DisksShown, MemoryShown, Moment, ProcessorShown, ReadingState, Reclaimable,
     ReclaimableState, SpaceState, SystemShown, VolumeNaming, VolumePlace, VolumeShown, WidgetKind,
     WidgetSize,
 } from "dashboard-model.slint";
@@ -113,7 +113,7 @@ export global DashboardWords {
         return volume.name;
     }
 
-    // A minute or an hour on two digits: "05".
+    // A number on two digits: "05" (minutes, hundredths).
     pure public function two-digits(number: int) -> string {
         return (number < 10 ? "0" : "") + number;
     }
@@ -462,12 +462,6 @@ export component SystemWidget inherits WidgetCard {
             value: root.uptime;
         }
     }
-}
-
-// A widget this page does not draw: it says it reads, or that no reading
-// comes.
-export component ReadingWidget inherits WidgetCard {
-    state: Dashboard.readings-lost ? ReadingState.unavailable : ReadingState.reading;
 }
 
 component Caption inherits Text {
@@ -829,3 +823,98 @@ export component MemoryWidget inherits WidgetCard {
     }
 }
 
+// The processor's use: the last reading and the load; from Wide on, the
+// curve of the last two minutes.
+export component ProcessorWidget inherits WidgetCard {
+    in property <WidgetSize> size;
+
+    property <ProcessorShown> shown: Dashboard.processor;
+    property <bool> curved: size != WidgetSize.small;
+    property <string> used: @tr("{} %", shown.percent);
+
+    kind: WidgetKind.processor;
+    state: Dashboard.readings-lost ? ReadingState.unavailable : shown.state;
+    summary: @tr("Processeur utilisé à {} %", shown.percent);
+
+    if root.state == ReadingState.read: row := HorizontalLayout {
+        spacing: Theme.spacing-xl;
+        VerticalLayout {
+            width: root.curved ? Theme.processor-summary-width : row.width;
+            alignment: start;
+            spacing: Theme.spacing-xs;
+            Text {
+                text: root.used;
+                color: Theme.text;
+                font-size: Theme.font-hero;
+                font-weight: Theme.weight-semibold;
+                accessible-role: none;
+            }
+            if root.shown.load-known: Detail {
+                text: @tr("Charge moyenne {},{} sur 1 min", root.shown.load-whole, DashboardWords.two-digits(root.shown.load-hundredths));
+            }
+            if !root.curved: ProgressBar {
+                progress: root.shown.percent / 100;
+                label: root.summary;
+            }
+        }
+        if root.curved: VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: Theme.spacing-xs;
+            Rectangle {
+                vertical-stretch: 1;
+                accessible-role: image;
+                accessible-label: root.shown.filling
+                    ? @tr("Courbe en cours de remplissage, {} % maintenant", root.shown.percent)
+                    : @tr("Utilisation sur 2 minutes, entre {} et {} %, {} % maintenant", root.shown.lowest, root.shown.highest, root.shown.percent);
+                // The scale, on the line it marks.
+                Rectangle {
+                    y: 0;
+                    height: Theme.border-width;
+                    background: Theme.border;
+                }
+                Caption {
+                    x: parent.width - self.width;
+                    y: 0;
+                    text: @tr("{} %", root.shown.scale);
+                    accessible-role: none;
+                }
+                Path {
+                    width: parent.width;
+                    height: parent.height;
+                    commands: root.shown.area;
+                    viewbox-width: Dashboard.curve-span;
+                    viewbox-height: root.shown.scale;
+                    fit: fill;
+                    fill: Theme.accent-soft;
+                }
+                Path {
+                    width: parent.width;
+                    height: parent.height;
+                    commands: root.shown.line;
+                    viewbox-width: Dashboard.curve-span;
+                    viewbox-height: root.shown.scale;
+                    fit: fill;
+                    stroke: Theme.accent;
+                    stroke-width: Theme.curve-stroke;
+                    stroke-line-join: round;
+                }
+                Rectangle {
+                    y: parent.height - self.height;
+                    height: Theme.border-width;
+                    background: Theme.border-strong;
+                }
+            }
+            HorizontalLayout {
+                Caption {
+                    horizontal-stretch: 1;
+                    text: @tr("il y a 2 min");
+                    accessible-role: none;
+                }
+                Caption {
+                    text: root.shown.filling ? @tr("maintenant · la courbe se remplit") : @tr("maintenant");
+                    accessible-role: none;
+                }
+            }
+        }
+    }
+}

@@ -454,6 +454,7 @@ mod tests {
             "DisksWidget",
             "Applications",
             "MemoryWidget",
+            "ProcessorWidget",
         ] {
             assert!(
                 texts.iter().any(|(component, _)| component == context),

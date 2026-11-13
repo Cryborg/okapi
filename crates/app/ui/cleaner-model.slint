@@ -159,6 +159,9 @@ export struct ReceiptLineShown {
 
 export global Cleaner {
     in property <CleanerStep> step;
+    // The analysis under way covers the categories checked by default: its
+    // result replaces the Home page's estimate.
+    in property <bool> replaces-estimate;
 
     in property <[CategoryChoice]> choices;
     in property <int> chosen-count;

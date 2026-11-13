@@ -25,8 +25,9 @@ mod ui {
     slint::include_modules!();
 }
 
-const WIDTH: u32 = 1280;
-const HEIGHT: u32 = 800;
+/// The sizes the mockups draw the window at.
+const LARGE: (u32, u32) = (1280, 800);
+const SMALL: (u32, u32) = (960, 640);
 
 struct Offscreen(Rc<MinimalSoftwareWindow>);
 
@@ -306,10 +307,109 @@ fn ended(window: &ui::AppWindow) {
     window.set_page(ui::Page::Cleaner);
 }
 
+/// The default dashboard placed in `columns`, as `dashboard::layout` places
+/// it: Récupérable over the row, Disques Large, Mémoire Petit, Processeur
+/// Large, Système Petit. The example cannot reach the binary's modules: the
+/// cells are copied from the test `the_default_dashboard_sits_as_in_the_mockup`.
+fn placement(columns: i32) -> ui::Placement {
+    use ui::WidgetKind::{Disks, Memory, Processor, Reclaimable, System};
+    use ui::WidgetSize::{Full, Small, Wide};
+    let cell = |kind, size, column, row, width| ui::WidgetCell {
+        kind,
+        size,
+        column,
+        row,
+        width,
+        height: 1,
+    };
+    let wide = columns.min(2);
+    let (cells, rows) = match columns {
+        1 => (
+            vec![
+                cell(Reclaimable, Full, 0, 0, 1),
+                cell(Disks, Wide, 0, 1, 1),
+                cell(Memory, Small, 0, 2, 1),
+                cell(Processor, Wide, 0, 3, 1),
+                cell(System, Small, 0, 4, 1),
+            ],
+            5,
+        ),
+        2 => (
+            vec![
+                cell(Reclaimable, Full, 0, 0, 2),
+                cell(Disks, Wide, 0, 1, 2),
+                cell(Memory, Small, 0, 2, 1),
+                cell(Processor, Wide, 0, 3, 2),
+                cell(System, Small, 0, 4, 1),
+            ],
+            5,
+        ),
+        3 => (
+            vec![
+                cell(Reclaimable, Full, 0, 0, 3),
+                cell(Disks, Wide, 0, 1, wide),
+                cell(Memory, Small, 2, 1, 1),
+                cell(Processor, Wide, 0, 2, wide),
+                cell(System, Small, 2, 2, 1),
+            ],
+            3,
+        ),
+        _ => (
+            vec![
+                cell(Reclaimable, Full, 0, 0, 4),
+                cell(Disks, Wide, 0, 1, wide),
+                cell(Memory, Small, 2, 1, 1),
+                cell(Processor, Wide, 0, 2, wide),
+                cell(System, Small, 2, 2, 1),
+            ],
+            3,
+        ),
+    };
+    ui::Placement {
+        cells: ModelRc::new(VecModel::from(cells)),
+        rows,
+    }
+}
+
+/// The Home page, an analysis of today kept and the system read.
+fn home(window: &ui::AppWindow) {
+    let dashboard = window.global::<ui::Dashboard>();
+    dashboard.set_placements(ModelRc::new(VecModel::from(
+        (1..=4).map(placement).collect::<Vec<_>>(),
+    )));
+    let today = ui::Moment {
+        day: ui::DayKind::Today,
+        day_of_month: 0,
+        month: 0,
+        hour: 9,
+        minute: 12,
+    };
+    dashboard.set_reclaimable(ui::Reclaimable {
+        state: ui::ReclaimableState::Current,
+        size: size(2, 4, ui::SizeUnit::Gigabyte),
+        entries: 18_312,
+        at: today,
+        ..ui::Reclaimable::default()
+    });
+    dashboard.set_system(ui::SystemShown {
+        state: ui::ReadingState::Read,
+        distribution: "Ubuntu 26.04 LTS".into(),
+        kernel: "7.0.0-42-generic".into(),
+        desktop: "GNOME".into(),
+        session: "Wayland".into(),
+        uptime_known: true,
+        uptime_days: 0,
+        uptime_hours: 3,
+        uptime_minutes: 12,
+    });
+    window.set_page(ui::Page::Home);
+}
+
 fn main() {
     let mut arguments = std::env::args().skip(1);
     let screen = arguments.next().unwrap_or_else(|| String::from("results"));
     let out = arguments.next().unwrap_or_else(|| format!("{screen}.png"));
+    let (width, height) = if screen == "home-small" { SMALL } else { LARGE };
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(Offscreen(window.clone()))).unwrap();
     let app = ui::AppWindow::new().unwrap();
@@ -324,18 +424,19 @@ fn main() {
         "cleaning" => cleaning(&app),
         "ended" => ended(&app),
         "about" => app.set_page(ui::Page::About),
+        "home" | "home-small" => home(&app),
         other => panic!(
-            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about"
+            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small"
         ),
     }
-    window.set_size(PhysicalSize::new(WIDTH, HEIGHT));
+    window.set_size(PhysicalSize::new(width, height));
     app.show().unwrap();
     slint::platform::update_timers_and_animations();
-    let mut pixels = vec![PremultipliedRgbaColor::default(); (WIDTH * HEIGHT) as usize];
+    let mut pixels = vec![PremultipliedRgbaColor::default(); (width * height) as usize];
     window.draw_if_needed(|renderer| {
-        renderer.render(&mut pixels, WIDTH as usize);
+        renderer.render(&mut pixels, width as usize);
     });
-    let mut encoder = png::Encoder::new(BufWriter::new(File::create(&out).unwrap()), WIDTH, HEIGHT);
+    let mut encoder = png::Encoder::new(BufWriter::new(File::create(&out).unwrap()), width, height);
     encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
     let bytes: Vec<u8> = pixels

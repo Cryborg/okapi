@@ -1,0 +1,459 @@
+// The widgets of the Home page, drawn from the mockup's
+// (docs/design/tableau-de-bord/project/Widget.dc.html).
+import { Theme } from "theme.slint";
+import { Card, Detail, Icon, Badge, ProgressBar, ActionButton, ButtonKind } from "widgets.slint";
+import { Cleaner, CleanerStep, RightsStep, Words } from "cleaner-model.slint";
+import {
+    Dashboard, DayKind, Moment, ReadingState, Reclaimable, ReclaimableState, SystemShown, WidgetKind,
+} from "dashboard-model.slint";
+
+// The words of the Home page.
+export global DashboardWords {
+    pure public function title(kind: WidgetKind) -> string {
+        if kind == WidgetKind.reclaimable {
+            return @tr("Récupérable");
+        }
+        if kind == WidgetKind.disks {
+            return @tr("Disques");
+        }
+        if kind == WidgetKind.memory {
+            return @tr("Mémoire");
+        }
+        if kind == WidgetKind.processor {
+            return @tr("Processeur");
+        }
+        return @tr("Système");
+    }
+
+    pure public function icon(kind: WidgetKind) -> image {
+        if kind == WidgetKind.reclaimable {
+            return @image-url("../assets/icons/sparkles.svg");
+        }
+        if kind == WidgetKind.disks {
+            return @image-url("../assets/icons/hard-drive.svg");
+        }
+        if kind == WidgetKind.memory {
+            return @image-url("../assets/icons/memory-stick.svg");
+        }
+        if kind == WidgetKind.processor {
+            return @image-url("../assets/icons/cpu.svg");
+        }
+        return @image-url("../assets/icons/monitor.svg");
+    }
+
+    // Why a widget shows nothing.
+    pure public function unavailable(kind: WidgetKind) -> string {
+        if kind == WidgetKind.reclaimable {
+            return @tr("Le résumé de la dernière analyse n'a pas pu être lu. Une nouvelle analyse en refera un.");
+        }
+        if kind == WidgetKind.disks {
+            return @tr("La liste des volumes montés n'a pas pu être lue.");
+        }
+        if kind == WidgetKind.memory {
+            return @tr("La mémoire n'a pas pu être lue sur ce système.");
+        }
+        if kind == WidgetKind.processor {
+            return @tr("L'utilisation du processeur n'a pas pu être lue.");
+        }
+        return @tr("Les informations du système n'ont pas pu être lues.");
+    }
+
+    pure public function month(number: int) -> string {
+        if number == 1 {
+            return @tr("janvier");
+        }
+        if number == 2 {
+            return @tr("février");
+        }
+        if number == 3 {
+            return @tr("mars");
+        }
+        if number == 4 {
+            return @tr("avril");
+        }
+        if number == 5 {
+            return @tr("mai");
+        }
+        if number == 6 {
+            return @tr("juin");
+        }
+        if number == 7 {
+            return @tr("juillet");
+        }
+        if number == 8 {
+            return @tr("août");
+        }
+        if number == 9 {
+            return @tr("septembre");
+        }
+        if number == 10 {
+            return @tr("octobre");
+        }
+        if number == 11 {
+            return @tr("novembre");
+        }
+        return @tr("décembre");
+    }
+
+    // The day of a month: "1er", "12".
+    pure public function day(number: int) -> string {
+        return number == 1 ? @tr("1er") : number;
+    }
+
+    // A minute or an hour on two digits: "05".
+    pure public function two-digits(number: int) -> string {
+        return (number < 10 ? "0" : "") + number;
+    }
+
+    // "9 h 12", "18 h", "9 h 05".
+    pure public function time(at: Moment) -> string {
+        if at.minute == 0 {
+            return @tr("{} h", at.hour);
+        }
+        return @tr("{} h {}", at.hour, two-digits(at.minute));
+    }
+
+    pure public function moment(at: Moment) -> string {
+        if at.day == DayKind.today {
+            return @tr("aujourd'hui à {}", time(at));
+        }
+        if at.day == DayKind.yesterday {
+            return @tr("hier à {}", time(at));
+        }
+        return @tr("le {} {} à {}", day(at.day-of-month), month(at.month), time(at));
+    }
+
+    // The same, opening a line: "Aujourd'hui à 9 h 12".
+    pure public function moment-first(moment: Moment) -> string {
+        if moment.day == DayKind.today {
+            return @tr("Aujourd'hui à {}", time(moment));
+        }
+        if moment.day == DayKind.yesterday {
+            return @tr("Hier à {}", time(moment));
+        }
+        return @tr("Le {} {} à {}", day(moment.day-of-month), month(moment.month), time(moment));
+    }
+
+    // "Estimation d'aujourd'hui à 9 h 12".
+    pure public function estimate(at: Moment) -> string {
+        if at.day == DayKind.today {
+            return @tr("Estimation d'aujourd'hui à {}", time(at));
+        }
+        if at.day == DayKind.yesterday {
+            return @tr("Estimation d'hier à {}", time(at));
+        }
+        return @tr("Estimation du {} {} à {}", day(at.day-of-month), month(at.month), time(at));
+    }
+
+    // "Nettoyage d'aujourd'hui à 10 h 05."
+    pure public function cleaning(moment: Moment) -> string {
+        if moment.day == DayKind.today {
+            return @tr("Nettoyage d'aujourd'hui à {}.", time(moment));
+        }
+        if moment.day == DayKind.yesterday {
+            return @tr("Nettoyage d'hier à {}.", time(moment));
+        }
+        return @tr("Nettoyage du {} {} à {}.", day(moment.day-of-month), month(moment.month), time(moment));
+    }
+}
+
+// Blocks that pulse where a reading will show.
+component Skeleton inherits Rectangle {
+    border-radius: Theme.radius-small;
+    background: Theme.track;
+    // A cosine brought between 0 and 1: full, dim, full again.
+    property <float> dimmed: (1 - cos(360deg * animation-tick() / Theme.skeleton-pulse)) / 2;
+    opacity: 1 - (1 - Theme.skeleton-dim) * dimmed;
+    accessible-role: none;
+}
+
+// A widget's frame: its header (icon, title, a note on the right) and its
+// body, or the reading under way, or why it shows nothing.
+export component WidgetCard inherits Card {
+    in property <WidgetKind> kind;
+    in property <ReadingState> state: ReadingState.read;
+    in property <string> note;
+    // The essentials of what it shows, read with its title.
+    in property <string> summary;
+
+    accessible-role: groupbox;
+    accessible-label: DashboardWords.title(kind);
+    accessible-description: state == ReadingState.reading ? @tr("Lecture en cours")
+        : state == ReadingState.unavailable ? @tr("Indisponible") : summary;
+    clip: true;
+
+    VerticalLayout {
+        padding-left: Theme.widget-padding;
+        padding-right: Theme.widget-padding;
+        padding-top: Theme.widget-padding-top;
+        padding-bottom: Theme.widget-padding-top;
+        spacing: Theme.widget-body-top;
+
+        HorizontalLayout {
+            height: Theme.widget-header;
+            spacing: Theme.spacing-s;
+            Icon {
+                source: DashboardWords.icon(root.kind);
+                colorize: Theme.text-2;
+                width: Theme.icon-small;
+                height: Theme.icon-small;
+                y: (parent.height - self.height) / 2;
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: DashboardWords.title(root.kind);
+                color: Theme.text;
+                font-size: Theme.font-label;
+                font-weight: Theme.weight-semibold;
+                vertical-alignment: center;
+                overflow: elide;
+                accessible-role: none;
+            }
+            Text {
+                text: root.note;
+                color: Theme.text-3;
+                font-size: Theme.font-caption;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+        }
+
+        if root.state == ReadingState.reading: VerticalLayout {
+            spacing: Theme.spacing-m;
+            alignment: start;
+            vertical-stretch: 1;
+            HorizontalLayout {
+                alignment: start;
+                Skeleton {
+                    width: parent.width * Theme.skeleton-figure-part;
+                    height: Theme.skeleton-figure;
+                }
+            }
+            Skeleton {
+                height: Theme.bar-height-large;
+            }
+            HorizontalLayout {
+                alignment: start;
+                Skeleton {
+                    width: parent.width * Theme.skeleton-line-part;
+                    height: Theme.font-label;
+                }
+            }
+            Rectangle {
+                vertical-stretch: 1;
+            }
+            Text {
+                text: @tr("Lecture en cours");
+                color: Theme.text-3;
+                font-size: Theme.font-caption;
+                accessible-role: none;
+            }
+        }
+
+        if root.state == ReadingState.unavailable: HorizontalLayout {
+            spacing: Theme.spacing-m;
+            Icon {
+                source: @image-url("../assets/icons/ban.svg");
+                colorize: Theme.text-3;
+                width: Theme.icon;
+                height: Theme.icon;
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Theme.spacing-xxs;
+                Text {
+                    text: @tr("Indisponible");
+                    color: Theme.text;
+                    font-size: Theme.font-label;
+                    font-weight: Theme.weight-medium;
+                }
+                Detail {
+                    text: DashboardWords.unavailable(root.kind);
+                }
+            }
+        }
+
+        // What the widget shows; under "Indisponible", what it still offers.
+        VerticalLayout {
+            vertical-stretch: root.state == ReadingState.reading ? 0 : 1;
+            @children
+        }
+    }
+}
+
+// The button that starts an analysis of the categories checked by default,
+// on the cleaner's page.
+component AnalyzeButton inherits ActionButton {
+    // Only when the cleaner could start one: not while it works, asks for
+    // the rights, or waits for an answer.
+    enabled: (Cleaner.step == CleanerStep.idle || Cleaner.step == CleanerStep.outcome
+        || Cleaner.step == CleanerStep.results || Cleaner.step == CleanerStep.receipt)
+        && Cleaner.rights-step == RightsStep.idle && !Cleaner.confirming && !Cleaner.browser-asking;
+    text: @tr("Analyser");
+    icon: @image-url("../assets/icons/search.svg");
+    kind: ButtonKind.primary;
+    clicked => {
+        Dashboard.analyze();
+    }
+}
+
+component Hero inherits Text {
+    color: Theme.text;
+    font-size: Theme.font-hero;
+    font-weight: Theme.weight-semibold;
+}
+
+component Heading inherits Text {
+    color: Theme.text;
+    font-size: Theme.font-title;
+    font-weight: Theme.weight-semibold;
+    wrap: word-wrap;
+}
+
+// What an analysis of the categories checked by default would free: the
+// last summary kept, or the analysis under way.
+export component ReclaimableWidget inherits WidgetCard {
+    // Over every column: more words, a larger button, the last results.
+    in property <bool> full;
+    callback see-results();
+
+    property <Reclaimable> shown: Dashboard.reclaimable;
+    property <bool> scanning: Cleaner.step == CleanerStep.planning || Cleaner.step == CleanerStep.scanning
+        || Cleaner.step == CleanerStep.cancelling;
+    property <bool> has-size: shown.state == ReclaimableState.current || shown.state == ReclaimableState.estimate;
+    property <string> heading: scanning ? @tr("Analyse en cours")
+        : shown.state == ReclaimableState.none ? @tr("Aucune analyse")
+        : shown.state != ReclaimableState.cleaned ? Words.size(shown.size)
+        : shown.freed-known ? @tr("{} libérés", Words.size(shown.freed)) : @tr("Estimation à refaire");
+    property <string> detail: scanning ? (has-size && Cleaner.replaces-estimate ? @tr("Le résultat remplacera l'estimation précédente ({}).", Words.size(shown.size)) : "")
+        : shown.state == ReclaimableState.none ? @tr("Lancez une analyse pour savoir combien d'espace vous pouvez récupérer. Rien n'est supprimé sans votre accord.")
+        : shown.state == ReclaimableState.estimate ? @tr("{}. Éléments trouvés : {}.", DashboardWords.estimate(shown.at), shown.entries)
+        : shown.state == ReclaimableState.current && full ? @tr("{}. Éléments trouvés : {}. Rien n'a encore été supprimé.", DashboardWords.estimate(shown.at), shown.entries)
+        : shown.state == ReclaimableState.current ? @tr("Éléments trouvés : {}. Rien n'a encore été supprimé.", shown.entries)
+        : shown.cleaned-at-known ? @tr("{} Analysez à nouveau pour une estimation à jour.", DashboardWords.cleaning(shown.cleaned-at))
+        : @tr("L'estimation date d'avant un nettoyage. Analysez à nouveau pour une estimation à jour.");
+
+    kind: WidgetKind.reclaimable;
+    state: shown.state == ReclaimableState.unavailable && !scanning ? ReadingState.unavailable : ReadingState.read;
+    note: !full && !scanning && shown.state == ReclaimableState.current ? DashboardWords.moment-first(shown.at) : "";
+    summary: heading;
+
+    if root.state == ReadingState.unavailable: HorizontalLayout {
+        alignment: start;
+        AnalyzeButton { }
+    }
+
+    if root.state == ReadingState.read: HorizontalLayout {
+        spacing: Theme.spacing-xl;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: Theme.spacing-xs;
+            if root.has-size && !root.scanning: HorizontalLayout {
+                alignment: start;
+                spacing: Theme.spacing-m;
+                Hero {
+                    text: root.heading;
+                }
+                if root.shown.state == ReclaimableState.estimate: Badge {
+                    y: (parent.height - self.height) / 2;
+                    text: @tr("Estimation");
+                    icon: @image-url("../assets/icons/clock.svg");
+                    tone: Theme.text-2;
+                    tone-soft: Theme.surface-2;
+                }
+            }
+            if !root.has-size || root.scanning: Heading {
+                text: root.heading;
+            }
+            if root.scanning: ProgressBar {
+                indeterminate: true;
+                label: @tr("Analyse en cours");
+            }
+            if root.detail != "": Detail {
+                text: root.detail;
+            }
+        }
+        VerticalLayout {
+            width: root.full ? Theme.reclaim-actions-full : Theme.reclaim-actions;
+            alignment: center;
+            spacing: Theme.spacing-s;
+            AnalyzeButton {
+                large: root.full;
+            }
+            if root.full && Cleaner.step == CleanerStep.results: ActionButton {
+                text: @tr("Voir les derniers résultats");
+                kind: ButtonKind.ghost;
+                clicked => {
+                    root.see-results();
+                }
+            }
+        }
+    }
+}
+
+component KeyValue inherits HorizontalLayout {
+    in property <string> key;
+    in property <string> value;
+    spacing: Theme.spacing-m;
+    accessible-role: text;
+    accessible-label: @tr("{} : {}", key, value);
+    Text {
+        width: Theme.key-width;
+        text: root.key;
+        color: Theme.text-2;
+        font-size: Theme.font-small;
+        accessible-role: none;
+    }
+    Text {
+        horizontal-stretch: 1;
+        text: root.value;
+        color: Theme.text;
+        font-size: Theme.font-small;
+        font-weight: Theme.weight-medium;
+        overflow: elide;
+        accessible-role: none;
+    }
+}
+
+// What the system says of itself.
+export component SystemWidget inherits WidgetCard {
+    property <SystemShown> shown: Dashboard.system;
+    // How long the system has run: "3 h 12", "2 j 5 h".
+    property <string> uptime: shown.uptime-days > 0
+        ? @tr("{} j {} h", shown.uptime-days, shown.uptime-hours)
+        : @tr("{} h {}", shown.uptime-hours, DashboardWords.two-digits(shown.uptime-minutes));
+    property <string> desktop: shown.desktop != "" && shown.session != "" ? @tr("{} sous {}", shown.desktop, shown.session)
+        : shown.desktop != "" ? shown.desktop : shown.session;
+
+    kind: WidgetKind.system;
+    state: Dashboard.readings-lost ? ReadingState.unavailable : shown.state;
+    summary: shown.distribution;
+
+    if root.state == ReadingState.read: VerticalLayout {
+        alignment: start;
+        spacing: Theme.spacing-xs;
+        if root.shown.distribution != "": KeyValue {
+            key: @tr("Distribution");
+            value: root.shown.distribution;
+        }
+        if root.shown.kernel != "": KeyValue {
+            key: @tr("Noyau");
+            value: root.shown.kernel;
+        }
+        if root.desktop != "": KeyValue {
+            key: @tr("Bureau");
+            value: root.desktop;
+        }
+        if root.shown.uptime-known: KeyValue {
+            key: @tr("Allumé depuis");
+            value: root.uptime;
+        }
+    }
+}
+
+// A widget this page does not draw: it says it reads, or that no reading
+// comes.
+export component ReadingWidget inherits WidgetCard {
+    state: Dashboard.readings-lost ? ReadingState.unavailable : ReadingState.reading;
+}

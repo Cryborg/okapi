@@ -543,7 +543,6 @@ msgctxt "CleaningPage"
 msgid "Saisissez le mot de passe dans la fenêtre du système. Annuler n'agit qu'une fois cette fenêtre fermée."
 msgstr "Enter the password in the system's window. Cancel only acts once that window is closed."
 
-
 msgctxt "ReceiptPage"
 msgid "La partie administrateur ne s'est pas terminée. {}"
 msgstr "The administrator's part did not finish. {}"
@@ -791,3 +790,271 @@ msgstr "Close {} and continue"
 msgctxt "BrowserQuestion"
 msgid "Le système a refusé de demander à {} de se fermer : fermez-le, puis relancez le nettoyage."
 msgstr "The system refused to ask {} to close: close it, then start the cleaning again."
+
+msgctxt "DashboardWords"
+msgid "Récupérable"
+msgstr "Reclaimable"
+
+msgctxt "DashboardWords"
+msgid "Disques"
+msgstr "Disks"
+
+msgctxt "DashboardWords"
+msgid "Mémoire"
+msgstr "Memory"
+
+msgctxt "DashboardWords"
+msgid "Processeur"
+msgstr "Processor"
+
+msgctxt "DashboardWords"
+msgid "Système"
+msgstr "System"
+
+msgctxt "DashboardWords"
+msgid "Le résumé de la dernière analyse n'a pas pu être lu. Une nouvelle analyse en refera un."
+msgstr "The summary of the last analysis could not be read. A new analysis will make another one."
+
+msgctxt "DashboardWords"
+msgid "La liste des volumes montés n'a pas pu être lue."
+msgstr "The list of mounted volumes could not be read."
+
+msgctxt "DashboardWords"
+msgid "La mémoire n'a pas pu être lue sur ce système."
+msgstr "The memory could not be read on this system."
+
+msgctxt "DashboardWords"
+msgid "L'utilisation du processeur n'a pas pu être lue."
+msgstr "The processor's use could not be read."
+
+msgctxt "DashboardWords"
+msgid "Les informations du système n'ont pas pu être lues."
+msgstr "The system's information could not be read."
+
+msgctxt "DashboardWords"
+msgid "janvier"
+msgstr "January"
+
+msgctxt "DashboardWords"
+msgid "février"
+msgstr "February"
+
+msgctxt "DashboardWords"
+msgid "mars"
+msgstr "March"
+
+msgctxt "DashboardWords"
+msgid "avril"
+msgstr "April"
+
+msgctxt "DashboardWords"
+msgid "mai"
+msgstr "May"
+
+msgctxt "DashboardWords"
+msgid "juin"
+msgstr "June"
+
+msgctxt "DashboardWords"
+msgid "juillet"
+msgstr "July"
+
+msgctxt "DashboardWords"
+msgid "août"
+msgstr "August"
+
+msgctxt "DashboardWords"
+msgid "septembre"
+msgstr "September"
+
+msgctxt "DashboardWords"
+msgid "octobre"
+msgstr "October"
+
+msgctxt "DashboardWords"
+msgid "novembre"
+msgstr "November"
+
+msgctxt "DashboardWords"
+msgid "décembre"
+msgstr "December"
+
+msgctxt "DashboardWords"
+msgid "{} h"
+msgstr "{}:00"
+
+msgctxt "DashboardWords"
+msgid "{} h {}"
+msgstr "{}:{}"
+
+msgctxt "DashboardWords"
+msgid "aujourd'hui à {}"
+msgstr "today at {}"
+
+msgctxt "DashboardWords"
+msgid "hier à {}"
+msgstr "yesterday at {}"
+
+msgctxt "DashboardWords"
+msgid "le {} {} à {}"
+msgstr "on {} {} at {}"
+
+msgctxt "DashboardWords"
+msgid "Aujourd'hui à {}"
+msgstr "Today at {}"
+
+msgctxt "DashboardWords"
+msgid "Hier à {}"
+msgstr "Yesterday at {}"
+
+msgctxt "DashboardWords"
+msgid "Le {} {} à {}"
+msgstr "On {} {} at {}"
+
+msgctxt "DashboardWords"
+msgid "Nettoyage d'aujourd'hui à {}."
+msgstr "Cleaning from today at {}."
+
+msgctxt "DashboardWords"
+msgid "Nettoyage d'hier à {}."
+msgstr "Cleaning from yesterday at {}."
+
+msgctxt "DashboardWords"
+msgid "Nettoyage du {} {} à {}."
+msgstr "Cleaning from {} {} at {}."
+
+msgctxt "WidgetCard"
+msgid "Lecture en cours"
+msgstr "Reading"
+
+msgctxt "WidgetCard"
+msgid "Indisponible"
+msgstr "Unavailable"
+
+msgctxt "AnalyzeButton"
+msgid "Analyser"
+msgstr "Analyze"
+
+msgctxt "ReclaimableWidget"
+msgid "Analyse en cours"
+msgstr "Analysis under way"
+
+msgctxt "ReclaimableWidget"
+msgid "Aucune analyse"
+msgstr "No analysis"
+
+msgctxt "ReclaimableWidget"
+msgid "{} libérés"
+msgstr "{} freed"
+
+msgctxt "ReclaimableWidget"
+msgid "Estimation à refaire"
+msgstr "Estimate to redo"
+
+msgctxt "ReclaimableWidget"
+msgid "Le résultat remplacera l'estimation précédente ({})."
+msgstr "The result will replace the previous estimate ({})."
+
+msgctxt "ReclaimableWidget"
+msgid "Lancez une analyse pour savoir combien d'espace vous pouvez récupérer. Rien n'est supprimé sans votre accord."
+msgstr "Start an analysis to know how much space you can reclaim. Nothing is deleted without your consent."
+
+msgctxt "ReclaimableWidget"
+msgid "{} Analysez à nouveau pour une estimation à jour."
+msgstr "{} Analyze again for an up-to-date estimate."
+
+msgctxt "ReclaimableWidget"
+msgid "L'estimation date d'avant un nettoyage. Analysez à nouveau pour une estimation à jour."
+msgstr "The estimate predates a cleaning. Analyze again for an up-to-date estimate."
+
+msgctxt "ReclaimableWidget"
+msgid "Estimation"
+msgstr "Estimate"
+
+msgctxt "ReclaimableWidget"
+msgid "Voir les derniers résultats"
+msgstr "See the last results"
+
+msgctxt "SystemWidget"
+msgid "{} sous {}"
+msgstr "{} on {}"
+
+msgctxt "SystemWidget"
+msgid "Distribution"
+msgstr "Distribution"
+
+msgctxt "SystemWidget"
+msgid "Noyau"
+msgstr "Kernel"
+
+msgctxt "SystemWidget"
+msgid "Bureau"
+msgstr "Desktop"
+
+msgctxt "SystemWidget"
+msgid "Allumé depuis"
+msgstr "Up for"
+
+msgctxt "DashboardPage"
+msgid "{} · dernière analyse {}"
+msgstr "{} · last analysis {}"
+
+msgctxt "DashboardPage"
+msgid "Dernière analyse {}"
+msgstr "Last analysis {}"
+
+msgctxt "DashboardPage"
+msgid "Accueil"
+msgstr "Home"
+
+msgctxt "DashboardPage"
+msgid "Votre disposition n'a pas pu être lue, la disposition par défaut est affichée."
+msgstr "Your layout could not be read: the default one is shown."
+
+msgctxt "DashboardPage"
+msgid "Votre tableau de bord est vide"
+msgstr "Your dashboard is empty"
+
+msgctxt "DashboardPage"
+msgid "Ajoutez les widgets que vous voulez suivre : espace récupérable, disques, mémoire, processeur ou système."
+msgstr "Add the widgets you want to follow: reclaimable space, disks, memory, processor or system."
+
+msgctxt "DashboardWords"
+msgid "Estimation d'aujourd'hui à {}"
+msgstr "Estimate from today at {}"
+
+msgctxt "DashboardWords"
+msgid "Estimation d'hier à {}"
+msgstr "Estimate from yesterday at {}"
+
+msgctxt "DashboardWords"
+msgid "Estimation du {} {} à {}"
+msgstr "Estimate from {} {} at {}"
+
+msgctxt "ReclaimableWidget"
+msgid "{}. Éléments trouvés : {}."
+msgstr "{}. Items found: {}."
+
+msgctxt "ReclaimableWidget"
+msgid "{}. Éléments trouvés : {}. Rien n'a encore été supprimé."
+msgstr "{}. Items found: {}. Nothing has been deleted yet."
+
+msgctxt "ReclaimableWidget"
+msgid "Éléments trouvés : {}. Rien n'a encore été supprimé."
+msgstr "Items found: {}. Nothing deleted yet."
+
+msgctxt "KeyValue"
+msgid "{} : {}"
+msgstr "{}: {}"
+
+msgctxt "SystemWidget"
+msgid "{} j {} h"
+msgstr "{} d {} h"
+
+msgctxt "SystemWidget"
+msgid "{} h {}"
+msgstr "{} h {} min"
+
+msgctxt "DashboardWords"
+msgid "1er"
+msgstr "1"

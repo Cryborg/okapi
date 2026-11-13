@@ -13,10 +13,12 @@ use okapi_engine::{
 };
 use okapi_helper::{Operation, OutcomeAnswer, Reply, ReplyError};
 use okapi_rules::{RuleSet, TemplateVariables};
-use okapi_store::{AdminRecord, History, HistoryEntry, HistoryOutcome, Opened};
+use okapi_store::{AdminRecord, History, HistoryEntry, HistoryOutcome, Opened, seconds};
 use slint::ComponentHandle as _;
 
-use super::{CleanerScreen, Problem, Running, Task, options, problem, rights, stop_shown};
+use super::{
+    CleanerEvent, CleanerScreen, Problem, Running, Task, options, problem, rights, stop_shown,
+};
 use crate::elevation::{ElevationFailure, ElevationStep};
 use crate::receipt::{Ending, Kept, LineKind, OutcomeFacts, Receipt};
 use crate::shown::{show, shown, size};
@@ -886,6 +888,12 @@ impl CleanerScreen {
                     tracing::error!(%error, "window not hidden");
                 }
             }
+        });
+        // Even when it freed nothing it knows of: root's part, or a thread
+        // that died, may have removed entries.
+        self.emit(CleanerEvent::CleaningDone {
+            freed: receipt.as_ref().map(|(_, receipt)| receipt.freed),
+            at: seconds(SystemTime::now()),
         });
     }
 

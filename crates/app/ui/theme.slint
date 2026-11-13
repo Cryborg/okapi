@@ -108,6 +108,33 @@ export global Theme {
     out property <float> indeterminate-part: 0.3;
     out property <length> mark-small: 32px;
     out property <length> mark-large: 96px;
+
+    // The dashboard's grid: the narrowest column, a row, the space between
+    // them, and the width below which the page's margin narrows. How many
+    // columns it may have is Rust's (`dashboard::layout::MAX_COLUMNS`).
+    out property <length> dash-column-min: 300px;
+    out property <length> dash-row: 176px;
+    out property <length> dash-gap: 16px;
+    out property <length> dash-narrow-below: 1100px;
+    // A widget: its header, and its body's margins.
+    out property <length> widget-header: 24px;
+    out property <length> widget-padding: 20px;
+    out property <length> widget-padding-top: 16px;
+    out property <length> widget-body-top: 12px;
+    // The width of the column of the Analyser button, full width and not.
+    out property <length> reclaim-actions-full: 240px;
+    out property <length> reclaim-actions: 132px;
+    // The names' column of a key-value list.
+    out property <length> key-width: 112px;
+    out property <length> font-hero: 40px;
+    // The loading blocks pulse between full and this opacity; the first
+    // stands for a figure, the last for a line, by the part of the width
+    // they take.
+    out property <float> skeleton-dim: 0.5;
+    out property <duration> skeleton-pulse: 1400ms;
+    out property <length> skeleton-figure: 28px;
+    out property <percent> skeleton-figure-part: 46%;
+    out property <percent> skeleton-line-part: 68%;
 }
 
 // What the product is called: a name, never translated.

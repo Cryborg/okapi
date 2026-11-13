@@ -2,18 +2,25 @@
 
 use std::io::{self, Write as _};
 use std::process::ExitCode;
+use std::rc::Rc;
+use std::sync::mpsc;
+use std::time::Duration;
 
 use okapi_rules::{Language, SESSION_VARIABLES};
 use okapi_store::journal;
+use okapi_tools::monitor::{Command, Sampler};
 use slint::ComponentHandle as _;
 
 mod cleaner;
+mod dashboard;
+mod dates;
 mod elevation;
 mod receipt;
 mod results;
 mod shown;
 
-use cleaner::{CleanerScreen, Seams};
+use cleaner::{CleanerEvent, CleanerScreen, Seams};
+use dashboard::{DashboardScreen, DashboardSeams};
 
 /// The interface, as Slint generates it from `ui/`.
 mod ui {
@@ -33,13 +40,18 @@ const LICENSE: &str = include_str!("../../../LICENSE");
 /// What the interface itself embeds (Slint, Lucide), beyond what the rules
 /// do (`okapi_rules::THIRD_PARTY_NOTICES`).
 const INTERFACE_NOTICES: &str = include_str!("../THIRD_PARTY_NOTICES");
+/// How long the dashboard waits for a filesystem to tell its space: a share
+/// that does not answer within it is said to.
+const SPACE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The window in `language`, filled with what it shows of Okapi itself, its
-/// cleaner reading, scanning and cleaning through `seams`.
+/// cleaner reading, scanning and cleaning through `seams`, its Home page
+/// reading through `home`.
 fn window(
     seams: Seams,
+    home: DashboardSeams,
     language: Language,
-) -> Result<(AppWindow, CleanerScreen), slint::PlatformError> {
+) -> Result<(AppWindow, CleanerScreen, DashboardScreen), slint::PlatformError> {
     let window = AppWindow::new()?;
     // Slint's own texts in the language of the rules' labels: the French
     // source is the bundle's empty language. Known once a component exists.
@@ -64,15 +76,61 @@ fn window(
         .window()
         .on_close_requested(move || closing.close_requested());
     tracing::debug!(page = ?window.get_page(), "page shown");
+    let dashboard = attach_home(&window, &screen, home);
+    Ok((window, screen, dashboard))
+}
+
+/// Binds the Home page to `window`: it follows the page shown, its
+/// "Analyser" asks `cleaner`, and it hears what `cleaner` does.
+fn attach_home(
+    window: &AppWindow,
+    screen: &CleanerScreen,
+    home: DashboardSeams,
+) -> DashboardScreen {
+    let dashboard = DashboardScreen::attach(window, home);
+    let heard = dashboard.clone();
     let cleaner = screen.clone();
+    let shown_home = dashboard.clone();
     window.on_page_shown(move |page| {
         tracing::debug!(?page, "page shown");
         // The settings may have changed since the screen was last shown.
         if page == Page::Cleaner {
             cleaner.refresh();
         }
+        shown_home.page_shown(page);
     });
-    Ok((window, screen))
+    let analyzing = screen.clone();
+    window
+        .global::<ui::Dashboard>()
+        .on_analyze(move || analyzing.analyze_default());
+    screen.listen(Rc::new(move |event| match event {
+        CleanerEvent::AnalysisDone(summary) => heard.analysis_done(summary),
+        CleanerEvent::CleaningDone { freed, at } => heard.cleaning_done(freed, at),
+    }));
+    dashboard
+}
+
+/// What the Home page reads on this machine: its directories, its time
+/// zone, and the readings of a sampler kept as long as the page is.
+fn home_seams(language: Language) -> DashboardSeams {
+    let (sink, readings) = mpsc::channel();
+    let commands: Box<dyn Fn(Command)> = match Sampler::start(sink, language, SPACE_TIMEOUT) {
+        Ok(sampler) => Box::new(move |command| sampler.send(command)),
+        Err(error) => {
+            // Its sink is gone with it: the page says every reading is
+            // unavailable.
+            tracing::error!(%error, "dashboard sampler not started");
+            Box::new(|_| {})
+        }
+    };
+    DashboardSeams {
+        config_directory: okapi_platform::config_directory(),
+        state_directory: okapi_platform::state_directory(),
+        zone: dashboard::system_zone(),
+        now: jiff::Timestamp::now,
+        commands,
+        samples: readings,
+    }
 }
 
 /// A diagnostic for whoever launched the app from a terminal, in English: no
@@ -112,7 +170,7 @@ fn main() -> ExitCode {
         session = ?SESSION_VARIABLES.map(|name| (name, std::env::var_os(name))),
         "app started"
     );
-    let (window, screen) = match window(Seams::system(), language) {
+    let (window, screen, _home) = match window(Seams::system(), home_seams(language), language) {
         Ok(window) => window,
         Err(error) => {
             tracing::error!(error = %error, detail = ?error, "window not created");
@@ -148,9 +206,13 @@ mod tests {
 
     /// The window, its cleaner reading defaults and never scanning.
     fn test_window() -> AppWindow {
-        window(cleaner::tests::seams_never_scanning(), Language::French)
-            .unwrap()
-            .0
+        window(
+            cleaner::tests::seams_never_scanning(),
+            dashboard::tests::inert(),
+            Language::French,
+        )
+        .unwrap()
+        .0
     }
 
     #[test]
@@ -167,7 +229,9 @@ mod tests {
         // Each entry read once, as a button, the current one selected.
         for label in ["Accueil", "Nettoyeur", "À propos"] {
             assert_eq!(
-                ElementHandle::find_by_accessible_label(&window, label).count(),
+                ElementHandle::find_by_accessible_label(&window, label)
+                    .filter(|element| element.accessible_role() == Some(AccessibleRole::Button))
+                    .count(),
                 1,
                 "{label}"
             );
@@ -338,7 +402,22 @@ mod tests {
     }
 
     /// Texts the same in both languages.
-    const SAME_IN_ENGLISH: [&str; 3] = ["Version {}", "{} {}", "Applications"];
+    const SAME_IN_ENGLISH: [&str; 4] = ["Version {}", "{} {}", "Applications", "Distribution"];
+
+    #[test]
+    fn no_text_shown_has_an_em_dash() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = vec![manifest.join("lang/en/LC_MESSAGES/okapi-app.po")];
+        files.extend(
+            fs::read_dir(manifest.join("ui"))
+                .unwrap()
+                .map(|file| file.unwrap().path()),
+        );
+        for file in files {
+            let text = fs::read_to_string(&file).unwrap();
+            assert!(!text.contains('\u{2014}'), "{}", file.display());
+        }
+    }
 
     #[test]
     fn every_text_is_translated_into_english() {
@@ -357,6 +436,13 @@ mod tests {
             "Confirmation",
             "CleaningPage",
             "ReceiptPage",
+            "DashboardPage",
+            "DashboardWords",
+            "WidgetCard",
+            "AnalyzeButton",
+            "ReclaimableWidget",
+            "SystemWidget",
+            "KeyValue",
         ] {
             assert!(
                 texts.iter().any(|(component, _)| component == context),
@@ -371,6 +457,7 @@ mod tests {
                 .and_then(|rest| rest.split('"').next())
                 .unwrap_or_default();
             assert!(!translation.is_empty(), "{component}: {text}");
+
             assert!(
                 translation != text || SAME_IN_ENGLISH.contains(&text.as_str()),
                 "{component}: {text}: left in French"

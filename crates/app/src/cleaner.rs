@@ -6,7 +6,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -441,25 +441,61 @@ fn ending_of(report: &ScanReport) -> Option<Outcome> {
     ending(report.issues(), report.groups().len(), report.total_size())
 }
 
-/// Keeps the summary of `report`, scanned with `options`, in `directory`
-/// for the Home page when the analysis came to an end the window shows:
-/// something found, or nothing to clean (at 0 bytes). Cancelled or stopped
-/// before reading, it replaces nothing.
-fn keep_summary(report: &ScanReport, options: &ScanOptions, directory: &Path) {
+/// What the analysis thread hands back.
+struct Analyzed {
+    report: ScanReport,
+    /// The summary made for the Home page (kept when it could be), when
+    /// the analysis is one to sum up.
+    summary: Option<LastAnalysis>,
+}
+
+/// Where an analysis of at least the categories checked by default keeps
+/// its summary: nowhere when no state directory is known (the Home page is
+/// told it all the same).
+#[derive(Debug)]
+struct SummaryTarget {
+    directory: Option<PathBuf>,
+}
+
+/// The summary of `report`, scanned with `options`, when the analysis came
+/// to an end the window shows: something found, or nothing to clean (at 0
+/// bytes); kept in `target`'s directory, its writing traced by the store.
+/// Cancelled or stopped before reading, none: it replaces nothing.
+fn keep_summary(
+    report: &ScanReport,
+    options: &ScanOptions,
+    target: &SummaryTarget,
+) -> Option<LastAnalysis> {
     let ending = ending_of(report);
     if !matches!(
         ending,
         Some(Outcome::Found { .. } | Outcome::NothingToClean { .. })
     ) {
         tracing::debug!(?ending, "analysis summary not kept: no ending to keep");
-        return;
+        return None;
     }
-    // The store traces the writing, done or not, in this analysis's span.
     let summary = LastAnalysis::of(report, options);
-    if summary.save(directory).is_ok() {
+    if let Some(directory) = &target.directory
+        && summary.save(directory).is_ok()
+    {
         tracing::info!(?summary, "analysis summary kept");
     }
+    Some(summary)
 }
+
+/// What the cleaner tells the rest of the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CleanerEvent {
+    /// An analysis of at least the categories checked by default came to
+    /// an end the window shows: its summary (kept when it could be).
+    AnalysisDone(LastAnalysis),
+    /// A cleaning ended, `freed` bytes when its receipt says so (none when
+    /// its thread died), at `at` seconds since the clock's origin.
+    CleaningDone { freed: Option<u64>, at: i64 },
+}
+
+/// Who hears the cleaner's events.
+pub type Listener = Rc<dyn Fn(CleanerEvent)>;
 
 const fn kind(category: Category) -> ui::CategoryKind {
     match category {
@@ -683,7 +719,7 @@ impl<T: Send + 'static> Running<T> {
 
 /// An analysis under way.
 struct Analysis {
-    running: Running<ScanReport>,
+    running: Running<Analyzed>,
     view: ScanView,
     /// How long it has been waited for since it was cancelled, counted in
     /// looks at it.
@@ -759,6 +795,7 @@ struct State {
     timer: Rc<slint::Timer>,
     /// Runs for [`SECOND_CLICK`] after the screen changes.
     settling: slint::Timer,
+    listener: Option<Listener>,
 }
 
 /// The cleaner screen bound to its window.
@@ -807,6 +844,7 @@ impl CleanerScreen {
             note_model: Rc::new(VecModel::default()),
             timer: Rc::new(slint::Timer::default()),
             settling: slint::Timer::default(),
+            listener: None,
         };
         let cleaner = window.global::<ui::Cleaner>();
         cleaner.set_choices(ModelRc::from(Rc::clone(&state.choice_model)));
@@ -862,6 +900,41 @@ impl CleanerScreen {
         cleaner.on_obtain_rights(on(Self::obtain_rights));
         cleaner.on_cancel_rights(on(Self::cancel_rights));
         screen
+    }
+
+    /// Tells `listener` the events from now on.
+    pub fn listen(&self, listener: Listener) {
+        self.0.borrow_mut().listener = Some(listener);
+    }
+
+    /// Tells the listener `event`, out of any borrow: it may look at the
+    /// screen.
+    fn emit(&self, event: CleanerEvent) {
+        tracing::debug!(?event, "cleaner event");
+        let listener = self.0.borrow().listener.clone();
+        if let Some(listener) = listener {
+            listener(event);
+        }
+    }
+
+    /// The analysis the Home page asks for: the categories checked by
+    /// default, on the cleaner's page, refused as the cleaner's own button
+    /// would be.
+    pub fn analyze_default(&self) {
+        if self.is_settling("analysis from home") || self.results_frozen("analysis from home") {
+            return;
+        }
+        if self.0.borrow().task.is_some() {
+            tracing::warn!("analysis from home asked for while a task runs");
+            return;
+        }
+        {
+            let mut state = self.0.borrow_mut();
+            state.choices = Choices::of(state.rules.as_deref());
+        }
+        self.show_choices();
+        self.with_window(|window, _| window.set_page(ui::Page::Cleaner));
+        self.analyze();
     }
 
     fn with_window(&self, show: impl FnOnce(&ui::AppWindow, &State)) {
@@ -940,8 +1013,11 @@ impl CleanerScreen {
     /// read now (they may have changed since the screen was shown), and
     /// where its summary is kept: none when it covers less than the
     /// categories checked by default, whose estimate a partial analysis
-    /// never replaces, or when no state directory is known.
-    fn prepare(&self, chosen: &BTreeSet<Category>) -> Result<(Job, Option<PathBuf>), Problem> {
+    /// never replaces.
+    fn prepare(
+        &self,
+        chosen: &BTreeSet<Category>,
+    ) -> Result<(Job, Option<SummaryTarget>), Problem> {
         let state = self.0.borrow();
         let rules = state.rules.as_ref().ok_or(Problem::Rules)?;
         let inputs = (state.seams.read)()?;
@@ -951,17 +1027,18 @@ impl CleanerScreen {
             variables: inputs.variables,
         };
         let by_default = Choices::of(Some(rules)).chosen();
-        let summary_directory = if !by_default.is_subset(chosen) {
+        if !by_default.is_subset(chosen) {
             let missing: Vec<_> = by_default.difference(chosen).collect();
             tracing::info!(?missing, "partial analysis: its summary is not kept");
-            None
-        } else if inputs.state_directory.is_none() {
-            tracing::warn!("no state directory: the summary of the analysis is not kept");
-            None
-        } else {
-            inputs.state_directory
+            return Ok((job, None));
+        }
+        if inputs.state_directory.is_none() {
+            tracing::warn!("no state directory: the summary of the analysis is not written");
+        }
+        let target = SummaryTarget {
+            directory: inputs.state_directory,
         };
-        Ok((job, summary_directory))
+        Ok((job, Some(target)))
     }
 
     /// Starts an analysis of the categories checked.
@@ -978,7 +1055,7 @@ impl CleanerScreen {
             tracing::warn!("analysis asked for without a category");
             return;
         }
-        let (job, summary_directory) = match self.prepare(&chosen) {
+        let (job, target) = match self.prepare(&chosen) {
             Ok(prepared) => prepared,
             Err(found) => {
                 tracing::warn!(problem = ?found, "analysis cannot start");
@@ -993,6 +1070,12 @@ impl CleanerScreen {
         // It starts: a refusal said before is over.
         self.with_window(|window, _| window.global::<ui::Cleaner>().set_problem(problem(None)));
         tracing::info!(options = ?job.options, categories = ?chosen, "analysis started");
+        let replaces_estimate = target.is_some();
+        self.with_window(|window, _| {
+            window
+                .global::<ui::Cleaner>()
+                .set_replaces_estimate(replaces_estimate);
+        });
         let work = Arc::clone(&self.0.borrow().seams.work);
         let options = job.options.clone();
         let started = Running::start(
@@ -1000,10 +1083,10 @@ impl CleanerScreen {
             tracing::info_span!("analysis"),
             move |cancel, progress| {
                 let report = work(job, cancel, progress);
-                if let Some(directory) = summary_directory {
-                    keep_summary(&report, &options, &directory);
-                }
-                report
+                let summary = target
+                    .as_ref()
+                    .and_then(|target| keep_summary(&report, &options, target));
+                Analyzed { report, summary }
             },
         );
         self.settle();
@@ -1073,7 +1156,7 @@ impl CleanerScreen {
             self.show_view();
         }
         match received {
-            Ok(report) => {
+            Ok(Analyzed { report, summary }) => {
                 tracing::info!(
                     groups = report.groups().len(),
                     bytes = report.total_size(),
@@ -1085,6 +1168,9 @@ impl CleanerScreen {
                     self.hold(report);
                 }
                 self.end(outcome);
+                if let Some(summary) = summary {
+                    self.emit(CleanerEvent::AnalysisDone(summary));
+                }
             }
             Err(TryRecvError::Empty) => {
                 if let Some((path, roots_done, roots)) = given_up {
@@ -1990,7 +2076,8 @@ pub mod tests {
     /// The window on the cleaner, in `language`.
     pub fn on_cleaner_in(seams: Seams, language: Language) -> (ui::AppWindow, CleanerScreen) {
         i_slint_backend_testing::init_no_event_loop();
-        let (window, screen) = crate::window(seams, language).unwrap();
+        let (window, screen, _home) =
+            crate::window(seams, crate::dashboard::tests::inert(), language).unwrap();
         let cleaner = match language {
             Language::French => "Nettoyeur",
             Language::English => "Cleaner",
@@ -2150,13 +2237,13 @@ pub mod tests {
     /// A scan run by the test: it says it started (with its options), then
     /// waits for each go to send the next progress, and at the last one ends
     /// as the real scan does with the variables read.
-    struct Scripted {
-        go: Sender<()>,
-        started: Receiver<ScanOptions>,
+    pub struct Scripted {
+        pub go: Sender<()>,
+        pub started: Receiver<ScanOptions>,
         sent: Receiver<()>,
     }
 
-    fn scripted(script: Vec<Progress>) -> (Seams, Scripted) {
+    pub fn scripted(script: Vec<Progress>) -> (Seams, Scripted) {
         let (go, gone) = mpsc::channel();
         let (start, started) = mpsc::channel();
         let (said, sent) = mpsc::channel();

@@ -1,0 +1,83 @@
+// What the Home page shows, set by Rust (`crates/app/src/dashboard.rs`).
+import { Size } from "cleaner-model.slint";
+
+export enum WidgetKind { reclaimable, disks, memory, processor, system }
+
+export enum WidgetSize { small, wide, tall, large, full }
+
+// Where a widget sits, in columns and rows (Rust: `dashboard/layout.rs`).
+export struct WidgetCell {
+    kind: WidgetKind,
+    size: WidgetSize,
+    column: int,
+    row: int,
+    width: int,
+    height: int,
+}
+
+// The widgets placed in a grid of a number of columns, and the rows they
+// fill.
+export struct Placement {
+    cells: [WidgetCell],
+    rows: int,
+}
+
+export enum DayKind { today, yesterday, other }
+
+// An instant in the local time zone (Rust: `dates.rs`), worded here.
+export struct Moment {
+    day: DayKind,
+    day-of-month: int,
+    // 1 to 12.
+    month: int,
+    hour: int,
+    minute: int,
+}
+
+// What the Récupérable widget knows: the summary of an analysis of this
+// session (current) or an earlier one (estimate), a cleaning since, or
+// nothing read.
+export enum ReclaimableState { none, current, estimate, cleaned, unavailable }
+
+export struct Reclaimable {
+    state: ReclaimableState,
+    size: Size,
+    entries: int,
+    at: Moment,
+    // The cleaning since: what it freed and when, when known.
+    freed-known: bool,
+    freed: Size,
+    cleaned-at-known: bool,
+    cleaned-at: Moment,
+}
+
+export enum ReadingState { reading, read, unavailable }
+
+export struct SystemShown {
+    state: ReadingState,
+    // Each part empty when it could not be read.
+    distribution: string,
+    kernel: string,
+    desktop: string,
+    session: string,
+    uptime-known: bool,
+    uptime-days: int,
+    // Within the day: 0 to 23.
+    uptime-hours: int,
+    uptime-minutes: int,
+}
+
+export global Dashboard {
+    // The placements in 1 to as many columns as the grid may have.
+    in property <[Placement]> placements;
+    // The layout kept could not be read: the default one is shown.
+    in property <bool> layout-unreadable;
+    in property <Reclaimable> reclaimable;
+    in property <SystemShown> system;
+    // No reading reaches the window any more.
+    in property <bool> readings-lost;
+
+    callback analyze();
+    // How many columns the grid shows, for the journal.
+    callback columns-shown(int);
+}

@@ -294,9 +294,8 @@ impl Planner<'_> {
         let Effect::Delete(deletion) = target.effect() else {
             return Vec::new();
         };
-        let origin = Origin::SystemTarget {
-            subcategory: target.subcategory().clone(),
-            path: deletion.path().clone(),
+        let Some(origin) = Origin::of_target(target) else {
+            return Vec::new();
         };
         let attributes = GroupAttributes {
             origins: vec![origin.clone()],

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- The one action Okapi asks the administrator for: running its helper,
+     which only scans and cleans the system targets of its own rules. -->
+<policyconfig>
+  <vendor>Okapi</vendor>
+  <vendor_url>https://github.com/Cryborg/okapi</vendor_url>
+  <action id="io.github.cryborg.okapi.clean">
+    <description>Clean system files that need the administrator</description>
+    <description xml:lang="fr">Nettoyer des fichiers système réservés à l'administrateur</description>
+    <message>Authentication is required to scan and clean system files</message>
+    <message xml:lang="fr">Une authentification est nécessaire pour analyser et nettoyer des fichiers système</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <!-- Kept a few minutes for the process that asked (the interface): a
+           scan, then the cleaning it offered, ask once. -->
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/okapi/okapi-helper</annotate>
+  </action>
+</policyconfig>

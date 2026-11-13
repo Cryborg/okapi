@@ -168,18 +168,8 @@ component Choosing inherits VerticalLayout {
         Line {
             horizontal-stretch: 1;
             vertical-alignment: center;
-            text: Cleaner.chosen-count == 0
-                ? @tr("Aucune catégorie sélectionnée")
-                : @tr("Catégories sélectionnées : {} sur {}", Cleaner.chosen-count, Cleaner.choices.length);
-        }
-        ActionButton {
-            text: @tr("Cocher les recommandées");
-            kind: ButtonKind.ghost;
-            enabled: !Cleaner.recommended-only;
-            y: (parent.height - self.height) / 2;
-            clicked => {
-                Cleaner.check-recommended();
-            }
+            // Why "Analyser" is off for want of a category.
+            text: Cleaner.chosen-count == 0 ? @tr("Aucune catégorie sélectionnée") : "";
         }
         ActionButton {
             text: @tr("Analyser");

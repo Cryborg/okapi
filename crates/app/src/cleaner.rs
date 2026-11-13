@@ -5,7 +5,7 @@
 //! [`CleanerScreen`] binds it to the window.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -15,14 +15,17 @@ use std::time::{Duration, Instant, SystemTime};
 
 use okapi_engine::{
     ByteSize, Cancel, Category, CleanReceipt, DEFAULT_MIN_AGE, DEFAULT_MIN_AGE_MINUTES,
-    DefaultChoice, Exclusions, Limit, Progress, ScanIssue, ScanOptions, ScanReport, SizeUnit, Stop,
-    Watch, clean_watched, scan_watched, settings_min_age,
+    DefaultChoice, Exclusions, Limit, Origin, Progress, ScanIssue, ScanOptions, ScanReport,
+    SizeUnit, Stop, Watch, clean_watched, scan_watched, settings_min_age,
 };
 use okapi_rules::{Language, Os, RuleSet, TemplateVariables};
 use okapi_store::Settings;
 use slint::{ComponentHandle as _, Model as _, ModelRc, SharedString, VecModel};
 
-use crate::results::{CheckState, GroupFacts, Line, Results};
+use okapi_helper::{Operation, Reply};
+
+use crate::elevation::{ElevationFailure, ElevationStep, Launcher};
+use crate::results::{AdminState, CheckState, GroupFacts, Line, Results};
 use crate::ui;
 use cleaning::CleanJob;
 
@@ -67,10 +70,14 @@ pub enum Problem {
     History,
     /// A task could not start: its thread, or what it would take.
     Start,
+    /// The settings changed since the rights were obtained: root's part would
+    /// not honour them, so nothing is removed and the rights are to obtain again.
+    RightsChanged,
 }
 
 mod browsers;
 mod cleaning;
+mod rights;
 
 /// One analysis to run.
 #[derive(Debug)]
@@ -83,6 +90,12 @@ pub struct Job {
 pub type Read = Rc<dyn Fn() -> Result<Inputs, Problem>>;
 pub type Work = Arc<dyn Fn(Job, Cancel, Sender<Progress>) -> ScanReport + Send + Sync>;
 pub type Clean = Arc<dyn Fn(&CleanJob, Cancel, Sender<Progress>) -> CleanReceipt + Send + Sync>;
+/// Runs the privileged helper on a request line: pkexec, or a test's fake.
+pub type Elevate = Arc<
+    dyn Fn(Operation, Vec<u8>, &Cancel, &Sender<ElevationStep>) -> Result<Reply, ElevationFailure>
+        + Send
+        + Sync,
+>;
 
 /// What the screen reads the machine, scans and cleans with: the system's,
 /// or a test's, which never touches the machine.
@@ -93,6 +106,8 @@ pub struct Seams {
     pub clean: Clean,
     /// Who holds the lock of an open browser, and how to close it.
     pub browser: browsers::HolderSeam,
+    /// The privileged helper, for what needs the administrator.
+    pub elevate: Elevate,
 }
 
 impl std::fmt::Debug for Seams {
@@ -125,6 +140,12 @@ impl Seams {
                 )
             }),
             browser: browsers::system_holder(),
+            elevate: {
+                let launcher = Launcher::pkexec();
+                Arc::new(move |operation, line, cancel, steps| {
+                    launcher.run(operation, line, cancel, steps)
+                })
+            },
         }
     }
 }
@@ -209,20 +230,6 @@ impl Choices {
         if let Some(choice) = self.0.get_mut(index) {
             choice.checked = !choice.checked;
         }
-    }
-
-    /// Checks those not left to the user, and only those.
-    pub fn check_recommended(&mut self) {
-        for choice in &mut self.0 {
-            choice.checked = !choice.to_choose;
-        }
-    }
-
-    #[must_use]
-    pub fn is_recommended(&self) -> bool {
-        self.0
-            .iter()
-            .all(|choice| choice.checked != choice.to_choose)
     }
 
     #[must_use]
@@ -478,6 +485,7 @@ const fn problem(problem: Option<Problem>) -> ui::SetupProblem {
         Some(Problem::Exclusion) => ui::SetupProblem::Exclusion,
         Some(Problem::History) => ui::SetupProblem::History,
         Some(Problem::Start) => ui::SetupProblem::Start,
+        Some(Problem::RightsChanged) => ui::SetupProblem::RightsChanged,
     }
 }
 
@@ -523,6 +531,7 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
             folded: *folded,
             hidden: false,
             badge: ui::ResultBadge::Preselected,
+            admin: ui::AdminRow::None,
             entries: shown(*entries),
             size: size(*bytes),
         },
@@ -544,6 +553,7 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
             folded: *folded,
             hidden: *hidden,
             badge: ui::ResultBadge::Preselected,
+            admin: ui::AdminRow::None,
             entries: shown(*entries),
             size: size(*bytes),
         },
@@ -577,20 +587,38 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
                 } else {
                     CheckState::Unchecked
                 }),
-                enabled: !group.needs_admin,
+                enabled: group.is_checkable(),
                 folded: false,
                 hidden: *hidden,
-                badge: if group.needs_admin {
-                    ui::ResultBadge::Admin
-                } else if group.preselected {
-                    ui::ResultBadge::Preselected
-                } else {
-                    ui::ResultBadge::ToChoose
-                },
-                entries: shown(group.entries),
-                size: size(group.bytes),
+                badge: badge_of(group),
+                admin: admin_row_of(group),
+                entries: shown(group.numbers().0),
+                size: size(group.numbers().1),
             }
         }
+    }
+}
+
+/// The badge of a group: "Administrator" while locked; unlocked, an
+/// administrator's group is to choose, never preselected (invariant 5).
+fn badge_of(group: &GroupFacts) -> ui::ResultBadge {
+    if !group.is_checkable() {
+        ui::ResultBadge::Admin
+    } else if !group.preselected || group.needs_admin {
+        ui::ResultBadge::ToChoose
+    } else {
+        ui::ResultBadge::Preselected
+    }
+}
+
+/// Where a group that needs the administrator stands, as its note says it.
+fn admin_row_of(group: &GroupFacts) -> ui::AdminRow {
+    match (group.needs_admin, group.admin, &group.targets) {
+        (false, ..) => ui::AdminRow::None,
+        (true, AdminState::Locked, None) => ui::AdminRow::Unreachable,
+        (true, AdminState::Locked, Some(_)) => ui::AdminRow::Locked,
+        (true, AdminState::NothingToClean, _) => ui::AdminRow::Nothing,
+        (true, AdminState::Unlocked { .. }, _) => ui::AdminRow::Unlocked,
     }
 }
 
@@ -682,6 +710,8 @@ struct Analysis {
 /// read, its report unread).
 enum Task {
     Analysis(Analysis),
+    /// Root's scan of what waits for the rights.
+    Elevating(rights::Elevating),
     Cleaning(cleaning::Cleaning),
 }
 
@@ -689,6 +719,7 @@ impl Task {
     const fn cancel(&self) -> &Cancel {
         match self {
             Self::Analysis(analysis) => &analysis.running.cancel,
+            Self::Elevating(elevating) => &elevating.running.cancel,
             Self::Cleaning(cleaning) => &cleaning.running.cancel,
         }
     }
@@ -696,6 +727,7 @@ impl Task {
     fn is_finished(&self) -> bool {
         match self {
             Self::Analysis(analysis) => analysis.running.thread.is_finished(),
+            Self::Elevating(elevating) => elevating.running.thread.is_finished(),
             Self::Cleaning(cleaning) => cleaning.running.thread.is_finished(),
         }
     }
@@ -705,6 +737,11 @@ impl Task {
 struct Held {
     report: Arc<ScanReport>,
     results: Results,
+    /// The age and exclusions root's scan unlocked the groups with: sent as
+    /// they are to root's cleaning, which measures its groups again
+    /// (invariant 1) and so never removes younger or excluded entries than
+    /// the scan shown would have.
+    granted: Option<rights::Granted>,
 }
 
 struct State {
@@ -713,6 +750,9 @@ struct State {
     language: Language,
     seams: Seams,
     rules: Option<Arc<RuleSet>>,
+    /// The path each rule the privileged helper may be asked for is asked
+    /// by.
+    helper_targets: BTreeMap<Origin, String>,
     choices: Choices,
     choice_model: Rc<VecModel<ui::CategoryChoice>>,
     row_model: Rc<VecModel<ui::ScanRow>>,
@@ -729,6 +769,7 @@ struct State {
     asked_to_close: BTreeSet<u32>,
     result_model: Rc<VecModel<ui::ResultRow>>,
     receipt_model: Rc<VecModel<ui::ReceiptLineShown>>,
+    step_model: Rc<VecModel<ui::CleanStep>>,
     note_model: Rc<VecModel<ui::IssueShown>>,
     timer: Rc<slint::Timer>,
     /// Runs for [`SECOND_CLICK`] after the screen changes.
@@ -756,11 +797,16 @@ impl CleanerScreen {
             .ok()
             .map(Arc::new);
         let choices = Choices::of(rules.as_deref());
+        let helper_targets = rules
+            .as_deref()
+            .map(rights::helper_targets)
+            .unwrap_or_default();
         let state = State {
             window: window.as_weak(),
             language,
             seams,
             rules,
+            helper_targets,
             choices,
             choice_model: Rc::new(VecModel::default()),
             row_model: Rc::new(VecModel::default()),
@@ -772,6 +818,7 @@ impl CleanerScreen {
             asked_to_close: BTreeSet::new(),
             result_model: Rc::new(VecModel::default()),
             receipt_model: Rc::new(VecModel::default()),
+            step_model: Rc::new(VecModel::default()),
             note_model: Rc::new(VecModel::default()),
             timer: Rc::new(slint::Timer::default()),
             settling: slint::Timer::default(),
@@ -783,6 +830,7 @@ impl CleanerScreen {
         cleaner.set_results(ModelRc::from(Rc::clone(&state.result_model)));
         cleaner.set_notes(ModelRc::from(Rc::clone(&state.note_model)));
         cleaner.set_receipt_lines(ModelRc::from(Rc::clone(&state.receipt_model)));
+        cleaner.set_clean_steps(ModelRc::from(Rc::clone(&state.step_model)));
         let screen = Self(Rc::new(RefCell::new(state)));
         screen.show_choices();
         screen.refresh();
@@ -802,7 +850,6 @@ impl CleanerScreen {
                 Self(state).toggle(index);
             }
         });
-        cleaner.on_check_recommended(on(Self::check_recommended));
         cleaner.on_analyze(on(Self::analyze));
         cleaner.on_cancel(on(Self::cancel));
         cleaner.on_choose_again(on(Self::back_to_choosing));
@@ -827,6 +874,8 @@ impl CleanerScreen {
         cleaner.on_cancel_browser(on(Self::cancel_browser_question));
         cleaner.on_cancel_cleaning(on(Self::cancel_cleaning));
         cleaner.on_finish(on(Self::finish));
+        cleaner.on_obtain_rights(on(Self::obtain_rights));
+        cleaner.on_cancel_rights(on(Self::cancel_rights));
         screen
     }
 
@@ -852,7 +901,6 @@ impl CleanerScreen {
             show(&state.choice_model, rows);
             let cleaner = window.global::<ui::Cleaner>();
             cleaner.set_chosen_count(shown(state.choices.chosen().len()));
-            cleaner.set_recommended_only(state.choices.is_recommended());
         });
     }
 
@@ -900,11 +948,6 @@ impl CleanerScreen {
             return;
         };
         self.0.borrow_mut().choices.toggle(index);
-        self.show_choices();
-    }
-
-    fn check_recommended(&self) {
-        self.0.borrow_mut().choices.check_recommended();
         self.show_choices();
     }
 
@@ -984,12 +1027,13 @@ impl CleanerScreen {
         timer.start(slint::TimerMode::Repeated, WATCH_EVERY, move || {
             if let Some(state) = weak.upgrade() {
                 let screen = Self(state);
-                let cleaning = matches!(screen.0.borrow().task, Some(Task::Cleaning(_)));
-                if cleaning {
-                    screen.watch_cleaning();
-                } else {
-                    screen.watch();
-                }
+                let watched = match screen.0.borrow().task {
+                    Some(Task::Analysis(_)) => Self::watch,
+                    Some(Task::Elevating(_)) => Self::watch_elevation,
+                    Some(Task::Cleaning(_)) => Self::watch_cleaning,
+                    None => return,
+                };
+                watched(&screen);
             }
         });
     }
@@ -1150,21 +1194,29 @@ impl CleanerScreen {
             .as_ref()
             .and_then(|task| match task {
                 Task::Analysis(analysis) => Some(analysis.view.chosen()),
-                Task::Cleaning(_) => None,
+                Task::Elevating(_) | Task::Cleaning(_) => None,
             })
             .unwrap_or_default();
         let language = state.language;
         let groups = report
             .groups()
             .iter()
-            .map(|group| GroupFacts::of(group, language))
+            .map(|group| GroupFacts::of(group, language, &state.helper_targets))
             .collect();
         let notes: Vec<_> = report.issues().iter().filter_map(note_shown).collect();
         show(&state.note_model, notes);
+        // A new analysis: what waits for the rights is locked again, and
+        // what was said of the rights before is over.
         state.held = Some(Held {
             results: Results::new(groups, chosen),
             report: Arc::new(report),
+            granted: None,
         });
+        if let Some(window) = state.window.upgrade() {
+            let cleaner = window.global::<ui::Cleaner>();
+            cleaner.set_rights_step(ui::RightsStep::Idle);
+            cleaner.set_rights_problem(ui::RightsProblem::None);
+        }
     }
 
     /// Changes the results at the line `row` shows, by `change`.
@@ -1189,13 +1241,16 @@ impl CleanerScreen {
     }
 
     /// Whether the results may change: never under an open confirmation,
-    /// which shows what a cleaning takes.
+    /// which shows what a cleaning takes, nor while root's scan, which
+    /// changes them, is under way.
     fn results_frozen(&self, asked: &str) -> bool {
-        let frozen = self.is_confirming();
+        let elevating = matches!(self.0.borrow().task, Some(Task::Elevating(_)));
+        let frozen = self.is_confirming() || elevating;
         if frozen {
             tracing::warn!(
                 asked,
-                "refused while a cleaning waits for its confirmation or an answer about a browser"
+                elevating,
+                "refused while a cleaning waits for its confirmation, an answer about a browser, or the rights"
             );
         }
         frozen
@@ -1229,6 +1284,7 @@ impl CleanerScreen {
             cleaner.set_selected_entries(shown(entries));
             cleaner.set_selected_size(size(bytes));
             cleaner.set_result_entries(shown(results.entries()));
+            cleaner.set_rights_waiting(shown(results.waiting_for_rights()));
         });
     }
 
@@ -1304,6 +1360,12 @@ impl CleanerScreen {
                 path = ?analysis.view.path,
                 "analysis left running on closing"
             ),
+            // Its input closes with the window: the helper cancels itself
+            // once the question of pkexec is answered.
+            (Task::Elevating(_), false) => tracing::warn!(
+                waited = ?started.elapsed(),
+                "root's scan left running on closing: pkexec still asks, the helper will cancel itself"
+            ),
             (Task::Cleaning(_), false) => tracing::error!(
                 waited = ?started.elapsed(),
                 "cleaning left running on closing: its history line is not written"
@@ -1322,6 +1384,33 @@ pub mod tests {
     use okapi_rules::Variable;
 
     use super::*;
+
+    #[test]
+    fn an_administrators_group_is_to_choose_once_unlocked() {
+        let mut group = GroupFacts {
+            label: String::new(),
+            label_alone: String::new(),
+            browser: None,
+            categories: BTreeSet::new(),
+            preselected: true,
+            needs_admin: true,
+            targets: Some(BTreeSet::from(["/var/crash".to_owned()])),
+            admin: AdminState::Locked,
+            checked_by_default: false,
+            entries: 1,
+            bytes: 1,
+        };
+        assert_eq!(badge_of(&group), ui::ResultBadge::Admin);
+        group.admin = AdminState::Unlocked {
+            entries: 1,
+            bytes: 1,
+        };
+        assert_eq!(
+            badge_of(&group),
+            ui::ResultBadge::ToChoose,
+            "never preselected (invariant 5)"
+        );
+    }
 
     pub fn defaults() -> Inputs {
         Inputs {
@@ -1368,19 +1457,10 @@ pub mod tests {
             Category::Apps,
             Category::Gaming,
         ]);
-        assert_eq!(choices.chosen(), all_but_gpu);
-        assert!(choices.is_recommended());
-        choices.toggle(0);
-        assert!(!choices.is_recommended(), "a recommended one left out");
+        assert_eq!(choices.chosen(), all_but_gpu, "never a reset (invariant 5)");
         choices.toggle(4);
         assert!(choices.chosen().contains(&Category::Gpu));
-        assert!(!choices.is_recommended());
-        choices.check_recommended();
-        assert_eq!(
-            choices.chosen(),
-            all_but_gpu,
-            "the GPU caches left out again"
-        );
+        choices.toggle(4);
         choices.toggle(Category::ALL.len());
         assert_eq!(choices.chosen(), all_but_gpu, "beyond the list: nothing");
         assert!(
@@ -1686,26 +1766,13 @@ pub mod tests {
                 .is_some_and(|description| description.ends_with("sera plus lent.")),
             "the warning is read"
         );
-        assert!(shows(&window, "Catégories sélectionnées : 4 sur 5"));
         assert!(shows(
             &window,
             "Toujours épargnés : fichiers modifiés depuis moins de 60 min. Exclusions : 0."
         ));
-        let recommended = || button(&window, "Cocher les recommandées").accessible_enabled();
-        assert_eq!(recommended(), Some(false), "already the case");
         gpu.invoke_accessible_default_action();
-        assert_eq!(gpu.accessible_checked(), Some(true));
-        assert_eq!(recommended(), Some(true));
-        button(&window, "Cocher les recommandées").invoke_accessible_default_action();
-        assert_eq!(
-            gpu.accessible_checked(),
-            Some(false),
-            "never checked for the user"
-        );
-        assert_eq!(
-            checkbox(&window, "Système").accessible_checked(),
-            Some(true)
-        );
+        assert_eq!(gpu.accessible_checked(), Some(true), "the user's to check");
+        gpu.invoke_accessible_default_action();
 
         for label in ["Système", "Navigateurs", "Applications", "Jeux"] {
             checkbox(&window, label).invoke_accessible_default_action();
@@ -2252,11 +2319,7 @@ pub mod tests {
             Some(false),
             "a checkbox takes Space only"
         );
-        // The other four categories, then the recommended ones.
-        for _ in 0..5 {
-            press(&window, Key::Tab);
-        }
-        press(&window, Key::Return);
+        press(&window, Key::Space);
         assert_eq!(
             checkbox(&window, "Système").accessible_checked(),
             Some(true)
@@ -2264,13 +2327,12 @@ pub mod tests {
     }
 
     #[test]
-    fn a_disabled_button_is_skipped_by_the_keyboard() {
+    fn the_keyboard_reaches_analyser_and_a_held_enter_never_cancels() {
         use slint::platform::Key;
 
         let (seams, scan) = scripted(Vec::new());
         let (window, _screen) = on_cleaner(seams);
-        // The sidebar, the five categories, then past the disabled
-        // "Cocher les recommandées" to "Analyser".
+        // The sidebar, the five categories, then "Analyser".
         for _ in 0..9 {
             press(&window, Key::Tab);
         }

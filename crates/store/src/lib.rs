@@ -19,7 +19,9 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 pub use dashboard::{DashboardLayout, DashboardWidget, LoadedLayout, WidgetSize};
-pub use history::{History, HistoryEntry, HistoryOutcome, HistoryUnavailable, Opened, seconds};
+pub use history::{
+    AdminRecord, History, HistoryEntry, HistoryOutcome, HistoryUnavailable, Opened, seconds,
+};
 pub use last_analysis::LastAnalysis;
 pub use settings::Settings;
 

@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 use super::clean::{clean, file_and_directory, ids, make_recent, run_later};
 use super::*;
 use crate::clean::{CleanPass, CleanResult, KeepReason};
-use crate::report::Category;
 use crate::report::ItemId;
+use crate::report::{Category, Origin};
 use crate::watch::{Cancel, Progress, Watch};
 
 thread_local! {
@@ -573,6 +573,66 @@ fn a_scan_walks_only_the_chosen_categories_keeping_the_attributes_of_all() {
     };
     assert_eq!(total, 2);
     assert_eq!(roots_done(&progress).len(), total);
+}
+
+#[test]
+fn a_scan_walks_only_the_chosen_rules_and_none_when_none_is_chosen() {
+    let fixture = Fixture::new();
+    let shared = fixture.directory("shared");
+    fixture.file("shared/old", 3, 2 * HOUR);
+    let alone = fixture.directory("alone");
+    fixture.file("alone/old", 5, 2 * HOUR);
+    let rules = [
+        app_on(AppFile::Apps, "wide", &shared, false),
+        app_on(AppFile::GpuCache, "reset", &shared, true),
+        app_on(AppFile::GpuCache, "alone", &alone, true),
+    ];
+    let origin = |file, id: &str| Origin::App {
+        file,
+        id: okapi_rules::RuleId::try_from(id.to_owned()).unwrap(),
+    };
+    let scan_choosing = |origins: &[Origin], categories: &[Category]| {
+        let mut run = Run::new(&fixture, entries(&rules));
+        run.options = run
+            .options
+            .clone()
+            .with_categories(categories.iter().copied().collect())
+            .with_origins(origins.iter().cloned().collect());
+        scan_watching(run, Cancel::new()).0
+    };
+
+    let report = scan_choosing(&[origin(AppFile::GpuCache, "reset")], &[]);
+    let [group] = report.groups() else {
+        panic!("expected the shared group: {:?}", report.groups());
+    };
+    assert_eq!(group.total_size(), 3);
+    assert!(
+        !group.is_selected_by_default(),
+        "chosen by its reset, the shared group keeps the AND of its rules (invariant 5)"
+    );
+
+    assert!(
+        scan_choosing(&[], &[]).groups().is_empty(),
+        "no rule chosen: nothing, never all"
+    );
+    assert!(
+        scan_choosing(&[origin(AppFile::GpuCache, "alone")], &[Category::Apps])
+            .groups()
+            .is_empty(),
+        "a rule chosen in a category left out is not walked"
+    );
+    assert!(
+        scan_choosing(&[origin(AppFile::Apps, "wide")], &[Category::Gpu])
+            .groups()
+            .is_empty(),
+        "the shared root: its rule chosen is in a category left out, its rule of the \
+         category chosen is not chosen"
+    );
+    let both = scan_choosing(&[origin(AppFile::GpuCache, "alone")], &[Category::Gpu]);
+    let [group] = both.groups() else {
+        panic!("a rule chosen in a category chosen is walked");
+    };
+    assert_eq!(group.total_size(), 5);
 }
 
 #[test]

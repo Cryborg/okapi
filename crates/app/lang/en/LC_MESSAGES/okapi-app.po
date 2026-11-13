@@ -148,14 +148,6 @@ msgid "Aucune catégorie sélectionnée"
 msgstr "No category selected"
 
 msgctxt "Choosing"
-msgid "Catégories sélectionnées : {} sur {}"
-msgstr "Categories selected: {} of {}"
-
-msgctxt "Choosing"
-msgid "Cocher les recommandées"
-msgstr "Check the recommended ones"
-
-msgctxt "Choosing"
 msgid "Analyser"
 msgstr "Analyze"
 
@@ -283,6 +275,10 @@ msgctxt "ProblemBanner"
 msgid "L'historique ne peut pas être tenu alors que vous demandez le journal des suppressions : rien n'est supprimé. Le détail est dans le journal."
 msgstr "The history cannot be kept while you ask for the deletion log: nothing is removed. The details are in the log."
 
+msgctxt "ProblemBanner"
+msgid "Les réglages ont changé depuis l'obtention des droits administrateur : rien n'est supprimé, obtenez-les à nouveau."
+msgstr "The settings changed since the administrator rights were obtained: nothing is removed, obtain them again."
+
 msgctxt "CleaningPage"
 msgid "Annulation du nettoyage"
 msgstr "Cancelling the cleaning"
@@ -296,24 +292,52 @@ msgid "L'élément en cours se termine ; ce qui n'est pas encore retiré reste."
 msgstr "The entry under way finishes; what is not yet removed stays."
 
 msgctxt "CleaningPage"
-msgid "Vérification de chaque élément avant de le retirer."
-msgstr "Checking each entry before removing it."
+msgid "Chaque élément est vérifié, puis revérifié juste avant d'être retiré."
+msgstr "Each entry is checked, then checked again just before it is removed."
 
-msgctxt "CleaningPage"
-msgid "Suppression des éléments vérifiés."
-msgstr "Removing the entries checked."
+msgctxt "CleanStepRow"
+msgid "Nettoyage des éléments administrateur"
+msgstr "Cleaning the administrator's items"
 
-msgctxt "CleaningPage"
-msgid "Vérification"
-msgstr "Checking"
+msgctxt "CleanStepRow"
+msgid "Vérification de chaque élément"
+msgstr "Checking each entry"
 
-msgctxt "CleaningPage"
-msgid "Suppression"
-msgstr "Removing"
+msgctxt "CleanStepRow"
+msgid "Suppression des éléments vérifiés"
+msgstr "Removing the entries checked"
 
-msgctxt "CleaningPage"
-msgid "Éléments : {} sur {}"
-msgstr "Entries: {} of {}"
+msgctxt "CleanStepRow"
+msgid "Enregistrement dans l'historique"
+msgstr "Recording in the history"
+
+msgctxt "CleanStepRow"
+msgid "Fait"
+msgstr "Done"
+
+msgctxt "CleanStepRow"
+msgid "Non fait"
+msgstr "Not done"
+
+msgctxt "CleanStepRow"
+msgid "En cours"
+msgstr "Under way"
+
+msgctxt "CleanStepRow"
+msgid "En attente"
+msgstr "Waiting"
+
+msgctxt "CleanStepRow"
+msgid "{}, éléments : {} sur {}"
+msgstr "{}, entries: {} of {}"
+
+msgctxt "CleanStepRow"
+msgid "{} sur {}"
+msgstr "{} of {}"
+
+msgctxt "CleanSteps"
+msgid "Étapes du nettoyage"
+msgstr "Steps of the cleaning"
 
 msgctxt "CleaningPage"
 msgid "Libéré jusqu'ici"
@@ -464,8 +488,97 @@ msgid "Le prochain démarrage sera plus lent, le temps de recréer ce cache."
 msgstr "The next start will be slower, while this cache is built again."
 
 msgctxt "ResultLine"
-msgid "Demande les droits administrateur, que l'interface ne sait pas encore obtenir."
-msgstr "Needs administrator rights, which the interface cannot obtain yet."
+msgid "Rien à nettoyer avec les droits administrateur."
+msgstr "Nothing to clean with administrator rights."
+
+msgctxt "ResultLine"
+msgid "Droits obtenus : à cocher vous-même."
+msgstr "Rights obtained: check it yourself."
+
+msgctxt "ResultLine"
+msgid "Hors de portée de l'assistant administrateur."
+msgstr "Out of the administrator's helper's reach."
+
+msgctxt "Words"
+msgid "L'assistant administrateur s'est interrompu : des éléments ont pu être supprimés. Le détail est dans le journal."
+msgstr "The administrator's helper was interrupted: items may have been deleted. The detail is in the log."
+
+msgctxt "ResultLine"
+msgid "Demande les droits administrateur : « Obtenir les droits » ci-dessus."
+msgstr "Needs administrator rights: “Get the rights” above."
+
+msgctxt "RightsBanner"
+msgid "Saisissez le mot de passe dans la fenêtre du système. Annuler n'agit qu'une fois cette fenêtre fermée."
+msgstr "Enter the password in the system's window. Cancel only acts once that window is closed."
+
+msgctxt "RightsBanner"
+msgid "Analyse avec les droits administrateur…"
+msgstr "Scanning with administrator rights…"
+
+msgctxt "RightsBanner"
+msgid "Annulation de la demande des droits : elle prend effet une fois la fenêtre du système fermée."
+msgstr "Cancelling the request for rights: it takes effect once the system's window is closed."
+
+msgctxt "RightsBanner"
+msgid "{} Groupes qui les demandent toujours : {}."
+msgstr "{} Groups that still need them: {}."
+
+msgctxt "RightsBanner"
+msgid "Certaines opérations demandent les droits administrateur. Groupes ci-dessous : {}."
+msgstr "Some operations need administrator rights. Groups below: {}."
+
+msgctxt "RightsBanner"
+msgid "Obtenir les droits"
+msgstr "Get the rights"
+
+msgctxt "RightsBanner"
+msgid "Annuler"
+msgstr "Cancel"
+
+msgctxt "Confirmation"
+msgid "Une fenêtre du système peut vous demander votre mot de passe pour les éléments administrateur. Ils sont mesurés de nouveau juste avant d'être retirés : leur nombre a pu changer depuis l'obtention des droits."
+msgstr "A window of the system may ask for your password for the administrator's items. They are measured again just before they are removed: their number may have changed since the rights were obtained."
+
+msgctxt "CleaningPage"
+msgid "Saisissez le mot de passe dans la fenêtre du système. Annuler n'agit qu'une fois cette fenêtre fermée."
+msgstr "Enter the password in the system's window. Cancel only acts once that window is closed."
+
+
+msgctxt "ReceiptPage"
+msgid "La partie administrateur ne s'est pas terminée. {}"
+msgstr "The administrator's part did not finish. {}"
+
+msgctxt "Words"
+msgid "L'authentification a été annulée."
+msgstr "The authentication was cancelled."
+
+msgctxt "Words"
+msgid "Une partie de ce que l'assistant administrateur devait nettoyer a changé depuis l'obtention des droits : elle n'a pas été nettoyée en entier. Le détail est dans le journal."
+msgstr "Part of what the administrator helper was to clean changed since the rights were obtained: it was not cleaned whole. The details are in the log."
+
+msgctxt "Words"
+msgid "La demande a été annulée avant la fin."
+msgstr "The request was cancelled before it was over."
+
+msgctxt "Words"
+msgid "Les droits administrateur ont été refusés, ou la demande n'a pas pu aboutir. Le détail est dans le journal."
+msgstr "Administrator rights were refused, or the request could not go through. The detail is in the log."
+
+msgctxt "Words"
+msgid "L'assistant administrateur n'est pas installé : lancez packaging/linux/install-helper.sh."
+msgstr "The administrator's helper is not installed: run packaging/linux/install-helper.sh."
+
+msgctxt "Words"
+msgid "L'assistant administrateur installé n'est pas à jour : relancez packaging/linux/install-helper.sh."
+msgstr "The administrator's helper installed is out of date: run packaging/linux/install-helper.sh again."
+
+msgctxt "Words"
+msgid "L'assistant administrateur s'est arrêté avant d'avoir fini. Le détail est dans le journal."
+msgstr "The administrator's helper stopped before it was done. The detail is in the log."
+
+msgctxt "Words"
+msgid "L'assistant administrateur a échoué. Le détail est dans le journal."
+msgstr "The administrator's helper failed. The detail is in the log."
 
 msgctxt "ResultLine"
 msgid "Présélectionné"

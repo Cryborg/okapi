@@ -66,6 +66,11 @@ fn row(
         folded: false,
         hidden: false,
         badge,
+        admin: if badge == ui::ResultBadge::Admin {
+            ui::AdminRow::Locked
+        } else {
+            ui::AdminRow::None
+        },
         entries: 1528,
         size: size(936, 7, ui::SizeUnit::Megabyte),
     }
@@ -82,6 +87,7 @@ fn header(category: ui::CategoryKind, folded: bool) -> ui::ResultRow {
         folded,
         hidden: false,
         badge: ui::ResultBadge::Preselected,
+        admin: ui::AdminRow::None,
         entries: 86_300,
         size: size(10, 8, ui::SizeUnit::Gigabyte),
     }
@@ -151,6 +157,7 @@ fn results(window: &ui::AppWindow, folded: bool) {
     cleaner.set_results(ModelRc::new(VecModel::from(rows)));
     cleaner.set_selected_entries(4);
     cleaner.set_result_entries(7);
+    cleaner.set_rights_waiting(6);
     cleaner.set_selected_size(size(2, 1, ui::SizeUnit::Gigabyte));
     cleaner.set_found(size(11, 6, ui::SizeUnit::Gigabyte));
     cleaner.set_step(ui::CleanerStep::Results);
@@ -194,8 +201,32 @@ fn receipt(window: &ui::AppWindow) {
     cleaner.set_kept(15);
     cleaner.set_history(ui::HistoryState::Failed);
     cleaner.set_deletion_log_lost(true);
+    {
+        use ui::CleanStepKind::{Check, History, Remove};
+        use ui::RowState::{Done, NotDone};
+        cleaner.set_clean_steps(steps(&[
+            (Check, Done, 14_923, 14_923),
+            (Remove, Done, 14_923, 14_923),
+            (History, NotDone, 0, 0),
+        ]));
+    }
     cleaner.set_step(ui::CleanerStep::Receipt);
     window.set_page(ui::Page::Cleaner);
+}
+
+/// The steps of a cleaning: kind, state, entries done of all.
+fn steps(steps: &[(ui::CleanStepKind, ui::RowState, i32, i32)]) -> ModelRc<ui::CleanStep> {
+    ModelRc::new(VecModel::from(
+        steps
+            .iter()
+            .map(|&(kind, state, done, total)| ui::CleanStep {
+                kind,
+                state,
+                done,
+                total,
+            })
+            .collect::<Vec<_>>(),
+    ))
 }
 
 /// The categories, before the analysis.
@@ -248,10 +279,15 @@ fn scanning(window: &ui::AppWindow) {
 
 /// A cleaning under way.
 fn cleaning(window: &ui::AppWindow) {
+    use ui::CleanStepKind::{Admin, Check, History, Remove};
+    use ui::RowState::{Done, Running, Waiting};
     let cleaner = window.global::<ui::Cleaner>();
-    cleaner.set_clean_pass(ui::CleanPassKind::Remove);
-    cleaner.set_clean_done(120);
-    cleaner.set_clean_total(300);
+    cleaner.set_clean_steps(steps(&[
+        (Admin, Done, 0, 0),
+        (Check, Done, 300, 300),
+        (Remove, Running, 120, 300),
+        (History, Waiting, 0, 0),
+    ]));
     cleaner.set_freed(size(512, 3, ui::SizeUnit::Megabyte));
     cleaner.set_step(ui::CleanerStep::Cleaning);
     window.set_page(ui::Page::Cleaner);
@@ -287,8 +323,9 @@ fn main() {
         "scanning" => scanning(&app),
         "cleaning" => cleaning(&app),
         "ended" => ended(&app),
+        "about" => app.set_page(ui::Page::About),
         other => panic!(
-            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended"
+            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about"
         ),
     }
     window.set_size(PhysicalSize::new(WIDTH, HEIGHT));

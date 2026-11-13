@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 use okapi_engine::{CleanOutcome, CleanReceipt, CleanResult, KeepReason, ScanReport};
+use okapi_helper::OutcomeAnswer;
 
 /// How many paths a line of the receipt lists; the journal has them all.
 pub const PATHS_SHOWN: usize = 20;
@@ -27,7 +28,22 @@ impl OutcomeFacts {
             result: outcome.result(),
             path: outcome.path().map(PathBuf::from),
             blocked: outcome.blocked().map(PathBuf::from),
-            scanned_bytes: report.find(outcome.id()).map_or(0, |(_, item)| item.size()),
+            scanned_bytes: report.size_of(outcome.id()).unwrap_or_default(),
+        }
+    }
+
+    /// What root's part of a cleaning answered for one entry. A result that
+    /// cannot be read back is shown as refused by the system, of unknown
+    /// kind: never as an entry of another report, which would be a fault of
+    /// the interface.
+    #[must_use]
+    pub fn of_helper(answered: &OutcomeAnswer) -> Self {
+        let outcome = answered.outcome();
+        Self {
+            result: outcome.clean_result_or_refused(),
+            path: outcome.path.as_ref().map(PathBuf::from),
+            blocked: outcome.blocked.as_ref().map(PathBuf::from),
+            scanned_bytes: answered.scanned_bytes(),
         }
     }
 
@@ -50,6 +66,9 @@ pub enum Ending {
     Cancelled,
     /// Something kept it from touching anything.
     Stopped,
+    /// A part ended without saying what it did, and nothing else is known:
+    /// what it removed is only in the log.
+    Interrupted,
 }
 
 /// Why entries were kept, as the receipt sorts them.
@@ -203,6 +222,45 @@ mod tests {
     use std::io::ErrorKind;
 
     use super::*;
+
+    /// What root's part answered for an entry is what the receipt shows of
+    /// it; one that cannot be read back is kept by the system, never one of
+    /// another report.
+    #[test]
+    fn roots_outcomes_are_shown_as_answered() {
+        let answered: OutcomeAnswer = serde_json::from_str(
+            r#"{"outcome": {"path": "/var/crash", "result": "partial", "bytes": 5,
+                            "reason": "failed", "code": 13, "blocked": "/var/crash/locked"},
+                "scannedBytes": 9}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            OutcomeFacts::of_helper(&answered),
+            OutcomeFacts {
+                result: CleanResult::Partial {
+                    bytes: 5,
+                    reason: KeepReason::Failed {
+                        kind: ErrorKind::PermissionDenied,
+                        code: Some(13)
+                    }
+                },
+                path: Some(PathBuf::from("/var/crash")),
+                blocked: Some(PathBuf::from("/var/crash/locked")),
+                scanned_bytes: 9,
+            }
+        );
+        let unreadable: OutcomeAnswer = serde_json::from_str(
+            r#"{"outcome": {"path": "/var/crash", "result": "vanished"}, "scannedBytes": 1}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            OutcomeFacts::of_helper(&unreadable).result,
+            CleanResult::Kept(KeepReason::Failed {
+                kind: ErrorKind::Other,
+                code: None
+            })
+        );
+    }
 
     fn outcome(result: CleanResult, path: &str, scanned_bytes: u64) -> OutcomeFacts {
         OutcomeFacts {

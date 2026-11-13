@@ -117,6 +117,12 @@ pub enum RulesError {
 
     #[error("{os} rules, databases.json: the label `{label}` is used by two targets")]
     DuplicateDatabaseLabel { os: Os, label: String },
+
+    /// The privileged helper is asked for its targets by their path.
+    #[error(
+        "{os} rules, system.json: `{path}` is the path of a target that needs the administrator and of another target"
+    )]
+    DuplicateAdminTarget { os: Os, path: String },
 }
 
 /// A template path or a variable value cannot be used to build a real path.

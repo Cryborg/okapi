@@ -23,7 +23,7 @@ Ce fichier ne porte que ce qui change le code qu'on écrit. Le « pourquoi » vi
 - `crates/engine` (`okapi-engine`) : scan, cache des résultats par ID, nettoyage sûr, reçus. Progression par channel, annulation par jeton.
 - `crates/store` (`okapi-store`) : réglages, disposition du tableau de bord, historique (journal des suppressions compris), résumé de la dernière analyse, journal des traces de chaque binaire (`journal`, crochet de panique). Écriture atomique commune (`file.rs`) : un fichier n'est jamais réécrit à travers un lien.
 - `crates/tools` (`okapi-tools`) : un module par outil (doublons, gros fichiers, disque, malware...), activable par feature Cargo.
-- `crates/helper` (`okapi-helper`) : binaire privilégié lancé via pkexec, liste fermée d'opérations.
+- `crates/helper` (`okapi-helper`) : binaire privilégié lancé via pkexec (`packaging/linux/`), liste fermée d'opérations ; sa bibliothèque porte le protocole. Il n'écrit aucun fichier à lui (pas de journal) : ses traces partent en JSON sur sa sortie d'erreur, que l'interface (`crates/app/src/elevation.rs`, le seul lanceur) lit au fil de l'eau et verse à son journal.
 - `crates/cli` (`okapi`) et `crates/app` (`okapi-app`, Slint) : coquilles fines au-dessus d'`engine` et `tools`.
 - `engine`, `tools`, `store` et `rules` ne dépendent jamais de Slint ni de `app`.
 
@@ -47,10 +47,10 @@ Ce fichier ne porte que ce qui change le code qu'on écrit. Le « pourquoi » vi
 
 Numérotés, jamais renumérotés (des agents et des tests les citent par numéro). Un invariant retiré garde son numéro, marqué MORT.
 
-1. L'interface et le CLI ne transmettent jamais un chemin à supprimer : seulement des identifiants issus du dernier scan, résolus par `engine`. (`okapi-engine` : rapport scellé par visibilité, identifiant d'un autre rapport refusé à la résolution (`ScanReport::find`) comme au nettoyage, testé ; interface : identifiants des groupes cochés du rapport gardé, nettoyage de bout en bout testé en bac à sable)
+1. L'interface et le CLI ne transmettent jamais un chemin à supprimer : seulement des identifiants issus du dernier scan, résolus par `engine`. `okapi-helper` ne reçoit que les chemins modèles, sans variable, de cibles `needsAdmin` qui suppriment, dans ses propres règles (aucune autre cible qui supprime n'a le même chemin, `okapi-rules`), refait l'analyse en root et ne nettoie que les groupes dont toutes les règles sont demandées. (`okapi-engine` : rapport scellé par visibilité, identifiant d'un autre rapport refusé à la résolution (`ScanReport::find`) comme au nettoyage, testé ; interface : identifiants des groupes cochés du rapport gardé, nettoyage de bout en bout testé en bac à sable ; sa part de root ne nomme que les chemins modèles des groupes administrateur cochés, jamais ses identifiants au moteur de l'utilisateur, testé ; `okapi-helper` : demande refusée en entier au moindre écart, groupe partagé avec une règle non demandée gardé, testé)
 2. L'âge minimal d'un élément est revérifié juste avant sa suppression, descendants compris. (`okapi-engine`, `clean` : passe de vérification puis relecture de chaque entrée au moment de la retirer, testé)
 3. Le scan et la suppression ne suivent jamais un lien symbolique ; les exclusions se comparent après résolution du chemin réel. (`okapi-engine` : scan par chemin, chaque dossier ouvert revérifié ; nettoyage par descripteurs ; testé)
-4. Une règle est de la donnée : elle ne fournit jamais de commande, d'exécutable ni d'argument. `okapi-helper` n'exécute que des opérations figées dans son code. (test à écrire)
+4. Une règle est de la donnée : elle ne fournit jamais de commande, d'exécutable ni d'argument. `okapi-helper` n'exécute que des opérations figées dans son code ; l'interface ne lance qu'une commande, pkexec sur le helper, programme et arguments fixes (`crates/app/src/elevation.rs`). (`clippy.toml` : `std::process::Command` et l'envoi de signaux de std, rustix et `okapi-platform` interdits partout, exceptions locales par `#[expect]`, et `libc` n'est appelable qu'en `unsafe`, interdit ; `okapi-helper` : liste de ses dépendances figée d'après `Cargo.lock`, testé)
 5. Les réinitialisations de cache de performance et les maintenances natives sont décochées par défaut. (`okapi-rules` : `is_selected_by_default`, testé ; `okapi-engine` : ET des règles qui partagent une racine, même pour une analyse limitée à des catégories, testé ; interface : catégorie « À choisir » décochée, groupes cochés par `checked_by_default` du moteur, case de catégorie ou de navigateur qui ne coche jamais un « À choisir », testé)
 6. Une racine de suppression résolue et canonisée n'est jamais égale à la valeur d'une variable (`HOME`, `CONFIG`, `SYSTEMDRIVE`...) ni un de ses ancêtres, `TMPDIR` excepté, que l'on ne vide qu'une fois vérifié qu'il ne contient aucune autre variable. `okapi-rules` n'en fait qu'un contrôle lexical sur les règles ; le moteur le refait par identité de fichier (périphérique et inode) des valeurs et de leurs ancêtres. (`okapi-engine`, scan et nettoyage : testé ; le passage à travers un alias ou un montage bind n'est simulé qu'au scan)
 
@@ -63,6 +63,7 @@ Numérotés, jamais renumérotés (des agents et des tests les citent par numér
 
 ## Flux
 
+- Avant la spec ou le plan de tout chantier : regarder ce qui existe en ligne (outils open source qui font la même chose, Kudu, leurs retours d'utilisateurs) et en tirer le meilleur. Le plan dit ce qui a été regardé, ce qu'on reprend et pourquoi.
 - Plus de 4 fichiers ou un sujet délicat : skill `socle:livrer` (plan, revue du plan, code, revue).
 - Clôture d'une feature : skill `socle:review-and-fix`.
 - Une correction de Franck ou un piège découvert : skill `socle:lessons`.

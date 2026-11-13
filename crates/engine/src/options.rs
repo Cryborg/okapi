@@ -8,7 +8,7 @@ use okapi_platform::{FileIdentity, file_identity};
 use thiserror::Error;
 
 use crate::paths::{canonicalize_longest_prefix, lowercase, starts_with_ignoring_case};
-use crate::report::Category;
+use crate::report::{Category, Origin};
 use crate::walk::IdentityReader;
 
 /// How old an entry must be to be offered when the user has not chosen, in
@@ -70,6 +70,24 @@ impl Exclusions {
     #[must_use]
     pub fn none() -> Self {
         Self::default()
+    }
+
+    /// Whether the exclusion `entry`, as the user wrote it, may cover what
+    /// lies at or below `root`: an extension always; a path at, above or
+    /// below `root`, as written or at its real location, ignoring case. One
+    /// whose real location cannot be read may: in doubt, it counts.
+    #[must_use]
+    pub fn may_touch(entry: &Path, root: &Path) -> bool {
+        if entry
+            .to_str()
+            .is_some_and(|text| text.starts_with(EXTENSION_PATTERN_PREFIX))
+        {
+            return true;
+        }
+        let related = |path: &Path| {
+            starts_with_ignoring_case(path, root) || starts_with_ignoring_case(root, path)
+        };
+        related(entry) || canonicalize_longest_prefix(entry).map_or(true, |real| related(&real))
     }
 
     /// Reads the exclusions the user wrote. A path is kept as written and as
@@ -169,6 +187,9 @@ pub struct ScanOptions {
     exclusions: Exclusions,
     /// The categories walked; none means all.
     categories: BTreeSet<Category>,
+    /// The rules walked, when they are chosen one by one: an empty set walks
+    /// nothing, never all.
+    origins: Option<BTreeSet<Origin>>,
 }
 
 impl ScanOptions {
@@ -181,6 +202,7 @@ impl ScanOptions {
             min_age,
             exclusions,
             categories: BTreeSet::new(),
+            origins: None,
         }
     }
 
@@ -205,6 +227,29 @@ impl ScanOptions {
     #[must_use]
     pub const fn categories(&self) -> &BTreeSet<Category> {
         &self.categories
+    }
+
+    /// Walks only the roots of a group with one of `origins`, as
+    /// [`Self::with_categories`] does for categories, and on top of them; but
+    /// an empty set walks nothing.
+    #[must_use]
+    pub fn with_origins(mut self, origins: BTreeSet<Origin>) -> Self {
+        self.origins = Some(origins);
+        self
+    }
+
+    /// Whether a group of rules `origins` is walked: one of them is itself
+    /// chosen, by its category and, when rules are chosen one by one, as a
+    /// rule. Two rules sharing a root, one chosen by its category and the
+    /// other as a rule, choose nothing.
+    pub(crate) fn chooses(&self, origins: &[Origin]) -> bool {
+        origins.iter().any(|origin| {
+            Category::is_chosen(&BTreeSet::from([origin.category()]), &self.categories)
+                && self
+                    .origins
+                    .as_ref()
+                    .is_none_or(|chosen| chosen.contains(origin))
+        })
     }
 
     pub(crate) const fn exclusions(&self) -> &Exclusions {
@@ -323,6 +368,28 @@ mod tests {
         assert!(exclusions.excludes_by_identity(&real.join("keep/inner"), file_identity));
         assert!(!exclusions.excludes_by_identity(&real.join("other"), file_identity));
         assert!(!Exclusions::none().excludes_by_identity(&real.join("keep"), file_identity));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_exclusion_touches_a_root_at_above_or_below_it_by_any_spelling() {
+        let directory = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(directory.path()).unwrap();
+        let root = real.join("var/crash");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir(real.join("elsewhere")).unwrap();
+        std::os::unix::fs::symlink(&root, real.join("alias")).unwrap();
+        let touches = |entry: PathBuf| Exclusions::may_touch(&entry, &root);
+        assert!(touches(PathBuf::from("*.log")));
+        assert!(touches(root.join("keep")));
+        assert!(touches(real.join("var")), "above it: excludes it whole");
+        assert!(
+            touches(real.join("VAR/Crash/keep")),
+            "case ignored, as matching does"
+        );
+        assert!(touches(real.join("alias/keep")), "through a link to it");
+        assert!(!touches(real.join("elsewhere/keep")));
+        assert!(!touches(real.join("var/crashes")), "a name beside it");
     }
 
     #[test]

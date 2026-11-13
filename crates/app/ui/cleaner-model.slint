@@ -13,7 +13,7 @@ export struct CategoryChoice {
 }
 
 // Why an analysis or a cleaning cannot start; the detail is in the journal.
-export enum SetupProblem { none, variables, rules, settings, min-age, exclusion, history, start }
+export enum SetupProblem { none, variables, rules, settings, min-age, exclusion, history, start, rights-changed }
 
 export enum CleanerStep { idle, planning, scanning, cancelling, outcome, results, cleaning, receipt }
 
@@ -27,7 +27,8 @@ export struct Size {
     unit: SizeUnit,
 }
 
-export enum RowState { waiting, running, done }
+// Where a line of work stands; not done: a cleaning step that ended short.
+export enum RowState { waiting, running, done, not-done }
 
 export struct ScanRow {
     kind: CategoryKind,
@@ -60,6 +61,20 @@ export enum ResultBadge { preselected, to-choose, admin }
 // category, or a group.
 export enum RowKind { category, browser, group }
 
+// Where a group that needs the administrator stands: none for another;
+// waiting for the rights; never the helper's to clean; nothing for root to
+// clean; or unlocked by root's scan, to check by hand.
+export enum AdminRow { none, locked, unreachable, nothing, unlocked }
+
+// Where the rights asked for stand: their question open (the system asks for
+// the password), root's scan under way, or cancelled and awaited.
+export enum RightsStep { idle, authenticating, scanning, cancelling }
+
+// Why the rights, or the administrator's part of a cleaning, gave nothing.
+export enum RightsProblem {
+    none, cancelled, dismissed, not-authorized, not-installed, outdated, failed, stopped, changed, unknown,
+}
+
 // Where the question about an open browser stands.
 export enum BrowserStep {
     // Okapi can close it.
@@ -89,6 +104,7 @@ export struct ResultRow {
     folded: bool,
     hidden: bool,
     badge: ResultBadge,
+    admin: AdminRow,
     entries: int,
     size: Size,
 }
@@ -104,7 +120,17 @@ export struct IssueShown {
     path: string,
 }
 
-export enum CleanPassKind { check, remove }
+export enum CleanStepKind { admin, check, remove, history }
+
+// A step of a cleaning: root's part, the check of each entry, their removal,
+// the history line. Its bar runs `done` of `total`; with no total, a running
+// step sweeps.
+export struct CleanStep {
+    kind: CleanStepKind,
+    state: RowState,
+    done: int,
+    total: int,
+}
 
 export enum CleanEnding { done, cancelled, stopped, interrupted }
 
@@ -136,8 +162,6 @@ export global Cleaner {
 
     in property <[CategoryChoice]> choices;
     in property <int> chosen-count;
-    // The categories checked are exactly the recommended ones.
-    in property <bool> recommended-only;
     in property <int> min-age-minutes;
     in property <int> exclusion-count;
     in property <SetupProblem> problem;
@@ -159,6 +183,10 @@ export global Cleaner {
     in property <Size> selected-size;
     in property <int> selected-entries;
     in property <int> result-entries;
+    // The groups waiting for the rights, and where asking for them stands.
+    in property <int> rights-waiting;
+    in property <RightsStep> rights-step;
+    in property <RightsProblem> rights-problem;
 
     // The confirmation: what it would remove.
     in property <bool> confirming;
@@ -166,6 +194,9 @@ export global Cleaner {
     // The checkbox of the confirmation: Rust deletes nothing without it.
     in-out property <bool> understood;
     in property <Size> confirm-size;
+    // Groups that need the administrator are confirmed: the system may ask
+    // for the password.
+    in property <bool> confirm-admin;
     // The question about an open browser, before a cleaning: the browser,
     // the labels of its caches the cleaning takes, and their size.
     in property <bool> browser-asking;
@@ -174,12 +205,12 @@ export global Cleaner {
     in property <Size> browser-size;
     in property <BrowserStep> browser-step;
 
-    // The cleaning under way.
-    in property <CleanPassKind> clean-pass;
-    in property <int> clean-done;
-    in property <int> clean-total;
+    // The cleaning under way, step by step; ended, what each came to.
+    in property <[CleanStep]> clean-steps;
     in property <Size> freed;
     in property <bool> clean-cancel-asked;
+    // The administrator's part under way: its question, then root's work.
+    in property <RightsStep> clean-rights;
 
     // The receipt.
     in property <CleanEnding> ending;
@@ -191,6 +222,8 @@ export global Cleaner {
     in property <HistoryState> history;
     // The deletion log the user asked for is not written.
     in property <bool> deletion-log-lost;
+    // Why the administrator's part of the cleaning was not done.
+    in property <RightsProblem> receipt-rights;
 
     callback toggle(int);
     callback confirm-delete();
@@ -204,10 +237,11 @@ export global Cleaner {
     callback fold(int);
     callback deselect-all();
     callback clean();
-    callback check-recommended();
     callback analyze();
     callback cancel();
     callback choose-again();
+    callback obtain-rights();
+    callback cancel-rights();
 }
 
 // The words and icons of a category, and the words of a size.
@@ -275,6 +309,35 @@ export global Words {
         return @tr("L'âge minimal remonte avant l'horloge : rien ne serait assez ancien.");
     }
 
+    // Why the rights, or the administrator's part, gave nothing.
+    pure public function rights(problem: RightsProblem) -> string {
+        if problem == RightsProblem.dismissed {
+            return @tr("L'authentification a été annulée.");
+        }
+        if problem == RightsProblem.cancelled {
+            return @tr("La demande a été annulée avant la fin.");
+        }
+        if problem == RightsProblem.not-authorized {
+            return @tr("Les droits administrateur ont été refusés, ou la demande n'a pas pu aboutir. Le détail est dans le journal.");
+        }
+        if problem == RightsProblem.not-installed {
+            return @tr("L'assistant administrateur n'est pas installé : lancez packaging/linux/install-helper.sh.");
+        }
+        if problem == RightsProblem.outdated {
+            return @tr("L'assistant administrateur installé n'est pas à jour : relancez packaging/linux/install-helper.sh.");
+        }
+        if problem == RightsProblem.stopped {
+            return @tr("L'assistant administrateur s'est arrêté avant d'avoir fini. Le détail est dans le journal.");
+        }
+        if problem == RightsProblem.changed {
+            return @tr("Une partie de ce que l'assistant administrateur devait nettoyer a changé depuis l'obtention des droits : elle n'a pas été nettoyée en entier. Le détail est dans le journal.");
+        }
+        if problem == RightsProblem.unknown {
+            return @tr("L'assistant administrateur s'est interrompu : des éléments ont pu être supprimés. Le détail est dans le journal.");
+        }
+        return @tr("L'assistant administrateur a échoué. Le détail est dans le journal.");
+    }
+
     pure public function unit(unit: SizeUnit) -> string {
         if unit == SizeUnit.byte {
             return @tr("o");
@@ -329,6 +392,8 @@ export component ProblemBanner inherits Rectangle {
                 ? @tr("L'âge minimal des réglages remonte avant l'horloge : rien ne serait assez ancien.")
                 : Cleaner.problem == SetupProblem.start
                 ? @tr("Le travail n'a pas pu démarrer : rien n'est supprimé. Le détail est dans le journal.")
+                : Cleaner.problem == SetupProblem.rights-changed
+                ? @tr("Les réglages ont changé depuis l'obtention des droits administrateur : rien n'est supprimé, obtenez-les à nouveau.")
                 : Cleaner.problem == SetupProblem.history
                 ? @tr("L'historique ne peut pas être tenu alors que vous demandez le journal des suppressions : rien n'est supprimé. Le détail est dans le journal.")
                 : @tr("Une exclusion des réglages est refusée : rien ne peut démarrer. Le détail est dans le journal.");

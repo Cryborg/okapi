@@ -38,6 +38,10 @@ pub type HolderSeam = Rc<dyn Fn(&BrowserLock) -> Asked>;
 
 /// The system's: the platform vouches for the process, or not.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "closing a browser the user asked to close: the interface's one signal"
+)]
 pub fn system_holder() -> HolderSeam {
     Rc::new(
         |lock| match okapi_platform::holder(lock.lock(), lock.user_data()) {

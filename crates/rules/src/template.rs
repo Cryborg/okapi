@@ -157,6 +157,13 @@ impl TemplatePath {
         }
     }
 
+    /// Whether this path names the same place for every user: it starts with
+    /// a literal root or drive, not a variable.
+    #[must_use]
+    pub const fn is_literal(&self) -> bool {
+        !matches!(self.root, PathRoot::Variable(_))
+    }
+
     /// Whether this path can exist on `os`: its variable is defined there, and a
     /// literal root matches the OS (`/` on Unix, a drive on Windows).
     #[must_use]
@@ -537,6 +544,14 @@ mod tests {
         let drive = template("E:/SteamLibrary").unwrap();
         assert!(drive.is_available_on(Os::Windows));
         assert!(!drive.is_available_on(Os::Linux));
+    }
+
+    #[test]
+    fn only_a_path_without_variable_is_literal() {
+        assert!(template("/var/crash").unwrap().is_literal());
+        assert!(template("E:/SteamLibrary").unwrap().is_literal());
+        assert!(!template("${CACHE}/x").unwrap().is_literal());
+        assert!(!template("${TMPDIR}").unwrap().is_literal());
     }
 
     #[test]

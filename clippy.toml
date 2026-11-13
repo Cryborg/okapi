@@ -1,2 +1,16 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+
+# Invariant 4: Okapi runs no command and sends no signal, the privileged
+# helper least of all; an exception is local and says why (`#[expect]`).
+disallowed-types = [
+    { path = "std::process::Command", reason = "invariant 4: Okapi runs no command" },
+]
+disallowed-methods = [
+    { path = "std::process::Child::kill", reason = "invariant 4: no signal sent" },
+    { path = "rustix::process::kill_process", reason = "invariant 4: no signal sent" },
+    { path = "rustix::process::kill_process_group", reason = "invariant 4: no signal sent" },
+    { path = "rustix::process::kill_current_process_group", reason = "invariant 4: no signal sent" },
+    { path = "rustix::process::pidfd_send_signal", reason = "invariant 4: no signal sent" },
+    { path = "okapi_platform::RunningBrowser::terminate", reason = "invariant 4: closes a browser, for the interface alone" },
+]

@@ -83,10 +83,15 @@ export global Theme {
     out property <length> empty-icon-box: 88px;
     out property <length> radius-empty-icon: 24px;
     out property <length> empty-width: 560px;
+    // Slint's own "Made with Slint" mark, at a fixed size: it would grow
+    // with the window.
+    out property <length> made-with-slint-width: 160px;
     // The columns of an analysis row: name, status, size.
     out property <length> row-name-width: 180px;
     out property <length> row-status-width: 120px;
     out property <length> row-size-width: 90px;
+    // The entries a cleaning step went through, "done of all".
+    out property <length> step-count-width: 90px;
     // The columns of the results: entries, size; and a group's indent.
     out property <length> results-entries-width: 96px;
     out property <length> results-size-width: 96px;

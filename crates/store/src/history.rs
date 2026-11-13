@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use okapi_engine::{CleanOutcome, CleanReceipt, CleanResult, KeepReason};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::StoreError;
@@ -19,7 +19,8 @@ const HISTORY_VERSION: u32 = 1;
 pub struct HistoryEntry {
     /// Seconds since the clock's origin, negative before it.
     pub time: i64,
-    /// What kept the cleaning from touching anything.
+    /// What kept the user's part of the cleaning from touching anything
+    /// (root's part says its own in `admin`).
     pub stops: Vec<String>,
     pub removed_bytes: u64,
     pub removed: usize,
@@ -27,21 +28,43 @@ pub struct HistoryEntry {
     pub gone: usize,
     pub kept: usize,
     pub complete: bool,
+    /// The part of the cleaning that needed the administrator, when there
+    /// was one; absent otherwise, so a line of the user's alone is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub admin: Option<AdminRecord>,
     /// Every entry, when the user keeps a deletion log.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entries: Option<Vec<HistoryOutcome>>,
 }
 
-/// What became of one entry, in the form scripts and the history read.
+/// What became of the part of a cleaning that needed the administrator.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminRecord {
+    /// It ran to its end over all it was asked for and said what became of
+    /// each entry. `false`: it did not (it stopped, was cancelled even after
+    /// removing entries, or part of what it was asked for was left),
+    /// `reason` says why; its outcomes, if any, say what it touched, and
+    /// when it gave none what it removed may still be unknown (its traces in
+    /// the journal say).
+    pub done: bool,
+    /// Why it was not done, by a stable name of the caller's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// What became of one entry, in the form scripts and the history read, and
+/// the privileged helper answers with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryOutcome {
     pub path: Option<String>,
-    /// `removed`, `partial`, `gone` or `kept`.
-    pub result: &'static str,
+    /// `removed`, `partial`, `gone` or `kept` (`CleanResult::key`).
+    pub result: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bytes: Option<u64>,
+    /// `KeepReason::key`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<&'static str>,
+    pub reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -50,7 +73,7 @@ pub struct HistoryOutcome {
     pub blocked: Option<String>,
     /// A name in `path` or `blocked` is not UTF-8: its bad bytes were
     /// replaced, so the text is not exactly the path.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub inexact: bool,
 }
 
@@ -59,28 +82,59 @@ impl HistoryEntry {
     /// user keeps a deletion log.
     #[must_use]
     pub(crate) fn of(receipt: &CleanReceipt, now: SystemTime, deletion_log: bool) -> Self {
-        let count = |wanted: fn(&CleanResult) -> bool| {
+        Self::of_outcomes(
             receipt
-                .outcomes()
-                .iter()
-                .filter(|outcome| wanted(&outcome.result()))
-                .count()
-        };
-        Self {
-            time: seconds(now),
-            stops: receipt
                 .stops()
                 .iter()
                 .map(|stop| stop.key().to_owned())
                 .collect(),
-            removed_bytes: receipt.removed_bytes(),
+            receipt
+                .outcomes()
+                .iter()
+                .map(|outcome| (outcome.result(), HistoryOutcome::of(outcome)))
+                .collect(),
+            None,
+            now,
+            deletion_log,
+        )
+    }
+
+    /// The line of a cleaning that ended at `now`, made of parts that may
+    /// come from several processes: what stopped the user's part (`stops`),
+    /// what became of each entry (counted on its result, never read back from
+    /// its names), and the administrator's part, if any, which leaves the
+    /// cleaning not complete when it was not done.
+    #[must_use]
+    pub fn of_outcomes(
+        stops: Vec<String>,
+        outcomes: Vec<(CleanResult, HistoryOutcome)>,
+        admin: Option<AdminRecord>,
+        now: SystemTime,
+        deletion_log: bool,
+    ) -> Self {
+        let (results, outcomes): (Vec<CleanResult>, Vec<HistoryOutcome>) =
+            outcomes.into_iter().unzip();
+        let count = |wanted: fn(&CleanResult) -> bool| {
+            results.iter().filter(|result| wanted(result)).count()
+        };
+        Self {
+            time: seconds(now),
+            removed_bytes: results
+                .iter()
+                .map(|result| result.removed_bytes())
+                .fold(0, u64::saturating_add),
             removed: count(|result| matches!(result, CleanResult::Removed { .. })),
             partial: count(|result| matches!(result, CleanResult::Partial { .. })),
             gone: count(|result| matches!(result, CleanResult::Gone)),
             kept: count(|result| matches!(result, CleanResult::Kept(_))),
-            complete: receipt.is_complete(),
-            entries: deletion_log
-                .then(|| receipt.outcomes().iter().map(HistoryOutcome::of).collect()),
+            complete: stops.is_empty()
+                && admin.as_ref().is_none_or(|admin| admin.done)
+                && results.iter().all(|result| {
+                    matches!(result, CleanResult::Removed { .. } | CleanResult::Gone)
+                }),
+            stops,
+            admin,
+            entries: deletion_log.then_some(outcomes),
         }
     }
 }
@@ -110,14 +164,39 @@ impl HistoryOutcome {
         };
         Self {
             path: outcome.path().map(lossy),
-            result: result.key(),
+            result: result.key().to_owned(),
             bytes,
-            reason: reason.map(KeepReason::key),
+            reason: reason.map(|reason| reason.key().to_owned()),
             error,
             code,
             blocked: outcome.blocked().map(lossy),
             inexact,
         }
+    }
+
+    /// The result it says, read back from its stable names; `None` when they
+    /// name none.
+    #[must_use]
+    pub fn clean_result(&self) -> Option<CleanResult> {
+        let reason = match &self.reason {
+            Some(key) => Some(KeepReason::from_key(key, self.code)?),
+            None => None,
+        };
+        CleanResult::from_key(&self.result, self.bytes, reason)
+    }
+
+    /// The result another process said, as the history and the receipt
+    /// count it: one that cannot be read back is an entry the system kept
+    /// for an unknown reason (never one of another report), traced.
+    #[must_use]
+    pub fn clean_result_or_refused(&self) -> CleanResult {
+        self.clean_result().unwrap_or_else(|| {
+            tracing::error!(outcome = ?self, "a result that cannot be read back: counted kept");
+            CleanResult::Kept(KeepReason::Failed {
+                kind: io::ErrorKind::Other,
+                code: None,
+            })
+        })
     }
 }
 
@@ -303,6 +382,7 @@ mod tests {
             gone: 3,
             kept: 4,
             complete: false,
+            admin: None,
             entries,
         }
     }
@@ -325,7 +405,7 @@ mod tests {
             .unwrap();
         let outcome = HistoryOutcome {
             path: Some("/tmp/x".to_owned()),
-            result: "removed",
+            result: "removed".to_owned(),
             bytes: Some(10),
             reason: None,
             error: None,
@@ -485,5 +565,116 @@ mod tests {
         );
         assert!(!line.complete);
         assert_eq!(line.entries, Some(Vec::new()));
+    }
+
+    fn outcome(result: &str, bytes: Option<u64>, reason: Option<&str>) -> HistoryOutcome {
+        HistoryOutcome {
+            path: Some("/var/crash/core".to_owned()),
+            result: result.to_owned(),
+            bytes,
+            reason: reason.map(str::to_owned),
+            error: None,
+            code: reason.filter(|reason| *reason == "failed").map(|_| 13),
+            blocked: None,
+            inexact: false,
+        }
+    }
+
+    /// A line made of parts from several processes counts what each says.
+    #[test]
+    fn a_line_counts_the_outcomes_of_every_part() {
+        let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(7);
+        let outcomes = vec![
+            outcome("removed", Some(5), None),
+            outcome("removed", Some(11), None),
+            outcome("partial", Some(3), Some("failed")),
+            outcome("gone", None, None),
+            outcome("kept", None, Some("recent")),
+        ];
+        // As the caller pairs another process's outcomes with their result.
+        let read = |outcomes: Vec<HistoryOutcome>| -> Vec<(CleanResult, HistoryOutcome)> {
+            outcomes
+                .into_iter()
+                .map(|outcome| (outcome.clean_result_or_refused(), outcome))
+                .collect()
+        };
+        let line = HistoryEntry::of_outcomes(Vec::new(), read(outcomes.clone()), None, now, true);
+        assert_eq!(
+            (line.removed, line.partial, line.gone, line.kept),
+            (2, 1, 1, 1)
+        );
+        assert_eq!(line.removed_bytes, 19);
+        assert_eq!(line.time, 7);
+        assert!(!line.complete);
+        assert_eq!(line.entries, Some(outcomes));
+
+        let done = read(vec![
+            outcome("removed", Some(5), None),
+            outcome("gone", None, None),
+        ]);
+        assert!(HistoryEntry::of_outcomes(Vec::new(), done.clone(), None, now, false).complete);
+        let stopped =
+            HistoryEntry::of_outcomes(vec!["cancelled".to_owned()], done.clone(), None, now, false);
+        assert!(!stopped.complete, "a stop: never complete");
+        assert_eq!(stopped.stops, ["cancelled"], "the user's part's, by name");
+        assert_eq!(stopped.entries, None, "no deletion log, no entries");
+
+        let unreadable = HistoryEntry::of_outcomes(
+            Vec::new(),
+            read(vec![outcome("vanished", Some(1), None)]),
+            None,
+            now,
+            false,
+        );
+        assert_eq!(
+            (
+                unreadable.kept,
+                unreadable.removed_bytes,
+                unreadable.complete
+            ),
+            (1, 0, false),
+            "kept by the system for an unknown reason"
+        );
+
+        let not_done = AdminRecord {
+            done: false,
+            reason: Some("authDismissed".to_owned()),
+        };
+        let without_root =
+            HistoryEntry::of_outcomes(Vec::new(), done.clone(), Some(not_done), now, false);
+        assert!(!without_root.complete, "root's part not done");
+        assert_eq!(
+            serde_json::to_value(&without_root).unwrap()["admin"],
+            serde_json::json!({ "done": false, "reason": "authDismissed" })
+        );
+        let with_root = AdminRecord {
+            done: true,
+            reason: None,
+        };
+        assert!(HistoryEntry::of_outcomes(Vec::new(), done, Some(with_root), now, false).complete);
+    }
+
+    /// The form the helper answers with is read back as it was written.
+    #[test]
+    fn an_outcome_reads_back_as_written() {
+        let refused = outcome("kept", None, Some("failed"));
+        let text = serde_json::to_string(&refused).unwrap();
+        let read: HistoryOutcome = serde_json::from_str(&text).unwrap();
+        assert_eq!(read, refused);
+        assert_eq!(
+            read.clean_result(),
+            Some(CleanResult::Kept(KeepReason::Failed {
+                kind: io::ErrorKind::PermissionDenied,
+                code: Some(13)
+            }))
+        );
+        let removed: HistoryOutcome =
+            serde_json::from_str(r#"{"path": "/x", "result": "removed", "bytes": 4}"#).unwrap();
+        assert!(!removed.inexact, "absent: exact");
+        assert_eq!(
+            removed.clean_result(),
+            Some(CleanResult::Removed { bytes: 4 })
+        );
+        assert_eq!(outcome("kept", None, Some("odd")).clean_result(), None);
     }
 }

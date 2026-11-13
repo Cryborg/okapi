@@ -106,8 +106,13 @@ export component AboutPage inherits Rectangle {
                     HorizontalLayout {
                         padding: Theme.spacing-l;
                         spacing: Theme.spacing-l;
-                        AboutSlint { }
+                        AboutSlint {
+                            width: Theme.made-with-slint-width;
+                            horizontal-stretch: 0;
+                            vertical-stretch: 0;
+                        }
                         Detail {
+                            horizontal-stretch: 1;
                             text: @tr("Interface réalisée avec la boîte à outils Slint.");
                             vertical-alignment: center;
                         }

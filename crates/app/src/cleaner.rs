@@ -2075,9 +2075,8 @@ pub mod tests {
 
     /// The window on the cleaner, in `language`.
     pub fn on_cleaner_in(seams: Seams, language: Language) -> (ui::AppWindow, CleanerScreen) {
-        i_slint_backend_testing::init_no_event_loop();
         let (window, screen, _home) =
-            crate::window(seams, crate::dashboard::tests::inert(), language).unwrap();
+            crate::wide_window(seams, crate::dashboard::tests::inert(), language);
         let cleaner = match language {
             Language::French => "Nettoyeur",
             Language::English => "Cleaner",
@@ -2631,6 +2630,12 @@ pub mod tests {
         scan.go.send(()).unwrap();
     }
 
+    /// The entries of the sidebar, each a stop of Tab.
+    pub const SIDEBAR_ENTRIES: usize = 3;
+    /// The stops of Tab in the sidebar of a wide window: its fold button,
+    /// then its entries.
+    pub const SIDEBAR_STOPS: usize = SIDEBAR_ENTRIES + 1;
+
     pub fn press(window: &ui::AppWindow, key: slint::platform::Key) {
         let text = slint::SharedString::from(key);
         window
@@ -2646,8 +2651,8 @@ pub mod tests {
         use slint::platform::Key;
 
         let (window, _screen) = on_cleaner(seams_never_scanning());
-        // The three sidebar entries, then the first category.
-        for _ in 0..4 {
+        // The sidebar, then the first category.
+        for _ in 0..=SIDEBAR_STOPS {
             press(&window, Key::Tab);
         }
         press(&window, Key::Space);
@@ -2674,8 +2679,8 @@ pub mod tests {
 
         let (seams, scan) = scripted(Vec::new());
         let (window, _screen) = on_cleaner(seams);
-        // The sidebar, the five categories, then "Analyser".
-        for _ in 0..9 {
+        // The sidebar, then a stop per category (five) and "Analyser".
+        for _ in 0..SIDEBAR_STOPS + 6 {
             press(&window, Key::Tab);
         }
         press(&window, Key::Return);

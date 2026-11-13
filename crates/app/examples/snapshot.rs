@@ -608,6 +608,10 @@ fn main() {
         "ended" => ended(&app),
         "about" => app.set_page(ui::Page::About),
         "home" | "home-small" => home(&app),
+        "home-folded" => {
+            home(&app);
+            app.set_sidebar_chosen_folded(true);
+        }
         "home-disks" => home_tall(&app, true),
         "home-customize" | "home-move" => {
             home(&app);
@@ -635,7 +639,7 @@ fn main() {
         }
         "home-memory" => home_tall(&app, false),
         other => panic!(
-            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-disks, home-memory, home-customize, home-move"
+            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-folded, home-disks, home-memory, home-customize, home-move"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

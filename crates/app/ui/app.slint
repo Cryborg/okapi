@@ -28,10 +28,40 @@ export component AppWindow inherits Window {
     in property <string> license-texts;
     in property <string> repository;
     in-out property <Page> page: Page.home;
-    // Told to Rust, which traces it.
+    // The sidebar folded by the user's choice (a narrow window folds it too).
+    in-out property <bool> sidebar-chosen-folded;
+    // Set, not bound to the width: the sidebar's width follows it, and the
+    // window's minimum width the sidebar's; a binding would loop. At
+    // creation, for a window that knows its size then (not winit's: 0 until
+    // shown); then at the first change of width, and whenever the width
+    // crosses the threshold.
+    property <bool> narrow;
+    // The width has changed since creation: the state was traced then.
+    property <bool> sized;
+    pure function narrow-now() -> bool {
+        self.width < Theme.narrow-below
+    }
+    init => {
+        self.narrow = self.narrow-now();
+    }
+    changed width => {
+        if !self.sized || self.narrow != self.narrow-now() {
+            self.sized = true;
+            self.narrow = self.narrow-now();
+            root.sidebar-shown(self.sidebar-chosen-folded, self.narrow);
+        }
+    }
+    // Told to Rust, which traces them.
     callback page-shown(Page);
     changed page => {
         root.page-shown(self.page);
+    }
+    callback sidebar-shown(chosen-folded: bool, narrow: bool);
+    // Before the first width, `narrow` is not known yet: that width says it.
+    changed sidebar-chosen-folded => {
+        if self.sized {
+            root.sidebar-shown(self.sidebar-chosen-folded, self.narrow);
+        }
     }
 
     title: Brand.name;
@@ -43,6 +73,8 @@ export component AppWindow inherits Window {
     HorizontalLayout {
         Sidebar {
             page: root.page;
+            chosen-folded <=> root.sidebar-chosen-folded;
+            narrow: root.narrow;
             navigate(page) => {
                 root.page = page;
             }
@@ -53,7 +85,7 @@ export component AppWindow inherits Window {
             horizontal-stretch: 1;
             if root.page == Page.home: DashboardPage {
                 vertical-stretch: 1;
-                window-width: root.width;
+                narrow: root.narrow;
                 open-cleaner => {
                     root.page = Page.cleaner;
                 }

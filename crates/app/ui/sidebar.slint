@@ -1,14 +1,18 @@
 import { Theme, Brand } from "theme.slint";
+import { IconButton } from "widgets.slint";
 
 // The screens the sidebar leads to: only those that exist.
 export enum Page { home, cleaner, about }
 
 // One entry of the sidebar: its icon and words carry it, never colour alone.
 // Reached with Tab, chosen with Enter or Space, its focus ring visible.
+// Folded, its words go to a tooltip, and the current one shows by its
+// background alone, as in the mockup: the screen reader still says it.
 component NavItem inherits Rectangle {
     in property <image> icon;
     in property <string> label;
     in property <bool> active;
+    in property <bool> folded;
     callback clicked;
 
     height: Theme.control-height;
@@ -40,6 +44,10 @@ component NavItem inherits Rectangle {
         clicked => {
             root.clicked();
         }
+        // A tooltip's text is styled: the label goes in as it is.
+        if root.folded: Tooltip {
+            text: @markdown("\{root.label}");
+        }
     }
 
     Rectangle {
@@ -49,8 +57,9 @@ component NavItem inherits Rectangle {
     }
 
     HorizontalLayout {
-        padding-left: Theme.spacing-m;
+        padding-left: root.folded ? 0 : Theme.spacing-m;
         spacing: Theme.spacing-m;
+        alignment: root.folded ? center : start;
         Image {
             source: icon;
             colorize: active ? Theme.text : Theme.text-2;
@@ -59,7 +68,7 @@ component NavItem inherits Rectangle {
             y: (parent.height - self.height) / 2;
             accessible-role: none;
         }
-        Text {
+        if !root.folded: Text {
             text: label;
             accessible-role: none;
             color: active ? Theme.text : Theme.text-2;
@@ -70,11 +79,19 @@ component NavItem inherits Rectangle {
     }
 }
 
+// Folded, by the user's choice or because the window is narrow, it shows
+// its icons only. Narrow, it has no button: the window folds it whatever
+// the choice, the button would do nothing.
 export component Sidebar inherits Rectangle {
     in property <Page> page;
+    // The user's choice, kept while the window is narrow.
+    in-out property <bool> chosen-folded;
+    in property <bool> narrow;
     callback navigate(Page);
 
-    width: Theme.sidebar-width;
+    property <bool> folded: chosen-folded || narrow;
+
+    width: folded ? Theme.sidebar-folded-width : Theme.sidebar-width;
     background: Theme.sidebar;
 
     VerticalLayout {
@@ -84,8 +101,11 @@ export component Sidebar inherits Rectangle {
         HorizontalLayout {
             height: Theme.brand-height;
             spacing: Theme.spacing-m;
-            padding-left: Theme.spacing-xs;
-            Image {
+            padding-left: root.folded ? 0 : Theme.spacing-xs;
+            alignment: root.folded ? center : stretch;
+            // Folded by choice, the unfold button takes the mark's place;
+            // narrow, there is no button, the mark stays.
+            if !root.folded || root.narrow: mark := Image {
                 source: @image-url("../assets/okapi.svg");
                 width: Theme.mark-small;
                 height: Theme.mark-small;
@@ -93,18 +113,30 @@ export component Sidebar inherits Rectangle {
                 // Decorates the name beside it.
                 accessible-role: none;
             }
-            Text {
+            if !root.folded: Text {
                 text: Brand.name;
                 color: Theme.text;
                 font-size: Theme.font-heading;
                 font-weight: Theme.weight-semibold;
                 vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            if !root.narrow: IconButton {
+                y: (parent.height - self.height) / 2;
+                icon: root.folded ? @image-url("../assets/icons/panel-left-open.svg") : @image-url("../assets/icons/panel-left-close.svg");
+                label: root.folded ? @tr("Déplier la barre latérale") : @tr("Replier la barre latérale");
+                accessible-expandable: true;
+                accessible-expanded: !root.folded;
+                clicked => {
+                    root.chosen-folded = !root.chosen-folded;
+                }
             }
         }
 
         NavItem {
             icon: @image-url("../assets/icons/home.svg");
             label: @tr("Accueil");
+            folded: root.folded;
             active: root.page == Page.home;
             clicked => {
                 root.navigate(Page.home);
@@ -114,6 +146,7 @@ export component Sidebar inherits Rectangle {
         NavItem {
             icon: @image-url("../assets/icons/sparkles.svg");
             label: @tr("Nettoyeur");
+            folded: root.folded;
             active: root.page == Page.cleaner;
             clicked => {
                 root.navigate(Page.cleaner);
@@ -130,6 +163,7 @@ export component Sidebar inherits Rectangle {
         NavItem {
             icon: @image-url("../assets/icons/info.svg");
             label: @tr("À propos");
+            folded: root.folded;
             active: root.page == Page.about;
             clicked => {
                 root.navigate(Page.about);

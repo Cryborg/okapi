@@ -3,8 +3,8 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import {
-    ActionButton, ButtonKind, Badge, Card, CheckMark, Detail, Footer, FocusRing, Icon, IconNote,
-    Line, ModalFrame, Title,
+    ActionButton, ButtonKind, Badge, Card, CheckMark, Detail, Footer, FocusRing, Icon, IconButton,
+    IconNote, Line, ModalFrame, Title,
 } from "widgets.slint";
 import {
     AdminRow, BrowserStep, CheckState, Cleaner, IssueKind, IssueShown, ProblemBanner, ResultBadge,
@@ -64,49 +64,14 @@ component RightsBanner inherits Rectangle {
 }
 
 // The button that folds or unfolds a category.
-component Fold inherits Rectangle {
+component Fold inherits IconButton {
     in property <bool> folded;
     in property <string> category;
-    callback clicked;
 
-    width: Theme.icon-box;
-    height: Theme.icon-box;
-    border-radius: Theme.radius-medium;
-    background: touch.has-hover ? Theme.surface-hover : transparent;
-    accessible-role: button;
-    accessible-label: folded ? @tr("Déplier {}", category) : @tr("Replier {}", category);
+    icon: folded ? @image-url("../assets/icons/chevron-right.svg") : @image-url("../assets/icons/chevron-down.svg");
+    label: folded ? @tr("Déplier {}", category) : @tr("Replier {}", category);
     accessible-expandable: true;
     accessible-expanded: !folded;
-    accessible-action-default => {
-        root.clicked();
-    }
-    forward-focus: keys;
-
-    keys := FocusScope {
-        key-pressed(event) => {
-            if !event.repeat && (event.text == Key.Return || event.text == Key.Space) {
-                root.clicked();
-                return accept;
-            }
-            reject
-        }
-    }
-
-    touch := TouchArea {
-        clicked => {
-            root.clicked();
-        }
-    }
-
-    FocusRing {
-        shown: keys.has-focus;
-        border-radius: root.border-radius;
-    }
-
-    Icon {
-        source: folded ? @image-url("../assets/icons/chevron-right.svg") : @image-url("../assets/icons/chevron-down.svg");
-        colorize: Theme.text-2;
-    }
 }
 
 // One line of the results: a category or a browser (its fold and its

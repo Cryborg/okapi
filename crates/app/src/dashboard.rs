@@ -1714,22 +1714,15 @@ pub mod tests {
 
     /// The window on the Home page, and the page itself.
     fn home_screen(seams: DashboardSeams) -> (ui::AppWindow, DashboardScreen) {
-        i_slint_backend_testing::init_no_event_loop();
         let (window, _cleaner, home) =
-            crate::window(seams_never_scanning(), seams, Language::French).unwrap();
-        slint::platform::update_timers_and_animations();
+            crate::wide_window(seams_never_scanning(), seams, Language::French);
         (window, home)
     }
 
     /// The window on the Home page at the mockup's size (three columns,
     /// every widget in view), its cleaner working through `cleaner`.
     fn on_home_with(cleaner: Seams, seams: DashboardSeams) -> ui::AppWindow {
-        i_slint_backend_testing::init_no_event_loop();
-        let (window, _cleaner, _home) = crate::window(cleaner, seams, Language::French).unwrap();
-        window
-            .window()
-            .set_size(slint::PhysicalSize::new(1280, 800));
-        slint::platform::update_timers_and_animations();
+        let (window, _cleaner, _home) = crate::wide_window(cleaner, seams, Language::French);
         window
     }
 
@@ -1841,20 +1834,33 @@ pub mod tests {
         assert!((memory_x - (disks_x + disks_width + gap)).abs() < 1.0);
         assert!((memory_y - disks_y).abs() < 1.0, "side by side");
         assert!((height - 176.0).abs() < 1.0, "a row");
-        // 960 px: a margin of 24 px, two columns, the memory under the
-        // disks.
+        // 960 px: the sidebar folded, a margin of 24 px, two columns, the
+        // memory under the disks.
         window.window().set_size(slint::PhysicalSize::new(960, 640));
         slint::platform::update_timers_and_animations();
         let (reclaimable_x, ..) = frame(&window, "Récupérable");
         let (disks_x, disks_y, disks_width, _) = frame(&window, "Disques");
         let (memory_x, memory_y, ..) = frame(&window, "Mémoire");
         assert!(
-            (reclaimable_x - (248.0 + 24.0)).abs() < 1.0,
+            (reclaimable_x - (64.0 + 24.0)).abs() < 1.0,
             "{reclaimable_x}"
         );
-        assert!((disks_width - (960.0 - 248.0 - 2.0 * 24.0)).abs() < 1.0);
+        assert!((disks_width - (960.0 - 64.0 - 2.0 * 24.0)).abs() < 1.0);
         assert!((memory_x - disks_x).abs() < 1.0);
         assert!((memory_y - (disks_y + 176.0 + gap)).abs() < 1.0);
+        // 1280 px, the sidebar folded by choice: the window is not narrow,
+        // the margin stays 32 px.
+        window
+            .window()
+            .set_size(slint::PhysicalSize::new(1280, 800));
+        window.set_sidebar_chosen_folded(true);
+        slint::platform::update_timers_and_animations();
+        let (reclaimable_x, _, reclaimable_width, _) = frame(&window, "Récupérable");
+        assert!(
+            (reclaimable_x - (64.0 + 32.0)).abs() < 1.0,
+            "{reclaimable_x}"
+        );
+        assert!((reclaimable_width - (1280.0 - 64.0 - 2.0 * 32.0)).abs() < 1.0);
     }
 
     #[test]
@@ -3940,12 +3946,7 @@ pub mod tests {
     /// be let finish, so that what it kept is all there.
     fn on_home_kept(directories: &Directories) -> (ui::AppWindow, DashboardScreen) {
         let (seams, _sampler) = directories.seams();
-        let (window, home) = home_screen(seams);
-        window
-            .window()
-            .set_size(slint::PhysicalSize::new(1280, 800));
-        slint::platform::update_timers_and_animations();
-        (window, home)
+        home_screen(seams)
     }
 
     /// The layout kept once every layout handed has been written; none at

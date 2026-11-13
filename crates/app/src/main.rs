@@ -76,6 +76,13 @@ fn window(
         .window()
         .on_close_requested(move || closing.close_requested());
     tracing::debug!(page = ?window.get_page(), "page shown");
+    let sized = window.as_weak();
+    window.on_sidebar_shown(move |chosen_folded, narrow| {
+        let window = sized.upgrade();
+        let size = window.as_ref().map(|window| window.window().size());
+        let scale = window.as_ref().map(|window| window.window().scale_factor());
+        tracing::debug!(chosen_folded, narrow, ?size, ?scale, "sidebar shown");
+    });
     let dashboard = attach_home(&window, &screen, home);
     Ok((window, screen, dashboard))
 }
@@ -199,6 +206,23 @@ fn main() -> ExitCode {
     }
 }
 
+/// The window at the mockup's size: the testing backend makes it narrower
+/// than the sidebar's threshold, which would fold it.
+#[cfg(test)]
+fn wide_window(
+    seams: Seams,
+    home: DashboardSeams,
+    language: Language,
+) -> (AppWindow, CleanerScreen, DashboardScreen) {
+    const MOCKUP: slint::PhysicalSize = slint::PhysicalSize::new(1280, 800);
+    i_slint_backend_testing::init_no_event_loop();
+    let built = window(seams, home, language).unwrap();
+    built.0.window().set_size(MOCKUP);
+    // `changed` handlers run on the next turn of the event loop.
+    slint::platform::update_timers_and_animations();
+    built
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -207,22 +231,22 @@ mod tests {
     use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 
     use super::*;
-    use crate::cleaner::tests::{button, press, shows, unnamed_images};
+    use crate::cleaner::tests::{
+        SIDEBAR_ENTRIES, SIDEBAR_STOPS, button, press, shows, unnamed_images,
+    };
 
     /// The window, its cleaner reading defaults and never scanning.
     fn test_window() -> AppWindow {
-        window(
+        wide_window(
             cleaner::tests::seams_never_scanning(),
             dashboard::tests::inert(),
             Language::French,
         )
-        .unwrap()
         .0
     }
 
     #[test]
     fn the_sidebar_leads_to_the_about_screen_and_its_licenses() {
-        i_slint_backend_testing::init_no_event_loop();
         // In French, whatever the machine's language.
         let window = test_window();
         let shown = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -300,10 +324,9 @@ mod tests {
 
     #[test]
     fn the_sidebar_is_reached_and_chosen_with_the_keyboard() {
-        i_slint_backend_testing::init_no_event_loop();
         let window = test_window();
-        // Tab to the first entry (home), then the third (about): Enter.
-        for _ in 0..3 {
+        // Tab through the sidebar to its last entry (about): Enter.
+        for _ in 0..SIDEBAR_STOPS {
             press(&window, slint::platform::Key::Tab);
         }
         press(&window, slint::platform::Key::Return);
@@ -319,13 +342,160 @@ mod tests {
     }
 
     #[test]
+    fn the_sidebar_folds_to_its_icons_by_choice_or_in_a_narrow_window() {
+        let window = test_window();
+        let resize = |width| {
+            window
+                .window()
+                .set_size(slint::PhysicalSize::new(width, 800));
+            // `changed` handlers run on the next turn of the event loop.
+            slint::platform::update_timers_and_animations();
+        };
+        let entry_width = || button(&window, "Accueil").size().width;
+        let buttons = |label| {
+            ElementHandle::find_by_accessible_label(&window, label)
+                .filter(|element| element.accessible_role() == Some(AccessibleRole::Button))
+                .count()
+        };
+        // On Home only: About shows the name too.
+        let named = || shows(&window, "Okapi");
+        // The mark has no name: found by its id (debug builds only).
+        let marked = || {
+            ElementHandle::find_by_element_id(&window, "Sidebar::mark")
+                .next()
+                .is_some()
+        };
+
+        // Unfolded at the window's first width: the mark, the name, the
+        // entries' words.
+        assert!(entry_width() > 200.0, "{}", entry_width());
+        assert!(named());
+        assert!(marked());
+        let fold = button(&window, "Replier la barre latérale");
+        assert_eq!(fold.accessible_expanded(), Some(true));
+
+        // Folded by choice: the icons only, still named for a screen reader.
+        fold.invoke_accessible_default_action();
+        assert!(window.get_sidebar_chosen_folded());
+        assert!(entry_width() < 50.0, "{}", entry_width());
+        assert!(!named());
+        assert!(!marked(), "the unfold button in its place");
+        let unfold = button(&window, "Déplier la barre latérale");
+        assert_eq!(unfold.accessible_expanded(), Some(false));
+        button(&window, "À propos").invoke_accessible_default_action();
+        assert_eq!(window.get_page(), Page::About);
+        button(&window, "Accueil").invoke_accessible_default_action();
+        unfold.invoke_accessible_default_action();
+        assert!(!window.get_sidebar_chosen_folded());
+        assert!(entry_width() > 200.0);
+
+        // A narrow window folds it, with no button to unfold it; widened
+        // again, it unfolds, as chosen.
+        resize(1000);
+        assert!(entry_width() < 50.0, "{}", entry_width());
+        assert!(!named());
+        assert!(marked(), "the mark, with no button in its place");
+        assert_eq!(buttons("Déplier la barre latérale"), 0);
+        assert_eq!(buttons("Replier la barre latérale"), 0);
+        assert!(!window.get_sidebar_chosen_folded(), "the choice kept");
+        resize(1100);
+        assert!(entry_width() > 200.0, "{}", entry_width());
+
+        // Folded by choice, it stays folded when the window widens.
+        button(&window, "Replier la barre latérale").invoke_accessible_default_action();
+        resize(1000);
+        resize(1280);
+        assert!(entry_width() < 50.0, "{}", entry_width());
+        assert_eq!(buttons("Déplier la barre latérale"), 1);
+    }
+
+    #[test]
+    fn the_sidebar_folds_with_the_keyboard_and_loses_its_button_when_narrow() {
+        use slint::platform::Key;
+
+        let window = test_window();
+        // The fold button, first: Enter folds, and it keeps the focus.
+        press(&window, Key::Tab);
+        press(&window, Key::Return);
+        assert!(window.get_sidebar_chosen_folded());
+        press(&window, Key::Return);
+        assert!(!window.get_sidebar_chosen_folded());
+
+        // Narrow, the button gone with the focus: from the start, the
+        // entries alone, the last of them About.
+        window
+            .window()
+            .set_size(slint::PhysicalSize::new(1000, 800));
+        slint::platform::update_timers_and_animations();
+        for _ in 0..SIDEBAR_ENTRIES {
+            press(&window, Key::Tab);
+        }
+        press(&window, Key::Return);
+        assert_eq!(window.get_page(), Page::About);
+    }
+
+    #[test]
+    fn each_change_of_the_sidebar_is_traced_once() {
+        i_slint_backend_testing::init_no_event_loop();
+        // Narrow from its creation, never sized yet.
+        let (window, ..) = window(
+            cleaner::tests::seams_never_scanning(),
+            dashboard::tests::inert(),
+            Language::French,
+        )
+        .unwrap();
+        let shown = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let recorded = std::rc::Rc::clone(&shown);
+        window.on_sidebar_shown(move |chosen_folded, narrow| {
+            recorded.borrow_mut().push((chosen_folded, narrow));
+        });
+        let resize = |width| {
+            window
+                .window()
+                .set_size(slint::PhysicalSize::new(width, 800));
+            slint::platform::update_timers_and_animations();
+        };
+        // A choice before the first width is said with it, narrow still.
+        window.set_sidebar_chosen_folded(true);
+        slint::platform::update_timers_and_animations();
+        resize(900);
+        window.set_sidebar_chosen_folded(false);
+        slint::platform::update_timers_and_animations();
+        resize(1280);
+        resize(1300);
+        resize(1000);
+        assert_eq!(
+            *shown.borrow(),
+            [(true, true), (false, true), (false, false), (false, true)]
+        );
+    }
+
+    #[test]
+    fn a_window_that_opens_narrow_opens_with_the_sidebar_folded() {
+        i_slint_backend_testing::init_no_event_loop();
+        // As wide as the testing backend makes it: never resized.
+        let (window, ..) = window(
+            cleaner::tests::seams_never_scanning(),
+            dashboard::tests::inert(),
+            Language::French,
+        )
+        .unwrap();
+        assert!(window.window().size().width < 1100, "a narrow window");
+        assert!(button(&window, "Accueil").size().width < 50.0);
+        assert!(
+            ElementHandle::find_by_accessible_label(&window, "Déplier la barre latérale")
+                .next()
+                .is_none()
+        );
+    }
+
+    #[test]
     fn the_licenses_scroll_with_the_keyboard_within_their_bounds() {
         use slint::platform::Key;
 
-        i_slint_backend_testing::init_no_event_loop();
         let window = test_window();
-        // Home, the cleaner, About (chosen), then the licenses.
-        for _ in 0..3 {
+        // The sidebar to About (chosen), then the licenses.
+        for _ in 0..SIDEBAR_STOPS {
             press(&window, Key::Tab);
         }
         press(&window, Key::Return);

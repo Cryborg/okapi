@@ -1065,8 +1065,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::super::tests::{
-        Sandbox, button, checkbox, let_the_screen_settle, on_cleaner, press, settle_files, shows,
-        shows_a_text_starting, step, watch_until,
+        SIDEBAR_STOPS, Sandbox, button, checkbox, let_the_screen_settle, on_cleaner, press,
+        settle_files, shows, shows_a_text_starting, step, watch_until,
     };
     use super::super::{Inputs, Seams};
     use crate::ui;
@@ -1674,7 +1674,7 @@ mod tests {
         let (window, _screen) = on_results(sandbox.read(&sandbox.root.join("state")));
         // The sidebar, "Choisir d'autres catégories", "Nouvelle analyse",
         // then the fold of Applications.
-        for _ in 0..6 {
+        for _ in 0..SIDEBAR_STOPS + 3 {
             press(&window, Key::Tab);
         }
         let fold = || {

@@ -257,12 +257,12 @@ component DropSlot inherits Rectangle {
 }
 
 export component DashboardPage inherits Rectangle {
-    // The window's width, which the page's margin follows.
-    in property <length> window-width;
+    // The window is narrow: the page's margin narrows.
+    in property <bool> narrow;
     // "Voir les derniers résultats": the cleaner's page.
     callback open-cleaner();
 
-    property <length> margin: window-width < Theme.dash-narrow-below ? Theme.spacing-xl : Theme.spacing-xxl;
+    property <length> margin: narrow ? Theme.spacing-xl : Theme.spacing-xxl;
     property <length> grid-width: view.visible-width - 2 * margin;
     property <int> columns: max(1, min(Dashboard.rows.length,
         floor((grid-width + Theme.dash-gap) / (Theme.dash-column-min + Theme.dash-gap))));

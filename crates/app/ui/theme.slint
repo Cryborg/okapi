@@ -73,6 +73,11 @@ export global Theme {
     out property <length> window-height: 800px;
 
     out property <length> sidebar-width: 248px;
+    // Folded, the sidebar shows its icons only.
+    out property <length> sidebar-folded-width: 64px;
+    // Below it, the window is narrow: the sidebar folds, the dashboard's
+    // margins narrow.
+    out property <length> narrow-below: 1100px;
     out property <length> brand-height: 44px;
     out property <length> control-height: 36px;
     out property <length> control-height-large: 48px;
@@ -112,13 +117,12 @@ export global Theme {
     out property <length> mark-small: 32px;
     out property <length> mark-large: 96px;
 
-    // The dashboard's grid: the narrowest column, a row, the space between
-    // them, and the width below which the page's margin narrows. How many
-    // columns it may have is Rust's (`dashboard::layout::MAX_COLUMNS`).
+    // The dashboard's grid: the narrowest column, a row and the space
+    // between them. How many columns it may have is Rust's
+    // (`dashboard::layout::MAX_COLUMNS`).
     out property <length> dash-column-min: 300px;
     out property <length> dash-row: 176px;
     out property <length> dash-gap: 16px;
-    out property <length> dash-narrow-below: 1100px;
     // A widget: its header, and its body's margins.
     out property <length> widget-header: 24px;
     out property <length> widget-padding: 20px;

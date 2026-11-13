@@ -69,6 +69,56 @@ export component FocusRing inherits Rectangle {
     border-color: Theme.focus;
 }
 
+// A square button that shows only an icon: its label is read, and shown in
+// a tooltip. Reached with Tab, pressed with Enter or Space, its focus ring
+// visible.
+export component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    callback clicked;
+
+    width: Theme.icon-box;
+    height: Theme.icon-box;
+    border-radius: Theme.radius-medium;
+    background: touch.has-hover ? Theme.surface-hover : transparent;
+    accessible-role: button;
+    accessible-label: label;
+    accessible-action-default => {
+        root.clicked();
+    }
+    forward-focus: keys;
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if !event.repeat && (event.text == Key.Return || event.text == Key.Space) {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+        // A tooltip's text is styled: the label goes in as it is.
+        Tooltip {
+            text: @markdown("\{root.label}");
+        }
+    }
+
+    FocusRing {
+        shown: keys.has-focus;
+        border-radius: root.border-radius;
+    }
+
+    Icon {
+        source: root.icon;
+        colorize: Theme.text-2;
+    }
+}
+
 export enum ButtonKind { primary, secondary, ghost, danger }
 
 // A button with words, and an icon beside them at times. Reached with Tab,

@@ -11,6 +11,14 @@ msgctxt "Sidebar"
 msgid "À propos"
 msgstr "About"
 
+msgctxt "Sidebar"
+msgid "Replier la barre latérale"
+msgstr "Collapse the sidebar"
+
+msgctxt "Sidebar"
+msgid "Déplier la barre latérale"
+msgstr "Expand the sidebar"
+
 msgctxt "AboutPage"
 msgid "À propos"
 msgstr "About"
@@ -477,11 +485,11 @@ msgstr "Done"
 
 msgctxt "Fold"
 msgid "Déplier {}"
-msgstr "Unfold {}"
+msgstr "Expand {}"
 
 msgctxt "Fold"
 msgid "Replier {}"
-msgstr "Fold {}"
+msgstr "Collapse {}"
 
 msgctxt "ResultLine"
 msgid "Le prochain démarrage sera plus lent, le temps de recréer ce cache."
@@ -729,11 +737,11 @@ msgstr "{}: {}"
 
 msgctxt "ReceiptLine"
 msgid "Replier {}"
-msgstr "Fold {}"
+msgstr "Collapse {}"
 
 msgctxt "ReceiptLine"
 msgid "Déplier {}"
-msgstr "Unfold {}"
+msgstr "Expand {}"
 
 msgctxt "ReceiptLine"
 msgid "Éléments : {}. Taille : {}."

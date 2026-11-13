@@ -328,6 +328,26 @@ fn a_journal_grown_too_large_is_set_aside() {
 }
 
 #[test]
+fn a_journal_that_grows_too_large_during_a_run_is_set_aside() {
+    if running_as_root() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let journal = sandbox.journal();
+    fs::create_dir_all(journal.parent().unwrap()).unwrap();
+    let full = fs::File::create(&journal).unwrap();
+    full.set_len(okapi_store::journal::ROTATION_SIZE).unwrap();
+    let output = sandbox.run(&["--exclude", "relative/path"]);
+    assert_eq!(output.status.code(), Some(2));
+    let rotated = journal.with_file_name("okapi.log.1");
+    assert!(fs::metadata(&rotated).unwrap().len() > okapi_store::journal::ROTATION_SIZE);
+    // The lines after the first went to a new journal, which says why.
+    let new = fs::metadata(&journal).unwrap().len();
+    assert!(new < okapi_store::journal::ROTATION_SIZE, "{new}");
+    assert!(journal_has(&journal, "journal rotated"));
+}
+
+#[test]
 fn without_a_minimum_age_fresh_files_are_never_offered() {
     if running_as_root() {
         return;

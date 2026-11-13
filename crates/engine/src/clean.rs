@@ -67,6 +67,32 @@ impl KeepReason {
             Self::BrowserOpen => "browser_open",
         }
     }
+
+    /// The reason of stable name `key`, as another process wrote it: a
+    /// refusal's kind is read back from the system's error number `code`
+    /// (unknown without it). `None` for a name no reason has.
+    #[must_use]
+    pub fn from_key(key: &str, code: Option<i32>) -> Option<Self> {
+        let failed = Self::Failed {
+            kind: code.map_or(io::ErrorKind::Other, |code| {
+                io::Error::from_raw_os_error(code).kind()
+            }),
+            code,
+        };
+        [
+            Self::UnknownItem,
+            Self::Replaced,
+            Self::Recent,
+            Self::Changed,
+            Self::Excluded,
+            Self::Protected,
+            failed,
+            Self::Cancelled,
+            Self::BrowserOpen,
+        ]
+        .into_iter()
+        .find(|reason| reason.key() == key)
+    }
 }
 
 /// What became of one entry.
@@ -95,6 +121,24 @@ impl CleanResult {
             Self::Gone => "gone",
             Self::Kept(_) => "kept",
         }
+    }
+
+    /// The result of stable name `key`, as another process wrote it with
+    /// the bytes it freed and the reason it kept something; `None` when the
+    /// name is unknown or a part it needs is missing.
+    #[must_use]
+    pub fn from_key(key: &str, bytes: Option<u64>, reason: Option<KeepReason>) -> Option<Self> {
+        [
+            bytes.map(|bytes| Self::Removed { bytes }),
+            bytes
+                .zip(reason)
+                .map(|(bytes, reason)| Self::Partial { bytes, reason }),
+            Some(Self::Gone),
+            reason.map(Self::Kept),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|result| result.key() == key)
     }
 
     /// What it freed: the size of every file removed.

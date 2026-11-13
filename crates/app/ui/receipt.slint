@@ -6,7 +6,7 @@ import {
 } from "widgets.slint";
 import {
     CleanEnding, CleanPassKind, Cleaner, HistoryState, ReceiptKind, ReceiptLineShown,
-    Words,
+    RightsProblem, RightsStep, Words,
 } from "cleaner-model.slint";
 
 // The cleaning under way: its pass, how far, what is freed so far.
@@ -26,8 +26,12 @@ export component CleaningPage inherits VerticalLayout {
                 text: Cleaner.clean-cancel-asked ? @tr("Annulation du nettoyage") : @tr("Nettoyage en cours");
             }
             Detail {
-                text: Cleaner.clean-cancel-asked
+                text: Cleaner.clean-rights == RightsStep.authenticating
+                    ? @tr("Saisissez le mot de passe dans la fenêtre du système. Annuler n'agit qu'une fois cette fenêtre fermée.")
+                    : Cleaner.clean-cancel-asked
                     ? @tr("L'élément en cours se termine ; ce qui n'est pas encore retiré reste.")
+                    : Cleaner.clean-rights == RightsStep.scanning
+                    ? @tr("Nettoyage des éléments administrateur.")
                     : Cleaner.clean-pass == CleanPassKind.check
                     ? @tr("Vérification de chaque élément avant de le retirer.")
                     : @tr("Suppression des éléments vérifiés.");
@@ -245,13 +249,18 @@ export component ReceiptPage inherits VerticalLayout {
                     : @tr("L'historique n'a pas été écrit.");
                 color: Cleaner.history == HistoryState.recorded ? Theme.text-2 : Theme.warning;
             }
+            if Cleaner.receipt-rights != RightsProblem.none: Line {
+                text: @tr("La partie administrateur ne s'est pas terminée. {}", Words.rights(Cleaner.receipt-rights));
+                color: Theme.warning;
+                accessible-live-region: polite;
+            }
             if Cleaner.deletion-log-lost: Line {
                 text: @tr("Le journal des suppressions que vous demandez n'a pas été écrit : ce qui a été supprimé n'est listé que dans le journal technique.");
                 color: Theme.danger;
                 accessible-live-region: assertive;
             }
         }
-        if Cleaner.ending == CleanEnding.stopped: VerticalLayout {
+        if Cleaner.stops.length > 0: VerticalLayout {
             spacing: Theme.spacing-xs;
             for stop in Cleaner.stops: Line {
                 text: Words.stop(stop);

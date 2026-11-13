@@ -16,7 +16,7 @@ use crate::PROTOCOL_VERSION;
 
 /// The longest request line, without its line break: a request names a few
 /// targets and exclusions, never more.
-pub(crate) const MAX_REQUEST_BYTES: usize = 64 * 1024;
+pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
 
 /// The youngest an entry the helper removes may be, whatever it is asked: a
 /// floor of its own, not the settings' default, which may change.
@@ -34,12 +34,12 @@ pub enum Operation {
 }
 
 /// The request as written, one JSON object on one line:
-/// `{"version": 1, "operation": "clean", "targets": ["/var/crash"],
-/// "minAgeMinutes": 60, "exclusions": ["/var/crash/keep"]}`.
-#[derive(Debug, Deserialize)]
+/// `{"version": 2, "operation": "clean", "targets": ["/var/crash"],
+/// "minAgeMinutes": 60, "exclusions": ["/var/crash/keep"]}`. The caller
+/// writes it with the type the helper reads it with ([`request_line`]).
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Written {
-    #[expect(dead_code, reason = "read first on its own, by `Versioned`")]
     version: u32,
     operation: Operation,
     targets: Vec<String>,
@@ -47,11 +47,44 @@ struct Written {
     exclusions: Vec<PathBuf>,
 }
 
-/// The version alone, read before anything else: a request of another
+/// The version alone, read before anything else: a document of another
 /// version is refused as such, not for a field it adds.
 #[derive(Deserialize)]
-struct Versioned {
-    version: u32,
+pub(crate) struct Versioned {
+    pub(crate) version: u32,
+}
+
+/// The request line the helper reads (without its line break), for the
+/// caller: `targets` by the path the rules write them with, an age in
+/// minutes (the helper refuses one below [`HELPER_MIN_AGE_FLOOR`]), and the
+/// exclusions.
+///
+/// # Errors
+///
+/// [`Refusal::TooLong`]: the helper would refuse it, so it is never sent;
+/// [`Refusal::Invalid`]: an exclusion is not UTF-8, which no request carries.
+pub fn request_line(
+    operation: Operation,
+    targets: &[String],
+    min_age_minutes: u64,
+    exclusions: &[PathBuf],
+) -> Result<Vec<u8>, Refusal> {
+    let written = Written {
+        version: PROTOCOL_VERSION,
+        operation,
+        targets: targets.to_vec(),
+        min_age_minutes,
+        exclusions: exclusions.to_vec(),
+    };
+    // A structure of strings, numbers and paths: always serializable, but
+    // for a path that is not UTF-8, which no request can carry.
+    let line = serde_json::to_vec(&written).map_err(|error| Refusal::Invalid {
+        detail: error.to_string(),
+    })?;
+    if line.len() > MAX_REQUEST_BYTES {
+        return Err(Refusal::TooLong);
+    }
+    Ok(line)
 }
 
 /// Why a request is refused: nothing is then read nor touched.
@@ -180,7 +213,8 @@ impl Selection {
 /// rules: those that delete, need the administrator and hold no variable.
 /// Unique: no other target that deletes has the path of one of them
 /// (`okapi-rules`).
-pub(crate) fn admin_targets(rules: &RuleSet) -> BTreeMap<String, Origin> {
+#[must_use]
+pub fn admin_targets(rules: &RuleSet) -> BTreeMap<String, Origin> {
     rules
         .system()
         .clean_targets()

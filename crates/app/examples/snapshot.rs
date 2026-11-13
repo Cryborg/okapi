@@ -66,6 +66,11 @@ fn row(
         folded: false,
         hidden: false,
         badge,
+        admin: if badge == ui::ResultBadge::Admin {
+            ui::AdminRow::Locked
+        } else {
+            ui::AdminRow::None
+        },
         entries: 1528,
         size: size(936, 7, ui::SizeUnit::Megabyte),
     }
@@ -82,6 +87,7 @@ fn header(category: ui::CategoryKind, folded: bool) -> ui::ResultRow {
         folded,
         hidden: false,
         badge: ui::ResultBadge::Preselected,
+        admin: ui::AdminRow::None,
         entries: 86_300,
         size: size(10, 8, ui::SizeUnit::Gigabyte),
     }
@@ -151,6 +157,7 @@ fn results(window: &ui::AppWindow, folded: bool) {
     cleaner.set_results(ModelRc::new(VecModel::from(rows)));
     cleaner.set_selected_entries(4);
     cleaner.set_result_entries(7);
+    cleaner.set_rights_waiting(6);
     cleaner.set_selected_size(size(2, 1, ui::SizeUnit::Gigabyte));
     cleaner.set_found(size(11, 6, ui::SizeUnit::Gigabyte));
     cleaner.set_step(ui::CleanerStep::Results);

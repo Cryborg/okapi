@@ -578,6 +578,13 @@ impl ScanReport {
         Some((group, group.items.get(item)?))
     }
 
+    /// The size the scan saw of the entry with this identifier, if the
+    /// identifier comes from this report.
+    #[must_use]
+    pub fn size_of(&self, id: ItemId) -> Option<u64> {
+        self.find(id).map(|(_, item)| item.size())
+    }
+
     /// The locks held of the browsers whose caches these identifiers are in,
     /// one per browser: what to ask the user about before cleaning them.
     #[must_use]
@@ -856,7 +863,7 @@ mod tests {
 
         use okapi_rules::Variable;
 
-        use crate::{CleanResult, KeepReason, Stop};
+        use crate::{KeepReason, Stop};
 
         let stops = [
             (Stop::UnsupportedSystem, "unsupportedSystem"),
@@ -893,10 +900,56 @@ mod tests {
             (KeepReason::Protected, "protected"),
             (failed, "failed"),
             (KeepReason::Cancelled, "cancelled"),
+            (KeepReason::BrowserOpen, "browser_open"),
         ];
+        // Every reason is listed: one added does not compile here, then
+        // fails until it is listed, and read back by `from_key`.
+        let place = |reason: KeepReason| match reason {
+            KeepReason::UnknownItem => 0,
+            KeepReason::Replaced => 1,
+            KeepReason::Recent => 2,
+            KeepReason::Changed => 3,
+            KeepReason::Excluded => 4,
+            KeepReason::Protected => 5,
+            KeepReason::Failed { .. } => 6,
+            KeepReason::Cancelled => 7,
+            KeepReason::BrowserOpen => 8,
+        };
+        assert_eq!(
+            reasons.map(|(reason, _)| place(reason)),
+            [0, 1, 2, 3, 4, 5, 6, 7, 8]
+        );
         for (reason, name) in reasons {
             assert_eq!(reason.key(), name);
+            // Read back as another process writes it: the name, the code.
+            let code = match reason {
+                KeepReason::Failed { code, .. } => code,
+                _ => None,
+            };
+            assert_eq!(KeepReason::from_key(name, code), Some(reason), "{name}");
         }
+        assert_eq!(KeepReason::from_key("unknown", None), None);
+        assert_eq!(
+            KeepReason::from_key("failed", None),
+            Some(KeepReason::Failed {
+                kind: ErrorKind::Other,
+                code: None
+            }),
+            "a refusal without its number: of unknown kind"
+        );
+    }
+
+    /// The names of the results, read back as another process writes them.
+    #[test]
+    fn every_result_keeps_its_name() {
+        use std::io::ErrorKind;
+
+        use crate::{CleanResult, KeepReason};
+
+        let failed = KeepReason::Failed {
+            kind: ErrorKind::PermissionDenied,
+            code: Some(13),
+        };
         let results = [
             (CleanResult::Removed { bytes: 1 }, "removed"),
             (
@@ -909,8 +962,38 @@ mod tests {
             (CleanResult::Gone, "gone"),
             (CleanResult::Kept(failed), "kept"),
         ];
+        let place = |result: CleanResult| match result {
+            CleanResult::Removed { .. } => 0,
+            CleanResult::Partial { .. } => 1,
+            CleanResult::Gone => 2,
+            CleanResult::Kept(_) => 3,
+        };
+        assert_eq!(results.map(|(result, _)| place(result)), [0, 1, 2, 3]);
         for (result, name) in results {
             assert_eq!(result.key(), name);
+            let (bytes, reason) = match result {
+                CleanResult::Removed { bytes } => (Some(bytes), None),
+                CleanResult::Partial { bytes, reason } => (Some(bytes), Some(reason)),
+                CleanResult::Gone => (None, None),
+                CleanResult::Kept(reason) => (None, Some(reason)),
+            };
+            assert_eq!(
+                CleanResult::from_key(name, bytes, reason),
+                Some(result),
+                "{name}"
+            );
+        }
+        for (name, bytes, reason) in [
+            ("unknown", Some(1), Some(failed)),
+            ("removed", None, None),
+            ("partial", Some(1), None),
+            ("kept", Some(1), None),
+        ] {
+            assert_eq!(
+                CleanResult::from_key(name, bytes, reason),
+                None,
+                "{name} {bytes:?} {reason:?}"
+            );
         }
     }
 

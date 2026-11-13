@@ -7,9 +7,61 @@ import {
     Line, Title,
 } from "widgets.slint";
 import {
-    BrowserStep, CheckState, Cleaner, IssueKind, IssueShown, ProblemBanner, ResultBadge, ResultRow,
-    RowKind, SetupProblem, Words,
+    AdminRow, BrowserStep, CheckState, Cleaner, IssueKind, IssueShown, ProblemBanner, ResultBadge,
+    ResultRow, RightsProblem, RightsStep, RowKind, SetupProblem, Words,
 } from "cleaner-model.slint";
+
+// What waits for the administrator's rights, and the button that asks for
+// them; while they are asked, where it stands; then why they gave nothing.
+component RightsBanner inherits Rectangle {
+    background: Theme.admin-soft;
+    border-radius: Theme.radius-medium;
+    accessible-role: text;
+    accessible-label: said.text;
+    accessible-live-region: polite;
+    HorizontalLayout {
+        padding: Theme.spacing-m;
+        padding-left: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        Icon {
+            source: @image-url("../assets/icons/shield.svg");
+            colorize: Theme.admin;
+            y: (parent.height - self.height) / 2;
+        }
+        said := Line {
+            horizontal-stretch: 1;
+            accessible-role: none;
+            color: Theme.text;
+            vertical-alignment: center;
+            wrap: word-wrap;
+            text: Cleaner.rights-step == RightsStep.authenticating
+                ? @tr("Saisissez le mot de passe dans la fenêtre du système. Annuler n'agit qu'une fois cette fenêtre fermée.")
+                : Cleaner.rights-step == RightsStep.scanning
+                ? @tr("Analyse avec les droits administrateur…")
+                : Cleaner.rights-step == RightsStep.cancelling
+                ? @tr("Annulation de la demande des droits : elle prend effet une fois la fenêtre du système fermée.")
+                : Cleaner.rights-problem != RightsProblem.none
+                ? @tr("{} Groupes qui les demandent toujours : {}.", Words.rights(Cleaner.rights-problem), Cleaner.rights-waiting)
+                : @tr("Certaines opérations demandent les droits administrateur. Groupes ci-dessous : {}.", Cleaner.rights-waiting);
+        }
+        if Cleaner.rights-step == RightsStep.idle: ActionButton {
+            text: @tr("Obtenir les droits");
+            kind: ButtonKind.secondary;
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                Cleaner.obtain-rights();
+            }
+        }
+        if Cleaner.rights-step == RightsStep.authenticating || Cleaner.rights-step == RightsStep.scanning: ActionButton {
+            text: @tr("Annuler");
+            kind: ButtonKind.ghost;
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                Cleaner.cancel-rights();
+            }
+        }
+    }
+}
 
 // The button that folds or unfolds a category.
 component Fold inherits Rectangle {
@@ -74,7 +126,13 @@ component ResultLine inherits VerticalLayout {
     // Why a group is left to the user, or out of reach.
     property <string> note: line.badge == ResultBadge.to-choose
         ? @tr("Le prochain démarrage sera plus lent, le temps de recréer ce cache.")
-        : @tr("Demande les droits administrateur, que l'interface ne sait pas encore obtenir.");
+        : line.admin == AdminRow.nothing
+        ? @tr("Rien à nettoyer avec les droits administrateur.")
+        : line.admin == AdminRow.unlocked
+        ? @tr("Droits obtenus : à cocher vous-même.")
+        : line.admin == AdminRow.unreachable
+        ? @tr("Hors de portée de l'assistant administrateur.")
+        : @tr("Demande les droits administrateur : « Obtenir les droits » ci-dessus.");
 
     if !line.hidden: Rectangle {
         min-height: Theme.results-row-height;
@@ -300,6 +358,9 @@ component Confirmation inherits PopupWindow {
                 }
                 Detail {
                     text: @tr("Taille : {}. Éléments : {}. Rien ne passe par la corbeille : cette action est irréversible.", Words.size(Cleaner.confirm-size), Cleaner.confirm-entries);
+                }
+                if Cleaner.confirm-admin: Detail {
+                    text: @tr("Une fenêtre du système peut vous demander votre mot de passe pour les éléments administrateur. Ils sont mesurés de nouveau juste avant d'être retirés : leur nombre a pu changer depuis l'obtention des droits.");
                 }
                 understood-box := Rectangle {
                     accessible-role: checkbox;
@@ -562,6 +623,7 @@ export component ResultsPage inherits VerticalLayout {
             }
         }
         if Cleaner.problem != SetupProblem.none: ProblemBanner { }
+        if Cleaner.rights-waiting > 0 || Cleaner.rights-step != RightsStep.idle: RightsBanner { }
         Card {
             vertical-stretch: 1;
             accessible-role: list;

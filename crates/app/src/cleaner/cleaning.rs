@@ -4,25 +4,29 @@
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::sync::mpsc::TryRecvError;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::SystemTime;
 
 use okapi_engine::{
     BrowserLock, CleanPass, CleanReceipt, CleanResult, ItemId, KeepReason, Progress, ScanItem,
-    ScanOptions, ScanReport,
+    ScanOptions, ScanReport, Stop,
 };
+use okapi_helper::{Operation, OutcomeAnswer, Reply, ReplyError};
 use okapi_rules::{RuleSet, TemplateVariables};
-use okapi_store::{History, Opened};
+use okapi_store::{AdminRecord, History, HistoryEntry, HistoryOutcome, Opened};
 use slint::ComponentHandle as _;
 
 use super::{
-    CleanerScreen, Problem, Running, Task, options, problem, show, shown, size, stop_shown,
+    CleanerScreen, Problem, Running, Task, options, problem, rights, show, shown, size, stop_shown,
 };
+use crate::elevation::{ElevationFailure, ElevationStep};
 use crate::receipt::{Ending, Kept, LineKind, OutcomeFacts, Receipt};
 use crate::ui;
 
 /// What a cleaning takes: identifiers of the report kept, and only them
-/// (invariant 1), with the rules, variables and options read as it starts.
+/// (invariant 1), with the rules, variables and options read as it starts;
+/// and the request of root's part, which names the rules' targets of the
+/// groups that need the administrator, never a path.
 #[derive(Debug)]
 pub struct CleanJob {
     pub report: Arc<ScanReport>,
@@ -30,7 +34,11 @@ pub struct CleanJob {
     pub rules: Arc<RuleSet>,
     pub variables: TemplateVariables,
     pub options: ScanOptions,
+    pub admin: Option<Vec<u8>>,
 }
+
+/// What root's part of a cleaning gave.
+pub type AdminDone = Result<Reply, ElevationFailure>;
 
 /// What became of the history line of a cleaning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,10 +49,11 @@ pub enum HistoryWrite {
     Unavailable,
 }
 
-/// A cleaning's receipt, and its history line.
+/// A cleaning's receipt, root's part, and its history line.
 #[derive(Debug)]
 pub struct Cleaned {
     receipt: CleanReceipt,
+    admin: Option<AdminDone>,
     history: HistoryWrite,
 }
 
@@ -55,6 +64,8 @@ struct CleanView {
     done: usize,
     total: usize,
     freed: u64,
+    /// Root's part under way: its question, then its work.
+    rights: Option<ElevationStep>,
 }
 
 /// A cleaning under way. The screen never gives it up: a removal cut short
@@ -62,19 +73,27 @@ struct CleanView {
 /// insisting, or the event loop ending, leaves it).
 pub(super) struct Cleaning {
     pub(super) running: Running<Cleaned>,
+    steps: Receiver<ElevationStep>,
     view: CleanView,
     report: Arc<ScanReport>,
+    /// It had a part of root's.
+    had_admin: bool,
     /// The user asked for every entry in the history.
     deletion_log: bool,
     /// The window asked to close: it hides once the receipt is in.
     close_when_done: bool,
 }
 
-/// The confirmation open: what it shows, of which report.
+/// The confirmation open: what it shows, of which report. The user's part
+/// (`groups`, `entries`) and root's (`admin`, its targets and entries) apart:
+/// root's entries are never identifiers of this report to remove.
 pub(super) struct Confirming {
     report: Arc<ScanReport>,
     groups: BTreeSet<usize>,
     entries: usize,
+    admin: BTreeSet<usize>,
+    admin_targets: BTreeSet<String>,
+    admin_entries: usize,
 }
 
 impl Confirming {
@@ -82,6 +101,7 @@ impl Confirming {
         &self.report
     }
 
+    /// The user's groups confirmed, by their index in the report.
     pub(super) const fn groups(&self) -> &BTreeSet<usize> {
         &self.groups
     }
@@ -98,7 +118,7 @@ impl Confirming {
 
     /// Leaves out of this cleaning the groups that empty a cache of the
     /// browser of `lock`: what is confirmed is then what is left. The entries
-    /// left.
+    /// left, root's part included (a browser's cache is never one of its).
     pub(super) fn leave_out(&mut self, lock: &BrowserLock) -> usize {
         let groups = self.report.groups();
         self.groups.retain(|index| {
@@ -112,7 +132,7 @@ impl Confirming {
             .filter_map(|index| groups.get(*index))
             .map(|group| group.items().len())
             .sum();
-        self.entries
+        self.entries + self.admin_entries
     }
 }
 
@@ -124,16 +144,105 @@ struct Prepared {
     deletion_log: bool,
 }
 
-/// Adds the line of `receipt` to `history`, from the cleaning's thread: the
-/// line is written before the screen stops waiting for it, unless the user
-/// insists on closing.
-fn record(history: Option<History>, receipt: &CleanReceipt, deletion_log: bool) -> HistoryWrite {
+/// What root's part gave the cleaning: what became of each of its entries,
+/// and why it was not done to its end, if it was not (`RightsProblem::None`
+/// when it was, cancelled entries included: a cancellation alone is said by
+/// them). A run whose end is unknown may have removed entries: said so. Root
+/// is only asked for groups its scan offered without a word: one it says
+/// something about now (withheld, or walked only in part) changed since, and
+/// was not cleaned whole.
+fn admin_part(admin: &AdminDone) -> (&[OutcomeAnswer], ui::RightsProblem) {
+    match admin {
+        Ok(Reply::Answer(answer)) => {
+            let outcomes = answer.outcomes().unwrap_or_default();
+            let stops = answer.stops();
+            let cancelled = stops.iter().any(|stop| stop == Stop::Cancelled.key());
+            let problem = if stops.iter().any(|stop| stop != Stop::Cancelled.key()) {
+                ui::RightsProblem::Stopped
+            } else if cancelled && outcomes.is_empty() {
+                // Cancelled before its cleaning touched anything.
+                ui::RightsProblem::Cancelled
+            } else if answer
+                .issues()
+                .iter()
+                .any(|issue| !issue.targets().is_empty())
+            {
+                // A stop is an issue of no target, said by the stops.
+                ui::RightsProblem::Changed
+            } else {
+                ui::RightsProblem::None
+            };
+            (outcomes, problem)
+        }
+        Ok(Reply::Refused(refusal)) => (&[], rights::refusal_problem(refusal)),
+        Err(failure) if rights::ran_to_an_unknown_end(failure) => (&[], ui::RightsProblem::Unknown),
+        Err(failure) => (&[], rights::problem_of(failure)),
+    }
+}
+
+/// Adds the line of the cleaning to `history`, from the cleaning's thread:
+/// the line is written before the screen stops waiting for it, unless the
+/// user insists on closing. One line for both parts: root's entries first.
+fn record(
+    history: Option<History>,
+    receipt: &CleanReceipt,
+    admin: Option<&AdminDone>,
+    deletion_log: bool,
+) -> HistoryWrite {
+    // Said even when no history is kept.
+    let admin = admin.map(|admin| {
+        let (outcomes, problem) = admin_part(admin);
+        if problem != ui::RightsProblem::None {
+            tracing::warn!(
+                ?problem,
+                outcomes = outcomes.len(),
+                "root's part of the cleaning not done to its end"
+            );
+        }
+        (outcomes, problem)
+    });
     let Some(mut history) = history else {
         return HistoryWrite::Unavailable;
     };
-    match history.record_cleaning(receipt, deletion_log) {
+    let (admin_outcomes, admin_record) = admin.map_or((&[][..], None), |(outcomes, problem)| {
+        let done = problem == ui::RightsProblem::None;
+        let record = AdminRecord {
+            done,
+            reason: (!done).then(|| rights::problem_key(problem).to_owned()),
+        };
+        (outcomes, Some(record))
+    });
+    let outcomes = admin_outcomes
+        .iter()
+        .map(|answered| {
+            let outcome = answered.outcome();
+            (outcome.clean_result_or_refused(), outcome.clone())
+        })
+        .chain(
+            receipt
+                .outcomes()
+                .iter()
+                .map(|outcome| (outcome.result(), HistoryOutcome::of(outcome))),
+        )
+        .collect();
+    let stops = receipt
+        .stops()
+        .iter()
+        .map(|stop| stop.key().to_owned())
+        .collect();
+    let entry = HistoryEntry::of_outcomes(
+        stops,
+        outcomes,
+        admin_record,
+        SystemTime::now(),
+        deletion_log,
+    );
+    match history.record(&entry) {
         Ok(()) => HistoryWrite::Recorded,
-        Err(_) => HistoryWrite::Failed,
+        Err(error) => {
+            tracing::error!(%error, deletion_log, "history not recorded");
+            HistoryWrite::Failed
+        }
     }
 }
 
@@ -154,19 +263,31 @@ impl CleanerScreen {
                 tracing::warn!("cleaning asked for without results");
                 return;
             };
-            let groups = held.results.checked().clone();
-            let (entries, bytes) = held.results.selected();
+            let results = &held.results;
+            let groups = results.user_checked();
+            let (admin, admin_targets) = results.admin_checked();
+            let (entries, bytes) = results.selected();
             if entries == 0 {
                 tracing::warn!("cleaning asked for without an entry");
                 return;
             }
-            tracing::info!(groups = groups.len(), entries, bytes, "cleaning to confirm");
+            tracing::info!(groups = groups.len(), admin = ?admin_targets, entries, bytes, "cleaning to confirm");
             state.confirming = Some(Confirming {
                 report: Arc::clone(&held.report),
+                entries: results.entries_of(&groups),
                 groups,
-                entries,
+                admin_entries: results.entries_of(&admin),
+                admin,
+                admin_targets,
             });
-            (entries, bytes)
+            (
+                entries,
+                bytes,
+                state
+                    .confirming
+                    .as_ref()
+                    .is_some_and(|confirming| !confirming.admin.is_empty()),
+            )
         };
         self.settle();
         self.with_window(|window, _| {
@@ -174,6 +295,7 @@ impl CleanerScreen {
             cleaner.set_understood(false);
             cleaner.set_confirm_entries(shown(opened.0));
             cleaner.set_confirm_size(size(opened.1));
+            cleaner.set_confirm_admin(opened.2);
             cleaner.set_confirming(true);
         });
     }
@@ -225,6 +347,39 @@ impl CleanerScreen {
             );
             return Err(Problem::Start);
         }
+        // Root's part, with the age and exclusions its scan unlocked with,
+        // which must still be those of the settings read now: root never
+        // removes what the settings came to protect since.
+        let admin = if confirmed.admin_targets.is_empty() {
+            None
+        } else {
+            let held = state.held.as_ref();
+            let Some(granted) = held.and_then(|held| held.granted.as_ref()) else {
+                tracing::error!(
+                    "groups that need the administrator confirmed without the rights: nothing removed"
+                );
+                return Err(Problem::Start);
+            };
+            let now = rights::Granted::of(
+                &inputs,
+                &held
+                    .map(|held| held.results.helper_targets())
+                    .unwrap_or_default(),
+            );
+            if &now != granted {
+                tracing::warn!(
+                    ?granted,
+                    ?now,
+                    "settings changed since the rights were obtained: nothing removed"
+                );
+                return Err(Problem::RightsChanged);
+            }
+            let Some(line) = granted.line(Operation::Clean, &confirmed.admin_targets) else {
+                return Err(Problem::Start);
+            };
+            tracing::info!(targets = ?confirmed.admin_targets, ?granted, "root's part of the cleaning");
+            Some(line)
+        };
         Ok(Prepared {
             job: CleanJob {
                 report: Arc::clone(&confirmed.report),
@@ -232,6 +387,7 @@ impl CleanerScreen {
                 rules: Arc::clone(rules),
                 variables: inputs.variables,
                 options,
+                admin,
             },
             history,
             deletion_log: inputs.deletion_log,
@@ -282,6 +438,15 @@ impl CleanerScreen {
             .and_then(|prepared| self.start_cleaning(prepared));
         if let Err(found) = started {
             tracing::warn!(problem = ?found, "cleaning cannot start: nothing removed");
+            if found == Problem::RightsChanged {
+                // The groups root unlocked were measured with other settings:
+                // they must be unlocked again before they can be checked.
+                if let Some(held) = self.0.borrow_mut().held.as_mut() {
+                    held.results.relock();
+                    held.granted = None;
+                }
+                self.show_results();
+            }
             self.with_window(|window, _| {
                 window
                     .global::<ui::Cleaner>()
@@ -298,16 +463,41 @@ impl CleanerScreen {
             history,
             deletion_log,
         } = prepared;
-        tracing::info!(ids = job.ids.len(), options = ?job.options, history = history.is_some(), deletion_log, "cleaning started");
+        tracing::info!(ids = job.ids.len(), admin = job.admin.is_some(), options = ?job.options, history = history.is_some(), deletion_log, "cleaning started");
         let report = Arc::clone(&job.report);
+        let had_admin = job.admin.is_some();
         let clean = Arc::clone(&self.0.borrow().seams.clean);
+        let elevate = Arc::clone(&self.0.borrow().seams.elevate);
+        let (step_sender, steps) = mpsc::channel();
         let running = Running::start(
             "okapi-cleaning",
             tracing::info_span!("cleaning"),
             move |cancel, progress| {
+                // Root's part first: the system's question, if it comes,
+                // comes before anything is removed; never asked once
+                // cancelled.
+                let admin = job.admin.clone().map(|line| {
+                    if cancel.is_cancelled() {
+                        tracing::info!("cleaning cancelled before root's part: not asked");
+                        return Err(ElevationFailure::Cancelled);
+                    }
+                    elevate(Operation::Clean, line, &cancel, &step_sender)
+                });
+                if matches!(
+                    admin,
+                    Some(Err(ElevationFailure::Reply(ReplyError::Dismissed)))
+                ) {
+                    // A "no" to the question: nothing of the user's either.
+                    tracing::info!("authentication dismissed: the whole cleaning is cancelled");
+                    cancel.cancel();
+                }
                 let receipt = clean(&job, cancel, progress);
-                let history = record(history, &receipt, deletion_log);
-                Cleaned { receipt, history }
+                let history = record(history, &receipt, admin.as_ref(), deletion_log);
+                Cleaned {
+                    receipt,
+                    admin,
+                    history,
+                }
             },
         )
         .map_err(|error| {
@@ -317,10 +507,12 @@ impl CleanerScreen {
         self.with_window(|window, _| window.global::<ui::Cleaner>().set_problem(problem(None)));
         self.0.borrow_mut().task = Some(Task::Cleaning(Cleaning {
             running,
+            steps,
             view: CleanView::default(),
             report,
             deletion_log,
             close_when_done: false,
+            had_admin,
         }));
         self.settle();
         self.with_window(|window, _| {
@@ -343,6 +535,9 @@ impl CleanerScreen {
             let Some(Task::Cleaning(cleaning)) = state.task.as_mut() else {
                 return;
             };
+            if let Some(step) = cleaning.steps.try_iter().last() {
+                cleaning.view.rights = Some(step);
+            }
             for progress in cleaning.running.progress.try_iter() {
                 if let Progress::Cleaning {
                     pass,
@@ -351,23 +546,30 @@ impl CleanerScreen {
                     removed_bytes,
                 } = progress
                 {
+                    // The user's part: root's is over.
                     cleaning.view = CleanView {
                         pass: Some(pass),
                         done,
                         total,
                         freed: removed_bytes,
+                        rights: None,
                     };
                 }
             }
             let view = &cleaning.view;
             (
                 cleaning.running.result.try_recv(),
-                (view.pass, view.done, view.total, view.freed),
+                (view.pass, view.done, view.total, view.freed, view.rights),
             )
         };
-        let (pass, done, total, freed) = view;
+        let (pass, done, total, freed, rights) = view;
         self.with_window(|window, _| {
             let cleaner = window.global::<ui::Cleaner>();
+            cleaner.set_clean_rights(match rights {
+                None => ui::RightsStep::Idle,
+                Some(ElevationStep::Launched) => ui::RightsStep::Authenticating,
+                Some(ElevationStep::Authenticated) => ui::RightsStep::Scanning,
+            });
             cleaner.set_clean_pass(match pass {
                 Some(CleanPass::Remove) => ui::CleanPassKind::Remove,
                 Some(CleanPass::Check) | None => ui::CleanPassKind::Check,
@@ -380,8 +582,13 @@ impl CleanerScreen {
             Ok(cleaned) => self.end_cleaning(Some(&cleaned)),
             Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => {
+                let had_admin = matches!(
+                    &self.0.borrow().task,
+                    Some(Task::Cleaning(cleaning)) if cleaning.had_admin
+                );
                 tracing::error!(
-                    "cleaning thread ended without a receipt: its history line is not written"
+                    had_admin,
+                    "cleaning thread ended without a receipt: its history line is not written, and root's part, if any, may have removed entries"
                 );
                 self.end_cleaning(None);
             }
@@ -404,7 +611,12 @@ impl CleanerScreen {
             state.held = None;
         }
         self.settle();
-        let receipt = done.map(|done| (done, receipt_of(&done.receipt, &cleaning.report)));
+        let receipt = done.map(|done| {
+            (
+                done,
+                receipt_of(&done.receipt, &cleaning.report, done.admin.as_ref()),
+            )
+        });
         if let Some((done, receipt)) = &receipt {
             tracing::info!(
                 ending = ?receipt.ending,
@@ -432,6 +644,11 @@ impl CleanerScreen {
                     done.receipt.stops().iter().filter_map(stop_shown).collect(),
                 );
                 show_receipt(&shown_to, &state.receipt_model, receipt);
+                shown_to.set_receipt_rights(
+                    done.admin
+                        .as_ref()
+                        .map_or(ui::RightsProblem::None, |admin| admin_part(admin).1),
+                );
                 shown_to.set_history(match done.history {
                     HistoryWrite::Recorded => ui::HistoryState::Recorded,
                     HistoryWrite::Failed => ui::HistoryState::Failed,
@@ -439,6 +656,13 @@ impl CleanerScreen {
                 });
             } else {
                 show(&state.receipt_model, Vec::new());
+                show(&state.stop_model, Vec::new());
+                // Its thread died: root's part, if any, may have removed entries.
+                shown_to.set_receipt_rights(if cleaning.had_admin {
+                    ui::RightsProblem::Unknown
+                } else {
+                    ui::RightsProblem::None
+                });
                 shown_to.set_ending(ui::CleanEnding::Interrupted);
                 shown_to.set_history(ui::HistoryState::NotWritten);
             }
@@ -526,16 +750,38 @@ impl CleanerScreen {
     }
 }
 
-/// The receipt of `receipt`, cleaned from `report`.
-fn receipt_of(receipt: &CleanReceipt, report: &ScanReport) -> Receipt {
-    let facts = OutcomeFacts::all(receipt, report);
-    if facts
+/// The receipt of a cleaning: `receipt` of the user's part, cleaned from
+/// `report`, and root's part, if any. It ends cancelled when the system's
+/// question was dismissed, stopped when neither part did anything.
+fn receipt_of(receipt: &CleanReceipt, report: &ScanReport, admin: Option<&AdminDone>) -> Receipt {
+    let users = OutcomeFacts::all(receipt, report);
+    if users
         .iter()
         .any(|fact| fact.result == CleanResult::Kept(KeepReason::UnknownItem))
     {
         tracing::error!("an identifier of another report reached the cleaning");
     }
-    Receipt::new(!receipt.stops().is_empty(), &facts)
+    let (admin_outcomes, problem) = admin.map_or((&[][..], ui::RightsProblem::None), admin_part);
+    let facts: Vec<OutcomeFacts> = admin_outcomes
+        .iter()
+        .map(OutcomeFacts::of_helper)
+        .chain(users)
+        .collect();
+    // Stopped when nothing could be done: a part stopped or failed, and no
+    // part touched anything. Root's part whose end is unknown may have
+    // removed entries: never "nothing was touched".
+    let unknown = problem == ui::RightsProblem::Unknown;
+    let failed = !receipt.stops().is_empty() || problem != ui::RightsProblem::None;
+    let mut shown = Receipt::new(failed && !unknown && facts.is_empty(), &facts);
+    if unknown && facts.is_empty() {
+        shown.ending = Ending::Interrupted;
+    } else if matches!(
+        problem,
+        ui::RightsProblem::Dismissed | ui::RightsProblem::Cancelled
+    ) {
+        shown.ending = Ending::Cancelled;
+    }
+    shown
 }
 
 /// Shows `receipt` in the window.
@@ -548,6 +794,7 @@ fn show_receipt(
         Ending::Done => ui::CleanEnding::Done,
         Ending::Cancelled => ui::CleanEnding::Cancelled,
         Ending::Stopped => ui::CleanEnding::Stopped,
+        Ending::Interrupted => ui::CleanEnding::Interrupted,
     });
     cleaner.set_freed(size(receipt.freed));
     cleaner.set_removed(shown(receipt.removed));
@@ -1903,5 +2150,507 @@ mod tests {
         ));
         assert!(no_button(&window, "Fermer Chrome et continuer"));
         assert_eq!(signalled.get(), 2);
+    }
+
+    /// What the fake helper was asked: each operation and its request.
+    type Asked = Arc<std::sync::Mutex<Vec<(okapi_helper::Operation, serde_json::Value)>>>;
+
+    /// The embedded rules, the system's targets two that need the
+    /// administrator in the sandbox: crash reports and core dumps.
+    fn admin_rules(sandbox: &Sandbox) -> RuleSet {
+        let target = |relative: &str, subcategory: &str| {
+            serde_json::json!({
+                "path": sandbox.root.join(relative),
+                "subcategory": subcategory,
+                "needsAdmin": true,
+            })
+        };
+        let system = serde_json::json!({
+            "type": "system",
+            "cleanTargets": [target("var/crash", "Crash Reports"), target("var/dumps", "Core Dumps")],
+        });
+        RuleSet::embedded_with(
+            Os::Linux,
+            okapi_rules::RuleFileKind::System,
+            &system.to_string(),
+        )
+        .unwrap()
+    }
+
+    /// The sandbox's settings, its analysis on `rules`, and a helper that
+    /// answers `answer(operation, request)` as the helper writes it, after
+    /// saying it is authenticated.
+    fn admin_seams(
+        sandbox: &Sandbox,
+        rules: &RuleSet,
+        asked: &Asked,
+        answer: impl Fn(okapi_helper::Operation, &serde_json::Value) -> (i32, String)
+        + Send
+        + Sync
+        + 'static,
+    ) -> Seams {
+        let rules = Arc::new(rules.clone());
+        let asked = Arc::clone(asked);
+        Seams {
+            work: Arc::new(move |job, cancel, progress| {
+                okapi_engine::scan_watched(
+                    &rules,
+                    &job.variables,
+                    &job.options,
+                    &okapi_engine::Watch::new(cancel, Some(progress)),
+                )
+            }),
+            elevate: Arc::new(move |operation, line, _cancel, steps| {
+                let request: serde_json::Value = serde_json::from_slice(&line).unwrap();
+                let (code, output) = answer(operation, &request);
+                asked.lock().unwrap().push((operation, request));
+                steps
+                    .send(crate::elevation::ElevationStep::Authenticated)
+                    .unwrap();
+                okapi_helper::read_reply(operation, Some(code), output.as_bytes())
+                    .map_err(crate::elevation::ElevationFailure::Reply)
+            }),
+            ..sandbox.read(&sandbox.root.join("state"))
+        }
+    }
+
+    /// The window on the results of an analysis of the system and the
+    /// applications, the helper's targets those of `rules`.
+    fn on_admin_results(
+        seams: Seams,
+        rules: &RuleSet,
+    ) -> (ui::AppWindow, super::super::CleanerScreen) {
+        let (window, screen) = on_cleaner(seams);
+        screen.use_helper_targets_of(rules);
+        checkbox(&window, "Jeux").invoke_accessible_default_action();
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
+        let_the_screen_settle();
+        (window, screen)
+    }
+
+    /// Asks for the rights and waits for root's scan.
+    fn obtain_rights(window: &ui::AppWindow) {
+        let cleaner = window.global::<ui::Cleaner>();
+        cleaner.invoke_obtain_rights();
+        assert_ne!(cleaner.get_rights_step(), ui::RightsStep::Idle);
+        watch_until(window, |window| {
+            window.global::<ui::Cleaner>().get_rights_step() == ui::RightsStep::Idle
+        });
+        let_the_screen_settle();
+    }
+
+    /// Root's scan: the crash reports offered, nothing of the core dumps.
+    fn scan_answer(sandbox: &Sandbox) -> String {
+        serde_json::json!({
+            "version": okapi_helper::PROTOCOL_VERSION,
+            "operation": "scan",
+            "stops": [],
+            "groups": [{ "targets": [sandbox.root.join("var/crash")], "entries": 3, "bytes": 3_000 }],
+            "issues": [],
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn the_rights_unlock_what_roots_scan_offers_and_root_cleans_only_what_is_checked() {
+        let sandbox = Sandbox::new();
+        let pip = sandbox.file("home/.cache/pip/old");
+        let crash = sandbox.file("var/crash/core");
+        sandbox.file("var/dumps/core");
+        settle_files();
+        let rules = admin_rules(&sandbox);
+        let asked = Asked::default();
+        let crash_name = sandbox.root.join("var/crash").display().to_string();
+        let answer = {
+            let scan = scan_answer(&sandbox);
+            let crash = crash.display().to_string();
+            move |operation, _: &serde_json::Value| {
+                match operation {
+                okapi_helper::Operation::Scan => (0, scan.clone()),
+                okapi_helper::Operation::Clean => (
+                    0,
+                    serde_json::json!({
+                        "version": okapi_helper::PROTOCOL_VERSION,
+                        "operation": "clean",
+                        "stops": [],
+                        "groups": [],
+                        "issues": [],
+                        "outcomes": [{ "outcome": { "path": crash, "result": "removed", "bytes": 7 }, "scannedBytes": 7 }],
+                    })
+                    .to_string(),
+                ),
+            }
+            }
+        };
+        let seams = admin_seams(&sandbox, &rules, &asked, answer);
+        let (window, _screen) = on_admin_results(seams, &rules);
+        let cleaner = window.global::<ui::Cleaner>();
+        assert_eq!(cleaner.get_rights_waiting(), 2);
+        assert_eq!(
+            found(&window, "Rapports de plantage").accessible_enabled(),
+            Some(false)
+        );
+
+        obtain_rights(&window);
+        let (operation, request) = asked.lock().unwrap()[0].clone();
+        assert_eq!(operation, okapi_helper::Operation::Scan);
+        assert_eq!(
+            request["minAgeMinutes"], 60,
+            "never below the helper's floor"
+        );
+        assert_eq!(cleaner.get_rights_waiting(), 0);
+        let unlocked = found(&window, "Rapports de plantage");
+        assert_eq!(unlocked.accessible_enabled(), Some(true));
+        assert_eq!(
+            unlocked.accessible_checked(),
+            Some(false),
+            "never checked for the user (invariant 5)"
+        );
+        assert_eq!(
+            found(&window, "Vidages mémoire").accessible_enabled(),
+            Some(false),
+            "nothing for root to clean"
+        );
+
+        unlocked.invoke_accessible_default_action();
+        assert!(
+            shows(&window, "Éléments : 4 sur 4"),
+            "root's numbers counted"
+        );
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        let (operation, request) = asked.lock().unwrap()[1].clone();
+        assert_eq!(operation, okapi_helper::Operation::Clean);
+        assert_eq!(
+            request["targets"],
+            serde_json::json!([crash_name]),
+            "the targets checked, no more"
+        );
+        assert_eq!(request["minAgeMinutes"], 60, "as root's scan was asked");
+        assert!(!pip.exists(), "the user's part removed");
+        assert!(
+            crash.exists(),
+            "root's part is root's: never the user's own cleaning"
+        );
+        assert!(shows(&window, "Nettoyage terminé"));
+        let history = sandbox.history();
+        assert_eq!(history.len(), 1, "one line for both parts");
+        assert_eq!(history[0]["removed"], 2);
+        assert_eq!(history[0]["admin"], serde_json::json!({ "done": true }));
+        assert_eq!(
+            history[0]["entries"][0]["path"],
+            crash.display().to_string(),
+            "root's first"
+        );
+    }
+
+    #[test]
+    fn a_dismissed_question_cancels_the_whole_cleaning() {
+        let sandbox = Sandbox::new();
+        let pip = sandbox.file("home/.cache/pip/old");
+        sandbox.file("var/crash/core");
+        settle_files();
+        let rules = admin_rules(&sandbox);
+        let asked = Asked::default();
+        let answer = {
+            let scan = scan_answer(&sandbox);
+            move |operation, _: &serde_json::Value| match operation {
+                okapi_helper::Operation::Scan => (0, scan.clone()),
+                okapi_helper::Operation::Clean => (okapi_helper::PKEXEC_DISMISSED, String::new()),
+            }
+        };
+        let seams = admin_seams(&sandbox, &rules, &asked, answer);
+        let (window, _screen) = on_admin_results(seams, &rules);
+        obtain_rights(&window);
+        found(&window, "Rapports de plantage").invoke_accessible_default_action();
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(
+            pip.exists(),
+            "a no to the question: nothing of the user's either"
+        );
+        assert!(shows(&window, "Nettoyage annulé"));
+        assert!(shows_a_text_starting(
+            &window,
+            "La partie administrateur ne s'est pas terminée"
+        ));
+        let history = sandbox.history();
+        assert_eq!(
+            history[0]["admin"],
+            serde_json::json!({ "done": false, "reason": "authDismissed" })
+        );
+        assert_eq!(history[0]["complete"], false);
+    }
+
+    #[test]
+    fn a_failed_question_leaves_the_rights_locked_and_says_why() {
+        let sandbox = Sandbox::new();
+        let pip = sandbox.file("home/.cache/pip/old");
+        sandbox.file("var/crash/core");
+        settle_files();
+        let rules = admin_rules(&sandbox);
+        let asked = Asked::default();
+        let seams = admin_seams(&sandbox, &rules, &asked, |_, _| {
+            (okapi_helper::PKEXEC_DISMISSED, String::new())
+        });
+        let (window, _screen) = on_admin_results(seams, &rules);
+        obtain_rights(&window);
+        let cleaner = window.global::<ui::Cleaner>();
+        assert_eq!(cleaner.get_rights_problem(), ui::RightsProblem::Dismissed);
+        assert_eq!(cleaner.get_rights_waiting(), 1, "nothing unlocked");
+        assert_eq!(
+            found(&window, "Rapports de plantage").accessible_enabled(),
+            Some(false)
+        );
+        // A cleaning of the user's alone never asks the helper.
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(!pip.exists());
+        assert_eq!(asked.lock().unwrap().len(), 1, "the scan alone");
+        assert_eq!(sandbox.history()[0].get("admin"), None, "no root's part");
+    }
+
+    /// An answer of root's cleaning, as the helper writes it.
+    fn clean_answer(stops: &[&str], outcomes: &serde_json::Value) -> String {
+        serde_json::json!({
+            "version": okapi_helper::PROTOCOL_VERSION,
+            "operation": "clean",
+            "stops": stops,
+            "groups": [],
+            "issues": [],
+            "outcomes": outcomes,
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn root_cleans_the_one_unlocked_group_checked_with_the_settings_of_its_scan() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        sandbox.file("var/crash/core");
+        let dumps = sandbox.file("var/dumps/core");
+        settle_files();
+        let rules = admin_rules(&sandbox);
+        let asked = Asked::default();
+        let scan = serde_json::json!({
+            "version": okapi_helper::PROTOCOL_VERSION,
+            "operation": "scan",
+            "stops": [],
+            "groups": [
+                { "targets": [sandbox.root.join("var/crash")], "entries": 1, "bytes": 7 },
+                { "targets": [sandbox.root.join("var/dumps")], "entries": 1, "bytes": 7 },
+            ],
+            "issues": [],
+        })
+        .to_string();
+        let answer = move |operation, _: &serde_json::Value| match operation {
+            okapi_helper::Operation::Scan => (0, scan.clone()),
+            okapi_helper::Operation::Clean => (0, clean_answer(&[], &serde_json::json!([]))),
+        };
+        let keep = sandbox.root.join("var/crash/keep");
+        let seams = {
+            let mut inputs = sandbox.inputs(Some(&sandbox.root.join("state")));
+            inputs.min_age_minutes = Some(0);
+            inputs
+                .exclusions
+                .extend([keep.clone(), "*.tmp".into(), "/srv/elsewhere".into()]);
+            Seams {
+                read: Rc::new(move || Ok(inputs.clone())),
+                ..admin_seams(&sandbox, &rules, &asked, answer)
+            }
+        };
+        let (window, _screen) = on_admin_results(seams, &rules);
+        obtain_rights(&window);
+        found(&window, "Rapports de plantage").invoke_accessible_default_action();
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        let asked = asked.lock().unwrap();
+        let (scan, clean) = (&asked[0].1, &asked[1].1);
+        assert_eq!(
+            clean["targets"],
+            serde_json::json!([sandbox.root.join("var/crash")]),
+            "the group checked, never the other unlocked one"
+        );
+        assert_eq!(
+            clean["minAgeMinutes"], 60,
+            "the age of the scan that unlocked it"
+        );
+        assert_eq!(
+            clean["exclusions"], scan["exclusions"],
+            "its exclusions too"
+        );
+        assert_eq!(
+            clean["exclusions"],
+            serde_json::json!([keep, "*.tmp"]),
+            "below a target or an extension; never one elsewhere"
+        );
+        assert!(dumps.exists());
+    }
+
+    #[test]
+    fn settings_changed_since_the_rights_remove_nothing_and_lock_root_again() {
+        let sandbox = Sandbox::new();
+        let pip = sandbox.file("home/.cache/pip/old");
+        let crash = sandbox.file("var/crash/core");
+        settle_files();
+        let rules = admin_rules(&sandbox);
+        let asked = Asked::default();
+        let answer = {
+            let scan = scan_answer(&sandbox);
+            move |operation, _: &serde_json::Value| match operation {
+                okapi_helper::Operation::Scan => (0, scan.clone()),
+                okapi_helper::Operation::Clean => (0, clean_answer(&[], &serde_json::json!([]))),
+            }
+        };
+        let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seams = {
+            let first = sandbox.inputs(Some(&sandbox.root.join("state")));
+            let mut second = first.clone();
+            second.min_age_minutes = Some(500);
+            let changed = Arc::clone(&changed);
+            Seams {
+                read: Rc::new(move || {
+                    Ok(if changed.load(std::sync::atomic::Ordering::Relaxed) {
+                        second.clone()
+                    } else {
+                        first.clone()
+                    })
+                }),
+                ..admin_seams(&sandbox, &rules, &asked, answer)
+            }
+        };
+        let (window, _screen) = on_admin_results(seams, &rules);
+        obtain_rights(&window);
+        found(&window, "Rapports de plantage").invoke_accessible_default_action();
+        changed.store(true, std::sync::atomic::Ordering::Relaxed);
+        confirm(&window);
+        let cleaner = window.global::<ui::Cleaner>();
+        assert_eq!(cleaner.get_problem(), ui::SetupProblem::RightsChanged);
+        assert_eq!(asked.lock().unwrap().len(), 1, "root never asked to clean");
+        assert!(pip.exists(), "nothing of the user's either");
+        assert!(crash.exists());
+        assert_eq!(cleaner.get_rights_waiting(), 1, "root's group locked again");
+        assert_eq!(
+            found(&window, "Rapports de plantage").accessible_enabled(),
+            Some(false)
+        );
+        assert!(sandbox.history().is_empty(), "nothing done, nothing kept");
+    }
+
+    /// Root's part of a cleaning ends with `code` and `output`: the user's
+    /// part goes, the receipt says root's was not done, the history why.
+    fn roots_part_fails(code: i32, output: String, reason: &str) {
+        let sandbox = Sandbox::new();
+        let pip = sandbox.file("home/.cache/pip/old");
+        sandbox.file("var/crash/core");
+        settle_files();
+        let rules = admin_rules(&sandbox);
+        let asked = Asked::default();
+        let answer = {
+            let scan = scan_answer(&sandbox);
+            move |operation, _: &serde_json::Value| match operation {
+                okapi_helper::Operation::Scan => (0, scan.clone()),
+                okapi_helper::Operation::Clean => (code, output.clone()),
+            }
+        };
+        let seams = admin_seams(&sandbox, &rules, &asked, answer);
+        let (window, _screen) = on_admin_results(seams, &rules);
+        obtain_rights(&window);
+        found(&window, "Rapports de plantage").invoke_accessible_default_action();
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(!pip.exists(), "{reason}: the user's part goes");
+        assert!(
+            shows_a_text_starting(&window, "La partie administrateur ne s'est pas terminée."),
+            "{reason}"
+        );
+        let history = sandbox.history();
+        assert_eq!(
+            history[0]["admin"],
+            serde_json::json!({ "done": false, "reason": reason })
+        );
+        assert_eq!(history[0]["complete"], false);
+    }
+
+    #[test]
+    fn a_refused_part_of_roots_lets_the_users_part_go() {
+        roots_part_fails(
+            okapi_helper::PKEXEC_NOT_AUTHORIZED,
+            String::new(),
+            "notAuthorized",
+        );
+    }
+
+    #[test]
+    fn a_stopped_part_of_roots_lets_the_users_part_go() {
+        roots_part_fails(
+            1,
+            clean_answer(&["unsupportedSystem"], &serde_json::json!([])),
+            "stopped",
+        );
+    }
+
+    #[test]
+    fn a_group_changed_since_roots_scan_is_said_not_cleaned_whole() {
+        // Walked only in part: what root removed of it is said all the same.
+        let removed = serde_json::json!([{
+            "outcome": { "path": "/var/crash/old", "result": "removed", "bytes": 7 },
+            "scannedBytes": 7,
+        }]);
+        let mut answer: serde_json::Value =
+            serde_json::from_str(&clean_answer(&[], &removed)).unwrap();
+        answer["issues"] = serde_json::json!([{
+            "kind": "limitReached",
+            "targets": ["/var/crash"],
+            "path": "/var/crash",
+            "detail": "Entries",
+        }]);
+        roots_part_fails(0, answer.to_string(), "changed");
+    }
+
+    #[test]
+    fn an_unreadable_part_of_roots_may_have_removed_entries() {
+        roots_part_fails(0, "{\"version\": 2".to_owned(), "unknown");
+    }
+
+    /// Root's part, checked alone, ends with `code` and `output`: the
+    /// receipt is titled `title`.
+    fn roots_part_alone_ends(code: i32, output: String, title: &str) {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        sandbox.file("var/crash/core");
+        settle_files();
+        let rules = admin_rules(&sandbox);
+        let asked = Asked::default();
+        let answer = {
+            let scan = scan_answer(&sandbox);
+            move |operation, _: &serde_json::Value| match operation {
+                okapi_helper::Operation::Scan => (0, scan.clone()),
+                okapi_helper::Operation::Clean => (code, output.clone()),
+            }
+        };
+        let seams = admin_seams(&sandbox, &rules, &asked, answer);
+        let (window, _screen) = on_admin_results(seams, &rules);
+        obtain_rights(&window);
+        button(&window, "Tout désélectionner").invoke_accessible_default_action();
+        found(&window, "Rapports de plantage").invoke_accessible_default_action();
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(shows(&window, title));
+    }
+
+    #[test]
+    fn roots_part_alone_that_fails_ends_stopped() {
+        roots_part_alone_ends(
+            okapi_helper::PKEXEC_NOT_AUTHORIZED,
+            String::new(),
+            "Nettoyage arrêté",
+        );
+    }
+
+    #[test]
+    fn roots_part_alone_whose_end_is_unknown_never_says_nothing_was_touched() {
+        roots_part_alone_ends(0, "{\"version\": 2".to_owned(), "Nettoyage interrompu");
     }
 }

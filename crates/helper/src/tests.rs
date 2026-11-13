@@ -89,8 +89,8 @@ fn refuses_any_target_but_those_of_its_rules_that_need_the_administrator() {
 #[test]
 fn refuses_a_request_of_another_form_or_version() {
     assert_eq!(
-        refusal(&json!({ "version": 2, "added": true })),
-        Refusal::UnsupportedVersion { version: 2 },
+        refusal(&json!({ "version": 3, "added": true })),
+        Refusal::UnsupportedVersion { version: 3 },
         "another version is said as such, whatever it adds"
     );
     for overrides in [
@@ -105,12 +105,12 @@ fn refuses_a_request_of_another_form_or_version() {
     let now = SystemTime::now();
     for line in [
         &b"not json"[..],
-        b"{\"version\": 1}",
+        b"{\"version\": 2}",
         b"",
         // The fields as an array, which serde accepts for a structure.
-        b"[1, \"clean\", [\"/var/crash\"], 60, []]",
+        b"[2, \"clean\", [\"/var/crash\"], 60, []]",
         // Complete but for its one byte that is not UTF-8.
-        b"{\"version\": 1, \"operation\": \"clean\", \"targets\": [\"/var/\xff\"], \"minAgeMinutes\": 60, \"exclusions\": []}",
+        b"{\"version\": 2, \"operation\": \"clean\", \"targets\": [\"/var/\xff\"], \"minAgeMinutes\": 60, \"exclusions\": []}",
     ] {
         assert!(
             matches!(
@@ -436,10 +436,10 @@ fn a_cleaning_removes_what_its_targets_offer_and_says_so() {
     assert_eq!(cleaned["version"], PROTOCOL_VERSION);
     assert_eq!(cleaned["operation"], "clean");
     assert_eq!(cleaned["stops"], json!([]));
-    let removed = |path: &Path, bytes: u64| json!({ "path": path.display().to_string(), "result": "removed", "bytes": bytes });
+    let removed = |path: &Path, bytes: u64| json!({ "outcome": { "path": path.display().to_string(), "result": "removed", "bytes": bytes }, "scannedBytes": bytes });
     // In the order the directories list their entries.
     let mut outcomes = cleaned["outcomes"].as_array().unwrap().clone();
-    outcomes.sort_by_key(|outcome| outcome["path"].as_str().unwrap().to_owned());
+    outcomes.sort_by_key(|outcome| outcome["outcome"]["path"].as_str().unwrap().to_owned());
     assert_eq!(
         outcomes,
         [removed(&small, 3), removed(&large, 11), removed(&dump, 5)]
@@ -556,8 +556,8 @@ fn a_partial_cleaning_is_a_complete_answer() {
         .iter()
         .map(|outcome| {
             (
-                outcome["path"].as_str().unwrap().to_owned(),
-                outcome.clone(),
+                outcome["outcome"]["path"].as_str().unwrap().to_owned(),
+                outcome["outcome"].clone(),
             )
         })
         .collect();
@@ -634,11 +634,11 @@ fn a_scan_stopped_cleans_nothing_and_says_why() {
 /// which the answer says as a stop.
 #[test]
 fn a_cleaning_cancelled_midway_is_stopped() {
-    let outcome = |result: &'static str, reason| HistoryOutcome {
+    let outcome = |result: &str, reason: Option<&str>| HistoryOutcome {
         path: Some("/var/crash/core".to_owned()),
-        result,
+        result: result.to_owned(),
         bytes: None,
-        reason,
+        reason: reason.map(str::to_owned),
         error: None,
         code: None,
         blocked: None,
@@ -823,4 +823,163 @@ fn the_policy_and_the_scripts_name_the_installed_helper() {
         !uninstall.contains("rm -r"),
         "never anything but the two files"
     );
+}
+
+/// The caller writes the request with the type the helper reads it with.
+#[test]
+fn the_request_line_the_caller_writes_is_the_one_the_helper_reads() {
+    let targets = vec![
+        "/var/cache/apt/archives".to_owned(),
+        "/var/crash".to_owned(),
+    ];
+    let exclusions = vec![PathBuf::from("/var/crash/keep")];
+    let line = crate::request_line(Operation::Clean, &targets, 90, &exclusions).unwrap();
+    let now = SystemTime::now();
+    let request = Request::read(&line, &embedded(), now).unwrap();
+    assert_eq!(request.operation(), Operation::Clean);
+    assert_eq!(
+        request.options(now),
+        ScanOptions::new(
+            now,
+            Duration::from_mins(90),
+            Exclusions::new(exclusions.clone()).unwrap()
+        )
+    );
+    assert!(targets.iter().all(|target| {
+        admin_targets(&embedded())
+            .get(target)
+            .is_some_and(|origin| request.selection().contains(origin))
+    }));
+    assert!(!line.contains(&b'\n'), "one line");
+    let many: Vec<String> = (0..MAX_REQUEST_BYTES)
+        .map(|_| "/var/crash".to_owned())
+        .collect();
+    assert_eq!(
+        crate::request_line(Operation::Scan, &many, 60, &[]),
+        Err(Refusal::TooLong),
+        "never sent: the helper would refuse it"
+    );
+}
+
+/// What the caller reads back of each way a run of the helper ends.
+#[test]
+fn the_caller_reads_back_each_reply() {
+    let sandbox = Sandbox::new();
+    sandbox.file("var/crash/core");
+    let rules = sandbox.rules(&[("var/crash", "Crash", true)]);
+    let answer = operate(
+        Operation::Scan,
+        &sandbox.selection(&rules, &["var/crash"]),
+        &rules,
+        &sandbox.variables(),
+        options_now(),
+        &Watch::none(),
+    );
+    let written = serde_json::to_vec(&answer).unwrap();
+    assert_eq!(
+        read_reply(Operation::Scan, Some(0), &written),
+        Ok(Reply::Answer(answer.clone())),
+        "read back as written"
+    );
+    assert!(
+        matches!(
+            read_reply(Operation::Clean, Some(0), &written),
+            Err(ReplyError::Unreadable { .. })
+        ),
+        "an answer to another operation"
+    );
+    assert!(
+        matches!(
+            read_reply(Operation::Scan, Some(1), &written),
+            Err(ReplyError::Unreadable { .. })
+        ),
+        "a code its answer does not end with"
+    );
+    let mut older: Value = serde_json::from_slice(&written).unwrap();
+    older["version"] = json!(1);
+    assert_eq!(
+        read_reply(Operation::Scan, Some(0), older.to_string().as_bytes()),
+        Err(ReplyError::OtherVersion { version: 1 })
+    );
+    let refusal = RefusalAnswer::of(&Refusal::UnsupportedVersion { version: 2 });
+    assert_eq!(
+        read_reply(
+            Operation::Scan,
+            Some(2),
+            &serde_json::to_vec(&refusal).unwrap()
+        ),
+        Ok(Reply::Refused(refusal)),
+    );
+    for (code, error) in [
+        (Some(PKEXEC_DISMISSED), ReplyError::Dismissed),
+        (Some(PKEXEC_NOT_AUTHORIZED), ReplyError::NotAuthorized),
+        (Some(3), ReplyError::NotRoot),
+        (Some(PANICKED), ReplyError::Panicked),
+        (None, ReplyError::Killed),
+        (Some(7), ReplyError::UnexpectedCode { code: 7 }),
+    ] {
+        assert_eq!(
+            read_reply(Operation::Scan, code, b""),
+            Err(error),
+            "{code:?}"
+        );
+    }
+    assert!(
+        matches!(
+            read_reply(Operation::Scan, Some(1), b""),
+            Err(ReplyError::Unreadable { code: 1, .. })
+        ),
+        "a failure without an answer"
+    );
+    assert!(matches!(
+        read_reply(Operation::Scan, Some(2), b"not json"),
+        Err(ReplyError::Unreadable { code: 2, .. })
+    ));
+    // A cleaning that says nothing of its entries is no answer to act on.
+    let silent = json!({
+        "version": PROTOCOL_VERSION, "operation": "clean", "stops": [], "groups": [], "issues": [],
+    })
+    .to_string();
+    assert!(matches!(
+        read_reply(Operation::Clean, Some(0), silent.as_bytes()),
+        Err(ReplyError::Unreadable { .. })
+    ));
+}
+
+/// A stopped answer ends with the failure's code, and only with it.
+#[test]
+fn a_stopped_answer_is_read_with_its_code() {
+    let stopped = json!({
+        "version": PROTOCOL_VERSION,
+        "operation": "scan",
+        "stops": ["cancelled"],
+        "groups": [],
+        "issues": [],
+    })
+    .to_string();
+    let Ok(Reply::Answer(answer)) = read_reply(Operation::Scan, Some(1), stopped.as_bytes()) else {
+        panic!("a stopped answer is an answer");
+    };
+    assert_eq!(answer.stops(), ["cancelled"]);
+    assert!(matches!(
+        read_reply(Operation::Scan, Some(0), stopped.as_bytes()),
+        Err(ReplyError::Unreadable { .. })
+    ));
+}
+
+/// The refusal of a helper of another version, fields it adds included,
+/// asks to install it again.
+#[test]
+fn a_refusal_of_any_version_is_read() {
+    let older = br#"{"version": 1, "helperVersion": "0.1.0", "refused": "unsupportedVersion",
+                     "detail": "the request is of version 2", "added": true}"#;
+    let Ok(Reply::Refused(refusal)) = read_reply(Operation::Clean, Some(2), older) else {
+        panic!("a refusal of another version is a refusal");
+    };
+    assert!(refusal.asks_to_reinstall());
+    assert_eq!(refusal.helper_version(), "0.1.0");
+    let exclusion = RefusalAnswer::of(&Refusal::Exclusion {
+        error: okapi_engine::ExclusionError::Empty,
+    });
+    assert!(!exclusion.asks_to_reinstall());
 }

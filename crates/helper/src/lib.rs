@@ -22,6 +22,7 @@
 
 mod answer;
 mod operation;
+mod reply;
 mod request;
 
 use std::io::{self, Read};
@@ -30,12 +31,17 @@ use std::thread::{self, JoinHandle};
 
 use okapi_engine::Cancel;
 
-pub use answer::{Answer, RefusalAnswer};
+pub use answer::{Answer, GroupAnswer, IssueAnswer, OutcomeAnswer, RefusalAnswer};
 pub use operation::operate;
-pub use request::{HELPER_MIN_AGE_FLOOR, Operation, Refusal, Request, Selection, read_request};
+pub use reply::{PANICKED, PKEXEC_DISMISSED, PKEXEC_NOT_AUTHORIZED, Reply, ReplyError, read_reply};
+pub use request::{
+    HELPER_MIN_AGE_FLOOR, MAX_REQUEST_BYTES, Operation, Refusal, Request, Selection, admin_targets,
+    read_request, request_line,
+};
 
-/// The version of the request and of the answer.
-pub const PROTOCOL_VERSION: u32 = 1;
+/// The version of the request and of the answer; a helper of another version
+/// refuses the request (`unsupportedVersion`).
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// How the helper ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +72,14 @@ impl Exit {
             Self::Refused => 2,
             Self::NotRoot => 3,
         }
+    }
+
+    /// The ending of exit code `code`, if it is one of the helper's.
+    #[must_use]
+    pub fn from_code(code: i32) -> Option<Self> {
+        [Self::Success, Self::Failure, Self::Refused, Self::NotRoot]
+            .into_iter()
+            .find(|exit| i32::from(exit.code()) == code)
     }
 }
 

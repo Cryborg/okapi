@@ -118,6 +118,17 @@ pub fn start_on_standard_error() {
         .init();
 }
 
+/// The level of `line`, if it is a trace as the journal writes it: the
+/// caller of [`start_on_standard_error`] adds it at that level.
+#[must_use]
+pub fn level_of(line: &str) -> Option<tracing::Level> {
+    #[derive(serde::Deserialize)]
+    struct Trace {
+        level: String,
+    }
+    serde_json::from_str::<Trace>(line).ok()?.level.parse().ok()
+}
+
 /// The journal's form, written to `writer`: one JSON line per event, with
 /// every detail of Okapi; from its dependencies (their `log` messages
 /// included, bridged), what they think worth saying, not a trace of each
@@ -250,6 +261,45 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use super::*;
+
+    /// Lines written to a buffer shared with the test.
+    #[derive(Clone, Default)]
+    struct Lines(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Lines {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_trace_keeps_its_level_from_the_helper_to_its_caller() {
+        let lines = Lines::default();
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::registry().with(journal_layer(move || writer.clone()));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(path = "/var/crash", "refused");
+            tracing::error!("failed");
+            tracing::info!("done");
+        });
+        let written = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        let levels: Vec<_> = written.lines().map(level_of).collect();
+        assert_eq!(
+            levels,
+            [
+                Some(tracing::Level::WARN),
+                Some(tracing::Level::ERROR),
+                Some(tracing::Level::INFO)
+            ]
+        );
+        assert_eq!(level_of("Error executing command as another user"), None);
+        assert_eq!(level_of("{\"level\":\"LOUD\"}"), None);
+    }
 
     #[test]
     fn a_journal_grown_too_large_is_set_aside_under_its_own_name() {

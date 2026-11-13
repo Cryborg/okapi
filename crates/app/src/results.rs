@@ -3,9 +3,9 @@
 //! plain facts of each group, tested without a report; the report itself, and
 //! its identifiers, stay with the screen (invariant 1).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use okapi_engine::{Category, ScanGroup};
+use okapi_engine::{Category, Origin, ScanGroup};
 use okapi_rules::{ChromiumBrowserKind, Language};
 
 /// What the results need of one group of the report.
@@ -21,27 +21,85 @@ pub struct GroupFacts {
     /// Never a cache reset nor a maintenance (invariant 5).
     pub preselected: bool,
     pub needs_admin: bool,
+    /// The targets the privileged helper is asked for to clean the group,
+    /// by the path the rules write them with: only when every rule of the
+    /// group is one of its targets (a group that joins another rule is never
+    /// the helper's to clean).
+    pub targets: Option<BTreeSet<String>>,
+    /// Where a group that needs the administrator stands.
+    pub admin: AdminState,
     /// Checked before the user chooses: the engine's one rule.
     pub checked_by_default: bool,
+    /// What the user's own scan saw of it: [`Self::numbers`] are shown.
     pub entries: usize,
     pub bytes: u64,
 }
 
+/// Where a group that needs the administrator stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdminState {
+    /// Out of reach: the rights are not obtained yet, or the group is not
+    /// one the helper may clean.
+    Locked,
+    /// Root's scan offers it: it may be checked, and shows root's numbers,
+    /// which go with it when it is locked again.
+    Unlocked { entries: usize, bytes: u64 },
+    /// Root's scan offers nothing of it.
+    NothingToClean,
+}
+
 impl GroupFacts {
-    /// What the results need of `group`, its label in `language`.
+    /// What the results need of `group`, its label in `language`; `targets`
+    /// names each rule the privileged helper may be asked for.
     #[must_use]
-    pub fn of(group: &ScanGroup, language: Language) -> Self {
+    pub fn of(group: &ScanGroup, language: Language, targets: &BTreeMap<Origin, String>) -> Self {
         let english = group.label().as_str();
+        let needs_admin = group.needs_admin();
         Self {
             label: okapi_rules::label(language, english).to_owned(),
             label_alone: okapi_rules::group_label(language, group.browser(), english),
             browser: group.browser(),
             categories: Category::of_group(group.origins()),
             preselected: group.is_selected_by_default(),
-            needs_admin: group.needs_admin(),
+            needs_admin,
+            targets: needs_admin
+                .then(|| {
+                    group
+                        .origins()
+                        .iter()
+                        .map(|origin| targets.get(origin).cloned())
+                        .collect::<Option<BTreeSet<_>>>()
+                })
+                .flatten()
+                .filter(|targets| !targets.is_empty())
+                .or_else(|| {
+                    if needs_admin {
+                        tracing::info!(origins = ?group.origins(), "a group that needs the administrator, out of the helper's reach");
+                    }
+                    None
+                }),
+            admin: AdminState::Locked,
             checked_by_default: group.is_checked_by_default(),
             entries: group.items().len(),
             bytes: group.total_size(),
+        }
+    }
+
+    /// Whether its checkbox may be checked: a group the user removes, or
+    /// one root's scan offers.
+    #[must_use]
+    pub fn is_checkable(&self) -> bool {
+        !self.needs_admin || matches!(self.admin, AdminState::Unlocked { .. })
+    }
+
+    /// Its entries and size as shown: root's once its scan set the group
+    /// (none when it offers nothing of it), the user's own scan's otherwise.
+    #[must_use]
+    pub fn numbers(&self) -> (usize, u64) {
+        match self.admin {
+            AdminState::Unlocked { entries, bytes } => (entries, bytes),
+            AdminState::NothingToClean => (0, 0),
+            AdminState::Locked => (self.entries, self.bytes),
         }
     }
 }
@@ -156,12 +214,12 @@ impl Results {
     }
 
     /// Those of `groups` a checkbox reaches: never one that needs the
-    /// administrator.
+    /// administrator and root's scan does not offer.
     fn selectable(&self, groups: &[usize]) -> Vec<usize> {
         groups
             .iter()
             .copied()
-            .filter(|index| !self.groups[*index].needs_admin)
+            .filter(|index| self.groups[*index].is_checkable())
             .collect()
     }
 
@@ -191,8 +249,8 @@ impl Results {
 
     fn sizes(&self, groups: &[usize]) -> (usize, u64) {
         groups.iter().fold((0, 0), |(entries, bytes), index| {
-            let group = &self.groups[*index];
-            (entries + group.entries, bytes.saturating_add(group.bytes))
+            let (group_entries, group_bytes) = self.groups[*index].numbers();
+            (entries + group_entries, bytes.saturating_add(group_bytes))
         })
     }
 
@@ -304,14 +362,14 @@ impl Results {
         }
     }
 
-    /// Checks or unchecks a group; never one that needs the administrator,
-    /// which the interface cannot clean yet.
+    /// Checks or unchecks a group; never one that needs the administrator
+    /// and root's scan does not offer.
     fn toggle_group(&mut self, index: usize) {
         let Some(group) = self.groups.get(index) else {
             return;
         };
-        if group.needs_admin {
-            tracing::warn!(index, "an administrator's group cannot be checked");
+        if !group.is_checkable() {
+            tracing::warn!(index, admin = ?group.admin, "an administrator's group out of reach cannot be checked");
             return;
         }
         if !self.checked.remove(&index) {
@@ -341,7 +399,9 @@ impl Results {
         self.checked.clear();
     }
 
-    /// The groups checked, by their index in the report.
+    /// The groups checked, by their index in the report: the screen takes
+    /// them part by part ([`Self::user_checked`], [`Self::admin_checked`]).
+    #[cfg(test)]
     #[must_use]
     pub const fn checked(&self) -> &BTreeSet<usize> {
         &self.checked
@@ -354,14 +414,135 @@ impl Results {
             .iter()
             .filter_map(|index| self.groups.get(*index))
             .fold((0, 0), |(entries, bytes), group| {
-                (entries + group.entries, bytes.saturating_add(group.bytes))
+                let (group_entries, group_bytes) = group.numbers();
+                (entries + group_entries, bytes.saturating_add(group_bytes))
             })
     }
 
-    /// The entries of every group of the report.
+    /// The entries of every group of the report, as shown.
     #[must_use]
     pub fn entries(&self) -> usize {
-        self.groups.iter().map(|group| group.entries).sum()
+        self.groups.iter().map(|group| group.numbers().0).sum()
+    }
+
+    /// The groups waiting for the rights: locked, and the helper's to clean.
+    fn waiting(&self) -> impl Iterator<Item = &GroupFacts> {
+        self.groups
+            .iter()
+            .filter(|group| group.admin == AdminState::Locked && group.targets.is_some())
+    }
+
+    /// How many groups wait for the rights.
+    #[must_use]
+    pub fn waiting_for_rights(&self) -> usize {
+        self.waiting().count()
+    }
+
+    /// The targets of every group the helper may clean, unlocked or not:
+    /// what root's scan is asked for, its answer setting every group.
+    #[must_use]
+    pub fn helper_targets(&self) -> BTreeSet<String> {
+        self.groups
+            .iter()
+            .filter_map(|group| group.targets.clone())
+            .flatten()
+            .collect()
+    }
+
+    /// Locks again every group the helper may clean, unchecked: before a new
+    /// scan of root's sets them, so that none stays unlocked by another one.
+    pub fn relock(&mut self) {
+        for (index, group) in self.groups.iter_mut().enumerate() {
+            if group.targets.is_some() {
+                group.admin = AdminState::Locked;
+                self.checked.remove(&index);
+            }
+        }
+    }
+
+    /// Takes in root's scan: a group waiting for the rights whose targets
+    /// are exactly those of a group root offers (`offered`: its targets,
+    /// entries and bytes) is unlocked at root's numbers, never checked; one
+    /// whose targets root says something about (`troubled`), or offers in
+    /// another group, stays locked; the others have nothing to clean for
+    /// root. Gives how many unlocked.
+    pub fn unlock(
+        &mut self,
+        offered: &[(BTreeSet<String>, usize, u64)],
+        troubled: &BTreeSet<String>,
+    ) -> usize {
+        let mut unlocked = 0;
+        let seen: BTreeSet<&String> = offered
+            .iter()
+            .flat_map(|(targets, ..)| targets)
+            .chain(troubled)
+            .collect();
+        for group in &mut self.groups {
+            let Some(targets) = group.targets.as_ref() else {
+                continue;
+            };
+            if group.admin != AdminState::Locked {
+                continue;
+            }
+            if let Some((_, entries, bytes)) =
+                offered.iter().find(|(offered, ..)| offered == targets)
+            {
+                group.admin = AdminState::Unlocked {
+                    entries: *entries,
+                    bytes: *bytes,
+                };
+                unlocked += 1;
+            } else if targets.iter().all(|target| !seen.contains(target)) {
+                group.admin = AdminState::NothingToClean;
+            }
+            tracing::info!(?targets, admin = ?group.admin, "group after root's scan");
+        }
+        unlocked
+    }
+
+    /// The groups checked that the user's own cleaning removes.
+    #[must_use]
+    pub fn user_checked(&self) -> BTreeSet<usize> {
+        self.checked
+            .iter()
+            .copied()
+            .filter(|index| {
+                self.groups
+                    .get(*index)
+                    .is_some_and(|group| !group.needs_admin)
+            })
+            .collect()
+    }
+
+    /// The groups checked that root's cleaning removes, and their targets.
+    #[must_use]
+    pub fn admin_checked(&self) -> (BTreeSet<usize>, BTreeSet<String>) {
+        let groups: BTreeSet<usize> = self
+            .checked
+            .iter()
+            .copied()
+            .filter(|index| {
+                self.groups
+                    .get(*index)
+                    .is_some_and(|group| group.needs_admin)
+            })
+            .collect();
+        let targets = groups
+            .iter()
+            .filter_map(|index| self.groups[*index].targets.clone())
+            .flatten()
+            .collect();
+        (groups, targets)
+    }
+
+    /// The entries of the groups `indices`.
+    #[must_use]
+    pub fn entries_of(&self, indices: &BTreeSet<usize>) -> usize {
+        indices
+            .iter()
+            .filter_map(|index| self.groups.get(*index))
+            .map(|group| group.numbers().0)
+            .sum()
     }
 }
 
@@ -377,10 +558,172 @@ mod tests {
             categories: categories.iter().copied().collect(),
             preselected,
             needs_admin,
+            targets: None,
+            admin: AdminState::Locked,
             checked_by_default: okapi_engine::checked_by_default(preselected, needs_admin),
             entries: 2,
             bytes: 10,
         }
+    }
+
+    /// A group that needs the administrator, the helper's to clean through
+    /// `targets`.
+    fn admin(targets: &[&str], preselected: bool) -> GroupFacts {
+        GroupFacts {
+            targets: Some(targets.iter().map(|target| (*target).to_owned()).collect()),
+            ..group(&[Category::System], preselected, true)
+        }
+    }
+
+    fn set(targets: &[&str]) -> BTreeSet<String> {
+        targets.iter().map(|target| (*target).to_owned()).collect()
+    }
+
+    /// Two groups of two targets and of one, one root says something about,
+    /// one out of the helper's reach, and one of the user's.
+    fn waiting() -> Results {
+        Results::new(
+            vec![
+                admin(&["/var/crash", "/var/dumps"], true),
+                admin(&["/var/cache/apt/archives"], true),
+                admin(&["/var/tmp/x"], true),
+                admin(&["/var/log/apt"], false),
+                group(&[Category::System], true, true),
+                group(&[Category::System], true, false),
+            ],
+            BTreeSet::from([Category::System]),
+        )
+    }
+
+    #[test]
+    fn only_the_groups_the_helper_cleans_wait_for_the_rights() {
+        let results = waiting();
+        assert_eq!(results.waiting_for_rights(), 4);
+        assert_eq!(
+            results.helper_targets(),
+            set(&[
+                "/var/cache/apt/archives",
+                "/var/crash",
+                "/var/dumps",
+                "/var/log/apt",
+                "/var/tmp/x"
+            ])
+        );
+        assert_eq!(
+            results.checked(),
+            &BTreeSet::from([5]),
+            "never an administrator's"
+        );
+    }
+
+    #[test]
+    fn roots_scan_unlocks_exactly_the_groups_it_offers() {
+        let mut results = waiting();
+        let offered = [
+            (set(&["/var/crash", "/var/dumps"]), 7, 700),
+            // One target of the two-target group alone: no group of ours.
+            (set(&["/var/crash"]), 1, 1),
+            (set(&["/var/log/apt"]), 3, 30),
+        ];
+        assert_eq!(results.unlock(&offered, &set(&["/var/tmp/x"])), 2);
+        let admin_of = |index: usize| results.group(index).unwrap().admin;
+        assert_eq!(
+            admin_of(0),
+            AdminState::Unlocked {
+                entries: 7,
+                bytes: 700
+            },
+            "at root's numbers"
+        );
+        assert_eq!(
+            admin_of(1),
+            AdminState::NothingToClean,
+            "root offers nothing of it"
+        );
+        assert_eq!(results.group(1).unwrap().numbers(), (0, 0), "nor shows any");
+        assert_eq!(
+            admin_of(2),
+            AdminState::Locked,
+            "root says something about it"
+        );
+        assert!(matches!(admin_of(3), AdminState::Unlocked { .. }));
+        assert_eq!(admin_of(4), AdminState::Locked, "out of the helper's reach");
+        assert_eq!(results.group(0).unwrap().numbers(), (7, 700), "shown");
+        assert_eq!(
+            results.checked(),
+            &BTreeSet::from([5]),
+            "unlocked, never checked (invariant 5)"
+        );
+        assert_eq!(results.waiting_for_rights(), 1);
+    }
+
+    /// A new scan of root's sets every group again: none stays unlocked, or
+    /// checked, by the one before (its age and exclusions are gone).
+    #[test]
+    fn a_new_scan_of_roots_sets_every_group_again() {
+        let mut results = waiting();
+        results.unlock(&[(set(&["/var/log/apt"]), 3, 30)], &BTreeSet::new());
+        let row = results
+            .rows()
+            .iter()
+            .position(|line| matches!(line, Line::Group { index: 3, .. }))
+            .unwrap();
+        results.toggle_row(row);
+        assert_eq!(results.admin_checked().0, BTreeSet::from([3]));
+        let own = (
+            results.group(3).unwrap().entries,
+            results.group(3).unwrap().bytes,
+        );
+        assert_ne!(results.group(3).unwrap().numbers(), own);
+        results.relock();
+        assert_eq!(
+            results.group(3).unwrap().numbers(),
+            own,
+            "root's numbers gone with the rights"
+        );
+        assert_eq!(
+            results.waiting_for_rights(),
+            4,
+            "nothing left to another scan"
+        );
+        assert!(results.admin_checked().0.is_empty(), "unchecked with it");
+        assert_eq!(results.checked(), &BTreeSet::from([5]), "the user's stay");
+        // A target root offers within another group is not nothing to clean.
+        results.unlock(&[(set(&["/var/crash"]), 1, 1)], &BTreeSet::new());
+        assert_eq!(results.group(0).unwrap().admin, AdminState::Locked);
+    }
+
+    #[test]
+    fn an_unlocked_group_is_checked_by_its_own_box_alone() {
+        let mut results = waiting();
+        results.unlock(&[(set(&["/var/log/apt"]), 3, 30)], &BTreeSet::new());
+        let row_of = |results: &Results, wanted: usize| {
+            results
+                .rows()
+                .iter()
+                .position(|line| matches!(line, Line::Group { index, .. } if *index == wanted))
+                .unwrap()
+        };
+        // The category's box: unchecks the user's group, never checks the
+        // administrator's, which is no preselection.
+        results.toggle_row(0);
+        results.toggle_row(0);
+        assert_eq!(results.checked(), &BTreeSet::from([5]));
+        let row = row_of(&results, 3);
+        results.toggle_row(row);
+        assert_eq!(results.checked(), &BTreeSet::from([3, 5]));
+        assert_eq!(results.user_checked(), BTreeSet::from([5]));
+        assert_eq!(
+            results.admin_checked(),
+            (BTreeSet::from([3]), set(&["/var/log/apt"]))
+        );
+        assert_eq!(results.selected(), (5, 40), "root's numbers counted");
+        // Now checked, the category's box unchecks it too.
+        results.toggle_row(0);
+        assert!(results.checked().is_empty());
+        let locked = row_of(&results, 1);
+        results.toggle_row(locked);
+        assert!(results.checked().is_empty(), "a locked group never checks");
     }
 
     /// One category: a preselected group, one left to choose, one that needs

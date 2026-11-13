@@ -72,6 +72,24 @@ impl Exclusions {
         Self::default()
     }
 
+    /// Whether the exclusion `entry`, as the user wrote it, may cover what
+    /// lies at or below `root`: an extension always; a path at, above or
+    /// below `root`, as written or at its real location, ignoring case. One
+    /// whose real location cannot be read may: in doubt, it counts.
+    #[must_use]
+    pub fn may_touch(entry: &Path, root: &Path) -> bool {
+        if entry
+            .to_str()
+            .is_some_and(|text| text.starts_with(EXTENSION_PATTERN_PREFIX))
+        {
+            return true;
+        }
+        let related = |path: &Path| {
+            starts_with_ignoring_case(path, root) || starts_with_ignoring_case(root, path)
+        };
+        related(entry) || canonicalize_longest_prefix(entry).map_or(true, |real| related(&real))
+    }
+
     /// Reads the exclusions the user wrote. A path is kept as written and as
     /// its real location at this instant, so an alias still protects what it
     /// points to: build the exclusions afresh for each scan.
@@ -343,6 +361,28 @@ mod tests {
         assert!(exclusions.excludes_by_identity(&real.join("keep/inner"), file_identity));
         assert!(!exclusions.excludes_by_identity(&real.join("other"), file_identity));
         assert!(!Exclusions::none().excludes_by_identity(&real.join("keep"), file_identity));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_exclusion_touches_a_root_at_above_or_below_it_by_any_spelling() {
+        let directory = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(directory.path()).unwrap();
+        let root = real.join("var/crash");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir(real.join("elsewhere")).unwrap();
+        std::os::unix::fs::symlink(&root, real.join("alias")).unwrap();
+        let touches = |entry: PathBuf| Exclusions::may_touch(&entry, &root);
+        assert!(touches(PathBuf::from("*.log")));
+        assert!(touches(root.join("keep")));
+        assert!(touches(real.join("var")), "above it: excludes it whole");
+        assert!(
+            touches(real.join("VAR/Crash/keep")),
+            "case ignored, as matching does"
+        );
+        assert!(touches(real.join("alias/keep")), "through a link to it");
+        assert!(!touches(real.join("elsewhere/keep")));
+        assert!(!touches(real.join("var/crashes")), "a name beside it");
     }
 
     #[test]

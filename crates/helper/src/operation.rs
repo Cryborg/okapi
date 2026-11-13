@@ -8,7 +8,7 @@ use okapi_engine::{
 use okapi_rules::{RuleSet, TemplateVariables};
 use okapi_store::HistoryOutcome;
 
-use crate::answer::{Answer, GroupAnswer, IssueAnswer};
+use crate::answer::{Answer, GroupAnswer, IssueAnswer, OutcomeAnswer};
 use crate::request::{Operation, Selection};
 
 /// Scans the targets of `selection` with `options` and, for a cleaning,
@@ -43,26 +43,38 @@ pub fn operate(
         Operation::Clean => {
             let ids = ids_of(&offered);
             let receipt = clean_watched(&report, &ids, rules, variables, &options, watch);
-            stops.extend(receipt.stops().iter().map(Stop::key));
+            stops.extend(receipt.stops().iter().map(|stop| stop.key().to_owned()));
             let outcomes: Vec<HistoryOutcome> =
                 receipt.outcomes().iter().map(HistoryOutcome::of).collect();
             // The engine says a cancelled cleaning entry by entry; the
             // answer says it as a stop, as for a scan.
             if is_cancelled(&outcomes) {
-                stops.push(Stop::Cancelled.key());
+                stops.push(Stop::Cancelled.key().to_owned());
             }
+            let outcomes = receipt
+                .outcomes()
+                .iter()
+                .zip(outcomes)
+                .map(|(cleaned, outcome)| {
+                    let scanned = report.size_of(cleaned.id()).unwrap_or_else(|| {
+                        tracing::error!(id = ?cleaned.id(), "an outcome of another report: its scanned size unknown");
+                        0
+                    });
+                    OutcomeAnswer::new(outcome, scanned)
+                })
+                .collect();
             Answer::clean(stops, groups, issues, outcomes)
         }
     }
 }
 
 /// What stopped the scan, by stable name.
-fn scan_stops(report: &ScanReport) -> Vec<&'static str> {
+fn scan_stops(report: &ScanReport) -> Vec<String> {
     report
         .issues()
         .iter()
         .filter_map(|issue| match issue {
-            ScanIssue::Stopped(stop) => Some(stop.key()),
+            ScanIssue::Stopped(stop) => Some(stop.key().to_owned()),
             _ => None,
         })
         .collect()
@@ -101,7 +113,7 @@ pub(crate) fn cleanable(report: &ScanReport, selection: &Selection) -> Vec<ItemI
 pub(crate) fn is_cancelled(outcomes: &[HistoryOutcome]) -> bool {
     outcomes
         .iter()
-        .any(|outcome| outcome.reason == Some(KeepReason::Cancelled.key()))
+        .any(|outcome| outcome.reason.as_deref() == Some(KeepReason::Cancelled.key()))
 }
 
 fn ids_of(groups: &[&ScanGroup]) -> Vec<ItemId> {

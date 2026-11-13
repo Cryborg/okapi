@@ -13,7 +13,9 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-pub use history::{History, HistoryEntry, HistoryOutcome, HistoryUnavailable, Opened, seconds};
+pub use history::{
+    AdminRecord, History, HistoryEntry, HistoryOutcome, HistoryUnavailable, Opened, seconds,
+};
 pub use settings::Settings;
 
 /// A settings or history file could not be used.

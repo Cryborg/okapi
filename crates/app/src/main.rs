@@ -8,6 +8,7 @@ use okapi_store::journal;
 use slint::ComponentHandle as _;
 
 mod cleaner;
+mod elevation;
 mod receipt;
 mod results;
 

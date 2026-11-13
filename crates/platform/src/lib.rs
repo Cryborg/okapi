@@ -17,7 +17,7 @@ pub use directory::{
     mount_root, sticky_allows, tells_mount_roots,
 };
 #[cfg(target_os = "linux")]
-pub use elevation::HELPER_PATH;
+pub use elevation::{HELPER_PATH, PKEXEC_PATH};
 pub use identity::{FileIdentity, IDENTITY_SUPPORTED, file_identity, last_change, ownership};
 pub use session::{
     create_private_directory, effective_user, open_for_reading, open_journal, real_user,

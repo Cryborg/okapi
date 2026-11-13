@@ -27,6 +27,7 @@ okapi-rules = { path = "crates/rules" }
 okapi-platform = { path = "crates/platform" }
 okapi-engine = { path = "crates/engine" }
 okapi-store = { path = "crates/store" }
+okapi-helper = { path = "crates/helper" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

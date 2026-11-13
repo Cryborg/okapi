@@ -25,8 +25,10 @@ pub fn running_as_root() -> bool {
 }
 
 /// Creates `directory` and its missing parents, `directory` itself readable
-/// by its owner only (it holds the journal and the history, which list file
-/// names), and makes it so if it already existed.
+/// by its owner only (what Okapi keeps there may list file names), and makes
+/// it so if it already existed: through a
+/// link, its target. Where rights are not Unix ones (Windows), the directory
+/// is created and its rights are left as they are.
 ///
 /// # Errors
 ///
@@ -48,6 +50,28 @@ pub fn create_private_directory(directory: &Path) -> io::Result<()> {
     {
         std::fs::create_dir_all(directory)
     }
+}
+
+/// Makes the names in `directory` durable: after a file is renamed into it,
+/// a power cut may otherwise bring the old one back.
+///
+/// # Errors
+///
+/// The system's error.
+#[cfg(unix)]
+pub fn sync_directory(directory: &Path) -> io::Result<()> {
+    File::open(directory)?.sync_all()
+}
+
+/// Does not make the names in `directory` durable where a directory cannot
+/// be opened as a file (Windows): a rename there may not survive a power cut.
+///
+/// # Errors
+///
+/// None.
+#[cfg(not(unix))]
+pub fn sync_directory(_directory: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 /// Opens the journal at `path` for appending (and reading), creating it readable by its
@@ -153,6 +177,18 @@ mod tests {
         create_private_directory(&state).unwrap();
         let mode = std::fs::metadata(&state).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o700);
+    }
+
+    #[test]
+    fn a_directory_is_synced_and_a_missing_one_is_an_error() {
+        let directory = tempfile::tempdir().unwrap();
+        sync_directory(directory.path()).unwrap();
+        assert_eq!(
+            sync_directory(&directory.path().join("missing"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
     }
 
     #[test]

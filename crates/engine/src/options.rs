@@ -194,6 +194,13 @@ impl ScanOptions {
         self
     }
 
+    /// The instant given to [`ScanOptions::new`], ages are measured from: for
+    /// the options a scan was made with, when it started.
+    #[must_use]
+    pub const fn now(&self) -> SystemTime {
+        self.now
+    }
+
     /// The categories walked; none means all.
     #[must_use]
     pub const fn categories(&self) -> &BTreeSet<Category> {

@@ -1,17 +1,14 @@
-use std::fs::{self, File};
-use std::io::{self, Read};
+//! What the user set, in `settings.json`.
+
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::StoreError;
+use crate::{StoreError, file};
 
 const SETTINGS_FILE: &str = "settings.json";
-/// Far beyond any settings a person writes: a larger file is a mistake
-/// (a link to a device, a log), never read whole.
-const MAX_SETTINGS_SIZE: u64 = 1024 * 1024;
 /// The settings format this Okapi reads.
-pub(crate) const SETTINGS_VERSION: u32 = 1;
+const SETTINGS_VERSION: u32 = 1;
 
 /// What the user set. A missing file means none of it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -28,6 +25,7 @@ pub struct Settings {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct RawSettings {
+    #[expect(dead_code, reason = "checked by `file::check_version` first")]
     version: u32,
     #[serde(default)]
     exclusions: Vec<String>,
@@ -54,30 +52,10 @@ impl Settings {
     /// defaults instead.
     pub fn load(directory: &Path) -> Result<Self, StoreError> {
         let path = Self::path(directory);
-        let file = match okapi_platform::open_for_reading(&path) {
-            Ok(file) => file,
-            // Absent, unless a link (dotfiles) leads nowhere on the way.
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                if dangling(&path) {
-                    return Err(StoreError::BrokenLink { path });
-                }
-                tracing::info!(path = %path.display(), "no settings, defaults used");
-                return Ok(Self::default());
-            }
-            Err(error) => return Err(StoreError::Unreadable { path, error }),
+        let Some(raw) = file::read_versioned::<RawSettings>(&path, SETTINGS_VERSION)? else {
+            tracing::info!(path = %path.display(), "no settings, defaults used");
+            return Ok(Self::default());
         };
-        let bytes = read_whole(file, &path)?;
-        let raw: RawSettings =
-            serde_json::from_slice(&bytes).map_err(|error| StoreError::Invalid {
-                path: path.clone(),
-                error,
-            })?;
-        if raw.version != SETTINGS_VERSION {
-            return Err(StoreError::UnsupportedVersion {
-                path,
-                version: raw.version,
-            });
-        }
         let settings = Self {
             exclusions: raw.exclusions,
             min_age_minutes: raw.min_age_minutes,
@@ -88,41 +66,12 @@ impl Settings {
     }
 }
 
-/// The content of `file`, opened at `path`, if it is a regular file of at
-/// most [`MAX_SETTINGS_SIZE`] bytes: a pipe would block forever, a device or a
-/// huge file (or one that claims no size, under `/proc`) exhaust the memory.
-fn read_whole(file: File, path: &Path) -> Result<Vec<u8>, StoreError> {
-    let unreadable = |error| StoreError::Unreadable {
-        path: path.to_owned(),
-        error,
-    };
-    if !file.metadata().map_err(unreadable)?.is_file() {
-        return Err(StoreError::NotAFile {
-            path: path.to_owned(),
-        });
-    }
-    let mut bytes = Vec::new();
-    file.take(MAX_SETTINGS_SIZE + 1)
-        .read_to_end(&mut bytes)
-        .map_err(unreadable)?;
-    if u64::try_from(bytes.len()).map_or(true, |size| size > MAX_SETTINGS_SIZE) {
-        return Err(StoreError::TooLarge {
-            path: path.to_owned(),
-            limit: MAX_SETTINGS_SIZE,
-        });
-    }
-    Ok(bytes)
-}
-
-/// Whether `path` or one of its ancestors is a link that leads nowhere.
-fn dangling(path: &Path) -> bool {
-    path.ancestors()
-        .any(|ancestor| fs::symlink_metadata(ancestor).is_ok() && fs::metadata(ancestor).is_err())
-}
-
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
+    use crate::file::MAX_FILE_SIZE;
 
     fn load(text: &str) -> Result<Settings, StoreError> {
         let directory = tempfile::tempdir().unwrap();
@@ -146,6 +95,19 @@ mod tests {
             }
         );
         assert_eq!(load(r#"{"version": 1}"#).unwrap(), Settings::default());
+    }
+
+    #[test]
+    fn without_a_version_a_mistyped_field_is_named_first() {
+        match load(r#"{"exclusion": []}"#) {
+            Err(StoreError::Invalid { error, .. }) => {
+                assert!(
+                    error.to_string().contains("unknown field `exclusion`"),
+                    "{error}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
@@ -174,8 +136,20 @@ mod tests {
             }
         }
         assert!(matches!(
+            load(r#"{"version": 2, "fieldOfLater": true}"#),
+            Err(StoreError::UnsupportedVersion {
+                version: 2,
+                supported: SETTINGS_VERSION,
+                ..
+            })
+        ));
+        assert!(matches!(
             load(r#"{"version": 2}"#),
-            Err(StoreError::UnsupportedVersion { version: 2, .. })
+            Err(StoreError::UnsupportedVersion {
+                version: 2,
+                supported: SETTINGS_VERSION,
+                ..
+            })
         ));
         let directory = tempfile::tempdir().unwrap();
         fs::write(
@@ -238,17 +212,17 @@ mod tests {
     fn a_settings_file_too_large_is_never_read() {
         let directory = tempfile::tempdir().unwrap();
         let file = fs::File::create(directory.path().join(SETTINGS_FILE)).unwrap();
-        file.set_len(MAX_SETTINGS_SIZE + 1).unwrap();
+        file.set_len(MAX_FILE_SIZE + 1).unwrap();
         assert!(matches!(
             Settings::load(directory.path()),
             Err(StoreError::TooLarge {
-                limit: MAX_SETTINGS_SIZE,
+                limit: MAX_FILE_SIZE,
                 ..
             })
         ));
         // At the limit, the content is read (and judged).
         let file = fs::File::create(directory.path().join(SETTINGS_FILE)).unwrap();
-        file.set_len(MAX_SETTINGS_SIZE).unwrap();
+        file.set_len(MAX_FILE_SIZE).unwrap();
         assert!(matches!(
             Settings::load(directory.path()),
             Err(StoreError::Invalid { .. })

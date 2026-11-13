@@ -369,7 +369,7 @@ fn store_text(language: Language, error: &StoreError) -> String {
                 )
             }
         }
-        StoreError::UnsupportedVersion { path, version } => {
+        StoreError::UnsupportedVersion { path, version, .. } => {
             if french {
                 format!(
                     "{} est en version {version}, que cet Okapi ne lit pas : rien n'est fait.",
@@ -1117,6 +1117,7 @@ mod tests {
             Message::Store(&StoreError::UnsupportedVersion {
                 path: path.clone(),
                 version: 2,
+                supported: 1,
             }),
             Message::Store(&unreadable),
             Message::Store(&StoreError::BrokenLink { path: path.clone() }),

@@ -15,6 +15,7 @@ pub use directory::{
     sticky_allows, tells_mount_roots,
 };
 pub use identity::{FileIdentity, IDENTITY_SUPPORTED, file_identity, last_change, ownership};
+pub use session::sync_directory;
 pub use session::{
     create_private_directory, effective_user, open_for_reading, open_journal, running_as_root,
 };

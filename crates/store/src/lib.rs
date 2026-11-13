@@ -1,11 +1,16 @@
 //! Persistent settings, history and journal: what the user set in
-//! `$XDG_CONFIG_HOME/okapi/settings.json`, one line per cleaning in
-//! `$XDG_STATE_HOME/okapi/history.jsonl`, and every trace in the journal
-//! beside it. A cleaning's receipt becomes its history line here, the one
-//! form both interfaces write; nothing here depends on an interface.
+//! `$XDG_CONFIG_HOME/okapi/settings.json`, the layout of the dashboard
+//! beside it (`dashboard.json`), one line per cleaning in
+//! `$XDG_STATE_HOME/okapi/history.jsonl`, the summary of the last analysis
+//! beside it (`last-analysis.json`), and every trace in the journal. A
+//! cleaning's receipt becomes its history line here, the one form both
+//! interfaces write; nothing here depends on an interface.
 
+mod dashboard;
+mod file;
 mod history;
 pub mod journal;
+mod last_analysis;
 mod settings;
 
 use std::io;
@@ -13,10 +18,13 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+pub use dashboard::{DashboardLayout, DashboardWidget, LoadedLayout, WidgetSize};
 pub use history::{History, HistoryEntry, HistoryOutcome, HistoryUnavailable, Opened, seconds};
+pub use last_analysis::LastAnalysis;
 pub use settings::Settings;
 
-/// A settings or history file could not be used.
+/// A file Okapi keeps (settings, layout, history, last analysis) could not
+/// be used.
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("`{}` cannot be read: {error}", path.display())]
@@ -26,12 +34,13 @@ pub enum StoreError {
         error: io::Error,
     },
 
-    /// A link (dotfiles) that leads nowhere: the settings exist but cannot be
+    /// A link (dotfiles) that leads nowhere: the file exists but cannot be
     /// reached, which is never taken for none.
     #[error("`{}` is a link that leads nowhere", path.display())]
     BrokenLink { path: PathBuf },
 
-    /// A directory, a pipe or a device where a file is expected.
+    /// A directory, a pipe or a device where a file is expected, or, for a
+    /// file to replace, a link (never written through).
     #[error("`{}` is not a regular file", path.display())]
     NotAFile { path: PathBuf },
 
@@ -45,8 +54,12 @@ pub enum StoreError {
         error: serde_json::Error,
     },
 
-    #[error("`{}` has version {version}, this Okapi reads version {}", path.display(), settings::SETTINGS_VERSION)]
-    UnsupportedVersion { path: PathBuf, version: u32 },
+    #[error("`{}` has version {version}, this Okapi reads version {supported}", path.display())]
+    UnsupportedVersion {
+        path: PathBuf,
+        version: u32,
+        supported: u32,
+    },
 
     #[error("`{}` cannot be written: {error}", path.display())]
     Unwritable {
@@ -54,4 +67,22 @@ pub enum StoreError {
         #[source]
         error: io::Error,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unsupported_version_names_the_one_this_okapi_reads() {
+        let error = StoreError::UnsupportedVersion {
+            path: PathBuf::from("/okapi/dashboard.json"),
+            version: 5,
+            supported: 3,
+        };
+        assert_eq!(
+            error.to_string(),
+            "`/okapi/dashboard.json` has version 5, this Okapi reads version 3"
+        );
+    }
 }

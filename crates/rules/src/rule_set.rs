@@ -13,7 +13,7 @@ use crate::error::RulesError;
 use crate::misc::MiscRules;
 use crate::os::Os;
 use crate::steam::SteamRules;
-use crate::system::SystemRules;
+use crate::system::{CleanTarget, SystemRules};
 use crate::template::TemplatePath;
 use crate::values::first_duplicate;
 
@@ -159,6 +159,34 @@ macro_rules! embedded_sources {
     };
 }
 
+impl RuleSources<'static> {
+    /// The rule files embedded for `os`.
+    const fn embedded(os: Os) -> Self {
+        match os {
+            Os::Linux => embedded_sources!("linux"),
+            Os::MacOs => embedded_sources!("macos"),
+            Os::Windows => embedded_sources!("windows"),
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl<'a> RuleSources<'a> {
+    /// The text of `file`, to replace.
+    const fn of_kind(&mut self, file: RuleFileKind) -> &mut &'a str {
+        match file {
+            RuleFileKind::System => &mut self.system,
+            RuleFileKind::Browsers => &mut self.browsers,
+            RuleFileKind::Apps => &mut self.apps,
+            RuleFileKind::Gaming => &mut self.gaming,
+            RuleFileKind::GpuCache => &mut self.gpu_cache,
+            RuleFileKind::Steam => &mut self.steam,
+            RuleFileKind::Databases => &mut self.databases,
+            RuleFileKind::Misc => &mut self.misc,
+        }
+    }
+}
+
 /// Every cleaning rule of one operating system, validated as a whole.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleSet {
@@ -181,11 +209,19 @@ impl RuleSet {
     /// Any [`RulesError`] if the embedded files are invalid, which the tests of
     /// this crate rule out for every [`Os`].
     pub fn embedded(os: Os) -> Result<Self, RulesError> {
-        let sources = match os {
-            Os::Linux => embedded_sources!("linux"),
-            Os::MacOs => embedded_sources!("macos"),
-            Os::Windows => embedded_sources!("windows"),
-        };
+        Self::from_sources(os, &RuleSources::embedded(os))
+    }
+
+    /// The rules shipped with Okapi for `os`, `file` replaced by `text`: rules
+    /// whose paths a test chooses, checked as a whole as any rule set is.
+    ///
+    /// # Errors
+    ///
+    /// Any [`RulesError`] that `text` causes.
+    #[cfg(feature = "test-support")]
+    pub fn embedded_with(os: Os, file: RuleFileKind, text: &str) -> Result<Self, RulesError> {
+        let mut sources = RuleSources::embedded(os);
+        *sources.of_kind(file) = text;
         Self::from_sources(os, &sources)
     }
 
@@ -204,6 +240,7 @@ impl RuleSet {
         rules.check_paths_exist_on_os()?;
         rules.check_unique_rule_ids()?;
         rules.check_unique_database_labels()?;
+        rules.check_unique_admin_targets()?;
         Ok(rules)
     }
 
@@ -348,6 +385,40 @@ impl RuleSet {
         Ok(())
     }
 
+    /// The privileged helper is asked for its targets by their path, and
+    /// cleans the rules it was asked for: the path a target that needs the
+    /// administrator deletes is the path no other target deletes, ordinary
+    /// ones included (with the same subcategory, theirs would be the same
+    /// rule to it). A maintenance operation deletes nothing: it may share it.
+    fn check_unique_admin_targets(&self) -> Result<(), RulesError> {
+        fn deleted(target: &CleanTarget) -> Option<&TemplatePath> {
+            match target.effect() {
+                Effect::Delete(deletion) => Some(deletion.path()),
+                Effect::Maintenance { .. } => None,
+            }
+        }
+        let targets = self.system.clean_targets();
+        let shared = targets
+            .iter()
+            .filter(|target| target.needs_admin())
+            .filter_map(deleted)
+            .find(|path| {
+                targets
+                    .iter()
+                    .filter_map(deleted)
+                    .filter(|other| other == path)
+                    .count()
+                    > 1
+            });
+        match shared {
+            Some(path) => Err(RulesError::DuplicateAdminTarget {
+                os: self.os,
+                path: path.to_string(),
+            }),
+            None => Ok(()),
+        }
+    }
+
     /// The label is how the user tells two database targets apart.
     fn check_unique_database_labels(&self) -> Result<(), RulesError> {
         let labels = self.databases.targets().iter().map(DatabaseTarget::label);
@@ -380,16 +451,7 @@ mod tests {
 
     fn load_minimal_with(file: RuleFileKind, text: &str) -> Result<RuleSet, RulesError> {
         let mut sources = MINIMAL;
-        match file {
-            RuleFileKind::System => sources.system = text,
-            RuleFileKind::Browsers => sources.browsers = text,
-            RuleFileKind::Apps => sources.apps = text,
-            RuleFileKind::Gaming => sources.gaming = text,
-            RuleFileKind::GpuCache => sources.gpu_cache = text,
-            RuleFileKind::Steam => sources.steam = text,
-            RuleFileKind::Databases => sources.databases = text,
-            RuleFileKind::Misc => sources.misc = text,
-        }
+        *sources.of_kind(file) = text;
         RuleSet::from_sources(Os::Linux, &sources)
     }
 
@@ -866,6 +928,36 @@ mod tests {
             ),
             "{error}"
         );
+    }
+
+    #[test]
+    fn rejects_a_path_an_admin_target_shares() {
+        let admin = r#"{"path": "/var/crash", "subcategory": "Crash", "needsAdmin": true}"#;
+        let other_admin = r#"{"path": "/var/crash", "subcategory": "Dumps", "needsAdmin": true}"#;
+        // Same path and subcategory: the same rule to the helper.
+        let ordinary = r#"{"path": "/var/crash", "subcategory": "Crash", "childSubdir": "x"}"#;
+        for pair in [[admin, other_admin], [admin, ordinary], [ordinary, admin]] {
+            let error = load_minimal_with(
+                RuleFileKind::System,
+                &format!(
+                    r#"{{"type": "system", "cleanTargets": [{}, {}]}}"#,
+                    pair[0], pair[1]
+                ),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(&error, RulesError::DuplicateAdminTarget { path, .. } if path == "/var/crash"),
+                "{error}"
+            );
+        }
+        let ordinary = r#"{"path": "/var/tmp", "subcategory": "Temp"}"#;
+        let twice = format!(r#"{{"type": "system", "cleanTargets": [{ordinary}, {ordinary}]}}"#);
+        load_minimal_with(RuleFileKind::System, &twice)
+            .expect("ordinary targets are never asked for by their path");
+        let maintenance = r#"{"path": "/var/crash", "subcategory": "Crash", "needsAdmin": true, "cleanupAction": "journal-vacuum"}"#;
+        let beside = format!(r#"{{"type": "system", "cleanTargets": [{admin}, {maintenance}]}}"#);
+        load_minimal_with(RuleFileKind::System, &beside)
+            .expect("a maintenance operation deletes nothing: no rule to the helper");
     }
 
     #[test]

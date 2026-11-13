@@ -5,21 +5,46 @@ export enum WidgetKind { reclaimable, disks, memory, processor, system }
 
 export enum WidgetSize { small, wide, tall, large, full }
 
-// Where a widget sits, in columns and rows (Rust: `dashboard/layout.rs`).
-export struct WidgetCell {
-    kind: WidgetKind,
-    size: WidgetSize,
+// Where something sits in a grid of a number of columns, in columns and
+// rows (Rust: `dashboard/layout.rs`).
+export struct CellPlace {
     column: int,
     row: int,
     width: int,
     height: int,
 }
 
-// The widgets placed in a grid of a number of columns, and the rows they
-// fill.
-export struct Placement {
-    cells: [WidgetCell],
-    rows: int,
+// A widget of the dashboard: one row of the model for as long as the
+// widget is there, its places in 1 to as many columns as the grid may have.
+export struct WidgetCell {
+    kind: WidgetKind,
+    size: WidgetSize,
+    // The sizes it is drawn in (Rust: `dashboard/catalog.rs`).
+    accepted: [WidgetSize],
+    places: [CellPlace],
+}
+
+// A widget the dashboard does not show, and the size it would come at.
+export struct AddableWidget {
+    kind: WidgetKind,
+    size: WidgetSize,
+}
+
+// The note after a widget was removed, with "Annuler".
+export struct Toast {
+    shown: bool,
+    kind: WidgetKind,
+}
+
+// What the focus is asked to go to, once: a widget of a row (its first stop
+// in the mode), the mode's button, or the empty dashboard's "Ajouter".
+export enum FocusPart { none, widget, customize, empty-add }
+
+export struct FocusRequest {
+    row: int,
+    part: FocusPart,
+    // Above 0 when asked; told back by `focus-taken`.
+    generation: int,
 }
 
 export enum DayKind { today, yesterday, other }
@@ -142,8 +167,17 @@ export struct ProcessorShown {
 }
 
 export global Dashboard {
-    // The placements in 1 to as many columns as the grid may have.
-    in property <[Placement]> placements;
+    // The widgets, and the rows they fill in 1 to as many columns as the
+    // grid may have.
+    in property <[WidgetCell]> cells;
+    in property <[int]> rows;
+    // In the Personnaliser mode, the tile "Ajouter un widget" ends the
+    // grid: its places, and the rows filled with it.
+    in property <[CellPlace]> tile;
+    in property <[int]> rows-with-tile;
+    // The widgets that can be added, in the catalog's order.
+    in property <[AddableWidget]> addable;
+    in property <Toast> toast;
     // The layout kept could not be read: the default one is shown.
     in property <bool> layout-unreadable;
     in property <Reclaimable> reclaimable;
@@ -156,8 +190,22 @@ export global Dashboard {
     in property <int> curve-span;
     // No reading reaches the window any more.
     in property <bool> readings-lost;
+    // The Personnaliser mode.
+    in property <bool> editing;
+    // The last change of the layout could not be kept.
+    in property <bool> save-failed;
+    in property <FocusRequest> focus-request;
 
     callback analyze();
-    // How many columns the grid shows, for the journal.
-    callback columns-shown(int);
+    callback customize(bool);
+    callback resize(int, WidgetSize);
+    callback remove(int);
+    callback add(WidgetKind);
+    callback reset();
+    // "Annuler" of the toast, or Ctrl+Z while it shows.
+    callback undo();
+    callback dismiss-toast();
+    // The toast has the pointer or the focus: it waits.
+    callback toast-held(bool);
+    callback focus-taken(int);
 }

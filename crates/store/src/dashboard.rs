@@ -30,6 +30,10 @@ pub enum WidgetSize {
     Full,
 }
 
+impl WidgetSize {
+    pub const ALL: [Self; 5] = [Self::Small, Self::Wide, Self::Tall, Self::Large, Self::Full];
+}
+
 /// One widget of the layout.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -151,6 +155,25 @@ mod tests {
             kind: kind.to_owned(),
             size,
         }
+    }
+
+    #[test]
+    fn every_size_is_listed() {
+        for size in WidgetSize::ALL {
+            // A size added later fails here until it is listed.
+            match size {
+                WidgetSize::Small
+                | WidgetSize::Wide
+                | WidgetSize::Tall
+                | WidgetSize::Large
+                | WidgetSize::Full => {}
+            }
+        }
+        let distinct: std::collections::BTreeSet<String> = WidgetSize::ALL
+            .iter()
+            .map(|size| format!("{size:?}"))
+            .collect();
+        assert_eq!(distinct.len(), 5);
     }
 
     fn load(text: &str) -> Result<Option<LoadedLayout>, StoreError> {

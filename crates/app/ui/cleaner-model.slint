@@ -1,7 +1,7 @@
 // What the cleaner shows, as Rust fills it (src/cleaner.rs), and the words
 // every part of it shares.
 import { Theme } from "theme.slint";
-import { Icon, Line } from "widgets.slint";
+import { Banner } from "widgets.slint";
 
 export enum CategoryKind { system, browsers, apps, gaming, gpu }
 
@@ -365,41 +365,22 @@ export global Words {
     }
 }
 
-export component ProblemBanner inherits Rectangle {
-    background: Theme.warning-soft;
-    border-radius: Theme.radius-medium;
-    accessible-role: text;
-    accessible-label: problem.text;
-    accessible-live-region: polite;
-    HorizontalLayout {
-        padding: Theme.spacing-m;
-        padding-left: Theme.spacing-l;
-        spacing: Theme.spacing-m;
-        Icon {
-            source: @image-url("../assets/icons/triangle-alert.svg");
-            colorize: Theme.warning;
-            y: (parent.height - self.height) / 2;
-        }
-        problem := Line {
-            horizontal-stretch: 1;
-            accessible-role: none;
-            color: Theme.warning;
-            vertical-alignment: center;
-            text: Cleaner.problem == SetupProblem.variables
-                ? @tr("Les dossiers de la session sont introuvables : rien ne peut démarrer. Le détail est dans le journal.")
-                : Cleaner.problem == SetupProblem.rules
-                ? @tr("Les règles de nettoyage sont illisibles : rien ne peut démarrer. Le détail est dans le journal.")
-                : Cleaner.problem == SetupProblem.settings
-                ? @tr("Les réglages sont illisibles : rien ne peut démarrer. Le détail est dans le journal.")
-                : Cleaner.problem == SetupProblem.min-age
-                ? @tr("L'âge minimal des réglages remonte avant l'horloge : rien ne serait assez ancien.")
-                : Cleaner.problem == SetupProblem.start
-                ? @tr("Le travail n'a pas pu démarrer : rien n'est supprimé. Le détail est dans le journal.")
-                : Cleaner.problem == SetupProblem.rights-changed
-                ? @tr("Les réglages ont changé depuis l'obtention des droits administrateur : rien n'est supprimé, obtenez-les à nouveau.")
-                : Cleaner.problem == SetupProblem.history
-                ? @tr("L'historique ne peut pas être tenu alors que vous demandez le journal des suppressions : rien n'est supprimé. Le détail est dans le journal.")
-                : @tr("Une exclusion des réglages est refusée : rien ne peut démarrer. Le détail est dans le journal.");
-        }
-    }
+// Why nothing can start, said over the cleaner's screens.
+export component ProblemBanner inherits Banner {
+    warning: true;
+    text: Cleaner.problem == SetupProblem.variables
+        ? @tr("Les dossiers de la session sont introuvables : rien ne peut démarrer. Le détail est dans le journal.")
+        : Cleaner.problem == SetupProblem.rules
+        ? @tr("Les règles de nettoyage sont illisibles : rien ne peut démarrer. Le détail est dans le journal.")
+        : Cleaner.problem == SetupProblem.settings
+        ? @tr("Les réglages sont illisibles : rien ne peut démarrer. Le détail est dans le journal.")
+        : Cleaner.problem == SetupProblem.min-age
+        ? @tr("L'âge minimal des réglages remonte avant l'horloge : rien ne serait assez ancien.")
+        : Cleaner.problem == SetupProblem.start
+        ? @tr("Le travail n'a pas pu démarrer : rien n'est supprimé. Le détail est dans le journal.")
+        : Cleaner.problem == SetupProblem.rights-changed
+        ? @tr("Les réglages ont changé depuis l'obtention des droits administrateur : rien n'est supprimé, obtenez-les à nouveau.")
+        : Cleaner.problem == SetupProblem.history
+        ? @tr("L'historique ne peut pas être tenu alors que vous demandez le journal des suppressions : rien n'est supprimé. Le détail est dans le journal.")
+        : @tr("Une exclusion des réglages est refusée : rien ne peut démarrer. Le détail est dans le journal.");
 }

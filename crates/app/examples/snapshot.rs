@@ -307,76 +307,101 @@ fn ended(window: &ui::AppWindow) {
     window.set_page(ui::Page::Cleaner);
 }
 
-/// The default dashboard placed in `columns`, as `dashboard::layout` places
-/// it: Récupérable over the row, Disques Large, Mémoire Petit, Processeur
-/// Large, Système Petit. The example cannot reach the binary's modules: the
-/// cells are copied from the test `the_default_dashboard_sits_as_in_the_mockup`.
-fn placement(columns: i32) -> ui::Placement {
-    use ui::WidgetKind::{Disks, Memory, Processor, Reclaimable, System};
-    use ui::WidgetSize::{Full, Small, Wide};
-    let cell = |kind, size, column, row, width| ui::WidgetCell {
-        kind,
-        size,
+fn place(column: i32, row: i32, width: i32, height: i32) -> ui::CellPlace {
+    ui::CellPlace {
         column,
         row,
         width,
-        height: 1,
-    };
-    let wide = columns.min(2);
-    let (cells, rows) = match columns {
-        1 => (
-            vec![
-                cell(Reclaimable, Full, 0, 0, 1),
-                cell(Disks, Wide, 0, 1, 1),
-                cell(Memory, Small, 0, 2, 1),
-                cell(Processor, Wide, 0, 3, 1),
-                cell(System, Small, 0, 4, 1),
-            ],
-            5,
-        ),
-        2 => (
-            vec![
-                cell(Reclaimable, Full, 0, 0, 2),
-                cell(Disks, Wide, 0, 1, 2),
-                cell(Memory, Small, 0, 2, 1),
-                cell(Processor, Wide, 0, 3, 2),
-                cell(System, Small, 0, 4, 1),
-            ],
-            5,
-        ),
-        3 => (
-            vec![
-                cell(Reclaimable, Full, 0, 0, 3),
-                cell(Disks, Wide, 0, 1, wide),
-                cell(Memory, Small, 2, 1, 1),
-                cell(Processor, Wide, 0, 2, wide),
-                cell(System, Small, 2, 2, 1),
-            ],
-            3,
-        ),
-        _ => (
-            vec![
-                cell(Reclaimable, Full, 0, 0, 4),
-                cell(Disks, Wide, 0, 1, wide),
-                cell(Memory, Small, 2, 1, 1),
-                cell(Processor, Wide, 0, 2, wide),
-                cell(System, Small, 2, 2, 1),
-            ],
-            3,
-        ),
-    };
-    ui::Placement {
-        cells: ModelRc::new(VecModel::from(cells)),
-        rows,
+        height,
     }
+}
+
+fn cell(kind: ui::WidgetKind, size: ui::WidgetSize, places: Vec<ui::CellPlace>) -> ui::WidgetCell {
+    use ui::WidgetSize::{Full, Large, Small, Tall, Wide};
+    // As `dashboard::catalog` says each widget is drawn.
+    let accepted = match kind {
+        ui::WidgetKind::Reclaimable => vec![Wide, Full],
+        ui::WidgetKind::Disks | ui::WidgetKind::Memory => vec![Small, Wide, Tall, Large],
+        ui::WidgetKind::Processor => vec![Small, Wide],
+        ui::WidgetKind::System => vec![Small],
+    };
+    ui::WidgetCell {
+        kind,
+        size,
+        accepted: ModelRc::new(VecModel::from(accepted)),
+        places: ModelRc::new(VecModel::from(places)),
+    }
+}
+
+/// The default dashboard, placed in 1 to 4 columns as `dashboard::layout`
+/// places it: Récupérable over the row, Disques Large, Mémoire Petit,
+/// Processeur Large, Système Petit. The example cannot reach the binary's
+/// modules: the cells are copied from the test
+/// `the_default_dashboard_sits_as_in_the_mockup`.
+fn default_cells() -> (Vec<ui::WidgetCell>, Vec<i32>) {
+    use ui::WidgetKind::{Disks, Memory, Processor, Reclaimable, System};
+    use ui::WidgetSize::{Full, Small, Wide};
+    let cells = vec![
+        cell(
+            Reclaimable,
+            Full,
+            vec![
+                place(0, 0, 1, 1),
+                place(0, 0, 2, 1),
+                place(0, 0, 3, 1),
+                place(0, 0, 4, 1),
+            ],
+        ),
+        cell(
+            Disks,
+            Wide,
+            vec![
+                place(0, 1, 1, 1),
+                place(0, 1, 2, 1),
+                place(0, 1, 2, 1),
+                place(0, 1, 2, 1),
+            ],
+        ),
+        cell(
+            Memory,
+            Small,
+            vec![
+                place(0, 2, 1, 1),
+                place(0, 2, 1, 1),
+                place(2, 1, 1, 1),
+                place(2, 1, 1, 1),
+            ],
+        ),
+        cell(
+            Processor,
+            Wide,
+            vec![
+                place(0, 3, 1, 1),
+                place(0, 3, 2, 1),
+                place(0, 2, 2, 1),
+                place(0, 2, 2, 1),
+            ],
+        ),
+        cell(
+            System,
+            Small,
+            vec![
+                place(0, 4, 1, 1),
+                place(0, 4, 1, 1),
+                place(2, 2, 1, 1),
+                place(2, 2, 1, 1),
+            ],
+        ),
+    ];
+    (cells, vec![5, 5, 3, 3])
 }
 
 /// The Home page, an analysis of today kept and the system read.
 fn home(window: &ui::AppWindow) {
     let dashboard = window.global::<ui::Dashboard>();
-    dashboard.set_placements(ModelRc::new(VecModel::from(
-        (1..=4).map(placement).collect::<Vec<_>>(),
-    )));
+    let (cells, rows) = default_cells();
+    dashboard.set_cells(ModelRc::new(VecModel::from(cells)));
+    dashboard.set_rows(ModelRc::new(VecModel::from(rows)));
     let today = ui::Moment {
         day: ui::DayKind::Today,
         day_of_month: 0,
@@ -551,31 +576,15 @@ fn home_tall(window: &ui::AppWindow, disks_large: bool) {
     } else {
         (ui::WidgetKind::Memory, ui::WidgetKind::Disks)
     };
+    let large_place = place(0, 0, 2, 2);
+    let tall_place = place(2, 0, 1, 2);
     let cells = vec![
-        ui::WidgetCell {
-            kind: large,
-            size: ui::WidgetSize::Large,
-            column: 0,
-            row: 0,
-            width: 2,
-            height: 2,
-        },
-        ui::WidgetCell {
-            kind: tall,
-            size: ui::WidgetSize::Tall,
-            column: 2,
-            row: 0,
-            width: 1,
-            height: 2,
-        },
+        cell(large, ui::WidgetSize::Large, vec![large_place; 4]),
+        cell(tall, ui::WidgetSize::Tall, vec![tall_place; 4]),
     ];
-    let placement = ui::Placement {
-        cells: ModelRc::new(VecModel::from(cells)),
-        rows: 2,
-    };
-    window
-        .global::<ui::Dashboard>()
-        .set_placements(ModelRc::new(VecModel::from(vec![placement; 4])));
+    let dashboard = window.global::<ui::Dashboard>();
+    dashboard.set_cells(ModelRc::new(VecModel::from(cells)));
+    dashboard.set_rows(ModelRc::new(VecModel::from(vec![2; 4])));
 }
 
 fn main() {
@@ -599,9 +608,26 @@ fn main() {
         "about" => app.set_page(ui::Page::About),
         "home" | "home-small" => home(&app),
         "home-disks" => home_tall(&app, true),
+        "home-customize" => {
+            home(&app);
+            let dashboard = app.global::<ui::Dashboard>();
+            dashboard.set_editing(true);
+            // The tile after Système, in each number of columns.
+            dashboard.set_tile(ModelRc::new(VecModel::from(vec![
+                place(0, 5, 1, 1),
+                place(1, 4, 1, 1),
+                place(0, 3, 1, 1),
+                place(0, 3, 1, 1),
+            ])));
+            dashboard.set_rows_with_tile(ModelRc::new(VecModel::from(vec![6, 5, 4, 4])));
+            dashboard.set_toast(ui::Toast {
+                shown: true,
+                kind: ui::WidgetKind::Disks,
+            });
+        }
         "home-memory" => home_tall(&app, false),
         other => panic!(
-            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-disks, home-memory"
+            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-disks, home-memory, home-customize"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

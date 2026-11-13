@@ -1234,3 +1234,139 @@ msgstr "now · the curve is filling"
 msgctxt "ProcessorWidget"
 msgid "maintenant"
 msgstr "now"
+
+msgctxt "DashboardWords"
+msgid "Petit"
+msgstr "Small"
+
+msgctxt "DashboardWords"
+msgid "Large"
+msgstr "Wide"
+
+msgctxt "DashboardWords"
+msgid "Haut"
+msgstr "Tall"
+
+msgctxt "DashboardWords"
+msgid "Grand"
+msgstr "Large"
+
+msgctxt "DashboardWords"
+msgid "Pleine largeur"
+msgstr "Full width"
+
+msgctxt "EditBar"
+msgid "Taille de {}"
+msgstr "Size of {}"
+
+msgctxt "EditBar"
+msgid "Taille unique"
+msgstr "Single size"
+
+msgctxt "EditBar"
+msgid "Retirer"
+msgstr "Remove"
+
+msgctxt "EditBar"
+msgid "Retirer {}"
+msgstr "Remove {}"
+
+msgctxt "DashboardPage"
+msgid "Terminé"
+msgstr "Done"
+
+msgctxt "DashboardPage"
+msgid "Personnaliser"
+msgstr "Customize"
+
+msgctxt "DashboardPage"
+msgid "Mode Personnaliser. Choisissez la taille de chaque widget ou retirez-le ; chaque changement est gardé aussitôt."
+msgstr "Customize mode. Choose each widget's size or remove it; every change is kept at once."
+
+msgctxt "DashboardPage"
+msgid "Votre disposition n'a pas pu être enregistrée."
+msgstr "Your layout could not be saved."
+
+msgctxt "DashboardWords"
+msgid "L'espace que la dernière analyse a trouvé à libérer."
+msgstr "The space the last analysis found to free."
+
+msgctxt "DashboardWords"
+msgid "L'espace libre de chaque volume monté."
+msgstr "The free space of each mounted volume."
+
+msgctxt "DashboardWords"
+msgid "La mémoire occupée et les applications qui en prennent le plus."
+msgstr "The memory used and the applications taking the most."
+
+msgctxt "DashboardWords"
+msgid "L'utilisation du processeur et sa charge moyenne."
+msgstr "The processor's use and its load average."
+
+msgctxt "DashboardWords"
+msgid "Distribution, noyau, bureau et durée depuis le démarrage."
+msgstr "Distribution, kernel, desktop and time since startup."
+
+msgctxt "AddTile"
+msgid "Ajouter un widget"
+msgstr "Add a widget"
+
+msgctxt "AddDialog"
+msgid "Ajouter un widget"
+msgstr "Add a widget"
+
+msgctxt "AddDialog"
+msgid "Tous les widgets sont déjà sur votre tableau de bord."
+msgstr "Every widget is on your dashboard already."
+
+msgctxt "AddDialog"
+msgid "Taille de départ : {}"
+msgstr "Starting size: {}"
+
+msgctxt "AddDialog"
+msgid "Ajouter"
+msgstr "Add"
+
+msgctxt "AddDialog"
+msgid "Ajouter {}"
+msgstr "Add {}"
+
+msgctxt "AddDialog"
+msgid "Fermer"
+msgstr "Close"
+
+msgctxt "ResetDialog"
+msgid "Rétablir la disposition par défaut ?"
+msgstr "Restore the default layout?"
+
+msgctxt "ResetDialog"
+msgid "Votre disposition actuelle sera remplacée par celle de départ : Récupérable, Disques, Mémoire, Processeur et Système, chacun à sa taille d'origine."
+msgstr "Your current layout will be replaced by the starting one: Reclaimable, Disks, Memory, Processor and System, each at its original size."
+
+msgctxt "ResetDialog"
+msgid "Annuler"
+msgstr "Cancel"
+
+msgctxt "ResetDialog"
+msgid "Rétablir"
+msgstr "Restore"
+
+msgctxt "Toast"
+msgid "{} retiré du tableau de bord"
+msgstr "{} removed from the dashboard"
+
+msgctxt "Toast"
+msgid "Annuler"
+msgstr "Undo"
+
+msgctxt "Toast"
+msgid "Fermer la notification"
+msgstr "Close the notification"
+
+msgctxt "DashboardPage"
+msgid "Rétablir la disposition par défaut"
+msgstr "Restore the default layout"
+
+msgctxt "DashboardPage"
+msgid "Ajouter un widget"
+msgstr "Add a widget"

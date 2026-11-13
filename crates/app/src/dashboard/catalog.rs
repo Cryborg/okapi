@@ -63,29 +63,29 @@ impl WidgetKind {
     }
 }
 
-/// The dashboard shown when none is kept: every widget, as the mockup lays
-/// them out.
+/// The size `kind` comes at, in the default dashboard as when added.
+pub(crate) const fn starting_size(kind: WidgetKind) -> WidgetSize {
+    match kind {
+        WidgetKind::Reclaimable => WidgetSize::Full,
+        WidgetKind::Disks | WidgetKind::Processor => WidgetSize::Wide,
+        WidgetKind::Memory | WidgetKind::System => WidgetSize::Small,
+    }
+}
+
+/// The dashboard shown when none is kept: every widget, in the catalog's
+/// order, at its starting size, as the mockup lays them out.
 pub(crate) fn default_widgets() -> Vec<(WidgetKind, WidgetSize)> {
-    vec![
-        (WidgetKind::Reclaimable, WidgetSize::Full),
-        (WidgetKind::Disks, WidgetSize::Wide),
-        (WidgetKind::Memory, WidgetSize::Small),
-        (WidgetKind::Processor, WidgetSize::Wide),
-        (WidgetKind::System, WidgetSize::Small),
-    ]
+    WidgetKind::ALL
+        .into_iter()
+        .map(|kind| (kind, starting_size(kind)))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const SIZES: [WidgetSize; 5] = [
-        WidgetSize::Small,
-        WidgetSize::Wide,
-        WidgetSize::Tall,
-        WidgetSize::Large,
-        WidgetSize::Full,
-    ];
+    const SIZES: [WidgetSize; 5] = WidgetSize::ALL;
 
     #[test]
     fn each_widget_is_found_again_by_its_own_name_and_no_other() {
@@ -132,6 +132,20 @@ mod tests {
             assert_eq!(sizes.len(), 1, "{kind:?} once");
             assert!(kind.accepts(sizes[0]), "{kind:?} at a size it takes");
         }
+    }
+
+    #[test]
+    fn the_default_dashboard_is_the_mockup_s() {
+        assert_eq!(
+            default_widgets(),
+            [
+                (WidgetKind::Reclaimable, WidgetSize::Full),
+                (WidgetKind::Disks, WidgetSize::Wide),
+                (WidgetKind::Memory, WidgetSize::Small),
+                (WidgetKind::Processor, WidgetSize::Wide),
+                (WidgetKind::System, WidgetSize::Small),
+            ]
+        );
     }
 
     #[test]

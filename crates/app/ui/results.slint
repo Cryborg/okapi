@@ -4,7 +4,7 @@ import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import {
     ActionButton, ButtonKind, Badge, Card, CheckMark, Detail, Footer, FocusRing, Icon, IconNote,
-    Line, Title,
+    Line, ModalFrame, Title,
 } from "widgets.slint";
 import {
     AdminRow, BrowserStep, CheckState, Cleaner, IssueKind, IssueShown, ProblemBanner, ResultBadge,
@@ -306,122 +306,98 @@ component NoteLine inherits HorizontalLayout {
 // The confirmation of a cleaning: irreversible, so a checkbox says it is
 // understood before "Supprimer" acts. Closed by its buttons or Escape, never
 // by a click outside.
-component Confirmation inherits PopupWindow {
-    close-policy: no-auto-close;
+component Confirmation inherits ModalFrame {
+    label: title.text;
+    init => {
+        back.focus();
+    }
+    escaped => {
+        Cleaner.cancel-confirmation();
+    }
 
-    // Escape, from wherever the focus is in the confirmation; never a stop
-    // of Tab itself.
-    keys := FocusScope {
-        focus-on-tab-navigation: false;
-        init => {
-            back.focus();
-        }
-        key-pressed(event) => {
-            if event.text == Key.Escape {
-                Cleaner.cancel-confirmation();
-                return accept;
-            }
-            reject
-        }
+    HorizontalLayout {
+        alignment: start;
         Rectangle {
-            background: Theme.surface;
-            border-radius: Theme.radius-large;
-            border-color: Theme.border;
-            border-width: Theme.border-width;
-            drop-shadow-color: Theme.shadow-1;
-            drop-shadow-blur: Theme.shadow-1-blur;
-            drop-shadow-offset-y: Theme.shadow-1-offset;
-            accessible-role: groupbox;
-            accessible-label: title.text;
-            VerticalLayout {
-                padding: Theme.spacing-xl;
-                spacing: Theme.spacing-l;
-                HorizontalLayout {
-                    alignment: start;
-                    Rectangle {
-                        width: Theme.icon-box;
-                        height: Theme.icon-box;
-                        border-radius: Theme.radius-medium;
-                        background: Theme.danger-soft;
-                        Icon {
-                            source: @image-url("../assets/icons/triangle-alert.svg");
-                            colorize: Theme.danger;
-                        }
-                    }
+            width: Theme.icon-box;
+            height: Theme.icon-box;
+            border-radius: Theme.radius-medium;
+            background: Theme.danger-soft;
+            Icon {
+                source: @image-url("../assets/icons/triangle-alert.svg");
+                colorize: Theme.danger;
+            }
+        }
+    }
+    title := Text {
+        text: @tr("Supprimer définitivement ?");
+        accessible-role: none;
+        color: Theme.text;
+        font-size: Theme.font-title;
+        font-weight: Theme.weight-semibold;
+    }
+    Detail {
+        text: @tr("Taille : {}. Éléments : {}. Rien ne passe par la corbeille : cette action est irréversible.", Words.size(Cleaner.confirm-size), Cleaner.confirm-entries);
+    }
+    if Cleaner.confirm-admin: Detail {
+        text: @tr("Une fenêtre du système peut vous demander votre mot de passe pour les éléments administrateur. Ils sont mesurés de nouveau juste avant d'être retirés : leur nombre a pu changer depuis l'obtention des droits.");
+    }
+    understood-box := Rectangle {
+        accessible-role: checkbox;
+        accessible-checkable: true;
+        accessible-checked: Cleaner.understood;
+        accessible-label: understood-text.text;
+        accessible-action-default => {
+            Cleaner.understood = !Cleaner.understood;
+        }
+        forward-focus: understood-keys;
+        understood-keys := FocusScope {
+            key-pressed(event) => {
+                if !event.repeat && event.text == Key.Space {
+                    Cleaner.understood = !Cleaner.understood;
+                    return accept;
                 }
-                title := Text {
-                    text: @tr("Supprimer définitivement ?");
-                    accessible-role: none;
-                    color: Theme.text;
-                    font-size: Theme.font-title;
-                    font-weight: Theme.weight-semibold;
-                }
-                Detail {
-                    text: @tr("Taille : {}. Éléments : {}. Rien ne passe par la corbeille : cette action est irréversible.", Words.size(Cleaner.confirm-size), Cleaner.confirm-entries);
-                }
-                if Cleaner.confirm-admin: Detail {
-                    text: @tr("Une fenêtre du système peut vous demander votre mot de passe pour les éléments administrateur. Ils sont mesurés de nouveau juste avant d'être retirés : leur nombre a pu changer depuis l'obtention des droits.");
-                }
-                understood-box := Rectangle {
-                    accessible-role: checkbox;
-                    accessible-checkable: true;
-                    accessible-checked: Cleaner.understood;
-                    accessible-label: understood-text.text;
-                    accessible-action-default => {
-                        Cleaner.understood = !Cleaner.understood;
-                    }
-                    forward-focus: understood-keys;
-                    understood-keys := FocusScope {
-                        key-pressed(event) => {
-                            if !event.repeat && event.text == Key.Space {
-                                Cleaner.understood = !Cleaner.understood;
-                                return accept;
-                            }
-                            reject
-                        }
-                    }
-                    TouchArea {
-                        clicked => {
-                            Cleaner.understood = !Cleaner.understood;
-                        }
-                    }
-                    FocusRing {
-                        shown: understood-keys.has-focus;
-                        border-radius: Theme.radius-medium;
-                    }
-                    HorizontalLayout {
-                        padding: Theme.spacing-xs;
-                        spacing: Theme.spacing-s;
-                        CheckMark {
-                            checked: Cleaner.understood;
-                            y: (parent.height - self.height) / 2;
-                        }
-                        understood-text := Detail {
-                            text: @tr("J'ai compris que c'est définitif");
-                            accessible-role: none;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-                HorizontalLayout {
-                    alignment: end;
-                    spacing: Theme.spacing-s;
-                    back := ActionButton {
-                        text: @tr("Annuler");
-                        kind: ButtonKind.ghost;
-                        clicked => {
-                            Cleaner.cancel-confirmation();
-                        }
-                    }
-                    ActionButton {
-                        text: @tr("Supprimer définitivement");
-                        kind: ButtonKind.danger;
-                        enabled: Cleaner.understood;
-                        clicked => {
-                            Cleaner.confirm-delete();
-                        }
-                    }
-                }
+                reject
+            }
+        }
+        TouchArea {
+            clicked => {
+                Cleaner.understood = !Cleaner.understood;
+            }
+        }
+        FocusRing {
+            shown: understood-keys.has-focus;
+            border-radius: Theme.radius-medium;
+        }
+        HorizontalLayout {
+            padding: Theme.spacing-xs;
+            spacing: Theme.spacing-s;
+            CheckMark {
+                checked: Cleaner.understood;
+                y: (parent.height - self.height) / 2;
+            }
+            understood-text := Detail {
+                text: @tr("J'ai compris que c'est définitif");
+                accessible-role: none;
+                vertical-alignment: center;
+            }
+        }
+    }
+    HorizontalLayout {
+        alignment: end;
+        spacing: Theme.spacing-s;
+        back := ActionButton {
+            text: @tr("Annuler");
+            kind: ButtonKind.ghost;
+            clicked => {
+                Cleaner.cancel-confirmation();
+            }
+        }
+        ActionButton {
+            text: @tr("Supprimer définitivement");
+            kind: ButtonKind.danger;
+            enabled: Cleaner.understood;
+            clicked => {
+                Cleaner.confirm-delete();
             }
         }
     }
@@ -430,8 +406,7 @@ component Confirmation inherits PopupWindow {
 // A browser open when its caches are to be cleaned: leave them out this time,
 // or have Okapi close it and go on. Closed by its buttons or Escape (which
 // cancels the cleaning), never by a click outside.
-component BrowserQuestion inherits PopupWindow {
-    close-policy: no-auto-close;
+component BrowserQuestion inherits ModalFrame {
     // Its buttons change with what it says, and with the browser asked
     // about: the focus goes back to Ignorer, never left on a Fermer.
     property <BrowserStep> step: Cleaner.browser-step;
@@ -442,101 +417,80 @@ component BrowserQuestion inherits PopupWindow {
     changed name => {
         ignore.focus();
     }
+    label: title.text;
+    init => {
+        ignore.focus();
+    }
+    escaped => {
+        Cleaner.cancel-browser();
+    }
 
-    keys := FocusScope {
-        focus-on-tab-navigation: false;
-        init => {
-            ignore.focus();
-        }
-        key-pressed(event) => {
-            if event.text == Key.Escape {
-                Cleaner.cancel-browser();
-                return accept;
-            }
-            reject
-        }
+    HorizontalLayout {
+        alignment: start;
         Rectangle {
-            background: Theme.surface;
-            border-radius: Theme.radius-large;
-            border-color: Theme.border;
-            border-width: Theme.border-width;
-            drop-shadow-color: Theme.shadow-1;
-            drop-shadow-blur: Theme.shadow-1-blur;
-            drop-shadow-offset-y: Theme.shadow-1-offset;
-            accessible-role: groupbox;
-            accessible-label: title.text;
-            VerticalLayout {
-                padding: Theme.spacing-xl;
-                spacing: Theme.spacing-l;
-                HorizontalLayout {
-                    alignment: start;
-                    Rectangle {
-                        width: Theme.icon-box;
-                        height: Theme.icon-box;
-                        border-radius: Theme.radius-medium;
-                        background: Theme.warning-soft;
-                        Icon {
-                            source: @image-url("../assets/icons/globe.svg");
-                            colorize: Theme.warning;
-                        }
-                    }
-                }
-                title := Text {
-                    text: @tr("{} est ouvert", Cleaner.browser-name);
-                    accessible-role: none;
-                    color: Theme.text;
-                    font-size: Theme.font-title;
-                    font-weight: Theme.weight-semibold;
-                }
-                Detail {
-                    text: @tr("{} se sert encore de son cache. Fermez-le pour que ce cache soit nettoyé, ou laissez-le de côté cette fois : le reste du nettoyage continue.", Cleaner.browser-name);
-                    wrap: word-wrap;
-                }
-                HorizontalLayout {
-                    spacing: Theme.spacing-m;
-                    Line {
-                        horizontal-stretch: 1;
-                        text: @tr("{} : {}", Cleaner.browser-name, Cleaner.browser-caches);
-                        wrap: word-wrap;
-                    }
-                    Line {
-                        text: Words.size(Cleaner.browser-size);
-                        horizontal-alignment: right;
-                    }
-                }
-                if Cleaner.browser-step != BrowserStep.ask: Line {
-                    text: Cleaner.browser-step == BrowserStep.closing ? @tr("Fermeture de {}…", Cleaner.browser-name)
-                        : Cleaner.browser-step == BrowserStep.not-closed ? @tr("{} ne s'est pas fermé : fermez-le, puis relancez le nettoyage.", Cleaner.browser-name)
-                        : Cleaner.browser-step == BrowserStep.refused ? @tr("Le système a refusé de demander à {} de se fermer : fermez-le, puis relancez le nettoyage.", Cleaner.browser-name)
-                        : @tr("Okapi ne peut pas fermer {} lui-même : fermez-le, puis relancez le nettoyage.", Cleaner.browser-name);
-                    color: Cleaner.browser-step == BrowserStep.closing ? Theme.text-2 : Theme.warning;
-                    wrap: word-wrap;
-                    accessible-live-region: polite;
-                }
-                Detail {
-                    text: @tr("Échap annule le nettoyage");
-                }
-                HorizontalLayout {
-                    alignment: end;
-                    spacing: Theme.spacing-s;
-                    ignore := ActionButton {
-                        text: @tr("Ignorer {}", Cleaner.browser-name);
-                        kind: ButtonKind.ghost;
-                        clicked => {
-                            Cleaner.ignore-browser();
-                        }
-                    }
-                    // Asked once only: a second request could end it at once,
-                    // in the middle of saving its session.
-                    if Cleaner.browser-step == BrowserStep.ask || Cleaner.browser-step == BrowserStep.closing: ActionButton {
-                        text: @tr("Fermer {} et continuer", Cleaner.browser-name);
-                        kind: ButtonKind.primary;
-                        enabled: Cleaner.browser-step != BrowserStep.closing;
-                        clicked => {
-                            Cleaner.close-browser();
-                        }
-                    }
-                }
+            width: Theme.icon-box;
+            height: Theme.icon-box;
+            border-radius: Theme.radius-medium;
+            background: Theme.warning-soft;
+            Icon {
+                source: @image-url("../assets/icons/globe.svg");
+                colorize: Theme.warning;
+            }
+        }
+    }
+    title := Text {
+        text: @tr("{} est ouvert", Cleaner.browser-name);
+        accessible-role: none;
+        color: Theme.text;
+        font-size: Theme.font-title;
+        font-weight: Theme.weight-semibold;
+    }
+    Detail {
+        text: @tr("{} se sert encore de son cache. Fermez-le pour que ce cache soit nettoyé, ou laissez-le de côté cette fois : le reste du nettoyage continue.", Cleaner.browser-name);
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        spacing: Theme.spacing-m;
+        Line {
+            horizontal-stretch: 1;
+            text: @tr("{} : {}", Cleaner.browser-name, Cleaner.browser-caches);
+            wrap: word-wrap;
+        }
+        Line {
+            text: Words.size(Cleaner.browser-size);
+            horizontal-alignment: right;
+        }
+    }
+    if Cleaner.browser-step != BrowserStep.ask: Line {
+        text: Cleaner.browser-step == BrowserStep.closing ? @tr("Fermeture de {}…", Cleaner.browser-name)
+            : Cleaner.browser-step == BrowserStep.not-closed ? @tr("{} ne s'est pas fermé : fermez-le, puis relancez le nettoyage.", Cleaner.browser-name)
+            : Cleaner.browser-step == BrowserStep.refused ? @tr("Le système a refusé de demander à {} de se fermer : fermez-le, puis relancez le nettoyage.", Cleaner.browser-name)
+            : @tr("Okapi ne peut pas fermer {} lui-même : fermez-le, puis relancez le nettoyage.", Cleaner.browser-name);
+        color: Cleaner.browser-step == BrowserStep.closing ? Theme.text-2 : Theme.warning;
+        wrap: word-wrap;
+        accessible-live-region: polite;
+    }
+    Detail {
+        text: @tr("Échap annule le nettoyage");
+    }
+    HorizontalLayout {
+        alignment: end;
+        spacing: Theme.spacing-s;
+        ignore := ActionButton {
+            text: @tr("Ignorer {}", Cleaner.browser-name);
+            kind: ButtonKind.ghost;
+            clicked => {
+                Cleaner.ignore-browser();
+            }
+        }
+        // Asked once only: a second request could end it at once,
+        // in the middle of saving its session.
+        if Cleaner.browser-step == BrowserStep.ask || Cleaner.browser-step == BrowserStep.closing: ActionButton {
+            text: @tr("Fermer {} et continuer", Cleaner.browser-name);
+            kind: ButtonKind.primary;
+            enabled: Cleaner.browser-step != BrowserStep.closing;
+            clicked => {
+                Cleaner.close-browser();
             }
         }
     }

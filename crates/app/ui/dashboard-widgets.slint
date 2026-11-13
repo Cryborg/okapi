@@ -1,10 +1,10 @@
 // The widgets of the Home page, drawn from the mockup's
 // (docs/design/tableau-de-bord/project/Widget.dc.html).
 import { Theme } from "theme.slint";
-import { Card, Detail, Icon, Badge, ProgressBar, ActionButton, ButtonKind, ScrolledList } from "widgets.slint";
+import { Card, Detail, Icon, Badge, ProgressBar, ActionButton, ButtonKind, ScrolledList, FocusRing } from "widgets.slint";
 import { Cleaner, CleanerStep, RightsStep, Words } from "cleaner-model.slint";
 import {
-    Dashboard, DayKind, DisksShown, MemoryShown, Moment, ProcessorShown, ReadingState, Reclaimable,
+    Dashboard, DayKind, DisksShown, FocusPart, MemoryShown, Moment, ProcessorShown, ReadingState, Reclaimable,
     ReclaimableState, SpaceState, SystemShown, VolumeNaming, VolumePlace, VolumeShown, WidgetKind,
     WidgetSize,
 } from "dashboard-model.slint";
@@ -102,6 +102,40 @@ export global DashboardWords {
         return number == 1 ? @tr("1er") : number;
     }
 
+    // A size of a widget.
+    pure public function size-name(size: WidgetSize) -> string {
+        if size == WidgetSize.small {
+            return @tr("Petit");
+        }
+        if size == WidgetSize.wide {
+            return @tr("Large");
+        }
+        if size == WidgetSize.tall {
+            return @tr("Haut");
+        }
+        if size == WidgetSize.large {
+            return @tr("Grand");
+        }
+        return @tr("Pleine largeur");
+    }
+
+    // What a widget shows, in the dialog that adds it.
+    pure public function description(kind: WidgetKind) -> string {
+        if kind == WidgetKind.reclaimable {
+            return @tr("L'espace que la dernière analyse a trouvé à libérer.");
+        }
+        if kind == WidgetKind.disks {
+            return @tr("L'espace libre de chaque volume monté.");
+        }
+        if kind == WidgetKind.memory {
+            return @tr("La mémoire occupée et les applications qui en prennent le plus.");
+        }
+        if kind == WidgetKind.processor {
+            return @tr("L'utilisation du processeur et sa charge moyenne.");
+        }
+        return @tr("Distribution, noyau, bureau et durée depuis le démarrage.");
+    }
+
     // How a volume is called.
     pure public function volume-name(volume: VolumeShown) -> string {
         if volume.naming == VolumeNaming.system {
@@ -180,10 +214,179 @@ component Skeleton inherits Rectangle {
     accessible-role: none;
 }
 
+// A size of a widget to choose: its shape in a grid of three columns and
+// two rows, filled when it is the widget's size.
+component SizeButton inherits Rectangle {
+    in property <WidgetSize> size;
+    in property <bool> chosen;
+    callback clicked;
+
+    property <bool> narrow: size == WidgetSize.small || size == WidgetSize.tall;
+    property <bool> low: size == WidgetSize.small || size == WidgetSize.wide || size == WidgetSize.full;
+
+    width: Theme.size-button;
+    height: Theme.size-button;
+    border-radius: Theme.radius-small;
+    background: chosen ? Theme.accent-soft : touch.has-hover ? Theme.surface-hover : transparent;
+    forward-focus: keys;
+    accessible-role: button;
+    accessible-checkable: true;
+    accessible-checked: chosen;
+    accessible-label: DashboardWords.size-name(size);
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if !event.repeat && (event.text == Key.Return || event.text == Key.Space) {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    Rectangle {
+        width: Theme.size-shape;
+        height: Theme.size-shape;
+        border-radius: Theme.radius-small / 2;
+        border-width: Theme.size-shape-border;
+        border-color: root.chosen ? Theme.accent : Theme.text-3;
+        Rectangle {
+            x: 0;
+            y: 0;
+            width: root.size == WidgetSize.full ? parent.width : root.narrow ? parent.width / 3 : parent.width * 2 / 3;
+            height: root.low ? parent.height / 2 : parent.height;
+            border-radius: parent.border-radius;
+            background: root.chosen ? Theme.accent : transparent;
+            border-width: root.chosen ? 0 : Theme.size-shape-border;
+            border-color: Theme.text-2;
+        }
+    }
+
+    FocusRing {
+        shown: keys.has-focus;
+        border-radius: root.border-radius;
+    }
+}
+
+// What a widget offers in the Personnaliser mode, in place of its header:
+// its name, its sizes, "Retirer". Suppr removes it too.
+component EditBar inherits Rectangle {
+    in property <WidgetKind> kind;
+    in property <int> slot;
+    in property <WidgetSize> size;
+    in property <[WidgetSize]> accepted;
+
+    property <string> title: DashboardWords.title(kind);
+    // The focus asked for this widget, once (it may come before the bar).
+    property <int> asked: Dashboard.focus-request.part == FocusPart.widget && Dashboard.focus-request.row == slot
+        ? Dashboard.focus-request.generation : 0;
+
+    function take-focus() {
+        if asked > 0 {
+            remove-button.focus();
+            Dashboard.focus-taken(asked);
+        }
+    }
+
+    init => {
+        take-focus();
+    }
+    changed asked => {
+        take-focus();
+    }
+
+    height: Theme.edit-bar;
+    background: Theme.surface-2;
+
+    FocusScope {
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            if !event.repeat && event.text == Key.Delete {
+                Dashboard.remove(root.slot);
+                return accept;
+            }
+            reject
+        }
+
+        HorizontalLayout {
+            padding-left: Theme.spacing-m;
+            padding-right: Theme.spacing-s;
+            spacing: Theme.spacing-s;
+            Icon {
+                source: @image-url("../assets/icons/grip-vertical.svg");
+                colorize: Theme.text-2;
+                width: Theme.icon-small;
+                height: Theme.icon-small;
+                y: (parent.height - self.height) / 2;
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: root.title;
+                color: Theme.text;
+                font-size: Theme.font-label;
+                font-weight: Theme.weight-semibold;
+                vertical-alignment: center;
+                overflow: elide;
+                accessible-role: none;
+            }
+            if root.accepted.length > 1: Rectangle {
+                accessible-role: groupbox;
+                accessible-label: @tr("Taille de {}", root.title);
+                HorizontalLayout {
+                    spacing: Theme.spacing-xxs;
+                    for choice in root.accepted: SizeButton {
+                        y: (parent.height - self.height) / 2;
+                        size: choice;
+                        chosen: choice == root.size;
+                        clicked => {
+                            Dashboard.resize(root.slot, choice);
+                        }
+                    }
+                }
+            }
+            if root.accepted.length <= 1: Text {
+                text: @tr("Taille unique");
+                color: Theme.text-3;
+                font-size: Theme.font-caption;
+                vertical-alignment: center;
+            }
+            remove-button := ActionButton {
+                y: (parent.height - self.height) / 2;
+                kind: ButtonKind.ghost;
+                icon: @image-url("../assets/icons/x.svg");
+                text: root.width >= Theme.remove-word-from ? @tr("Retirer") : "";
+                accessible-label: @tr("Retirer {}", root.title);
+                clicked => {
+                    Dashboard.remove(root.slot);
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        y: parent.height - self.height;
+        height: Theme.border-width;
+        background: Theme.border;
+    }
+}
+
 // A widget's frame: its header (icon, title, a note on the right) and its
 // body, or the reading under way, or why it shows nothing.
 export component WidgetCard inherits Card {
     in property <WidgetKind> kind;
+    // Its place in the dashboard's list, its size, the sizes it is drawn in.
+    in property <int> slot;
+    in property <WidgetSize> size;
+    in property <[WidgetSize]> accepted;
     in property <ReadingState> state: ReadingState.read;
     in property <string> note;
     // The essentials of what it shows, read with its title.
@@ -196,99 +399,109 @@ export component WidgetCard inherits Card {
     clip: true;
 
     VerticalLayout {
-        padding-left: Theme.widget-padding;
-        padding-right: Theme.widget-padding;
-        padding-top: Theme.widget-padding-top;
-        padding-bottom: Theme.widget-padding-top;
-        spacing: Theme.widget-body-top;
-
-        HorizontalLayout {
-            height: Theme.widget-header;
-            spacing: Theme.spacing-s;
-            Icon {
-                source: DashboardWords.icon(root.kind);
-                colorize: Theme.text-2;
-                width: Theme.icon-small;
-                height: Theme.icon-small;
-                y: (parent.height - self.height) / 2;
-            }
-            Text {
-                horizontal-stretch: 1;
-                text: DashboardWords.title(root.kind);
-                color: Theme.text;
-                font-size: Theme.font-label;
-                font-weight: Theme.weight-semibold;
-                vertical-alignment: center;
-                overflow: elide;
-                accessible-role: none;
-            }
-            if root.note != "": Text {
-                text: root.note;
-                color: Theme.text-3;
-                font-size: Theme.font-caption;
-                vertical-alignment: center;
-            }
+        if Dashboard.editing: EditBar {
+            kind: root.kind;
+            slot: root.slot;
+            size: root.size;
+            accepted: root.accepted;
         }
 
-        if root.state == ReadingState.reading: VerticalLayout {
-            spacing: Theme.spacing-m;
-            alignment: start;
+        VerticalLayout {
             vertical-stretch: 1;
-            HorizontalLayout {
-                alignment: start;
-                Skeleton {
-                    width: parent.width * Theme.skeleton-figure-part;
-                    height: Theme.skeleton-figure;
-                }
-            }
-            Skeleton {
-                height: Theme.bar-height-large;
-            }
-            HorizontalLayout {
-                alignment: start;
-                Skeleton {
-                    width: parent.width * Theme.skeleton-line-part;
-                    height: Theme.font-label;
-                }
-            }
-            Rectangle {
-                vertical-stretch: 1;
-            }
-            Text {
-                text: @tr("Lecture en cours");
-                color: Theme.text-3;
-                font-size: Theme.font-caption;
-                accessible-role: none;
-            }
-        }
+            padding-left: Theme.widget-padding;
+            padding-right: Theme.widget-padding;
+            padding-top: Dashboard.editing ? Theme.widget-body-top : Theme.widget-padding-top;
+            padding-bottom: Theme.widget-padding-top;
+            spacing: Theme.widget-body-top;
 
-        if root.state == ReadingState.unavailable: HorizontalLayout {
-            spacing: Theme.spacing-m;
-            Icon {
-                source: @image-url("../assets/icons/ban.svg");
-                colorize: Theme.text-3;
-                width: Theme.icon;
-                height: Theme.icon;
-            }
-            VerticalLayout {
-                horizontal-stretch: 1;
-                spacing: Theme.spacing-xxs;
+            if !Dashboard.editing: HorizontalLayout {
+                height: Theme.widget-header;
+                spacing: Theme.spacing-s;
+                Icon {
+                    source: DashboardWords.icon(root.kind);
+                    colorize: Theme.text-2;
+                    width: Theme.icon-small;
+                    height: Theme.icon-small;
+                    y: (parent.height - self.height) / 2;
+                }
                 Text {
-                    text: @tr("Indisponible");
+                    horizontal-stretch: 1;
+                    text: DashboardWords.title(root.kind);
                     color: Theme.text;
                     font-size: Theme.font-label;
-                    font-weight: Theme.weight-medium;
+                    font-weight: Theme.weight-semibold;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    accessible-role: none;
                 }
-                Detail {
-                    text: DashboardWords.unavailable(root.kind);
+                if root.note != "": Text {
+                    text: root.note;
+                    color: Theme.text-3;
+                    font-size: Theme.font-caption;
+                    vertical-alignment: center;
                 }
             }
-        }
 
-        // What the widget shows; under "Indisponible", what it still offers.
-        VerticalLayout {
-            vertical-stretch: root.state == ReadingState.reading ? 0 : 1;
-            @children
+            if root.state == ReadingState.reading: VerticalLayout {
+                spacing: Theme.spacing-m;
+                alignment: start;
+                vertical-stretch: 1;
+                HorizontalLayout {
+                    alignment: start;
+                    Skeleton {
+                        width: parent.width * Theme.skeleton-figure-part;
+                        height: Theme.skeleton-figure;
+                    }
+                }
+                Skeleton {
+                    height: Theme.bar-height-large;
+                }
+                HorizontalLayout {
+                    alignment: start;
+                    Skeleton {
+                        width: parent.width * Theme.skeleton-line-part;
+                        height: Theme.font-label;
+                    }
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+                Text {
+                    text: @tr("Lecture en cours");
+                    color: Theme.text-3;
+                    font-size: Theme.font-caption;
+                    accessible-role: none;
+                }
+            }
+
+            if root.state == ReadingState.unavailable: HorizontalLayout {
+                spacing: Theme.spacing-m;
+                Icon {
+                    source: @image-url("../assets/icons/ban.svg");
+                    colorize: Theme.text-3;
+                    width: Theme.icon;
+                    height: Theme.icon;
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Theme.spacing-xxs;
+                    Text {
+                        text: @tr("Indisponible");
+                        color: Theme.text;
+                        font-size: Theme.font-label;
+                        font-weight: Theme.weight-medium;
+                    }
+                    Detail {
+                        text: DashboardWords.unavailable(root.kind);
+                    }
+                }
+            }
+
+            // What the widget shows; under "Indisponible", what it still offers.
+            VerticalLayout {
+                vertical-stretch: root.state == ReadingState.reading ? 0 : 1;
+                @children
+            }
         }
     }
 }
@@ -300,7 +513,9 @@ component AnalyzeButton inherits ActionButton {
     // the rights, or waits for an answer.
     enabled: (Cleaner.step == CleanerStep.idle || Cleaner.step == CleanerStep.outcome
         || Cleaner.step == CleanerStep.results || Cleaner.step == CleanerStep.receipt)
-        && Cleaner.rights-step == RightsStep.idle && !Cleaner.confirming && !Cleaner.browser-asking;
+        && Cleaner.rights-step == RightsStep.idle && !Cleaner.confirming && !Cleaner.browser-asking
+        // Customizing, the widgets' actions wait.
+        && !Dashboard.editing;
     text: @tr("Analyser");
     icon: @image-url("../assets/icons/search.svg");
     kind: ButtonKind.primary;
@@ -396,6 +611,7 @@ export component ReclaimableWidget inherits WidgetCard {
             if root.full && Cleaner.step == CleanerStep.results: ActionButton {
                 text: @tr("Voir les derniers résultats");
                 kind: ButtonKind.ghost;
+                enabled: !Dashboard.editing;
                 clicked => {
                     root.see-results();
                 }
@@ -599,10 +815,9 @@ component VolumeLine inherits VerticalLayout {
 
 // The mounted volumes: the two fullest when small, all of them beyond.
 export component DisksWidget inherits WidgetCard {
-    in property <WidgetSize> size;
 
     property <DisksShown> shown: Dashboard.disks;
-    property <bool> small: size == WidgetSize.small;
+    property <bool> small: root.size == WidgetSize.small;
 
     kind: WidgetKind.disks;
     state: Dashboard.readings-lost ? ReadingState.unavailable : shown.state;
@@ -645,6 +860,8 @@ export component DisksWidget inherits WidgetCard {
         property <length> room: self.visible-width - (root.shown.volumes.length > Theme.volumes-in-view ? Theme.scroll-gutter : 0);
         property <length> column-width: two-columns ? (room - Theme.volume-column-gap) / 2 : room;
         label: DashboardWords.title(WidgetKind.disks);
+        // Customizing, Tab stops on the widget's bar only.
+        focus-on-tab-navigation: !Dashboard.editing;
         content-height: lines.preferred-height;
         lines := VerticalLayout {
             width: list.room;
@@ -695,6 +912,7 @@ component Applications inherits VerticalLayout {
     if root.shown.applications-state == ReadingState.read: apps := ScrolledList {
         vertical-stretch: 1;
         label: @tr("Applications qui en occupent le plus");
+        focus-on-tab-navigation: !Dashboard.editing;
         content-height: rows.preferred-height;
         rows := VerticalLayout {
             width: apps.visible-width - (root.shown.applications.length * root.line > apps.visible-height ? Theme.scroll-gutter : 0);
@@ -738,11 +956,10 @@ component Applications inherits VerticalLayout {
 
 // The memory used, and from Wide on, the applications holding the most.
 export component MemoryWidget inherits WidgetCard {
-    in property <WidgetSize> size;
 
     property <MemoryShown> shown: Dashboard.memory;
-    property <bool> beside: size == WidgetSize.wide || size == WidgetSize.large;
-    property <bool> large: size == WidgetSize.large;
+    property <bool> beside: root.size == WidgetSize.wide || root.size == WidgetSize.large;
+    property <bool> large: root.size == WidgetSize.large;
     property <string> used: @tr("{} occupés sur {}", Words.size(shown.used), Words.size(shown.total));
     property <string> of-total: @tr("occupés sur {}", Words.size(shown.total));
     property <string> swap: @tr("Swap : {} sur {}", Words.size(shown.swap-used), Words.size(shown.swap-total));
@@ -826,10 +1043,9 @@ export component MemoryWidget inherits WidgetCard {
 // The processor's use: the last reading and the load; from Wide on, the
 // curve of the last two minutes.
 export component ProcessorWidget inherits WidgetCard {
-    in property <WidgetSize> size;
 
     property <ProcessorShown> shown: Dashboard.processor;
-    property <bool> curved: size != WidgetSize.small;
+    property <bool> curved: root.size != WidgetSize.small;
     property <string> used: @tr("{} %", shown.percent);
 
     kind: WidgetKind.processor;

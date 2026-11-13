@@ -1,9 +1,233 @@
 // The Home page: a header, then the widgets of the layout in a grid whose
 // columns follow the width (docs/design/tableau-de-bord/project/Dashboard.dc.html).
 import { Theme } from "theme.slint";
-import { Title, Detail, Icon, ScrolledList } from "widgets.slint";
-import { Dashboard, Placement, ReadingState, ReclaimableState, WidgetKind, WidgetSize } from "dashboard-model.slint";
+import { Title, Detail, Icon, ScrolledList, ActionButton, ButtonKind, Banner, FocusRing, ModalFrame } from "widgets.slint";
+import { AddableWidget, CellPlace, Dashboard, FocusPart, ReadingState, ReclaimableState, WidgetKind, WidgetSize } from "dashboard-model.slint";
 import { DashboardWords, DisksWidget, MemoryWidget, ProcessorWidget, ReclaimableWidget, SystemWidget } from "dashboard-widgets.slint";
+
+// The tile that ends the grid in the Personnaliser mode.
+component AddTile inherits Rectangle {
+    callback clicked;
+    border-radius: Theme.radius-large;
+    border-width: Theme.add-tile-border;
+    border-color: Theme.border-strong;
+    background: touch.has-hover ? Theme.surface-hover : transparent;
+    forward-focus: keys;
+    accessible-role: button;
+    accessible-label: label.text;
+    accessible-action-default => {
+        root.clicked();
+    }
+    keys := FocusScope {
+        key-pressed(event) => {
+            if !event.repeat && (event.text == Key.Return || event.text == Key.Space) {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+    VerticalLayout {
+        alignment: center;
+        spacing: Theme.spacing-m;
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: Theme.add-dot;
+                height: Theme.add-dot;
+                border-radius: self.width / 2;
+                background: Theme.surface-2;
+                border-width: Theme.border-width;
+                border-color: Theme.border;
+                Icon {
+                    source: @image-url("../assets/icons/plus.svg");
+                    colorize: Theme.text-2;
+                }
+            }
+        }
+        label := Text {
+            text: @tr("Ajouter un widget");
+            horizontal-alignment: center;
+            color: touch.has-hover ? Theme.text : Theme.text-2;
+            font-size: Theme.font-label;
+            font-weight: Theme.weight-medium;
+            accessible-role: none;
+        }
+    }
+    FocusRing {
+        shown: keys.has-focus;
+        border-radius: root.border-radius;
+    }
+}
+
+// A dialog of the page: its title over what it asks.
+component Dialog inherits ModalFrame {
+    in property <string> title;
+    label: title;
+    Text {
+        text: root.title;
+        accessible-role: none;
+        color: Theme.text;
+        font-size: Theme.font-title;
+        font-weight: Theme.weight-semibold;
+        wrap: word-wrap;
+    }
+    @children
+}
+
+// The widgets the dashboard lacks, each to add.
+component AddDialog inherits Dialog {
+    title: @tr("Ajouter un widget");
+    escaped => {
+        self.close();
+    }
+    if Dashboard.addable.length == 0: Detail {
+        text: @tr("Tous les widgets sont déjà sur votre tableau de bord.");
+    }
+    for widget in Dashboard.addable: HorizontalLayout {
+        spacing: Theme.spacing-m;
+        Rectangle {
+            width: Theme.icon-box;
+            height: Theme.icon-box;
+            border-radius: Theme.radius-medium;
+            background: Theme.surface-2;
+            Icon {
+                source: DashboardWords.icon(widget.kind);
+                colorize: Theme.text-2;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: Theme.spacing-xxs;
+            Text {
+                text: DashboardWords.title(widget.kind);
+                color: Theme.text;
+                font-size: Theme.font-label;
+                font-weight: Theme.weight-semibold;
+                accessible-role: none;
+            }
+            Detail {
+                text: DashboardWords.description(widget.kind);
+            }
+            Text {
+                text: @tr("Taille de départ : {}", DashboardWords.size-name(widget.size));
+                color: Theme.text-3;
+                font-size: Theme.font-caption;
+            }
+        }
+        ActionButton {
+            y: (parent.height - self.height) / 2;
+            text: @tr("Ajouter");
+            accessible-label: @tr("Ajouter {}", DashboardWords.title(widget.kind));
+            clicked => {
+                // Closed first: the focus then goes to the widget added.
+                root.close();
+                Dashboard.add(widget.kind);
+            }
+        }
+    }
+    HorizontalLayout {
+        alignment: end;
+        close-button := ActionButton {
+            text: @tr("Fermer");
+            clicked => {
+                root.close();
+            }
+        }
+    }
+    init => {
+        close-button.focus();
+    }
+}
+
+// Asks before the default layout replaces the one shown.
+component ResetDialog inherits Dialog {
+    title: @tr("Rétablir la disposition par défaut ?");
+    escaped => {
+        self.close();
+    }
+    Detail {
+        text: @tr("Votre disposition actuelle sera remplacée par celle de départ : Récupérable, Disques, Mémoire, Processeur et Système, chacun à sa taille d'origine.");
+    }
+    HorizontalLayout {
+        alignment: end;
+        spacing: Theme.spacing-s;
+        back := ActionButton {
+            text: @tr("Annuler");
+            clicked => {
+                root.close();
+            }
+        }
+        ActionButton {
+            text: @tr("Rétablir");
+            kind: ButtonKind.primary;
+            clicked => {
+                root.close();
+                Dashboard.reset();
+            }
+        }
+    }
+    init => {
+        back.focus();
+    }
+}
+
+// The note of a widget removed, with "Annuler"; it goes by itself unless
+// held by the pointer or the focus.
+component Toast inherits Rectangle {
+    property <bool> held: touch.has-hover || undo.focused || dismiss.focused;
+    changed held => {
+        Dashboard.toast-held(self.held);
+    }
+    width: Theme.toast-width;
+    border-radius: Theme.radius-large;
+    background: Theme.surface;
+    border-width: Theme.border-width;
+    border-color: Theme.border-strong;
+    drop-shadow-color: Theme.shadow-1;
+    drop-shadow-blur: Theme.shadow-1-blur;
+    drop-shadow-offset-y: Theme.shadow-1-offset;
+    accessible-role: AccessibleRole.text;
+    accessible-label: words.text;
+    accessible-live-region: polite;
+    height: line.preferred-height;
+    touch := TouchArea { }
+    line := HorizontalLayout {
+        padding: Theme.spacing-m;
+        padding-left: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        words := Text {
+            horizontal-stretch: 1;
+            text: @tr("{} retiré du tableau de bord", DashboardWords.title(Dashboard.toast.kind));
+            color: Theme.text;
+            font-size: Theme.font-label;
+            vertical-alignment: center;
+            wrap: word-wrap;
+            accessible-role: none;
+        }
+        undo := ActionButton {
+            kind: ButtonKind.ghost;
+            text: @tr("Annuler");
+            clicked => {
+                Dashboard.undo();
+            }
+        }
+        dismiss := ActionButton {
+            kind: ButtonKind.ghost;
+            icon: @image-url("../assets/icons/x.svg");
+            text: "";
+            accessible-label: @tr("Fermer la notification");
+            clicked => {
+                Dashboard.dismiss-toast();
+            }
+        }
+    }
+}
 
 export component DashboardPage inherits Rectangle {
     // The window's width, which the page's margin follows.
@@ -13,9 +237,9 @@ export component DashboardPage inherits Rectangle {
 
     property <length> margin: window-width < Theme.dash-narrow-below ? Theme.spacing-xl : Theme.spacing-xxl;
     property <length> grid-width: view.visible-width - 2 * margin;
-    property <int> columns: max(1, min(Dashboard.placements.length,
+    property <int> columns: max(1, min(Dashboard.rows.length,
         floor((grid-width + Theme.dash-gap) / (Theme.dash-column-min + Theme.dash-gap))));
-    property <Placement> placement: Dashboard.placements[columns - 1];
+    property <int> rows: Dashboard.rows[columns - 1];
     property <length> column-width: (grid-width - (columns - 1) * Theme.dash-gap) / columns;
     property <bool> analyzed: Dashboard.reclaimable.state == ReclaimableState.current
         || Dashboard.reclaimable.state == ReclaimableState.estimate;
@@ -24,102 +248,218 @@ export component DashboardPage inherits Rectangle {
         : Dashboard.system.distribution != "" ? @tr("{} · dernière analyse {}", Dashboard.system.distribution, DashboardWords.moment(Dashboard.reclaimable.at))
         : @tr("Dernière analyse {}", DashboardWords.moment(Dashboard.reclaimable.at));
 
-    changed columns => {
-        Dashboard.columns-shown(self.columns);
-    }
-
-    // Reached with Tab, scrolled with the arrows, the pages, Home and End.
-    view := ScrolledList {
-        // A page, not a list: its widgets are its parts.
-        accessible-role: none;
-        content-height: page.preferred-height;
-
-        page := VerticalLayout {
-            width: view.visible-width;
-            padding: root.margin;
-            spacing: Theme.spacing-xl;
-
-            VerticalLayout {
-                spacing: Theme.spacing-xs;
-                Title {
-                    text: @tr("Accueil");
-                }
-                if root.header-line != "": Detail {
-                    text: root.header-line;
-                }
+    // Ctrl+Z puts back the widget just removed, from wherever the focus is
+    // in the page.
+    FocusScope {
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            // Ctrl+Maj+Z redoes, by custom: not this. Caps Lock gives "Z".
+            if event.modifiers.control && !event.modifiers.shift && (event.text == "z" || event.text == "Z") && Dashboard.toast.shown {
+                Dashboard.undo();
+                return accept;
             }
+            reject
+        }
 
-            if Dashboard.layout-unreadable: Rectangle {
-                background: Theme.warning-soft;
-                border-radius: Theme.radius-medium;
-                accessible-role: text;
-                accessible-label: unreadable.text;
+        // Reached with Tab, scrolled with the arrows, the pages, Home and End.
+        view := ScrolledList {
+            // A page, not a list: its widgets are its parts.
+            accessible-role: none;
+            content-height: page.preferred-height;
+
+            page := VerticalLayout {
+                width: view.visible-width;
+                padding: root.margin;
+                spacing: Theme.spacing-xl;
+
                 HorizontalLayout {
-                    padding: Theme.spacing-m;
-                    padding-left: Theme.spacing-l;
-                    spacing: Theme.spacing-m;
-                    Icon {
-                        source: @image-url("../assets/icons/triangle-alert.svg");
-                        colorize: Theme.warning;
-                        width: Theme.icon-small;
-                        height: Theme.icon-small;
-                        y: (parent.height - self.height) / 2;
-                    }
-                    unreadable := Detail {
+                    spacing: Theme.spacing-l;
+                    VerticalLayout {
                         horizontal-stretch: 1;
-                        text: @tr("Votre disposition n'a pas pu être lue, la disposition par défaut est affichée.");
-                        color: Theme.text;
-                        accessible-role: none;
-                    }
-                }
-            }
-
-            if root.placement.cells.length == 0: VerticalLayout {
-                alignment: center;
-                spacing: Theme.spacing-s;
-                padding-top: Theme.spacing-xxl;
-                Text {
-                    text: @tr("Votre tableau de bord est vide");
-                    color: Theme.text;
-                    font-size: Theme.font-title;
-                    font-weight: Theme.weight-semibold;
-                    horizontal-alignment: center;
-                }
-                Detail {
-                    text: @tr("Ajoutez les widgets que vous voulez suivre : espace récupérable, disques, mémoire, processeur ou système.");
-                    horizontal-alignment: center;
-                }
-            }
-
-            if root.placement.cells.length > 0: Rectangle {
-                height: root.placement.rows * Theme.dash-row + max(0, root.placement.rows - 1) * Theme.dash-gap;
-
-                for cell in root.placement.cells: Rectangle {
-                    x: cell.column * (root.column-width + Theme.dash-gap);
-                    y: cell.row * (Theme.dash-row + Theme.dash-gap);
-                    width: cell.width * root.column-width + (cell.width - 1) * Theme.dash-gap;
-                    height: cell.height * Theme.dash-row + (cell.height - 1) * Theme.dash-gap;
-
-                    if cell.kind == WidgetKind.reclaimable: ReclaimableWidget {
-                        // Alone in its row, it keeps a full width's words
-                        // only where they fit beside the button.
-                        full: cell.size == WidgetSize.full && root.columns > 1;
-                        see-results => {
-                            root.open-cleaner();
+                        spacing: Theme.spacing-xs;
+                        Title {
+                            text: @tr("Accueil");
+                        }
+                        if root.header-line != "": Detail {
+                            text: root.header-line;
                         }
                     }
-                    if cell.kind == WidgetKind.system: SystemWidget { }
-                    if cell.kind == WidgetKind.disks: DisksWidget {
-                        size: cell.size;
+                    if Dashboard.editing: ActionButton {
+                        y: 0;
+                        kind: ButtonKind.ghost;
+                        text: @tr("Rétablir la disposition par défaut");
+                        icon: @image-url("../assets/icons/rotate-ccw.svg");
+                        clicked => {
+                            reset-dialog.show();
+                        }
                     }
-                    if cell.kind == WidgetKind.memory: MemoryWidget {
-                        size: cell.size;
+                    if Dashboard.editing: ActionButton {
+                        y: 0;
+                        text: @tr("Ajouter un widget");
+                        icon: @image-url("../assets/icons/plus.svg");
+                        clicked => {
+                            add-dialog.show();
+                        }
                     }
-                    if cell.kind == WidgetKind.processor: ProcessorWidget {
-                        size: cell.size;
+                    // One button, in or out of the mode: the focus stays on it.
+                    customize := ActionButton {
+                        // The focus asked for it, once.
+                        property <int> asked: Dashboard.focus-request.part == FocusPart.customize
+                            ? Dashboard.focus-request.generation : 0;
+                        function take-focus() {
+                            if self.asked > 0 {
+                                self.focus();
+                                Dashboard.focus-taken(self.asked);
+                            }
+                        }
+                        init => {
+                            self.take-focus();
+                        }
+                        changed asked => {
+                            self.take-focus();
+                        }
+                        y: 0;
+                        text: Dashboard.editing ? @tr("Terminé") : @tr("Personnaliser");
+                        icon: Dashboard.editing ? @image-url("../assets/icons/check.svg") : @image-url("../assets/icons/layout-dashboard.svg");
+                        kind: Dashboard.editing ? ButtonKind.primary : ButtonKind.secondary;
+                        clicked => {
+                            Dashboard.customize(!Dashboard.editing);
+                        }
+                    }
+                }
+
+                if Dashboard.editing && Dashboard.cells.length > 0: Banner {
+                    text: @tr("Mode Personnaliser. Choisissez la taille de chaque widget ou retirez-le ; chaque changement est gardé aussitôt.");
+                }
+
+                if Dashboard.layout-unreadable: Banner {
+                    warning: true;
+                    text: @tr("Votre disposition n'a pas pu être lue, la disposition par défaut est affichée.");
+                }
+
+                if Dashboard.save-failed: Banner {
+                    warning: true;
+                    text: @tr("Votre disposition n'a pas pu être enregistrée.");
+                }
+
+                if Dashboard.cells.length == 0: VerticalLayout {
+                    alignment: center;
+                    spacing: Theme.spacing-s;
+                    padding-top: Theme.spacing-xxl;
+                    Text {
+                        text: @tr("Votre tableau de bord est vide");
+                        color: Theme.text;
+                        font-size: Theme.font-title;
+                        font-weight: Theme.weight-semibold;
+                        horizontal-alignment: center;
+                    }
+                    Detail {
+                        text: @tr("Ajoutez les widgets que vous voulez suivre : espace récupérable, disques, mémoire, processeur ou système.");
+                        horizontal-alignment: center;
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        padding-top: Theme.spacing-s;
+                        ActionButton {
+                            // The focus asked for it after the last widget went.
+                            property <int> asked: Dashboard.focus-request.part == FocusPart.empty-add
+                                ? Dashboard.focus-request.generation : 0;
+                            function take-focus() {
+                                if self.asked > 0 {
+                                    self.focus();
+                                    Dashboard.focus-taken(self.asked);
+                                }
+                            }
+                            init => {
+                                self.take-focus();
+                            }
+                            changed asked => {
+                                self.take-focus();
+                            }
+                            text: @tr("Ajouter un widget");
+                            kind: ButtonKind.primary;
+                            clicked => {
+                                add-dialog.show();
+                            }
+                        }
+                    }
+                }
+
+                if Dashboard.cells.length > 0: Rectangle {
+                    property <int> filled: Dashboard.editing ? Dashboard.rows-with-tile[root.columns - 1] : root.rows;
+                    height: self.filled * Theme.dash-row + max(0, self.filled - 1) * Theme.dash-gap;
+
+                    if Dashboard.editing: AddTile {
+                        property <CellPlace> at: Dashboard.tile[root.columns - 1];
+                        x: self.at.column * (root.column-width + Theme.dash-gap);
+                        y: self.at.row * (Theme.dash-row + Theme.dash-gap);
+                        width: root.column-width;
+                        height: Theme.dash-row;
+                        clicked => {
+                            add-dialog.show();
+                        }
+                    }
+
+                    for cell[index] in Dashboard.cells: Rectangle {
+                        property <CellPlace> at: cell.places[root.columns - 1];
+                        x: self.at.column * (root.column-width + Theme.dash-gap);
+                        y: self.at.row * (Theme.dash-row + Theme.dash-gap);
+                        width: self.at.width * root.column-width + (self.at.width - 1) * Theme.dash-gap;
+                        height: self.at.height * Theme.dash-row + (self.at.height - 1) * Theme.dash-gap;
+
+                        if cell.kind == WidgetKind.reclaimable: ReclaimableWidget {
+                            slot: index;
+                            size: cell.size;
+                            accepted: cell.accepted;
+                            // Alone in its row, it keeps a full width's words
+                            // only where they fit beside the button.
+                            full: cell.size == WidgetSize.full && root.columns > 1;
+                            see-results => {
+                                root.open-cleaner();
+                            }
+                        }
+                        if cell.kind == WidgetKind.system: SystemWidget {
+                            slot: index;
+                            size: cell.size;
+                            accepted: cell.accepted;
+                        }
+                        if cell.kind == WidgetKind.disks: DisksWidget {
+                            slot: index;
+                            size: cell.size;
+                            accepted: cell.accepted;
+                        }
+                        if cell.kind == WidgetKind.memory: MemoryWidget {
+                            slot: index;
+                            size: cell.size;
+                            accepted: cell.accepted;
+                        }
+                        if cell.kind == WidgetKind.processor: ProcessorWidget {
+                            slot: index;
+                            size: cell.size;
+                            accepted: cell.accepted;
+                        }
                     }
                 }
             }
         }
+
+        // In the page's scope: Ctrl+Z works from its buttons too.
+        if Dashboard.toast.shown: Toast {
+            x: (root.width - self.width) / 2;
+            y: root.height - self.height - Theme.spacing-xl;
+        }
     }
+
+    add-dialog := AddDialog {
+        x: (root.width - Theme.add-dialog-width) / 2;
+        y: root.height / 8;
+        width: Theme.add-dialog-width;
+    }
+
+    reset-dialog := ResetDialog {
+        x: (root.width - Theme.modal-width) / 2;
+        y: root.height / 4;
+        width: Theme.modal-width;
+    }
+
 }

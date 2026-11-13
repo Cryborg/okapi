@@ -78,6 +78,8 @@ export component ActionButton inherits Rectangle {
     in property <ButtonKind> kind: ButtonKind.secondary;
     in property <bool> large;
     in property <bool> enabled: true;
+    // The keyboard's focus is on it.
+    out property <bool> focused: keys.has-focus;
     callback clicked;
 
     forward-focus: keys;
@@ -315,5 +317,70 @@ export component ScrolledList inherits FocusScope {
         border-radius: root.ring-radius;
         border-width: root.has-focus ? Theme.focus-width : 0;
         border-color: Theme.focus;
+    }
+}
+
+// A line that says something about the whole screen: a note, or a
+// warning. Read when it shows.
+export component Banner inherits Rectangle {
+    in property <string> text;
+    in property <bool> warning;
+    background: warning ? Theme.warning-soft : Theme.info-soft;
+    border-radius: Theme.radius-medium;
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.text;
+    accessible-live-region: polite;
+    HorizontalLayout {
+        padding: Theme.spacing-m;
+        padding-left: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        Icon {
+            source: root.warning ? @image-url("../assets/icons/triangle-alert.svg") : @image-url("../assets/icons/info.svg");
+            colorize: root.warning ? Theme.warning : Theme.info;
+            y: (parent.height - self.height) / 2;
+        }
+        Detail {
+            horizontal-stretch: 1;
+            text: root.text;
+            color: Theme.text;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+}
+
+// The frame of a modal dialog: never closed by a click outside (Franck's
+// rule), Escape tells `escaped` from wherever the focus is in it; never a
+// stop of Tab itself.
+export component ModalFrame inherits PopupWindow {
+    // Its name, read with it.
+    in property <string> label;
+    callback escaped;
+    close-policy: no-auto-close;
+    FocusScope {
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.escaped();
+                return accept;
+            }
+            reject
+        }
+        Rectangle {
+            background: Theme.surface;
+            border-radius: Theme.radius-large;
+            border-color: Theme.border;
+            border-width: Theme.border-width;
+            drop-shadow-color: Theme.shadow-1;
+            drop-shadow-blur: Theme.shadow-1-blur;
+            drop-shadow-offset-y: Theme.shadow-1-offset;
+            accessible-role: groupbox;
+            accessible-label: root.label;
+            VerticalLayout {
+                padding: Theme.spacing-xl;
+                spacing: Theme.spacing-l;
+                @children
+            }
+        }
     }
 }

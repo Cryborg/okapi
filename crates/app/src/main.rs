@@ -123,13 +123,17 @@ fn home_seams(language: Language) -> DashboardSeams {
             Box::new(|_| {})
         }
     };
+    let config_directory = okapi_platform::config_directory();
     DashboardSeams {
-        config_directory: okapi_platform::config_directory(),
+        config_directory: config_directory.clone(),
         state_directory: okapi_platform::state_directory(),
         zone: dashboard::system_zone(),
         now: jiff::Timestamp::now,
         commands,
         samples: readings,
+        save: config_directory.map(|directory| -> dashboard::Write {
+            Box::new(move |layout| layout.save(&directory).is_ok())
+        }),
     }
 }
 
@@ -170,7 +174,7 @@ fn main() -> ExitCode {
         session = ?SESSION_VARIABLES.map(|name| (name, std::env::var_os(name))),
         "app started"
     );
-    let (window, screen, _home) = match window(Seams::system(), home_seams(language), language) {
+    let (window, screen, home) = match window(Seams::system(), home_seams(language), language) {
         Ok(window) => window,
         Err(error) => {
             tracing::error!(error = %error, detail = ?error, "window not created");
@@ -181,6 +185,7 @@ fn main() -> ExitCode {
     tracing::info!("window created");
     let ran = window.run();
     screen.shut_down();
+    home.shut_down();
     match ran {
         Ok(()) => {
             tracing::info!("app closed");
@@ -455,6 +460,11 @@ mod tests {
             "Applications",
             "MemoryWidget",
             "ProcessorWidget",
+            "EditBar",
+            "AddTile",
+            "AddDialog",
+            "ResetDialog",
+            "Toast",
         ] {
             assert!(
                 texts.iter().any(|(component, _)| component == context),

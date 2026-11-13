@@ -33,6 +33,9 @@ export global Theme {
     out property <color> admin: dark ? #BBA6F4 : #6340B8;
     out property <color> admin-soft: dark ? #2B2444 : #EEE8FA;
     out property <color> shadow-1: dark ? #00000066 : #1C1B1914;
+    // A note of the whole screen (Banner).
+    out property <color> info: dark ? #93B6F5 : #245AB8;
+    out property <color> info-soft: dark ? #1C2A42 : #E4ECFA;
     // The focus ring, visible everywhere.
     out property <color> focus: dark ? #7EA6FF : #2F6FEB;
     out property <length> focus-width: 2px;
@@ -144,6 +147,19 @@ export global Theme {
     // The processor's summary beside its curve, and the curve's line.
     out property <length> processor-summary-width: 180px;
     out property <length> curve-stroke: 2px;
+    // The Personnaliser mode: a widget's bar, the width from which "Retirer"
+    // says its word, a size button and the shape drawn in it.
+    out property <length> edit-bar: 44px;
+    out property <length> remove-word-from: 416px;
+    out property <length> size-button: 28px;
+    out property <length> size-shape: 16px;
+    out property <length> size-shape-border: 1.5px;
+    // The tile that adds a widget, its round, its border; the dialog that
+    // lists the widgets to add; the note of a removal.
+    out property <length> add-dot: 40px;
+    out property <length> add-tile-border: 1.5px;
+    out property <length> add-dialog-width: 520px;
+    out property <length> toast-width: 440px;
     // The names' column of a key-value list.
     out property <length> key-width: 112px;
     out property <length> font-hero: 40px;

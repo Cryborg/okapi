@@ -3,7 +3,9 @@
 //! summary of the last analysis the cleaner kept.
 
 mod catalog;
+mod editing;
 mod layout;
+mod saving;
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, VecDeque};
@@ -14,19 +16,24 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-use okapi_store::{DashboardLayout, LastAnalysis, WidgetSize};
+use okapi_store::{DashboardLayout, DashboardWidget, LastAnalysis, WidgetSize};
 use okapi_tools::monitor::{
     ApplicationName, Applications, Command, MemoryStatus, ProcessorReading, Sample, Source,
     SystemReading, Unavailable, Volume, VolumeKind, VolumeName, VolumeSpace, nearly_full,
 };
-use slint::{ComponentHandle as _, ModelRc, VecModel};
+use slint::{ComponentHandle as _, Model as _, ModelRc, VecModel};
 
 use crate::dates::{self, Day};
 use crate::shown::{show, shown, size};
 use crate::ui;
 use catalog::WidgetKind;
+use editing::{Removed, Widgets};
 use layout::{MAX_COLUMNS, place, shown as widgets_shown};
+pub use saving::Write;
+use saving::{LastWrite, Saver};
 
+/// How long the note of a widget removed stays, unless it is held.
+const TOAST_SHOWN_FOR: Duration = Duration::from_secs(8);
 /// How often the readings sent are taken in: the fastest source reads
 /// every two seconds.
 const TAKE_SAMPLES_EVERY: Duration = Duration::from_millis(500);
@@ -61,6 +68,8 @@ pub struct DashboardSeams {
     pub commands: Box<dyn Fn(Command)>,
     /// What it reads; cut off, every reading is unavailable.
     pub samples: Receiver<Sample>,
+    /// How the layout is kept; none when there is nowhere to keep it.
+    pub save: Option<Write>,
 }
 
 impl std::fmt::Debug for DashboardSeams {
@@ -115,12 +124,40 @@ struct State {
     /// The last list read: they are read less often than the memory.
     applications: Option<Result<Applications, Unavailable>>,
     rows: Rows,
+    /// The widgets shown, in order, each at its size.
+    widgets: Widgets,
+    /// One row a widget, for as long as it is there: Slint keeps its
+    /// element, and the focus in it.
+    cells: Rc<VecModel<ui::WidgetCell>>,
+    watched: BTreeSet<Source>,
+    /// In the Personnaliser mode.
+    editing: bool,
+    /// None when the layout cannot be kept.
+    saver: Option<Saver>,
+    banners: LayoutBanners,
+    /// The generation of the last focus asked for.
+    focus_asked: i32,
+    /// The last widget removed, while "Annuler" may put it back.
+    removed: Option<Removed>,
+    /// Hides the note of that removal.
+    toast_timer: slint::Timer,
+    /// The note has the pointer or the focus: it waits.
+    toast_held: bool,
     processor: Option<Result<ProcessorReading, Unavailable>>,
     /// The last uses, oldest first, between 0 and 1.
     uses: VecDeque<f64>,
     /// The readings no longer reach the page.
     lost: bool,
     timer: slint::Timer,
+}
+
+/// What the page says of the layout kept.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct LayoutBanners {
+    /// The layout kept could not be read; until one is kept.
+    unreadable: bool,
+    /// The last change could not be kept.
+    save_failed: bool,
 }
 
 /// The lines the widgets list, kept from one reading to the next: Slint
@@ -150,23 +187,24 @@ impl DashboardScreen {
     pub fn attach(window: &ui::AppWindow, seams: DashboardSeams) -> Self {
         let dashboard = window.global::<ui::Dashboard>();
         let (widgets, unreadable) = read_layout(seams.config_directory.as_deref());
-        dashboard.set_layout_unreadable(unreadable);
-        let sizes: Vec<_> = widgets.iter().map(|(_, size)| *size).collect();
-        let placements: Vec<ui::Placement> = (1..=MAX_COLUMNS)
-            .map(|columns| placement(&widgets, &place(&sizes, columns)))
-            .collect();
-        dashboard.set_placements(ModelRc::from(Rc::new(VecModel::from(placements))));
-        dashboard.on_columns_shown(|columns| tracing::debug!(columns, "dashboard columns"));
+        let (cells, rows) = placed(&widgets);
+        let cells = Rc::new(VecModel::from(cells));
+        dashboard.set_cells(ModelRc::from(Rc::clone(&cells)));
+        dashboard.set_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+        show_list_around(&dashboard, &widgets);
         dashboard.set_curve_span(shown(CURVE_READINGS - 1));
 
-        let mut sources: BTreeSet<Source> = widgets
-            .iter()
-            .flat_map(|(kind, size)| kind.sources(*size))
-            .collect();
-        // The header says the distribution, whatever the widgets.
-        sources.insert(Source::System);
-        tracing::info!(widgets = ?widgets, ?sources, "dashboard attached");
-        (seams.commands)(Command::Watch(sources));
+        let watched = sources(&widgets);
+        tracing::info!(widgets = ?widgets, sources = ?watched, "dashboard attached");
+        (seams.commands)(Command::Watch(watched.clone()));
+        let mut seams = seams;
+        let saver = seams.save.take().and_then(|write| {
+            Saver::start(write)
+                .inspect_err(|error| {
+                    tracing::error!(%error, "dashboard layout writer not started: changes not kept");
+                })
+                .ok()
+        });
 
         let summary = read_summary(seams.state_directory.as_deref());
         let screen = Self(Rc::new(RefCell::new(State {
@@ -179,6 +217,19 @@ impl DashboardScreen {
             memory: None,
             applications: None,
             rows: Rows::default(),
+            widgets,
+            cells,
+            watched,
+            editing: false,
+            saver,
+            banners: LayoutBanners {
+                unreadable,
+                save_failed: false,
+            },
+            focus_asked: 0,
+            removed: None,
+            toast_timer: slint::Timer::default(),
+            toast_held: false,
             processor: None,
             uses: VecDeque::with_capacity(CURVE_READINGS),
             lost: false,
@@ -194,8 +245,313 @@ impl DashboardScreen {
                     Self(state).take_samples();
                 }
             });
+        screen.bind(&dashboard);
         screen.page_shown(window.get_page());
         screen
+    }
+
+    /// Binds the page's callbacks to the screen.
+    fn bind(&self, dashboard: &ui::Dashboard<'_>) {
+        let on = |action: fn(&Self, i32)| {
+            let weak = Rc::downgrade(&self.0);
+            move |value: i32| {
+                if let Some(state) = weak.upgrade() {
+                    action(&Self(state), value);
+                }
+            }
+        };
+        dashboard.on_remove(on(Self::remove));
+        let weak = Rc::downgrade(&self.0);
+        dashboard.on_add(move |kind| {
+            if let Some(state) = weak.upgrade() {
+                Self(state).add(catalog_kind(kind));
+            }
+        });
+        let on_call = |action: fn(&Self)| {
+            let weak = Rc::downgrade(&self.0);
+            move || {
+                if let Some(state) = weak.upgrade() {
+                    action(&Self(state));
+                }
+            }
+        };
+        dashboard.on_reset(on_call(Self::reset));
+        dashboard.on_undo(on_call(Self::undo));
+        dashboard.on_dismiss_toast(on_call(Self::close_toast));
+        let weak = Rc::downgrade(&self.0);
+        dashboard.on_toast_held(move |held| {
+            if let Some(state) = weak.upgrade() {
+                Self(state).hold_toast(held);
+            }
+        });
+        dashboard.on_focus_taken(on(Self::focus_taken));
+        let weak = Rc::downgrade(&self.0);
+        dashboard.on_customize(move |on| {
+            if let Some(state) = weak.upgrade() {
+                Self(state).customize(on);
+            }
+        });
+        let weak = Rc::downgrade(&self.0);
+        dashboard.on_resize(move |row, size| {
+            if let Some(state) = weak.upgrade() {
+                Self(state).resize(row, store_size(size));
+            }
+        });
+    }
+
+    /// Enters the Personnaliser mode, or leaves it (and the note of the
+    /// last removal with it).
+    fn customize(&self, on: bool) {
+        {
+            let mut state = self.0.borrow_mut();
+            if state.editing == on {
+                return;
+            }
+            state.editing = on;
+        }
+        tracing::info!(editing = on, "dashboard customizing");
+        if !on {
+            self.dismiss_toast();
+        }
+        self.show();
+    }
+
+    /// Gives the widget of `row` the size `size`.
+    fn resize(&self, row: i32, size: WidgetSize) {
+        let Ok(index) = usize::try_from(row) else {
+            return;
+        };
+        let changed = editing::resize(&mut self.0.borrow_mut().widgets, index, size);
+        if changed {
+            let kind = self.0.borrow().widgets[index].0;
+            tracing::info!(index, ?kind, ?size, "dashboard widget resized");
+            self.dismiss_toast();
+            self.edited();
+        }
+    }
+
+    /// Removes the widget of `row`; the focus goes to the one after it,
+    /// the one before when it was the last, the mode's button when none is
+    /// left.
+    fn remove(&self, row: i32) {
+        let Ok(index) = usize::try_from(row) else {
+            return;
+        };
+        let removed = {
+            let mut state = self.0.borrow_mut();
+            let removed = editing::remove(&mut state.widgets, index);
+            if removed.is_some() {
+                state.cells.remove(index);
+            }
+            removed
+        };
+        let Some(removed) = removed else {
+            return;
+        };
+        tracing::info!(?removed, "dashboard widget removed");
+        self.edited();
+        self.show_toast(removed);
+        let left = self.0.borrow().widgets.len();
+        if left == 0 {
+            self.ask_focus(0, ui::FocusPart::EmptyAdd);
+        } else {
+            self.ask_focus(index.min(left - 1), ui::FocusPart::Widget);
+        }
+    }
+
+    /// Adds `kind` at the end, in the mode, the focus on it.
+    fn add(&self, kind: WidgetKind) {
+        let added = {
+            let mut state = self.0.borrow_mut();
+            let added = editing::add(&mut state.widgets, kind);
+            if added {
+                let (cells, _) = placed(&state.widgets);
+                if let Some(cell) = cells.last() {
+                    state.cells.push(cell.clone());
+                }
+            }
+            added
+        };
+        if !added {
+            return;
+        }
+        tracing::info!(?kind, "dashboard widget added");
+        self.dismiss_toast();
+        self.customize(true);
+        self.edited();
+        let last = self.0.borrow().widgets.len() - 1;
+        self.ask_focus(last, ui::FocusPart::Widget);
+    }
+
+    /// The default dashboard again.
+    fn reset(&self) {
+        let reset = {
+            let mut state = self.0.borrow_mut();
+            let reset = editing::reset(&mut state.widgets);
+            if reset {
+                let (cells, _) = placed(&state.widgets);
+                state.cells.set_vec(cells);
+            }
+            reset
+        };
+        if reset {
+            tracing::info!("dashboard layout reset to the default one");
+            self.dismiss_toast();
+            self.edited();
+        }
+    }
+
+    /// Puts the widget last removed back, at its place and size.
+    fn undo(&self) {
+        let restored = {
+            let mut state = self.0.borrow_mut();
+            let Some(removed) = state.removed.take() else {
+                return;
+            };
+            state.toast_timer.stop();
+            // The note goes, and what held it with it.
+            state.toast_held = false;
+            let restored = editing::restore(&mut state.widgets, removed);
+            if restored {
+                let (cells, _) = placed(&state.widgets);
+                let index = removed.index.min(state.cells.row_count());
+                state.cells.insert(index, cells[index].clone());
+            }
+            restored.then_some(removed)
+        };
+        let Some(removed) = restored else {
+            tracing::debug!("nothing to put back: the widget came back otherwise");
+            self.show();
+            return;
+        };
+        tracing::info!(?removed, "dashboard widget put back");
+        self.edited();
+        let index = removed.index.min(self.0.borrow().widgets.len() - 1);
+        self.ask_focus(index, ui::FocusPart::Widget);
+    }
+
+    /// Shows the note of `removed`, for a while.
+    fn show_toast(&self, removed: Removed) {
+        self.0.borrow_mut().removed = Some(removed);
+        let held = self.0.borrow().toast_held;
+        self.hold_toast(held);
+        self.show();
+    }
+
+    /// The toast held stays; let go, it goes after a while.
+    fn hold_toast(&self, held: bool) {
+        self.0.borrow_mut().toast_held = held;
+        let state = self.0.borrow();
+        if held || state.removed.is_none() {
+            state.toast_timer.stop();
+            return;
+        }
+        let weak = Rc::downgrade(&self.0);
+        state
+            .toast_timer
+            .start(slint::TimerMode::SingleShot, TOAST_SHOWN_FOR, move || {
+                if let Some(state) = weak.upgrade() {
+                    Self(state).dismiss_toast();
+                }
+            });
+    }
+
+    /// The toast closed by its button: the focus it had goes to the mode's
+    /// button.
+    fn close_toast(&self) {
+        self.dismiss_toast();
+        self.ask_focus(0, ui::FocusPart::Customize);
+    }
+
+    /// Hides the toast: "Annuler" has nothing to put back any more.
+    fn dismiss_toast(&self) {
+        {
+            let mut state = self.0.borrow_mut();
+            if state.removed.take().is_none() {
+                return;
+            }
+            state.toast_timer.stop();
+            // The note goes, and what held it with it.
+            state.toast_held = false;
+        }
+        self.show();
+    }
+
+    /// The window took the focus asked for as `generation`: asked no more.
+    fn focus_taken(&self, generation: i32) {
+        let state = self.0.borrow();
+        if state.focus_asked != generation {
+            return;
+        }
+        if let Some(window) = state.window.upgrade() {
+            window
+                .global::<ui::Dashboard>()
+                .set_focus_request(ui::FocusRequest::default());
+        }
+    }
+
+    /// Asks the window to put the focus on `part` of the widget of `row`.
+    fn ask_focus(&self, row: usize, part: ui::FocusPart) {
+        let mut state = self.0.borrow_mut();
+        state.focus_asked = state.focus_asked.wrapping_add(1).max(1);
+        if let Some(window) = state.window.upgrade() {
+            window
+                .global::<ui::Dashboard>()
+                .set_focus_request(ui::FocusRequest {
+                    row: shown(row),
+                    part,
+                    generation: state.focus_asked,
+                });
+        }
+    }
+
+    /// After a change of the list: the places shown again, the sources
+    /// followed again, the layout kept.
+    fn edited(&self) {
+        {
+            let mut state = self.0.borrow_mut();
+            let (cells, rows) = placed(&state.widgets);
+            for (index, mut cell) in cells.into_iter().enumerate() {
+                // The sizes it takes never change: the same model keeps
+                // their buttons, and the focus on one of them.
+                if let Some(shown) = state.cells.row_data(index) {
+                    cell.accepted = shown.accepted;
+                }
+                state.cells.set_row_data(index, cell);
+            }
+            if let Some(window) = state.window.upgrade() {
+                let dashboard = window.global::<ui::Dashboard>();
+                dashboard.set_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+                show_list_around(&dashboard, &state.widgets);
+            }
+            let watched = sources(&state.widgets);
+            if watched != state.watched {
+                forget_newly_watched(&mut state, &watched);
+                (state.seams.commands)(Command::Watch(watched.clone()));
+                state.watched = watched;
+            }
+            let layout = layout_of(&state.widgets);
+            match state.saver.as_ref().map(|saver| saver.save(layout)) {
+                Some(true) => {}
+                Some(false) => {
+                    tracing::error!("dashboard layout writer gone: changes no longer kept");
+                    state.saver = None;
+                    state.banners.save_failed = true;
+                }
+                None => {
+                    tracing::warn!("dashboard layout not kept: no writer");
+                    state.banners.save_failed = true;
+                }
+            }
+        }
+        self.show();
+    }
+
+    /// Lets the last layout handed be written, as the window closes.
+    pub fn shut_down(&self) {
+        if let Some(saver) = self.0.borrow_mut().saver.as_mut() {
+            saver.shut_down();
+        }
     }
 
     /// Follows the page shown: read while the Home page is, nothing else.
@@ -211,6 +567,8 @@ impl DashboardScreen {
         } else {
             tracing::info!(?page, "dashboard hidden: readings paused");
             (self.0.borrow().seams.commands)(Command::Pause);
+            self.customize(false);
+            self.dismiss_toast();
         }
     }
 
@@ -273,7 +631,26 @@ impl DashboardScreen {
         let mut changed = false;
         {
             let mut state = self.0.borrow_mut();
-            loop {
+            let before = state.banners;
+            match state.saver.as_ref().map(Saver::last_write) {
+                None | Some(LastWrite::Nothing) => {}
+                Some(LastWrite::Kept(kept)) => {
+                    state.banners.save_failed = !kept;
+                    // Kept, the layout shown is the one on disk.
+                    state.banners.unreadable &= !kept;
+                    if !kept {
+                        tracing::warn!("dashboard layout not kept: said");
+                    }
+                }
+                Some(LastWrite::Gone) => {
+                    tracing::error!("dashboard layout writer gone: changes no longer kept");
+                    state.saver = None;
+                    state.banners.save_failed = true;
+                }
+            }
+            changed |= state.banners != before;
+            // Cut off, nothing comes any more; the clock still turns.
+            while !state.lost {
                 match state.seams.samples.try_recv() {
                     Ok(Sample::System(reading)) => {
                         state.system = Some(reading);
@@ -317,7 +694,6 @@ impl DashboardScreen {
                     Err(TryRecvError::Disconnected) => {
                         tracing::error!("dashboard readings cut off: every widget unavailable");
                         state.lost = true;
-                        state.timer.stop();
                         changed = true;
                         break;
                     }
@@ -351,6 +727,66 @@ impl DashboardScreen {
         ));
         dashboard.set_processor(processor(state.processor.as_ref(), &state.uses));
         dashboard.set_readings_lost(state.lost);
+        dashboard.set_editing(state.editing);
+        dashboard.set_save_failed(state.banners.save_failed);
+        dashboard.set_layout_unreadable(state.banners.unreadable);
+        dashboard.set_toast(ui::Toast {
+            shown: state.removed.is_some(),
+            kind: state
+                .removed
+                .map_or(ui::WidgetKind::Reclaimable, |removed| {
+                    widget_kind(removed.kind)
+                }),
+        });
+    }
+}
+
+/// What `widgets` need read; the system always, for the header.
+fn sources(widgets: &[(WidgetKind, WidgetSize)]) -> BTreeSet<Source> {
+    let mut watched: BTreeSet<Source> = widgets
+        .iter()
+        .flat_map(|(kind, size)| kind.sources(*size))
+        .collect();
+    watched.insert(Source::System);
+    watched
+}
+
+/// Forgets what was read of the sources followed again: a reading from
+/// before would be shown as now.
+fn forget_newly_watched(state: &mut State, watched: &BTreeSet<Source>) {
+    for source in watched.difference(&state.watched) {
+        match source {
+            Source::Volumes => state.volumes = None,
+            Source::Memory => state.memory = None,
+            Source::Applications => state.applications = None,
+            Source::Processor => {
+                state.processor = None;
+                state.uses.clear();
+            }
+            Source::System => state.system = None,
+        }
+    }
+}
+
+/// What goes with the list in the mode: the tile after it, the widgets it
+/// lacks.
+fn show_list_around(dashboard: &ui::Dashboard<'_>, widgets: &[(WidgetKind, WidgetSize)]) {
+    let (tile, rows) = tile_placed(widgets);
+    dashboard.set_tile(ModelRc::from(Rc::new(VecModel::from(tile))));
+    dashboard.set_rows_with_tile(ModelRc::from(Rc::new(VecModel::from(rows))));
+    dashboard.set_addable(ModelRc::from(Rc::new(VecModel::from(addable(widgets)))));
+}
+
+/// `widgets` as the store keeps them.
+fn layout_of(widgets: &[(WidgetKind, WidgetSize)]) -> DashboardLayout {
+    DashboardLayout {
+        widgets: widgets
+            .iter()
+            .map(|(kind, size)| DashboardWidget {
+                kind: kind.name().to_owned(),
+                size: *size,
+            })
+            .collect(),
     }
 }
 
@@ -367,7 +803,7 @@ pub fn system_zone() -> TimeZone {
 fn read_layout(directory: Option<&Path>) -> (Vec<(WidgetKind, WidgetSize)>, bool) {
     let Some(directory) = directory else {
         tracing::warn!("no configuration directory: the default dashboard is shown");
-        return (widgets_shown(None), true);
+        return (widgets_shown(None), false);
     };
     match DashboardLayout::load(directory) {
         Ok(loaded) => (widgets_shown(loaded.as_ref()), false),
@@ -408,25 +844,81 @@ fn read_summary(directory: Option<&Path>) -> Summary {
     }
 }
 
-fn placement(
-    widgets: &[(WidgetKind, WidgetSize)],
-    (cells, rows): &(Vec<layout::Cell>, usize),
-) -> ui::Placement {
-    let cells: Vec<ui::WidgetCell> = widgets
+fn cell_place(cell: &layout::Cell) -> ui::CellPlace {
+    ui::CellPlace {
+        column: shown(cell.column),
+        row: shown(cell.row),
+        width: shown(cell.width),
+        height: shown(cell.height),
+    }
+}
+
+/// Where the tile "Ajouter un widget" sits after `widgets` (a small one
+/// at their end) in 1 to [`MAX_COLUMNS`] columns, and the rows filled with
+/// it.
+fn tile_placed(widgets: &[(WidgetKind, WidgetSize)]) -> (Vec<ui::CellPlace>, Vec<i32>) {
+    let mut sizes: Vec<WidgetSize> = widgets.iter().map(|(_, size)| *size).collect();
+    sizes.push(WidgetSize::Small);
+    (1..=MAX_COLUMNS)
+        .map(|columns| {
+            let (cells, rows) = place(&sizes, columns);
+            let tile = cells.last().map(cell_place).unwrap_or_default();
+            (tile, shown(rows))
+        })
+        .unzip()
+}
+
+/// The widgets that can be added to `widgets`, at the size they come at.
+fn addable(widgets: &[(WidgetKind, WidgetSize)]) -> Vec<ui::AddableWidget> {
+    WidgetKind::ALL
+        .into_iter()
+        .filter(|kind| widgets.iter().all(|(shown, _)| shown != kind))
+        .map(|kind| ui::AddableWidget {
+            kind: widget_kind(kind),
+            size: widget_size(catalog::starting_size(kind)),
+        })
+        .collect()
+}
+
+/// The cells of `widgets`, each with its places in 1 to [`MAX_COLUMNS`]
+/// columns, and the rows they fill in each.
+fn placed(widgets: &[(WidgetKind, WidgetSize)]) -> (Vec<ui::WidgetCell>, Vec<i32>) {
+    let sizes: Vec<WidgetSize> = widgets.iter().map(|(_, size)| *size).collect();
+    let grids: Vec<(Vec<layout::Cell>, usize)> = (1..=MAX_COLUMNS)
+        .map(|columns| place(&sizes, columns))
+        .collect();
+    let cells = widgets
         .iter()
-        .zip(cells)
-        .map(|((kind, size), cell)| ui::WidgetCell {
-            kind: widget_kind(*kind),
-            size: widget_size(*size),
-            column: shown(cell.column),
-            row: shown(cell.row),
-            width: shown(cell.width),
-            height: shown(cell.height),
+        .enumerate()
+        .map(|(index, (kind, size))| {
+            let places: Vec<ui::CellPlace> = grids
+                .iter()
+                .map(|(cells, _)| cell_place(&cells[index]))
+                .collect();
+            let accepted: Vec<ui::WidgetSize> = WidgetSize::ALL
+                .into_iter()
+                .filter(|accepted| kind.accepts(*accepted))
+                .map(widget_size)
+                .collect();
+            ui::WidgetCell {
+                kind: widget_kind(*kind),
+                size: widget_size(*size),
+                accepted: ModelRc::from(Rc::new(VecModel::from(accepted))),
+                places: ModelRc::from(Rc::new(VecModel::from(places))),
+            }
         })
         .collect();
-    ui::Placement {
-        cells: ModelRc::from(Rc::new(VecModel::from(cells))),
-        rows: shown(*rows),
+    let rows = grids.iter().map(|(_, rows)| shown(*rows)).collect();
+    (cells, rows)
+}
+
+const fn catalog_kind(kind: ui::WidgetKind) -> WidgetKind {
+    match kind {
+        ui::WidgetKind::Reclaimable => WidgetKind::Reclaimable,
+        ui::WidgetKind::Disks => WidgetKind::Disks,
+        ui::WidgetKind::Memory => WidgetKind::Memory,
+        ui::WidgetKind::Processor => WidgetKind::Processor,
+        ui::WidgetKind::System => WidgetKind::System,
     }
 }
 
@@ -437,6 +929,16 @@ const fn widget_kind(kind: WidgetKind) -> ui::WidgetKind {
         WidgetKind::Memory => ui::WidgetKind::Memory,
         WidgetKind::Processor => ui::WidgetKind::Processor,
         WidgetKind::System => ui::WidgetKind::System,
+    }
+}
+
+const fn store_size(size: ui::WidgetSize) -> WidgetSize {
+    match size {
+        ui::WidgetSize::Small => WidgetSize::Small,
+        ui::WidgetSize::Wide => WidgetSize::Wide,
+        ui::WidgetSize::Tall => WidgetSize::Tall,
+        ui::WidgetSize::Large => WidgetSize::Large,
+        ui::WidgetSize::Full => WidgetSize::Full,
     }
 }
 
@@ -847,7 +1349,6 @@ pub mod tests {
     use okapi_rules::Language;
     use okapi_store::{DashboardWidget, History};
     use okapi_tools::monitor::Space;
-    use slint::Model as _;
 
     use super::*;
     use crate::cleaner::Seams;
@@ -869,6 +1370,7 @@ pub mod tests {
                 let _kept = &sink;
             }),
             samples,
+            save: None,
         }
     }
 
@@ -935,6 +1437,10 @@ pub mod tests {
             (
                 DashboardSeams {
                     config_directory: Some(self.config.clone()),
+                    save: Some({
+                        let config = self.config.clone();
+                        Box::new(move |layout: &DashboardLayout| layout.save(&config).is_ok())
+                    }),
                     zone: TimeZone::posix("CET-1CEST,M3.5.0,M10.5.0/3").unwrap(),
                     now: fixed_now,
                     ..seams
@@ -2408,5 +2914,769 @@ pub mod tests {
             &window,
             "Courbe en cours de remplissage, 30 % maintenant"
         ));
+    }
+
+    /// Lets the page take in what its threads said, until `done`.
+    /// Waits, the page's clock stopped, until `done` (a file written by
+    /// its thread): the note of a removal stays.
+    fn until(window: &ui::AppWindow, done: impl Fn(&ui::AppWindow) -> bool) {
+        let started = std::time::Instant::now();
+        while started.elapsed() < Duration::from_secs(10) {
+            slint::platform::update_timers_and_animations();
+            if done(window) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the page never got there");
+    }
+
+    /// Lets the page take in what its threads said, its clock going on,
+    /// until `done`.
+    fn until_said(window: &ui::AppWindow, done: impl Fn(&ui::AppWindow) -> bool) {
+        let started = std::time::Instant::now();
+        while started.elapsed() < Duration::from_secs(10) {
+            take_in();
+            if done(window) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the page never said it");
+    }
+
+    fn kept_layout(directory: &Path) -> Vec<(String, WidgetSize)> {
+        DashboardLayout::load(directory)
+            .unwrap()
+            .map(|loaded| {
+                loaded
+                    .layout
+                    .widgets
+                    .into_iter()
+                    .map(|widget| (widget.kind, widget.size))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn customizing(window: &ui::AppWindow) {
+        button(window, "Personnaliser").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+    }
+
+    #[test]
+    fn the_mode_shows_each_widget_s_bar_and_holds_its_actions() {
+        let directories = Directories::new();
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        assert!(
+            ElementHandle::find_by_accessible_label(&window, "Retirer Disques")
+                .next()
+                .is_none()
+        );
+        customizing(&window);
+        assert!(window.global::<ui::Dashboard>().get_editing());
+        button(&window, "Retirer Disques");
+        assert!(shows(&window, "Taille unique"), "the system's");
+        assert_eq!(
+            button(&window, "Analyser").accessible_enabled(),
+            Some(false)
+        );
+        button(&window, "Terminé").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert!(!window.global::<ui::Dashboard>().get_editing());
+        button(&window, "Personnaliser");
+        assert_eq!(button(&window, "Analyser").accessible_enabled(), Some(true));
+    }
+
+    #[test]
+    fn a_size_chosen_is_drawn_kept_and_read_for() {
+        let directories = Directories::new();
+        kept(&directories.config, &[("memory", WidgetSize::Small)]);
+        let (seams, sampler) = directories.seams();
+        let window = on_home(seams);
+        customizing(&window);
+        let large = button(&window, "Grand");
+        assert_eq!(large.accessible_checked(), Some(false));
+        large.invoke_accessible_default_action();
+        until(&window, |_| {
+            kept_layout(&directories.config) == [("memory".to_owned(), WidgetSize::Large)]
+        });
+        assert_eq!(button(&window, "Grand").accessible_checked(), Some(true));
+        assert_eq!(button(&window, "Petit").accessible_checked(), Some(false));
+        assert!(
+            (frame(&window, "Mémoire").3 - (2.0 * 176.0 + 16.0)).abs() < 1.0,
+            "two rows"
+        );
+        assert_eq!(
+            sampler.commands.borrow().last(),
+            Some(&Command::Watch(BTreeSet::from([
+                Source::Memory,
+                Source::Applications,
+                Source::System,
+            ])))
+        );
+    }
+
+    #[test]
+    fn a_widget_removed_is_gone_and_the_focus_goes_to_the_next_one() {
+        let directories = Directories::new();
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        customizing(&window);
+        button(&window, "Retirer Disques").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert!(
+            ElementHandle::find_by_accessible_label(&window, "Disques")
+                .all(|element| element.accessible_role() != Some(AccessibleRole::Groupbox))
+        );
+        // The focus on the next one's "Retirer": Enter removes it.
+        crate::cleaner::tests::press(&window, slint::platform::Key::Return);
+        slint::platform::update_timers_and_animations();
+        until(&window, |_| {
+            kept_layout(&directories.config)
+                == [
+                    ("reclaimable".to_owned(), WidgetSize::Full),
+                    ("processor".to_owned(), WidgetSize::Wide),
+                    ("system".to_owned(), WidgetSize::Small),
+                ]
+        });
+    }
+
+    #[test]
+    fn the_last_widget_removed_leaves_the_focus_on_the_empty_dashboard_s_add() {
+        let directories = Directories::new();
+        kept(&directories.config, &[("system", WidgetSize::Small)]);
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        customizing(&window);
+        button(&window, "Retirer Système").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert!(shows(&window, "Votre tableau de bord est vide"));
+        crate::cleaner::tests::press(&window, slint::platform::Key::Return);
+        slint::platform::update_timers_and_animations();
+        button(&window, "Ajouter Système");
+    }
+
+    #[test]
+    fn a_layout_that_cannot_be_kept_says_so() {
+        let directories = Directories::new();
+        let (seams, _sampler) = directories.seams();
+        let not_a_directory = directories.state.join("a-file");
+        fs::write(&not_a_directory, "").unwrap();
+        let window = on_home(DashboardSeams {
+            save: Some(Box::new(move |layout: &DashboardLayout| {
+                layout.save(&not_a_directory).is_ok()
+            })),
+            ..seams
+        });
+        customizing(&window);
+        button(&window, "Retirer Disques").invoke_accessible_default_action();
+        until_said(&window, |window| {
+            shows(window, "Votre disposition n'a pas pu être enregistrée.")
+        });
+    }
+
+    #[test]
+    fn with_nowhere_to_keep_it_a_change_says_so_at_once() {
+        let (seams, _sampler) = noting(None);
+        let window = on_home(seams);
+        assert!(!shows(
+            &window,
+            "Votre disposition n'a pas pu être enregistrée."
+        ));
+        customizing(&window);
+        button(&window, "Retirer Disques").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert!(shows(
+            &window,
+            "Votre disposition n'a pas pu être enregistrée."
+        ));
+    }
+
+    #[test]
+    fn leaving_the_home_page_leaves_the_mode() {
+        let directories = Directories::new();
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        customizing(&window);
+        go_to(&window, "À propos");
+        go_to(&window, "Accueil");
+        assert!(!window.global::<ui::Dashboard>().get_editing());
+        button(&window, "Personnaliser");
+    }
+
+    fn kinds_kept(directory: &Path) -> Vec<String> {
+        kept_layout(directory)
+            .into_iter()
+            .map(|(kind, _)| kind)
+            .collect()
+    }
+
+    fn removing_disks(directories: &Directories) -> ui::AppWindow {
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        customizing(&window);
+        button(&window, "Retirer Disques").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        until(&window, |_| {
+            !kinds_kept(&directories.config).contains(&"disks".to_owned())
+        });
+        window
+    }
+
+    #[test]
+    fn a_widget_added_goes_at_the_end_with_the_focus_on_it() {
+        let directories = Directories::new();
+        let window = removing_disks(&directories);
+        button(&window, "Ajouter un widget").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert!(shows(&window, "L'espace libre de chaque volume monté."));
+        assert!(shows(&window, "Taille de départ : Large"));
+        assert!(
+            ElementHandle::find_by_accessible_label(&window, "Ajouter Mémoire")
+                .next()
+                .is_none(),
+            "only the widgets the dashboard lacks"
+        );
+        button(&window, "Ajouter Disques").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        until(&window, |_| {
+            kinds_kept(&directories.config).last() == Some(&"disks".to_owned())
+        });
+        assert!(
+            ElementHandle::find_by_accessible_label(&window, "Ajouter Disques")
+                .next()
+                .is_none(),
+            "the dialog closed"
+        );
+        assert!(
+            !shows(&window, "Disques retiré du tableau de bord"),
+            "nothing to put back"
+        );
+        // The focus on the widget added: Enter removes it again.
+        crate::cleaner::tests::press(&window, slint::platform::Key::Return);
+        slint::platform::update_timers_and_animations();
+        until(&window, |_| {
+            !kinds_kept(&directories.config).contains(&"disks".to_owned())
+        });
+    }
+
+    #[test]
+    fn with_every_widget_there_the_dialog_says_none_is_left_and_closes_on_escape() {
+        let directories = Directories::new();
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        customizing(&window);
+        button(&window, "Ajouter un widget").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert!(shows(
+            &window,
+            "Tous les widgets sont déjà sur votre tableau de bord."
+        ));
+        crate::cleaner::tests::press(&window, slint::platform::Key::Escape);
+        slint::platform::update_timers_and_animations();
+        assert!(!shows(
+            &window,
+            "Tous les widgets sont déjà sur votre tableau de bord."
+        ));
+    }
+
+    #[test]
+    fn the_default_layout_comes_back_once_confirmed() {
+        let directories = Directories::new();
+        let window = removing_disks(&directories);
+        // The note's "Annuler" gone, the one left is the dialog's.
+        button(&window, "Fermer la notification").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        button(&window, "Rétablir la disposition par défaut").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert!(shows(&window, "Rétablir la disposition par défaut ?"));
+        button(&window, "Annuler").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert!(!shows(&window, "Rétablir la disposition par défaut ?"));
+        assert!(
+            ElementHandle::find_by_accessible_label(&window, "Disques")
+                .all(|element| element.accessible_role() != Some(AccessibleRole::Groupbox)),
+            "nothing restored"
+        );
+        button(&window, "Rétablir la disposition par défaut").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        button(&window, "Rétablir").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        until(&window, |_| {
+            kept_layout(&directories.config)
+                == catalog::default_widgets()
+                    .iter()
+                    .map(|(kind, size)| (kind.name().to_owned(), *size))
+                    .collect::<Vec<_>>()
+        });
+        assert!(
+            !shows(&window, "Rétablir la disposition par défaut ?"),
+            "closed"
+        );
+    }
+
+    #[test]
+    fn the_confirmation_names_the_default_widgets_in_their_order() {
+        let directories = Directories::new();
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        customizing(&window);
+        button(&window, "Rétablir la disposition par défaut").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        // Its words list the default layout: they follow it.
+        assert!(shows(
+            &window,
+            "Votre disposition actuelle sera remplacée par celle de départ : Récupérable, Disques, Mémoire, Processeur et Système, chacun à sa taille d'origine."
+        ));
+        assert_eq!(
+            catalog::default_widgets()
+                .iter()
+                .map(|(kind, _)| kind.name())
+                .collect::<Vec<_>>(),
+            ["reclaimable", "disks", "memory", "processor", "system"]
+        );
+    }
+
+    #[test]
+    fn a_widget_removed_comes_back_to_its_place_with_annuler() {
+        let directories = Directories::new();
+        let window = removing_disks(&directories);
+        assert!(shows(&window, "Disques retiré du tableau de bord"));
+        button(&window, "Annuler").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        until(&window, |_| {
+            kinds_kept(&directories.config).get(1) == Some(&"disks".to_owned())
+        });
+        assert!(!shows(&window, "Disques retiré du tableau de bord"));
+    }
+
+    #[test]
+    fn control_z_puts_the_widget_back_while_the_note_shows() {
+        let directories = Directories::new();
+        let window = removing_disks(&directories);
+        let key = |text: &str, pressed: bool| {
+            let text = slint::SharedString::from(text);
+            window.window().dispatch_event(if pressed {
+                slint::platform::WindowEvent::KeyPressed { text }
+            } else {
+                slint::platform::WindowEvent::KeyReleased { text }
+            });
+        };
+        let control = slint::SharedString::from(slint::platform::Key::Control);
+        // Caps Lock on: the key reads "Z" without Shift.
+        key(&control, true);
+        key("Z", true);
+        key("Z", false);
+        key(&control, false);
+        slint::platform::update_timers_and_animations();
+        until(&window, |_| {
+            kinds_kept(&directories.config).get(1) == Some(&"disks".to_owned())
+        });
+    }
+
+    #[test]
+    fn the_note_goes_by_itself() {
+        let directories = Directories::new();
+        let window = removing_disks(&directories);
+        i_slint_backend_testing::mock_elapsed_time(
+            TOAST_SHOWN_FOR.saturating_sub(Duration::from_secs(1)),
+        );
+        slint::platform::update_timers_and_animations();
+        assert!(shows(&window, "Disques retiré du tableau de bord"));
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_secs(1));
+        slint::platform::update_timers_and_animations();
+        assert!(!shows(&window, "Disques retiré du tableau de bord"));
+    }
+
+    #[test]
+    fn an_emptied_dashboard_offers_to_add_a_widget() {
+        let directories = Directories::new();
+        kept(&directories.config, &[]);
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        button(&window, "Ajouter un widget").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        button(&window, "Ajouter Système").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert!(
+            window.global::<ui::Dashboard>().get_editing(),
+            "into the mode"
+        );
+        until(&window, |_| {
+            kinds_kept(&directories.config) == ["system".to_owned()]
+        });
+    }
+
+    #[test]
+    fn a_click_outside_a_dialog_never_closes_it() {
+        let directories = Directories::new();
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        customizing(&window);
+        let click = |x: f32, y: f32| {
+            let position = slint::LogicalPosition::new(x, y);
+            let button = slint::platform::PointerEventButton::Left;
+            window
+                .window()
+                .dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+            window
+                .window()
+                .dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
+            slint::platform::update_timers_and_animations();
+        };
+        button(&window, "Ajouter un widget").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        click(10.0, 790.0);
+        click(700.0, 700.0);
+        assert!(shows(
+            &window,
+            "Tous les widgets sont déjà sur votre tableau de bord."
+        ));
+        button(&window, "Fermer").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert!(!shows(
+            &window,
+            "Tous les widgets sont déjà sur votre tableau de bord."
+        ));
+        button(&window, "Rétablir la disposition par défaut").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        click(10.0, 790.0);
+        assert!(shows(&window, "Rétablir la disposition par défaut ?"));
+        crate::cleaner::tests::press(&window, slint::platform::Key::Escape);
+        slint::platform::update_timers_and_animations();
+        assert!(!shows(&window, "Rétablir la disposition par défaut ?"));
+    }
+
+    #[test]
+    fn delete_removes_the_widget_the_focus_is_in() {
+        let directories = Directories::new();
+        let window = removing_disks(&directories);
+        // The focus went to Mémoire's bar: Suppr removes it.
+        crate::cleaner::tests::press(&window, slint::platform::Key::Delete);
+        slint::platform::update_timers_and_animations();
+        until(&window, |_| {
+            !kinds_kept(&directories.config).contains(&"memory".to_owned())
+        });
+        assert!(shows(&window, "Mémoire retiré du tableau de bord"));
+    }
+
+    #[test]
+    fn the_last_of_the_list_removed_leaves_the_focus_on_the_one_before() {
+        let directories = Directories::new();
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        customizing(&window);
+        button(&window, "Retirer Système").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        crate::cleaner::tests::press(&window, slint::platform::Key::Return);
+        slint::platform::update_timers_and_animations();
+        until(&window, |_| {
+            kinds_kept(&directories.config) == ["reclaimable", "disks", "memory"]
+        });
+    }
+
+    #[test]
+    fn an_unreadable_layout_is_said_until_one_is_kept() {
+        let directories = Directories::new();
+        fs::write(DashboardLayout::path(&directories.config), "{").unwrap();
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        let unreadable =
+            "Votre disposition n'a pas pu être lue, la disposition par défaut est affichée.";
+        assert!(shows(&window, unreadable));
+        customizing(&window);
+        // A change without a note, and no reading: only the write says.
+        button(&window, "Petit").invoke_accessible_default_action();
+        until_said(&window, |window| !shows(window, unreadable));
+    }
+
+    #[test]
+    fn a_layout_kept_after_a_failure_takes_the_banner_away() {
+        let directories = Directories::new();
+        let (seams, _sampler) = directories.seams();
+        let config = directories.config.clone();
+        let fails = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let failing = std::sync::Arc::clone(&fails);
+        let window = on_home(DashboardSeams {
+            save: Some(Box::new(move |layout: &DashboardLayout| {
+                !failing.load(std::sync::atomic::Ordering::SeqCst) && layout.save(&config).is_ok()
+            })),
+            ..seams
+        });
+        let failed = "Votre disposition n'a pas pu être enregistrée.";
+        customizing(&window);
+        button(&window, "Retirer Disques").invoke_accessible_default_action();
+        until_said(&window, |window| shows(window, failed));
+        fails.store(false, std::sync::atomic::Ordering::SeqCst);
+        button(&window, "Retirer Mémoire").invoke_accessible_default_action();
+        until_said(&window, |window| !shows(window, failed));
+    }
+
+    #[test]
+    fn the_note_stays_while_the_pointer_holds_it() {
+        let directories = Directories::new();
+        let window = removing_disks(&directories);
+        let note =
+            ElementHandle::find_by_accessible_label(&window, "Disques retiré du tableau de bord")
+                .next()
+                .unwrap();
+        let (position, size) = (note.absolute_position(), note.size());
+        let over = slint::LogicalPosition::new(position.x + size.width / 2.0, position.y + 4.0);
+        window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::PointerMoved { position: over });
+        slint::platform::update_timers_and_animations();
+        i_slint_backend_testing::mock_elapsed_time(TOAST_SHOWN_FOR * 2);
+        slint::platform::update_timers_and_animations();
+        assert!(shows(&window, "Disques retiré du tableau de bord"), "held");
+        window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+                position: slint::LogicalPosition::new(10.0, 10.0),
+            });
+        slint::platform::update_timers_and_animations();
+        i_slint_backend_testing::mock_elapsed_time(TOAST_SHOWN_FOR);
+        slint::platform::update_timers_and_animations();
+        assert!(
+            !shows(&window, "Disques retiré du tableau de bord"),
+            "let go"
+        );
+    }
+
+    #[test]
+    fn control_z_does_nothing_once_the_note_is_gone() {
+        let directories = Directories::new();
+        let window = removing_disks(&directories);
+        i_slint_backend_testing::mock_elapsed_time(TOAST_SHOWN_FOR);
+        slint::platform::update_timers_and_animations();
+        let control = slint::SharedString::from(slint::platform::Key::Control);
+        for (text, pressed) in [
+            (control.clone(), true),
+            ("z".into(), true),
+            ("z".into(), false),
+            (control, false),
+        ] {
+            window.window().dispatch_event(if pressed {
+                slint::platform::WindowEvent::KeyPressed { text }
+            } else {
+                slint::platform::WindowEvent::KeyReleased { text }
+            });
+        }
+        slint::platform::update_timers_and_animations();
+        // A later change shows what is kept: Disques still away.
+        button(&window, "Retirer Système").invoke_accessible_default_action();
+        until(&window, |_| {
+            !kinds_kept(&directories.config).contains(&"system".to_owned())
+        });
+        assert!(!kinds_kept(&directories.config).contains(&"disks".to_owned()));
+    }
+
+    #[test]
+    fn annuler_puts_the_widget_back_at_its_size() {
+        let directories = Directories::new();
+        kept(
+            &directories.config,
+            &[("memory", WidgetSize::Small), ("disks", WidgetSize::Tall)],
+        );
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        customizing(&window);
+        button(&window, "Retirer Disques").invoke_accessible_default_action();
+        until(&window, |_| kinds_kept(&directories.config) == ["memory"]);
+        button(&window, "Annuler").invoke_accessible_default_action();
+        until(&window, |_| {
+            kept_layout(&directories.config)
+                == [
+                    ("memory".to_owned(), WidgetSize::Small),
+                    ("disks".to_owned(), WidgetSize::Tall),
+                ]
+        });
+        // The focus on it again: Enter removes it.
+        crate::cleaner::tests::press(&window, slint::platform::Key::Return);
+        until(&window, |_| kinds_kept(&directories.config) == ["memory"]);
+    }
+
+    #[test]
+    fn a_widget_removed_is_read_no_more_and_read_afresh_when_added() {
+        let directories = Directories::new();
+        kept(
+            &directories.config,
+            &[("memory", WidgetSize::Small), ("system", WidgetSize::Small)],
+        );
+        let (seams, sampler) = directories.seams();
+        let window = on_home(seams);
+        customizing(&window);
+        button(&window, "Retirer Mémoire").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert_eq!(
+            sampler.commands.borrow().last(),
+            Some(&Command::Watch(BTreeSet::from([Source::System])))
+        );
+        button(&window, "Ajouter un widget").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        button(&window, "Ajouter Mémoire").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert_eq!(
+            sampler.commands.borrow().last(),
+            Some(&Command::Watch(BTreeSet::from([
+                Source::Memory,
+                Source::System
+            ])))
+        );
+        assert_eq!(
+            said(&window, "Mémoire").as_deref(),
+            Some("Lecture en cours")
+        );
+        until(&window, |_| {
+            kept_layout(&directories.config)
+                == [
+                    ("system".to_owned(), WidgetSize::Small),
+                    ("memory".to_owned(), WidgetSize::Small),
+                ]
+        });
+    }
+
+    #[test]
+    fn a_size_chosen_with_the_keyboard_keeps_the_focus_in_the_bar() {
+        use slint::platform::Key;
+        let directories = Directories::new();
+        let window = removing_disks(&directories);
+        // The focus on Mémoire's "Retirer"; before it, its sizes.
+        crate::cleaner::tests::press(&window, Key::Backtab);
+        crate::cleaner::tests::press(&window, Key::Space);
+        slint::platform::update_timers_and_animations();
+        until(&window, |_| {
+            kept_layout(&directories.config).get(1)
+                == Some(&("memory".to_owned(), WidgetSize::Large))
+        });
+        crate::cleaner::tests::press(&window, Key::Backtab);
+        crate::cleaner::tests::press(&window, Key::Space);
+        slint::platform::update_timers_and_animations();
+        until(&window, |_| {
+            kept_layout(&directories.config).get(1)
+                == Some(&("memory".to_owned(), WidgetSize::Tall))
+        });
+    }
+
+    #[test]
+    fn delete_held_removes_one_widget() {
+        let directories = Directories::new();
+        let window = removing_disks(&directories);
+        let delete = slint::SharedString::from(slint::platform::Key::Delete);
+        window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: delete.clone(),
+            });
+        for _ in 0..3 {
+            window
+                .window()
+                .dispatch_event(slint::platform::WindowEvent::KeyPressRepeated {
+                    text: delete.clone(),
+                });
+            slint::platform::update_timers_and_animations();
+        }
+        window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: delete });
+        until(&window, |_| {
+            kinds_kept(&directories.config) == ["reclaimable", "processor", "system"]
+        });
+    }
+
+    #[test]
+    fn done_takes_the_note_away() {
+        let directories = Directories::new();
+        let window = removing_disks(&directories);
+        button(&window, "Terminé").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert!(!shows(&window, "Disques retiré du tableau de bord"));
+    }
+
+    #[test]
+    fn a_widget_put_back_is_read_again() {
+        let directories = Directories::new();
+        kept(
+            &directories.config,
+            &[("memory", WidgetSize::Small), ("system", WidgetSize::Small)],
+        );
+        let (seams, sampler) = directories.seams();
+        let window = on_home(seams);
+        customizing(&window);
+        button(&window, "Retirer Mémoire").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        button(&window, "Annuler").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert_eq!(
+            sampler.commands.borrow().last(),
+            Some(&Command::Watch(BTreeSet::from([
+                Source::Memory,
+                Source::System
+            ])))
+        );
+    }
+
+    #[test]
+    fn a_writer_gone_says_the_layout_is_no_longer_kept() {
+        let directories = Directories::new();
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(DashboardSeams {
+            save: Some(Box::new(|_: &DashboardLayout| panic!("the writer dies"))),
+            ..seams
+        });
+        customizing(&window);
+        button(&window, "Retirer Disques").invoke_accessible_default_action();
+        until_said(&window, |window| {
+            shows(window, "Votre disposition n'a pas pu être enregistrée.")
+        });
+    }
+
+    #[test]
+    fn a_note_gone_while_held_leaves_the_next_one_to_go_by_itself() {
+        let directories = Directories::new();
+        let window = removing_disks(&directories);
+        // The pointer on the note's words: it holds it.
+        let note =
+            ElementHandle::find_by_accessible_label(&window, "Disques retiré du tableau de bord")
+                .next()
+                .unwrap();
+        let (position, size) = (note.absolute_position(), note.size());
+        let over = slint::LogicalPosition::new(position.x + 24.0, position.y + size.height / 2.0);
+        window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::PointerMoved { position: over });
+        slint::platform::update_timers_and_animations();
+        // Put back from the keyboard: the note goes while held.
+        let control = slint::SharedString::from(slint::platform::Key::Control);
+        for (text, pressed) in [
+            (control.clone(), true),
+            ("z".into(), true),
+            ("z".into(), false),
+            (control, false),
+        ] {
+            window.window().dispatch_event(if pressed {
+                slint::platform::WindowEvent::KeyPressed { text }
+            } else {
+                slint::platform::WindowEvent::KeyReleased { text }
+            });
+        }
+        slint::platform::update_timers_and_animations();
+        until(&window, |_| {
+            kinds_kept(&directories.config).get(1) == Some(&"disks".to_owned())
+        });
+        window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+                position: slint::LogicalPosition::new(10.0, 10.0),
+            });
+        slint::platform::update_timers_and_animations();
+        button(&window, "Retirer Mémoire").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert!(shows(&window, "Mémoire retiré du tableau de bord"));
+        i_slint_backend_testing::mock_elapsed_time(TOAST_SHOWN_FOR);
+        slint::platform::update_timers_and_animations();
+        assert!(!shows(&window, "Mémoire retiré du tableau de bord"));
     }
 }

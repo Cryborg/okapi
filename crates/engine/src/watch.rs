@@ -38,8 +38,8 @@ impl Cancel {
 /// How far a scan or a cleaning went.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Progress {
-    /// The scan planned its roots: those it walks or offers (of a group with
-    /// a category chosen), by category and in all (each root once: as many
+    /// The scan planned its roots: those it walks or offers (of a group its
+    /// options choose), by category and in all (each root once: as many
     /// as [`Progress::RootDone`] in a scan that ends). By category, a root
     /// counts for every category of its group (the rules sharing it), chosen
     /// or not. Not sent when the scan stops before planning.

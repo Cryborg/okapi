@@ -5,7 +5,8 @@ use std::time::SystemTime;
 
 use okapi_platform::FileIdentity;
 use okapi_rules::{
-    ChromiumBrowserKind, Label, RelativePath, RuleId, TemplateError, TemplatePath, Variable,
+    ChromiumBrowserKind, CleanTarget, Effect, Label, RelativePath, RuleId, TemplateError,
+    TemplatePath, Variable,
 };
 
 use crate::preconditions::Stop;
@@ -61,6 +62,19 @@ pub enum Origin {
 }
 
 impl Origin {
+    /// The origin of the entries of `target`, if it deletes anything: a
+    /// maintenance operation offers no entry.
+    #[must_use]
+    pub fn of_target(target: &CleanTarget) -> Option<Self> {
+        match target.effect() {
+            Effect::Delete(deletion) => Some(Self::SystemTarget {
+                subcategory: target.subcategory().clone(),
+                path: deletion.path().clone(),
+            }),
+            Effect::Maintenance { .. } => None,
+        }
+    }
+
     /// The family of rules it belongs to.
     #[must_use]
     pub const fn category(&self) -> Category {
@@ -203,6 +217,38 @@ impl ScanIssue {
     #[must_use]
     pub const fn stops_the_scan(&self) -> bool {
         matches!(self, Self::Stopped(_))
+    }
+
+    /// Its stable name, for the privileged helper's answer.
+    #[must_use]
+    pub const fn key(&self) -> &'static str {
+        match self {
+            Self::Stopped(_) => "stopped",
+            Self::AgeBeyondClock { .. } => "ageBeyondClock",
+            Self::Unsupported { .. } => "unsupported",
+            Self::Unresolvable { .. } => "unresolvable",
+            Self::UnreadableRoot { .. } => "unreadableRoot",
+            Self::UnsafeRoot { .. } => "unsafeRoot",
+            Self::ProtectedRoot { .. } => "protectedRoot",
+            Self::Excluded { .. } => "excluded",
+            Self::LimitReached { .. } => "limitReached",
+        }
+    }
+
+    /// The rules it concerns; none for a stop, which concerns them all.
+    #[must_use]
+    pub fn origins(&self) -> &[Origin] {
+        match self {
+            Self::Stopped(_) => &[],
+            Self::AgeBeyondClock { origin }
+            | Self::Unsupported { origin }
+            | Self::Unresolvable { origin, .. } => std::slice::from_ref(origin),
+            Self::UnreadableRoot { origins, .. }
+            | Self::UnsafeRoot { origins, .. }
+            | Self::ProtectedRoot { origins, .. }
+            | Self::Excluded { origins, .. }
+            | Self::LimitReached { origins, .. } => origins,
+        }
     }
 }
 
@@ -865,6 +911,98 @@ mod tests {
         ];
         for (result, name) in results {
             assert_eq!(result.key(), name);
+        }
+    }
+
+    /// The names of the issues, and the rules each concerns: what the
+    /// privileged helper answers with, and filters its answer on.
+    #[test]
+    fn every_issue_keeps_its_name_and_its_rules() {
+        let label = Label::try_from("Crash".to_owned()).unwrap();
+        let origin = Origin::SystemTarget {
+            subcategory: label,
+            path: TemplatePath::try_from("/var/crash".to_owned()).unwrap(),
+        };
+        let other = Origin::App {
+            file: AppFile::Apps,
+            id: RuleId::try_from("pip".to_owned()).unwrap(),
+        };
+        let origins = vec![origin.clone(), other];
+        let path = PathBuf::from("/var/crash");
+        let issues = [
+            (ScanIssue::Stopped(Stop::Cancelled), "stopped", 0),
+            (
+                ScanIssue::AgeBeyondClock {
+                    origin: origin.clone(),
+                },
+                "ageBeyondClock",
+                1,
+            ),
+            (
+                ScanIssue::Unsupported {
+                    origin: origin.clone(),
+                },
+                "unsupported",
+                1,
+            ),
+            (
+                ScanIssue::Unresolvable {
+                    origin,
+                    error: TemplateError::MissingVariable {
+                        variable: Variable::Home,
+                    },
+                },
+                "unresolvable",
+                1,
+            ),
+            (
+                ScanIssue::UnreadableRoot {
+                    origins: origins.clone(),
+                    path: path.clone(),
+                    error: io::ErrorKind::PermissionDenied,
+                },
+                "unreadableRoot",
+                2,
+            ),
+            (
+                ScanIssue::UnsafeRoot {
+                    origins: origins.clone(),
+                    path: path.clone(),
+                    reason: UnsafeReason::Link,
+                },
+                "unsafeRoot",
+                2,
+            ),
+            (
+                ScanIssue::ProtectedRoot {
+                    origins: origins.clone(),
+                    path: path.clone(),
+                    variable: Variable::Home,
+                },
+                "protectedRoot",
+                2,
+            ),
+            (
+                ScanIssue::Excluded {
+                    origins: origins.clone(),
+                    path: path.clone(),
+                },
+                "excluded",
+                2,
+            ),
+            (
+                ScanIssue::LimitReached {
+                    origins: origins.clone(),
+                    root: path,
+                    limit: Limit::Depth,
+                },
+                "limitReached",
+                2,
+            ),
+        ];
+        for (issue, name, rules) in issues {
+            assert_eq!(issue.key(), name);
+            assert_eq!(issue.origins(), &origins[..rules], "{name}");
         }
     }
 }

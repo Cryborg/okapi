@@ -18,7 +18,7 @@ use crate::walk::{Found, Limits, Readers, RootProblem, ScanProgress, WalkContext
 use crate::watch::{Progress, Watch};
 
 /// Scans the system targets and the application rules of `rules` for what
-/// can be cleaned, without privileges and without changing anything.
+/// can be cleaned, without changing anything.
 ///
 /// Only directories the rules name are walked, by their real location (the
 /// rule's own path is resolved first, links in its ancestors included). Below
@@ -183,7 +183,7 @@ pub(crate) fn scan_entries(
     // Every root reserves its place, chosen or not: the walks of the chosen
     // ones skip the others below them.
     let root_identities: BTreeSet<_> = roots.iter().map(|(_, root)| root.identity).collect();
-    let roots = chosen_roots(roots, &attributes, &mut groups, options.categories());
+    let roots = chosen_roots(roots, &attributes, &mut groups, options);
     let roots_total = roots
         .iter()
         .filter(|(_, root, _)| root.kind != PlannedKind::Withheld)
@@ -316,25 +316,24 @@ fn plan(
     Some((protected, roots_by_rule))
 }
 
-/// The roots of a group in the categories `chosen` (all when none is), each
-/// with its categories: those of its group's rules (the sense a group is
-/// shown in).
+/// The roots of a group `options` choose, each with its categories: those of
+/// its group's rules (the sense a group is shown in).
 fn chosen_roots(
     roots: Vec<(usize, PlannedRoot)>,
     attributes: &BTreeMap<usize, GroupAttributes>,
     groups: &mut RuleGroups,
-    chosen: &BTreeSet<Category>,
+    options: &ScanOptions,
 ) -> Vec<(usize, PlannedRoot, BTreeSet<Category>)> {
     roots
         .into_iter()
-        .map(|(rule, root)| {
-            let categories = attributes
+        .filter_map(|(rule, root)| {
+            let origins = attributes
                 .get(&groups.find(rule))
-                .map(|attributes| Category::of_group(&attributes.origins))
-                .unwrap_or_default();
-            (rule, root, categories)
+                .map_or(&[][..], |attributes| &attributes.origins);
+            options
+                .chooses(origins)
+                .then(|| (rule, root, Category::of_group(origins)))
         })
-        .filter(|(_, _, categories)| Category::is_chosen(categories, chosen))
         .collect()
 }
 

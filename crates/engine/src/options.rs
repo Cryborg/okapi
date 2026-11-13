@@ -8,7 +8,7 @@ use okapi_platform::{FileIdentity, file_identity};
 use thiserror::Error;
 
 use crate::paths::{canonicalize_longest_prefix, lowercase, starts_with_ignoring_case};
-use crate::report::Category;
+use crate::report::{Category, Origin};
 use crate::walk::IdentityReader;
 
 /// How old an entry must be to be offered when the user has not chosen, in
@@ -169,6 +169,9 @@ pub struct ScanOptions {
     exclusions: Exclusions,
     /// The categories walked; none means all.
     categories: BTreeSet<Category>,
+    /// The rules walked, when they are chosen one by one: an empty set walks
+    /// nothing, never all.
+    origins: Option<BTreeSet<Origin>>,
 }
 
 impl ScanOptions {
@@ -181,6 +184,7 @@ impl ScanOptions {
             min_age,
             exclusions,
             categories: BTreeSet::new(),
+            origins: None,
         }
     }
 
@@ -198,6 +202,29 @@ impl ScanOptions {
     #[must_use]
     pub const fn categories(&self) -> &BTreeSet<Category> {
         &self.categories
+    }
+
+    /// Walks only the roots of a group with one of `origins`, as
+    /// [`Self::with_categories`] does for categories, and on top of them; but
+    /// an empty set walks nothing.
+    #[must_use]
+    pub fn with_origins(mut self, origins: BTreeSet<Origin>) -> Self {
+        self.origins = Some(origins);
+        self
+    }
+
+    /// Whether a group of rules `origins` is walked: one of them is itself
+    /// chosen, by its category and, when rules are chosen one by one, as a
+    /// rule. Two rules sharing a root, one chosen by its category and the
+    /// other as a rule, choose nothing.
+    pub(crate) fn chooses(&self, origins: &[Origin]) -> bool {
+        origins.iter().any(|origin| {
+            Category::is_chosen(&BTreeSet::from([origin.category()]), &self.categories)
+                && self
+                    .origins
+                    .as_ref()
+                    .is_none_or(|chosen| chosen.contains(origin))
+        })
     }
 
     pub(crate) const fn exclusions(&self) -> &Exclusions {

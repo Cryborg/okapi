@@ -53,8 +53,9 @@ pub struct EntryStatus {
     pub mount_root: Option<bool>,
 }
 
-/// The user that may remove anything in a sticky directory.
-pub(crate) const ROOT_USER: u32 = 0;
+/// The administrator: the user that may remove anything in a sticky
+/// directory, and the only one the privileged helper runs as.
+pub const ROOT_USER: u32 = 0;
 
 /// Who owns an object, and for a directory whether it is sticky.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

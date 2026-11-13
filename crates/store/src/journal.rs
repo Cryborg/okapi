@@ -73,12 +73,6 @@ pub fn start(
     verbose: bool,
     on_write_failure: WriteFailure,
 ) -> Result<(PathBuf, Rotation), Unavailable> {
-    // Every detail of Okapi; from its dependencies (their `log` messages
-    // included, bridged), what they think worth saying, not a trace of each
-    // message they pass (zbus, for accessibility, would flood the journal).
-    let file_level = Targets::new()
-        .with_target(OKAPI_TARGETS, LevelFilter::TRACE)
-        .with_default(LevelFilter::INFO);
     let console_level = if verbose {
         LevelFilter::DEBUG
     } else {
@@ -89,14 +83,11 @@ pub fn start(
         .and_then(|directory| open(&directory, file_name));
     match opened {
         Ok((file, path, rotation)) => {
-            let journal = fmt::layer()
-                .json()
-                .with_writer(JournalFile {
-                    file: Mutex::new(file),
-                    failed: AtomicBool::new(false),
-                    on_write_failure,
-                })
-                .with_filter(file_level);
+            let journal = journal_layer(JournalFile {
+                file: Mutex::new(file),
+                failed: AtomicBool::new(false),
+                on_write_failure,
+            });
             tracing_subscriber::registry()
                 .with(journal)
                 .with(console(console_level))
@@ -110,6 +101,36 @@ pub fn start(
             Err(unavailable)
         }
     }
+}
+
+/// Sends every trace, as the journal holds them, to standard error, for a
+/// binary that writes no file of its own: the privileged helper, whose
+/// caller adds them to its own journal. The caller reads that stream as it
+/// comes, beside the standard output: a full pipe would block the helper.
+/// After a panic ([`trace_panics`]), the default report follows in plain text.
+///
+/// # Panics
+///
+/// As [`start`].
+pub fn start_on_standard_error() {
+    tracing_subscriber::registry()
+        .with(journal_layer(io::stderr))
+        .init();
+}
+
+/// The journal's form, written to `writer`: one JSON line per event, with
+/// every detail of Okapi; from its dependencies (their `log` messages
+/// included, bridged), what they think worth saying, not a trace of each
+/// message they pass (zbus, for accessibility, would flood the journal).
+fn journal_layer<S, W>(writer: W) -> impl Layer<S>
+where
+    S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
+    W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
+{
+    let level = Targets::new()
+        .with_target(OKAPI_TARGETS, LevelFilter::TRACE)
+        .with_default(LevelFilter::INFO);
+    fmt::layer().json().with_writer(writer).with_filter(level)
 }
 
 /// Traces every panic, with its backtrace, before the default report on

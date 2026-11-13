@@ -17,6 +17,21 @@ pub const fn effective_user() -> Option<u32> {
     None
 }
 
+/// The user who started the process (its real user), whom the system's
+/// access checks (`accessat`) judge, and the cleaning's with them.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn real_user() -> Option<u32> {
+    Some(rustix::process::getuid().as_raw())
+}
+
+/// The user who started the process: unknown here yet.
+#[cfg(not(target_os = "linux"))]
+#[must_use]
+pub const fn real_user() -> Option<u32> {
+    None
+}
+
 /// Whether the process runs as root: the command line refuses to run then,
 /// removals that need the administrator go through the privileged helper.
 #[must_use]

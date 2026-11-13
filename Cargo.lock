@@ -3132,6 +3132,17 @@ dependencies = [
 [[package]]
 name = "okapi-helper"
 version = "0.1.0"
+dependencies = [
+ "okapi-engine",
+ "okapi-platform",
+ "okapi-rules",
+ "okapi-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+]
 
 [[package]]
 name = "okapi-platform"

@@ -10,8 +10,9 @@ use std::time::Duration;
 use okapi_engine::BrowserLock;
 use slint::ComponentHandle as _;
 
+use super::CleanerScreen;
 use super::cleaning::Confirming;
-use super::{CleanerScreen, size};
+use crate::shown::size;
 use crate::ui;
 
 /// How often the lock of a browser asked to close is read again.

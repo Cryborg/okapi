@@ -6,7 +6,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -14,18 +14,19 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 use okapi_engine::{
-    ByteSize, Cancel, Category, CleanReceipt, DEFAULT_MIN_AGE, DEFAULT_MIN_AGE_MINUTES,
-    DefaultChoice, Exclusions, Limit, Origin, Progress, ScanIssue, ScanOptions, ScanReport,
-    SizeUnit, Stop, Watch, clean_watched, scan_watched, settings_min_age,
+    Cancel, Category, CleanReceipt, DEFAULT_MIN_AGE, DEFAULT_MIN_AGE_MINUTES, DefaultChoice,
+    Exclusions, Limit, Origin, Progress, ScanIssue, ScanOptions, ScanReport, Stop, Watch,
+    clean_watched, scan_watched, settings_min_age,
 };
 use okapi_rules::{Language, Os, RuleSet, TemplateVariables};
-use okapi_store::Settings;
-use slint::{ComponentHandle as _, Model as _, ModelRc, SharedString, VecModel};
+use okapi_store::{LastAnalysis, Settings};
+use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 
 use okapi_helper::{Operation, Reply};
 
 use crate::elevation::{ElevationFailure, ElevationStep, Launcher};
 use crate::results::{AdminState, CheckState, GroupFacts, Line, Results};
+use crate::shown::{show, shown, size};
 use crate::ui;
 use cleaning::CleanJob;
 
@@ -440,28 +441,23 @@ fn ending_of(report: &ScanReport) -> Option<Outcome> {
     ending(report.issues(), report.groups().len(), report.total_size())
 }
 
-/// A count as the window shows it: beyond what it holds, the most it holds,
-/// traced.
-fn shown<T: Copy + TryInto<i32> + std::fmt::Debug>(value: T) -> i32 {
-    value.try_into().unwrap_or_else(|_| {
-        tracing::warn!(?value, "beyond what the window shows");
-        i32::MAX
-    })
-}
-
-fn size(bytes: u64) -> ui::Size {
-    let size = ByteSize::of(bytes);
-    ui::Size {
-        whole: shown(size.whole()),
-        tenths: size.tenths().map_or(0, shown),
-        has_tenths: size.tenths().is_some(),
-        unit: match size.unit() {
-            SizeUnit::Byte => ui::SizeUnit::Byte,
-            SizeUnit::Kilobyte => ui::SizeUnit::Kilobyte,
-            SizeUnit::Megabyte => ui::SizeUnit::Megabyte,
-            SizeUnit::Gigabyte => ui::SizeUnit::Gigabyte,
-            SizeUnit::Terabyte => ui::SizeUnit::Terabyte,
-        },
+/// Keeps the summary of `report`, scanned with `options`, in `directory`
+/// for the Home page when the analysis came to an end the window shows:
+/// something found, or nothing to clean (at 0 bytes). Cancelled or stopped
+/// before reading, it replaces nothing.
+fn keep_summary(report: &ScanReport, options: &ScanOptions, directory: &Path) {
+    let ending = ending_of(report);
+    if !matches!(
+        ending,
+        Some(Outcome::Found { .. } | Outcome::NothingToClean { .. })
+    ) {
+        tracing::debug!(?ending, "analysis summary not kept: no ending to keep");
+        return;
+    }
+    // The store traces the writing, done or not, in this analysis's span.
+    let summary = LastAnalysis::of(report, options);
+    if summary.save(directory).is_ok() {
+        tracing::info!(?summary, "analysis summary kept");
     }
 }
 
@@ -645,17 +641,6 @@ fn note_shown(issue: &ScanIssue) -> Option<ui::IssueShown> {
         ),
     };
     Some(ui::IssueShown { kind, path })
-}
-
-/// Shows `rows` in `model`, row by row when their number holds.
-fn show<T: Clone + 'static>(model: &VecModel<T>, rows: Vec<T>) {
-    if model.row_count() == rows.len() {
-        for (index, row) in rows.into_iter().enumerate() {
-            model.set_row_data(index, row);
-        }
-    } else {
-        model.set_vec(rows);
-    }
 }
 
 /// A thread at work, its progress and its result sent on channels made for
@@ -952,16 +937,31 @@ impl CleanerScreen {
     }
 
     /// The analysis of `chosen`, its options built now from the settings
-    /// read now: they may have changed since the screen was shown.
-    fn prepare(&self, chosen: &BTreeSet<Category>) -> Result<Job, Problem> {
+    /// read now (they may have changed since the screen was shown), and
+    /// where its summary is kept: none when it covers less than the
+    /// categories checked by default, whose estimate a partial analysis
+    /// never replaces, or when no state directory is known.
+    fn prepare(&self, chosen: &BTreeSet<Category>) -> Result<(Job, Option<PathBuf>), Problem> {
         let state = self.0.borrow();
         let rules = state.rules.as_ref().ok_or(Problem::Rules)?;
         let inputs = (state.seams.read)()?;
-        Ok(Job {
+        let job = Job {
             rules: Arc::clone(rules),
             options: options(&inputs, SystemTime::now(), chosen.clone())?,
             variables: inputs.variables,
-        })
+        };
+        let by_default = Choices::of(Some(rules)).chosen();
+        let summary_directory = if !by_default.is_subset(chosen) {
+            let missing: Vec<_> = by_default.difference(chosen).collect();
+            tracing::info!(?missing, "partial analysis: its summary is not kept");
+            None
+        } else if inputs.state_directory.is_none() {
+            tracing::warn!("no state directory: the summary of the analysis is not kept");
+            None
+        } else {
+            inputs.state_directory
+        };
+        Ok((job, summary_directory))
     }
 
     /// Starts an analysis of the categories checked.
@@ -978,8 +978,8 @@ impl CleanerScreen {
             tracing::warn!("analysis asked for without a category");
             return;
         }
-        let job = match self.prepare(&chosen) {
-            Ok(job) => job,
+        let (job, summary_directory) = match self.prepare(&chosen) {
+            Ok(prepared) => prepared,
             Err(found) => {
                 tracing::warn!(problem = ?found, "analysis cannot start");
                 self.with_window(|window, _| {
@@ -994,10 +994,17 @@ impl CleanerScreen {
         self.with_window(|window, _| window.global::<ui::Cleaner>().set_problem(problem(None)));
         tracing::info!(options = ?job.options, categories = ?chosen, "analysis started");
         let work = Arc::clone(&self.0.borrow().seams.work);
+        let options = job.options.clone();
         let started = Running::start(
             "okapi-analysis",
             tracing::info_span!("analysis"),
-            move |cancel, progress| work(job, cancel, progress),
+            move |cancel, progress| {
+                let report = work(job, cancel, progress);
+                if let Some(directory) = summary_directory {
+                    keep_summary(&report, &options, &directory);
+                }
+                report
+            },
         );
         self.settle();
         // A new analysis is the last one: the results of the one before go.
@@ -1378,10 +1385,13 @@ impl CleanerScreen {
 pub mod tests {
     use std::cell::Cell;
     use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::Path;
     use std::sync::Mutex;
 
     use i_slint_backend_testing::{AccessibleRole, ElementHandle};
     use okapi_rules::Variable;
+    use slint::Model as _;
 
     use super::*;
 
@@ -1676,19 +1686,6 @@ pub mod tests {
         );
     }
 
-    #[test]
-    fn sizes_and_counts_reach_the_window_within_its_bounds() {
-        let shown_size = size(1_999_999);
-        assert_eq!(
-            (shown_size.whole, shown_size.tenths, shown_size.has_tenths),
-            (1, 9, true)
-        );
-        assert_eq!(shown_size.unit, ui::SizeUnit::Megabyte);
-        assert!(!size(999).has_tenths);
-        assert_eq!(shown(usize::MAX), i32::MAX);
-        assert_eq!(shown(7_usize), 7);
-    }
-
     pub fn checkbox(window: &ui::AppWindow, label: &str) -> ElementHandle {
         ElementHandle::find_by_accessible_label(window, label)
             .find(|element| element.accessible_role() == Some(AccessibleRole::Checkbox))
@@ -1724,6 +1721,264 @@ pub mod tests {
             text.accessible_label()
                 .is_some_and(|label| label.starts_with(start))
         })
+    }
+
+    /// `seams`, the instant each analysis started from sent.
+    fn noting_starts(seams: Seams) -> (Seams, Receiver<SystemTime>) {
+        let (start, starts) = mpsc::channel();
+        let work = Arc::clone(&seams.work);
+        let seams = Seams {
+            work: Arc::new(move |job, cancel, progress| {
+                start.send(job.options.now()).unwrap();
+                work(job, cancel, progress)
+            }),
+            ..seams
+        };
+        (seams, starts)
+    }
+
+    /// A summary no analysis of a sandbox can make.
+    const EARLIER: LastAnalysis = LastAnalysis {
+        time: 1,
+        reclaimable_bytes: 2,
+        entries: 3,
+    };
+
+    fn summary(sandbox: &Sandbox) -> Option<LastAnalysis> {
+        LastAnalysis::load(&sandbox.root.join("state")).unwrap()
+    }
+
+    #[test]
+    fn an_analysis_of_the_default_categories_keeps_its_summary() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        sandbox.file("home/.cache/pip/older");
+        settle_files();
+        EARLIER.save(&sandbox.root.join("state")).unwrap();
+        let (seams, starts) = noting_starts(sandbox.read(&sandbox.root.join("state")));
+        let (window, _screen) = on_cleaner(seams);
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
+        let kept = summary(&sandbox).unwrap();
+        assert_eq!(kept.time, okapi_store::seconds(starts.recv().unwrap()));
+        assert_eq!(
+            (kept.reclaimable_bytes, kept.entries),
+            (14, 2),
+            "two files of 7 bytes"
+        );
+    }
+
+    #[test]
+    fn an_analysis_of_more_categories_than_the_default_ones_keeps_its_summary() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        settle_files();
+        EARLIER.save(&sandbox.root.join("state")).unwrap();
+        let (window, _screen) = on_cleaner(sandbox.read(&sandbox.root.join("state")));
+        checkbox(&window, "Caches GPU").invoke_accessible_default_action();
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
+        assert_eq!(summary(&sandbox).map(|kept| kept.entries), Some(1));
+    }
+
+    #[test]
+    fn an_analysis_stopped_before_reading_keeps_the_summary_before() {
+        let sandbox = Sandbox::new();
+        EARLIER.save(&sandbox.root.join("state")).unwrap();
+        let inputs = Inputs {
+            variables: TemplateVariables::new(),
+            ..sandbox.inputs(Some(&sandbox.root.join("state")))
+        };
+        let (window, _screen) = on_cleaner(Seams {
+            read: Rc::new(move || Ok(inputs.clone())),
+            ..Seams::system()
+        });
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Outcome);
+        assert_eq!(
+            window.global::<ui::Cleaner>().get_outcome(),
+            ui::OutcomeKind::NothingLooked
+        );
+        assert_eq!(summary(&sandbox), Some(EARLIER));
+    }
+
+    #[test]
+    fn an_analysis_without_a_state_directory_shows_its_results() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let inputs = sandbox.inputs(None);
+        let (window, _screen) = on_cleaner(Seams {
+            read: Rc::new(move || Ok(inputs.clone())),
+            ..Seams::system()
+        });
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
+    }
+
+    #[test]
+    fn an_analysis_with_nothing_to_clean_keeps_a_summary_at_zero() {
+        let sandbox = Sandbox::new();
+        EARLIER.save(&sandbox.root.join("state")).unwrap();
+        let (window, _screen) = on_cleaner(sandbox.read(&sandbox.root.join("state")));
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Outcome);
+        assert_eq!(
+            window.global::<ui::Cleaner>().get_outcome(),
+            ui::OutcomeKind::NothingToClean
+        );
+        let kept = summary(&sandbox).unwrap();
+        assert_eq!((kept.reclaimable_bytes, kept.entries), (0, 0));
+    }
+
+    #[test]
+    fn an_analysis_of_fewer_categories_than_the_default_ones_keeps_the_summary_before() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        settle_files();
+        EARLIER.save(&sandbox.root.join("state")).unwrap();
+        let (window, _screen) = on_cleaner(sandbox.read(&sandbox.root.join("state")));
+        checkbox(&window, "Jeux").invoke_accessible_default_action();
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
+        assert_eq!(summary(&sandbox), Some(EARLIER));
+    }
+
+    #[test]
+    fn a_cancelled_analysis_keeps_the_summary_before() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        settle_files();
+        EARLIER.save(&sandbox.root.join("state")).unwrap();
+        let (seams, scan) = scripted(Vec::new());
+        let (window, _screen) = on_cleaner(Seams {
+            read: sandbox.read(&sandbox.root.join("state")).read,
+            ..seams
+        });
+        button(&window, "Analyser").invoke_accessible_default_action();
+        scan.started.recv().unwrap();
+        let_the_screen_settle();
+        button(&window, "Annuler l'analyse").invoke_accessible_default_action();
+        assert_eq!(step(&window), ui::CleanerStep::Cancelling);
+        scan.go.send(()).unwrap();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Idle);
+        assert_eq!(summary(&sandbox), Some(EARLIER));
+    }
+
+    #[test]
+    fn a_summary_that_cannot_be_kept_leaves_the_results_shown() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        let not_a_directory = sandbox.file("state-is-a-file");
+        settle_files();
+        let (window, _screen) = on_cleaner(sandbox.read(&not_a_directory));
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
+        assert_eq!(
+            fs::read(&not_a_directory).unwrap(),
+            b"content",
+            "nothing written over it"
+        );
+    }
+
+    /// A home, a temporary directory and a state directory below the build
+    /// directory, never below a target of the rules (`/tmp` is one), with
+    /// every absolute target of the rules excluded: the analysis and the
+    /// cleaning reach nothing of the machine.
+    pub struct Sandbox {
+        _directory: tempfile::TempDir,
+        pub root: PathBuf,
+    }
+
+    impl Sandbox {
+        pub fn new() -> Self {
+            let directory = tempfile::TempDir::new_in(env!("OUT_DIR")).unwrap();
+            let root = fs::canonicalize(directory.path()).unwrap();
+            for target in Self::excluded() {
+                assert!(
+                    !root.starts_with(&target),
+                    "the sandbox {} lies below {}",
+                    root.display(),
+                    target.display()
+                );
+            }
+            for directory in [
+                "home/.cache",
+                "home/.config",
+                "home/.local/share",
+                "tmp",
+                "state",
+            ] {
+                fs::create_dir_all(root.join(directory)).unwrap();
+            }
+            Self {
+                _directory: directory,
+                root,
+            }
+        }
+
+        pub fn excluded() -> Vec<PathBuf> {
+            RuleSet::embedded(Os::Linux)
+                .unwrap()
+                .absolute_targets(false)
+        }
+
+        pub fn file(&self, relative: &str) -> PathBuf {
+            let path = self.root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, b"content").unwrap();
+            path
+        }
+
+        pub fn variables(&self) -> TemplateVariables {
+            let mut variables = TemplateVariables::new();
+            for (variable, relative) in [
+                (Variable::Home, "home"),
+                (Variable::TempDirectory, "tmp"),
+                (Variable::Config, "home/.config"),
+                (Variable::Cache, "home/.cache"),
+                (Variable::LocalShare, "home/.local/share"),
+            ] {
+                variables
+                    .insert(variable, self.root.join(relative))
+                    .unwrap();
+            }
+            variables
+        }
+
+        /// The settings: no minimum age (the files are fresh), every
+        /// absolute target excluded, a deletion log, and the history here.
+        pub fn inputs(&self, state_directory: Option<&Path>) -> Inputs {
+            Inputs {
+                variables: self.variables(),
+                min_age_minutes: Some(0),
+                exclusions: Self::excluded(),
+                deletion_log: true,
+                state_directory: state_directory.map(Path::to_path_buf),
+            }
+        }
+
+        pub fn read(&self, state_directory: &Path) -> Seams {
+            let inputs = self.inputs(Some(state_directory));
+            Seams {
+                read: Rc::new(move || Ok(inputs.clone())),
+                ..Seams::system()
+            }
+        }
+
+        pub fn history(&self) -> Vec<serde_json::Value> {
+            fs::read_to_string(self.root.join("state/history.jsonl"))
+                .unwrap_or_default()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect()
+        }
+    }
+
+    /// File dates follow a coarse clock: a pause puts what was just written
+    /// before the analysis's own `now`.
+    pub fn settle_files() {
+        std::thread::sleep(Duration::from_millis(50));
     }
 
     /// The window on the cleaner, in French, reading and scanning with

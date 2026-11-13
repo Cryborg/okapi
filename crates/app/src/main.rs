@@ -11,6 +11,7 @@ mod cleaner;
 mod elevation;
 mod receipt;
 mod results;
+mod shown;
 
 use cleaner::{CleanerScreen, Seams};
 

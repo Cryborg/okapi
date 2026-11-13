@@ -16,11 +16,10 @@ use okapi_rules::{RuleSet, TemplateVariables};
 use okapi_store::{AdminRecord, History, HistoryEntry, HistoryOutcome, Opened};
 use slint::ComponentHandle as _;
 
-use super::{
-    CleanerScreen, Problem, Running, Task, options, problem, rights, show, shown, size, stop_shown,
-};
+use super::{CleanerScreen, Problem, Running, Task, options, problem, rights, stop_shown};
 use crate::elevation::{ElevationFailure, ElevationStep};
 use crate::receipt::{Ending, Kept, LineKind, OutcomeFacts, Receipt};
+use crate::shown::{show, shown, size};
 use crate::ui;
 
 /// What a cleaning takes: identifiers of the report kept, and only them
@@ -1052,117 +1051,17 @@ mod tests {
     use std::time::Duration;
 
     use i_slint_backend_testing::{AccessibleRole, ElementHandle};
-    use okapi_rules::{Os, RuleSet, TemplateVariables, Variable};
+    use okapi_rules::{Os, RuleSet, TemplateVariables};
     use slint::ComponentHandle as _;
 
     use std::sync::Arc;
 
     use super::super::tests::{
-        button, checkbox, let_the_screen_settle, on_cleaner, press, shows, shows_a_text_starting,
-        step, watch_until,
+        Sandbox, button, checkbox, let_the_screen_settle, on_cleaner, press, settle_files, shows,
+        shows_a_text_starting, step, watch_until,
     };
     use super::super::{Inputs, Seams};
     use crate::ui;
-
-    /// A home, a temporary directory and a state directory below the build
-    /// directory, never below a target of the rules (`/tmp` is one), with
-    /// every absolute target of the rules excluded: the analysis and the
-    /// cleaning reach nothing of the machine.
-    struct Sandbox {
-        _directory: tempfile::TempDir,
-        root: PathBuf,
-    }
-
-    impl Sandbox {
-        fn new() -> Self {
-            let directory = tempfile::TempDir::new_in(env!("OUT_DIR")).unwrap();
-            let root = fs::canonicalize(directory.path()).unwrap();
-            for target in Self::excluded() {
-                assert!(
-                    !root.starts_with(&target),
-                    "the sandbox {} lies below {}",
-                    root.display(),
-                    target.display()
-                );
-            }
-            for directory in [
-                "home/.cache",
-                "home/.config",
-                "home/.local/share",
-                "tmp",
-                "state",
-            ] {
-                fs::create_dir_all(root.join(directory)).unwrap();
-            }
-            Self {
-                _directory: directory,
-                root,
-            }
-        }
-
-        fn excluded() -> Vec<PathBuf> {
-            RuleSet::embedded(Os::Linux)
-                .unwrap()
-                .absolute_targets(false)
-        }
-
-        fn file(&self, relative: &str) -> PathBuf {
-            let path = self.root.join(relative);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(&path, b"content").unwrap();
-            path
-        }
-
-        fn variables(&self) -> TemplateVariables {
-            let mut variables = TemplateVariables::new();
-            for (variable, relative) in [
-                (Variable::Home, "home"),
-                (Variable::TempDirectory, "tmp"),
-                (Variable::Config, "home/.config"),
-                (Variable::Cache, "home/.cache"),
-                (Variable::LocalShare, "home/.local/share"),
-            ] {
-                variables
-                    .insert(variable, self.root.join(relative))
-                    .unwrap();
-            }
-            variables
-        }
-
-        /// The settings: no minimum age (the files are fresh), every
-        /// absolute target excluded, a deletion log, and the history here.
-        fn inputs(&self, state_directory: Option<&Path>) -> Inputs {
-            Inputs {
-                variables: self.variables(),
-                min_age_minutes: Some(0),
-                exclusions: Self::excluded(),
-                deletion_log: true,
-                state_directory: state_directory.map(Path::to_path_buf),
-            }
-        }
-
-        fn read(&self, state_directory: &Path) -> Seams {
-            let inputs = self.inputs(Some(state_directory));
-            Seams {
-                read: Rc::new(move || Ok(inputs.clone())),
-                ..Seams::system()
-            }
-        }
-
-        fn history(&self) -> Vec<serde_json::Value> {
-            fs::read_to_string(self.root.join("state/history.jsonl"))
-                .unwrap_or_default()
-                .lines()
-                .map(|line| serde_json::from_str(line).unwrap())
-                .collect()
-        }
-    }
-
-    /// File dates follow a coarse clock: a pause puts what was just written
-    /// before the analysis's own `now`.
-    fn settle_files() {
-        std::thread::sleep(Duration::from_millis(50));
-    }
 
     /// The window on the results of an analysis of Applications alone.
     fn on_results(seams: Seams) -> (ui::AppWindow, super::super::CleanerScreen) {

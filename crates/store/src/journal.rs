@@ -8,11 +8,13 @@
 //! file opened for appending, but each counts only its own; every megabyte it
 //! writes, and before setting the journal aside, a run looks whether the
 //! journal's path still leads to its file, and follows it otherwise (another
-//! run set it aside, or a person removed it). Where files have no known
-//! identity (outside Unix for now) it cannot look, and two runs set each
-//! other's journal aside. Two runs that cross the limit together, or start
-//! together on a journal too large, may both set it aside: the previous
-//! journal is then lost.
+//! run set it aside, or a person removed it, or its directory). Lines are
+//! lost: what a run writes, until its next look, to a journal no longer
+//! named (removed, or set aside twice by another run); where files have no
+//! known identity (outside Unix for now) it cannot look, and two runs set
+//! each other's journal aside; two runs that cross the limit together, or
+//! start together on a journal too large, may both set it aside, the previous
+//! journal then lost.
 
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -176,6 +178,7 @@ where
 pub enum Rotation {
     None,
     Done {
+        /// At launch, the file's size; during a run, what this run counted.
         size: u64,
     },
     /// Not set aside: the lines go on to the same journal.
@@ -239,6 +242,7 @@ fn open(
             limit: limit_after(&rotation, written),
             looked: written,
         }),
+        directory: directory.to_owned(),
         path,
         failed: AtomicBool::new(false),
         on_write_failure,
@@ -286,6 +290,7 @@ fn trace_aside(rotation: &Rotation) {
 /// The journal file, set aside when it grows too large. Its first failure is
 /// said, once.
 struct JournalFile {
+    directory: PathBuf,
     path: PathBuf,
     opened: Mutex<Opened>,
     failed: AtomicBool,
@@ -385,9 +390,11 @@ impl JournalFile {
         }
     }
 
-    /// Opens the journal at its path, and counts from its size.
+    /// Opens the journal at its path (its directory too, if it was
+    /// removed), and counts from its size.
     fn follow(&self, opened: &mut Opened) -> Rotation {
-        match okapi_platform::open_journal(&self.path)
+        match okapi_platform::create_private_directory(&self.directory)
+            .and_then(|()| okapi_platform::open_journal(&self.path))
             .and_then(|file| Ok((file.metadata()?.len(), file)))
         {
             Ok((written, file)) => {
@@ -637,6 +644,18 @@ mod tests {
     }
 
     #[test]
+    fn a_journal_whose_directory_is_removed_during_a_run_comes_back() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join("state");
+        let (journal, _) = open(&state, "app.log", unheard()).unwrap();
+        write_line(&journal, "one\n");
+        fs::remove_dir_all(&state).unwrap();
+        grown_by(&journal, LOOK_EVERY);
+        write_line(&journal, "two\n");
+        assert_eq!(fs::read_to_string(&journal.path).unwrap(), "two\n");
+    }
+
+    #[test]
     fn a_journal_moved_during_a_run_is_opened_again_once_it_can_be() {
         let directory = tempfile::tempdir().unwrap();
         let said = Arc::new(AtomicUsize::new(0));
@@ -750,6 +769,7 @@ mod tests {
                 limit: ROTATION_SIZE,
                 looked: 0,
             }),
+            directory: directory.path().to_owned(),
             path,
             failed: AtomicBool::new(false),
             on_write_failure: Box::new(move |_| {

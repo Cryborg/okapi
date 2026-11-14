@@ -40,7 +40,7 @@ Ce fichier ne porte que ce qui change le code qu'on écrit. Le « pourquoi » vi
 - Les lints de `[workspace.lints]` (clippy pedantic, `unsafe_code` interdit...) sont la norme : on ne les affaiblit jamais globalement. Une exception est locale et justifiée : `#[expect(lint, reason = "...")]`.
 - Toute bibliothèque a sa doc de module (`//!`) et ses tests unitaires à côté du code.
 - Un commentaire n'existe que pour faire comprendre le code, expliquer une correction contre-intuitive, ou retenir une erreur qu'on referait. Jamais de récit, jamais de compte recopié.
-- Aucun tiret cadratin dans un texte affiché.
+- Aucun tiret cadratin dans un texte affiché, sauf un texte légal affiché tel quel (licences, notices).
 - Une modale ne se ferme jamais par un clic en dehors : seulement par ses boutons, Échap ou retour.
 
 ## Invariants stricts

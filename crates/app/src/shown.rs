@@ -31,20 +31,36 @@ pub(crate) fn size(bytes: u64) -> ui::Size {
     }
 }
 
-/// Shows `rows` in `model`, row by row when their number holds.
-pub(crate) fn show<T: Clone + 'static>(model: &VecModel<T>, rows: Vec<T>) {
-    if model.row_count() == rows.len() {
-        for (index, row) in rows.into_iter().enumerate() {
-            model.set_row_data(index, row);
+/// Shows `rows` in `model` in place: a row changed is set, rows added or
+/// gone at the end are pushed or removed. The rows kept keep their elements,
+/// so that the pointer and the focus stay on them.
+pub(crate) fn show<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
+    let kept = model.row_count().min(rows.len());
+    for (index, row) in rows.iter().enumerate().take(kept) {
+        if model.row_data(index).as_ref() != Some(row) {
+            model.set_row_data(index, row.clone());
         }
-    } else {
-        model.set_vec(rows);
+    }
+    while model.row_count() > rows.len() {
+        model.remove(model.row_count() - 1);
+    }
+    for row in rows.into_iter().skip(kept) {
+        model.push(row);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_model_is_changed_in_place() {
+        let model = VecModel::from(vec![1, 2, 3]);
+        show(&model, vec![1, 5]);
+        assert_eq!(model.iter().collect::<Vec<_>>(), [1, 5]);
+        show(&model, vec![1, 5, 7, 8]);
+        assert_eq!(model.iter().collect::<Vec<_>>(), [1, 5, 7, 8]);
+    }
 
     #[test]
     fn sizes_and_counts_reach_the_window_within_its_bounds() {

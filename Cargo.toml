@@ -23,6 +23,10 @@ tempfile = "3.27.0"
 # The flag and the conditional shutdown alone: no channel, no iterator.
 signal-hook = { version = "0.4.6", default-features = false }
 jiff = "0.2.43"
+# The desktop portal, asked from the interface's loop: no blocking API; each
+# connection runs its own executor thread, on async-io.
+zbus = { version = "5.19.0", default-features = false, features = ["async-io"] }
+futures-lite = "2.6.1"
 png = "0.18.1"
 # Without the system tray it would bring; the compatibility feature is required.
 slint = { version = "=1.18.1", default-features = false, features = ["std", "backend-default", "renderer-femtovg", "renderer-software", "accessibility", "compat-1-2"] }

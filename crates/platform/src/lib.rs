@@ -13,6 +13,8 @@ mod variables;
 pub use browser::{CHROMIUM_LOCK, FIREFOX_LOCK, LockKind, lock_is_live};
 #[cfg(target_os = "linux")]
 pub use browser::{Holder, RunningBrowser, UnknownHolder, holder};
+#[cfg(target_os = "linux")]
+pub use directory::open_path;
 pub use directory::{
     DESCRIPTOR_REMOVAL_SUPPORTED, Directory, EntryStatus, EntryType, Ownership, ROOT_USER,
     mount_root, out_of_descriptors, sticky_allows, tells_mount_roots,

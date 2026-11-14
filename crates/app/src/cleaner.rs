@@ -113,6 +113,8 @@ pub struct Seams {
     pub browser: browsers::HolderSeam,
     /// The privileged helper, for what needs the administrator.
     pub elevate: Elevate,
+    /// What the disk usage screen reads and asks of the machine.
+    pub disk: crate::disk_usage::DiskSeams,
 }
 
 impl std::fmt::Debug for Seams {
@@ -151,6 +153,7 @@ impl Seams {
                     launcher.run(operation, line, cancel, steps)
                 })
             },
+            disk: crate::disk_usage::DiskSeams::system(),
         }
     }
 }
@@ -1609,6 +1612,15 @@ pub mod tests {
     pub fn seams_never_scanning() -> Seams {
         Seams {
             read: Rc::new(|| Ok(defaults())),
+            // No home folder to analyze, no file manager to open.
+            disk: crate::disk_usage::DiskSeams {
+                home: None,
+                cache: None,
+                mounts: Rc::new(|| None),
+                open: Rc::new(|_, done| done(false)),
+                now: jiff::Timestamp::now,
+                threads: std::num::NonZeroUsize::MIN,
+            },
             ..Seams::system()
         }
     }
@@ -2755,7 +2767,7 @@ pub mod tests {
     }
 
     /// The entries of the sidebar, each a stop of Tab.
-    pub const SIDEBAR_ENTRIES: usize = 3;
+    pub const SIDEBAR_ENTRIES: usize = 4;
     /// The stops of Tab in the sidebar of a wide window: its fold button,
     /// then its entries.
     pub const SIDEBAR_STOPS: usize = SIDEBAR_ENTRIES + 1;

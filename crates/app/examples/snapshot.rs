@@ -435,6 +435,139 @@ fn home(window: &ui::AppWindow) {
     window.set_page(ui::Page::Home);
 }
 
+/// A line of the disk usage screen.
+fn disk_line(
+    kind: ui::DiskLineKind,
+    state: ui::DiskLineState,
+    name: &str,
+    megabytes: i32,
+    bar: f32,
+    percent: i32,
+) -> ui::DiskLine {
+    ui::DiskLine {
+        kind,
+        state,
+        name: name.into(),
+        size: if megabytes >= 1000 {
+            size(
+                megabytes / 1000,
+                (megabytes % 1000) / 100,
+                ui::SizeUnit::Gigabyte,
+            )
+        } else {
+            size(megabytes, 0, ui::SizeUnit::Megabyte)
+        },
+        has_size: !matches!(
+            state,
+            ui::DiskLineState::Unreadable
+                | ui::DiskLineState::Denied
+                | ui::DiskLineState::OtherMount
+                | ui::DiskLineState::Pending
+        ),
+        bar,
+        percent,
+        below_one: false,
+        indented: false,
+        tall: state != ui::DiskLineState::Read,
+        talls_before: 0,
+        detail: if state == ui::DiskLineState::OtherMount {
+            "/media/franck/KINGSTON".into()
+        } else {
+            "".into()
+        },
+        count: 0,
+        expanded: false,
+        enterable: kind == ui::DiskLineKind::Folder
+            && matches!(state, ui::DiskLineState::Read | ui::DiskLineState::Partial),
+    }
+}
+
+/// The disk usage screen: its start, an analysis running, its result.
+fn disk(window: &ui::AppWindow, step: ui::DiskStep) {
+    use ui::DiskLineKind::{File, Folder, Others, Unexplained};
+    use ui::DiskLineState::{Denied, OtherMount, Partial, Pending, Read};
+
+    let disk = window.global::<ui::DiskUsage>();
+    disk.set_step(step);
+    disk.set_volumes_state(ui::DiskVolumes::Ready);
+    disk.set_volumes(ModelRc::new(VecModel::from(vec![
+        volume(
+            ui::VolumeNaming::System,
+            "",
+            "/",
+            ui::VolumePlace::Local,
+            Some((159, 198, 39, 20)),
+        ),
+        volume(
+            ui::VolumeNaming::Own,
+            "Données",
+            "/run/media/franck/Données",
+            ui::VolumePlace::Local,
+            Some((412, 1000, 588, 59)),
+        ),
+    ])));
+    disk.set_target_is_home(true);
+    disk.set_target_path("/home/franck".into());
+    disk.set_trail(ModelRc::new(VecModel::from(vec![
+        slint::SharedString::new(),
+        "projets".into(),
+    ])));
+    let mut lines = vec![
+        disk_line(Folder, Read, "Okapi", 46_000, 1.0, 38),
+        disk_line(Folder, Partial, "Papotons", 21_400, 0.46, 18),
+        disk_line(
+            File,
+            Read,
+            "sauvegarde-du-dossier-photos-de-vacances-2024-version-finale.tar",
+            9_800,
+            0.21,
+            8,
+        ),
+        disk_line(Folder, Read, "Bubble Blend", 8_200, 0.18, 7),
+        disk_line(Others, Read, "", 4_500, 0.1, 4),
+        disk_line(Folder, Pending, "atelier", 0, 0.0, 0),
+        disk_line(Folder, Denied, "privé", 0, 0.0, 0),
+        disk_line(Folder, OtherMount, "clé", 0, 0.0, 0),
+        disk_line(Unexplained, Read, "", 12_000, 0.0, 0),
+    ];
+    lines[4].count = 412;
+    let mut talls = 0;
+    for line in &mut lines {
+        line.talls_before = talls;
+        if line.tall {
+            talls += 1;
+        }
+    }
+    disk.set_lines(ModelRc::new(VecModel::from(lines)));
+    disk.set_folder_size(size(120, 0, ui::SizeUnit::Gigabyte));
+    disk.set_files_seen("128 400".into());
+    disk.set_seen(size(96, 0, ui::SizeUnit::Gigabyte));
+    disk.set_phase(if step == ui::DiskStep::Result {
+        ui::DiskPhase::Complete
+    } else {
+        ui::DiskPhase::Running
+    });
+    disk.set_minutes(4);
+    if step == ui::DiskStep::Result {
+        disk.set_chosen(0);
+        disk.set_detail(ui::DiskDetail {
+            kind: Folder,
+            state: Read,
+            name: "Okapi".into(),
+            path: "/home/franck/projets/Okapi".into(),
+            allocated: size(46, 0, ui::SizeUnit::Gigabyte),
+            apparent: size(46, 0, ui::SizeUnit::Gigabyte),
+            sparse: false,
+            files: "41 203".into(),
+            folders: 12,
+            cache: false,
+            openable: true,
+            analyzable: false,
+        });
+    }
+    window.set_page(ui::Page::DiskUsage);
+}
+
 fn volume(
     naming: ui::VolumeNaming,
     name: &str,
@@ -592,7 +725,11 @@ fn main() {
     let mut arguments = std::env::args().skip(1);
     let screen = arguments.next().unwrap_or_else(|| String::from("results"));
     let out = arguments.next().unwrap_or_else(|| format!("{screen}.png"));
-    let (width, height) = if screen == "home-small" { SMALL } else { LARGE };
+    let (width, height) = if screen == "home-small" || screen == "disk-result-small" {
+        SMALL
+    } else {
+        LARGE
+    };
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(Offscreen(window.clone()))).unwrap();
     let app = ui::AppWindow::new().unwrap();
@@ -638,8 +775,11 @@ fn main() {
             });
         }
         "home-memory" => home_tall(&app, false),
+        "disk-start" => disk(&app, ui::DiskStep::Start),
+        "disk-scanning" => disk(&app, ui::DiskStep::Scanning),
+        "disk-result" | "disk-result-small" => disk(&app, ui::DiskStep::Result),
         other => panic!(
-            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-folded, home-disks, home-memory, home-customize, home-move"
+            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

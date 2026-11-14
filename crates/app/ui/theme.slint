@@ -193,6 +193,24 @@ export global Theme {
     out property <length> skeleton-figure: 28px;
     out property <percent> skeleton-figure-part: 46%;
     out property <percent> skeleton-line-part: 68%;
+    // The disk usage screen (okapi.css, `--ok-size-bar`, `--ok-disk-*`,
+    // `--ok-du-*`): a line's bar, and the volume's, seen, unexplained, free.
+    out property <color> size-bar: dark ? #7FA8E8 : #3F74B8;
+    out property <color> disk-seen: dark ? #A9C6F2 : #2F5F9E;
+    out property <color> disk-unexplained: dark ? #B8893A : #9A7028;
+    out property <color> disk-free: track;
+    out property <length> disk-row-height: 40px;
+    out property <length> disk-row-height-tall: 56px;
+    out property <length> disk-bar-width: 140px;
+    out property <length> disk-bar-width-narrow: 100px;
+    out property <length> disk-bar-height: 8px;
+    out property <length> disk-panel-width: 300px;
+    out property <length> disk-panel-width-narrow: 264px;
+    out property <length> disk-indent: 30px;
+    out property <length> disk-percent-width: 44px;
+    out property <length> disk-size-width: 84px;
+    out property <length> disk-volume-bar-height: 12px;
+    out property <length> disk-volume-gap: 2px;
 }
 
 // What the window's width decides for every page. Set by `AppWindow` alone.

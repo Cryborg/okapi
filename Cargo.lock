@@ -3157,6 +3157,7 @@ dependencies = [
 name = "okapi-app"
 version = "0.1.0"
 dependencies = [
+ "futures-lite",
  "i-slint-backend-testing",
  "jiff",
  "okapi-engine",
@@ -3171,6 +3172,7 @@ dependencies = [
  "slint-build",
  "tempfile",
  "tracing",
+ "zbus",
 ]
 
 [[package]]

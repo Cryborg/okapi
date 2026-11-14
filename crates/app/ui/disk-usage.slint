@@ -1,0 +1,801 @@
+import { ListView } from "std-widgets.slint";
+import { Theme, Screen } from "theme.slint";
+import { Size, Words } from "cleaner-model.slint";
+import { VolumeShown } from "dashboard-model.slint";
+import { DashboardWords } from "dashboard-widgets.slint";
+import { ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, IconButton, ProgressBar, Title } from "widgets.slint";
+import {
+    DiskUsage, DiskStep, DiskPhase, DiskVolumes, DiskFiles, DiskRefusal, DiskLine, DiskLineKind, DiskLineState,
+} from "disk-usage-model.slint";
+
+// What the screen says of a line, the same for the eye and the ear.
+global DiskWords {
+    // A line's name: « Autres » and the unexplained space are named here.
+    pure public function name(line: DiskLine) -> string {
+        line.kind == DiskLineKind.others ? @tr("Autres")
+            : line.kind == DiskLineKind.unexplained ? @tr("Espace non expliqué")
+            : line.name
+    }
+
+    // What is analyzed.
+    pure public function target() -> string {
+        DiskUsage.target-is-home ? @tr("Dossier personnel") : DashboardWords.volume-name(DiskUsage.target-volume)
+    }
+
+    // The state below a name, or nothing.
+    pure public function state(line: DiskLine) -> string {
+        if line.kind == DiskLineKind.others {
+            return @tr("{} éléments, moins de 1 % chacun", line.count);
+        }
+        if line.state == DiskLineState.pending {
+            return @tr("Pas encore parcouru");
+        }
+        if line.state == DiskLineState.partial {
+            return DiskUsage.phase == DiskPhase.running ? @tr("En cours, la taille va encore grandir")
+                : DiskUsage.phase == DiskPhase.stopped ? @tr("Taille partielle : l'analyse a été arrêtée")
+                : @tr("Taille partielle : un dossier dessous est illisible");
+        }
+        if line.state == DiskLineState.denied {
+            return @tr("Illisible : il faut les droits administrateur");
+        }
+        if line.state == DiskLineState.unreadable {
+            return @tr("Illisible");
+        }
+        if line.state == DiskLineState.changed {
+            return @tr("Modifié pendant l'analyse");
+        }
+        if line.state == DiskLineState.other-mount {
+            return @tr("Autre disque : {}, non parcouru ici", line.detail);
+        }
+        if line.state == DiskLineState.mounted-apart {
+            return @tr("Monté à part, non parcouru ici");
+        }
+        if line.state == DiskLineState.counted-elsewhere {
+            return @tr("Lien dur, compté dans {}", line.detail);
+        }
+        if line.kind == DiskLineKind.unexplained {
+            return @tr("Occupé, mais Okapi n'a pas pu voir par quoi");
+        }
+        ""
+    }
+
+    // Its size as shown.
+    pure public function size(line: DiskLine) -> string {
+        // Not read yet: no size, the line greyed.
+        if line.state == DiskLineState.pending {
+            return "";
+        }
+        if !line.has-size {
+            return line.state == DiskLineState.unreadable || line.state == DiskLineState.denied
+                || line.state == DiskLineState.changed ? @tr("inconnue") : @tr("non compté");
+        }
+        Words.size(line.size)
+    }
+
+    // Its size said aloud: « au moins » when partial.
+    pure public function spoken-size(line: DiskLine) -> string {
+        line.state == DiskLineState.partial ? @tr("au moins {}", Words.size(line.size)) : DiskWords.size(line)
+    }
+
+    // Whether it has a bar and a share: a size of its own, counted here.
+    pure public function measured(line: DiskLine) -> bool {
+        line.has-size && line.kind != DiskLineKind.unexplained
+            && (line.state == DiskLineState.read || line.state == DiskLineState.partial)
+    }
+
+    // Its share of the folder.
+    pure public function percent(line: DiskLine) -> string {
+        if !DiskWords.measured(line) {
+            return "";
+        }
+        line.below-one ? @tr("< 1 %") : @tr("{} %", line.percent)
+    }
+
+    // What a screen reader says of it.
+    pure public function spoken(line: DiskLine) -> string {
+        let kind = line.kind == DiskLineKind.folder ? @tr("dossier") : line.kind == DiskLineKind.others ? @tr("groupe")
+            : line.kind == DiskLineKind.unexplained ? "" : @tr("fichier");
+        let state = DiskWords.state(line);
+        let percent = DiskWords.percent(line);
+        let head = percent == "" ? @tr("{}, {}", DiskWords.name(line), DiskWords.spoken-size(line))
+            : @tr("{}, {}, {}", DiskWords.name(line), DiskWords.spoken-size(line), percent);
+        let with-state = state == "" ? head : @tr("{}, {}", head, state);
+        kind == "" ? with-state : @tr("{}, {}", with-state, kind)
+    }
+
+    pure public function icon(line: DiskLine) -> image {
+        line.kind == DiskLineKind.folder || line.kind == DiskLineKind.others ? @image-url("../assets/icons/folder.svg")
+            : line.kind == DiskLineKind.link ? @image-url("../assets/icons/link.svg")
+            : line.kind == DiskLineKind.unexplained ? @image-url("../assets/icons/info.svg")
+            : @image-url("../assets/icons/file.svg")
+    }
+}
+
+// The bar of a volume: seen, unexplained, free, each a part, apart by a gap.
+component VolumeBar inherits HorizontalLayout {
+    in property <float> seen;
+    in property <float> unexplained;
+    in property <float> free;
+    height: Theme.disk-volume-bar-height;
+    spacing: Theme.disk-volume-gap;
+    if root.seen > 0: Rectangle {
+        horizontal-stretch: root.seen;
+        border-radius: Theme.radius-pill;
+        background: Theme.disk-seen;
+    }
+    if root.unexplained > 0: Rectangle {
+        horizontal-stretch: root.unexplained;
+        border-radius: Theme.radius-pill;
+        background: Theme.disk-unexplained;
+    }
+    if root.free > 0: Rectangle {
+        horizontal-stretch: root.free;
+        border-radius: Theme.radius-pill;
+        background: Theme.disk-free;
+    }
+}
+
+// A colour of the volume bar and its words: never the colour alone.
+component Swatch inherits HorizontalLayout {
+    in property <color> tone;
+    in property <string> text;
+    spacing: Theme.spacing-xs;
+    Rectangle {
+        width: Theme.icon-badge;
+        height: Theme.icon-badge;
+        y: (parent.height - self.height) / 2;
+        border-radius: Theme.radius-small;
+        background: root.tone;
+    }
+    Detail {
+        text: root.text;
+    }
+}
+
+// One choice of the start: the home folder or a volume.
+component StartChoice inherits Rectangle {
+    in property <bool> selected;
+    in property <string> name;
+    in property <string> description;
+    in property <image> icon;
+    in property <string> badge;
+    in property <float> used: -1;
+    callback chosen;
+
+    border-radius: Theme.radius-large;
+    border-width: root.selected ? Theme.focus-width : Theme.border-width;
+    border-color: root.selected ? Theme.accent : Theme.border;
+    background: touch.has-hover ? Theme.surface-hover : Theme.surface;
+    accessible-role: radio-button;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
+    accessible-label: root.name;
+    accessible-description: root.description;
+    accessible-action-default => {
+        root.chosen();
+    }
+    forward-focus: keys;
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == Key.Space {
+                root.chosen();
+                return accept;
+            }
+            reject
+        }
+    }
+    touch := TouchArea {
+        clicked => {
+            root.chosen();
+        }
+    }
+    FocusRing {
+        shown: keys.has-focus;
+        border-radius: root.border-radius;
+    }
+    HorizontalLayout {
+        padding: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        Icon {
+            source: root.icon;
+            colorize: Theme.text-2;
+            y: (parent.height - self.height) / 2;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: Theme.spacing-xs;
+            HorizontalLayout {
+                spacing: Theme.spacing-s;
+                alignment: start;
+                Text {
+                    text: root.name;
+                    accessible-role: none;
+                    color: Theme.text;
+                    font-weight: Theme.weight-semibold;
+                    overflow: elide;
+                }
+                if root.badge != "": Badge {
+                    text: root.badge;
+                    tone: Theme.accent;
+                    tone-soft: Theme.accent-soft;
+                }
+            }
+            if root.used >= 0: ProgressBar {
+                progress: root.used;
+                tone: Theme.size-bar;
+            }
+            Detail {
+                text: root.description;
+                accessible-role: none;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+// Before an analysis: what to look at.
+component Start inherits VerticalLayout {
+    padding: Screen.page-margin;
+    spacing: Theme.spacing-xl;
+    VerticalLayout {
+        spacing: Theme.spacing-xs;
+        Title {
+            text: @tr("Espace disque");
+        }
+        Detail {
+            text: @tr("Voyez ce qui prend de la place, dossier par dossier. Cet écran ne supprime rien.");
+        }
+    }
+    if DiskUsage.start-refused == DiskRefusal.folder: Banner {
+        text: @tr("Ce dossier n'a pas pu être ouvert : rien n'a été analysé.");
+        warning: true;
+    }
+    if DiskUsage.start-refused == DiskRefusal.volume: Banner {
+        text: @tr("Ce disque n'est pas lu en ce moment (débranché, ou il ne répond pas) : rien n'a été analysé.");
+        warning: true;
+    }
+    Text {
+        text: @tr("Que voulez-vous analyser ?");
+        color: Theme.text;
+        font-size: Theme.font-heading;
+        font-weight: Theme.weight-semibold;
+    }
+    StartChoice {
+        selected: DiskUsage.choice == -1;
+        name: @tr("Dossier personnel");
+        badge: @tr("Conseillé");
+        description: @tr("Vos documents, médias, projets et les données de vos applications. C'est là que l'espace part le plus souvent.");
+        icon: @image-url("../assets/icons/home.svg");
+        chosen => {
+            DiskUsage.choice = -1;
+        }
+    }
+    Text {
+        text: @tr("Ou un disque entier");
+        color: Theme.text-2;
+        font-weight: Theme.weight-semibold;
+    }
+    if DiskUsage.volumes-state == DiskVolumes.reading: Detail {
+        text: @tr("Lecture des disques…");
+    }
+    if DiskUsage.volumes-state == DiskVolumes.unavailable: Detail {
+        text: @tr("Les disques ne peuvent pas être lus pour l'instant.");
+    }
+    for volume[index] in DiskUsage.volumes: StartChoice {
+        selected: DiskUsage.choice == index;
+        name: DashboardWords.volume-name(volume);
+        description: @tr("{} libres sur {}", Words.size(volume.free), Words.size(volume.total));
+        icon: @image-url("../assets/icons/hard-drive.svg");
+        used: volume.percent / 100;
+        chosen => {
+            DiskUsage.choice = index;
+        }
+    }
+    Detail {
+        text: @tr("Sur un disque entier, certains dossiers système ne s'ouvrent qu'avec les droits administrateur. Leur place apparaîtra comme « espace non expliqué ».");
+        wrap: word-wrap;
+    }
+    Rectangle {
+        vertical-stretch: 1;
+    }
+    HorizontalLayout {
+        alignment: end;
+        analyze := ActionButton {
+            text: @tr("Analyser");
+            kind: ButtonKind.primary;
+            large: true;
+            clicked => {
+                if DiskUsage.choice < 0 {
+                    DiskUsage.analyze-home();
+                } else {
+                    DiskUsage.analyze-volume(DiskUsage.choice);
+                }
+            }
+        }
+    }
+}
+
+// One line of the list.
+component Row inherits Rectangle {
+    in property <DiskLine> line;
+    in property <int> index;
+    in property <bool> focused;
+    in property <bool> narrow;
+
+    height: line.tall ? Theme.disk-row-height-tall : Theme.disk-row-height;
+    background: DiskUsage.chosen == root.index ? Theme.accent-soft
+        : touch.has-hover ? Theme.surface-hover
+        : line.kind == DiskLineKind.unexplained ? Theme.surface-2 : transparent;
+    accessible-role: list-item;
+    accessible-label: DiskWords.spoken(line);
+    accessible-item-selectable: true;
+    accessible-item-selected: DiskUsage.chosen == root.index;
+    accessible-action-default => {
+        DiskUsage.enter(root.index);
+    }
+
+    touch := TouchArea {
+        clicked => {
+            DiskUsage.current = root.index;
+            DiskUsage.choose(root.index);
+        }
+        double-clicked => {
+            DiskUsage.enter(root.index);
+        }
+        changed has-hover => {
+            DiskUsage.point(self.has-hover ? root.index : -1);
+        }
+    }
+    Rectangle {
+        y: parent.height - self.height;
+        height: Theme.border-width;
+        background: line.kind == DiskLineKind.unexplained ? Theme.border-strong : Theme.border;
+    }
+    FocusRing {
+        shown: root.focused;
+        border-radius: Theme.radius-small;
+    }
+    HorizontalLayout {
+        padding-left: Theme.spacing-l + (line.indented ? Theme.disk-indent : 0);
+        padding-right: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        Icon {
+            source: DiskWords.icon(line);
+            colorize: Theme.text-2;
+            y: (parent.height - self.height) / 2;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: Theme.spacing-xxs;
+            name := Text {
+                text: DiskWords.name(line);
+                accessible-role: none;
+                color: Theme.text;
+                overflow: elide;
+            }
+            if line.tall: Text {
+                text: DiskWords.state(line);
+                accessible-role: none;
+                color: Theme.text-2;
+                font-size: Theme.font-caption;
+                overflow: elide;
+            }
+        }
+        Rectangle {
+            width: root.narrow ? Theme.disk-bar-width-narrow : Theme.disk-bar-width;
+            height: Theme.disk-bar-height;
+            y: (parent.height - self.height) / 2;
+            border-radius: Theme.radius-pill;
+            background: Theme.track;
+            visible: DiskWords.measured(line);
+            Rectangle {
+                x: 0;
+                width: parent.width * clamp(line.bar, 0, 1);
+                height: parent.height;
+                border-radius: parent.border-radius;
+                background: Theme.size-bar;
+            }
+        }
+        Text {
+            width: Theme.disk-percent-width;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            text: DiskWords.percent(line);
+            accessible-role: none;
+            color: Theme.text-2;
+            font-size: Theme.font-small;
+        }
+        Text {
+            width: Theme.disk-size-width;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            text: DiskWords.size(line);
+            accessible-role: none;
+            color: line.has-size && line.state != DiskLineState.counted-elsewhere ? Theme.text : Theme.text-3;
+            font-weight: Theme.weight-semibold;
+            overflow: elide;
+        }
+        Icon {
+            source: line.kind == DiskLineKind.others
+                ? (line.expanded ? @image-url("../assets/icons/chevron-up.svg") : @image-url("../assets/icons/chevron-down.svg"))
+                : @image-url("../assets/icons/chevron-right.svg");
+            colorize: Theme.text-3;
+            width: Theme.icon-small;
+            height: Theme.icon-small;
+            y: (parent.height - self.height) / 2;
+            opacity: line.enterable || line.kind == DiskLineKind.others ? 1 : 0;
+        }
+    }
+    // A name cut short is said whole on hover.
+    if name.width < name.preferred-width && touch.has-hover: Tooltip {
+        text: @markdown("\{DiskWords.name(line)}");
+    }
+}
+
+// The lines of the folder shown, by the keyboard too: the arrows move, Enter
+// goes in, Backspace or Alt+Up goes up, Space chooses.
+component Lines inherits FocusScope {
+    in property <bool> narrow;
+    accessible-role: list;
+    accessible-label: @tr("Contenu du dossier");
+
+    // Where line `index` sits in the list.
+    function top(index: int) -> length {
+        index * Theme.disk-row-height
+            + DiskUsage.lines[index].talls-before * (Theme.disk-row-height-tall - Theme.disk-row-height)
+    }
+
+    function show(index: int) {
+        let place = root.top(index);
+        let height = DiskUsage.lines[index].tall ? Theme.disk-row-height-tall : Theme.disk-row-height;
+        if place < -view.content-y {
+            view.content-y = -place;
+        } else if place + height > -view.content-y + view.visible-height {
+            view.content-y = view.visible-height - place - height;
+        }
+    }
+
+    function move(index: int) {
+        if DiskUsage.lines.length == 0 {
+            return;
+        }
+        DiskUsage.current = clamp(index, 0, DiskUsage.lines.length - 1);
+        root.show(DiskUsage.current);
+        // Moved by the user: the line with the focus keeps its place.
+        DiskUsage.list-focus(true);
+    }
+
+    key-pressed(event) => {
+        if event.text == Key.DownArrow {
+            root.move(DiskUsage.current + 1);
+            return accept;
+        }
+        if event.text == Key.UpArrow && !event.modifiers.alt {
+            root.move(DiskUsage.current - 1);
+            return accept;
+        }
+        if event.text == Key.Home {
+            root.move(0);
+            return accept;
+        }
+        if event.text == Key.End {
+            root.move(DiskUsage.lines.length - 1);
+            return accept;
+        }
+        if event.text == Key.Return {
+            DiskUsage.enter(DiskUsage.current);
+            return accept;
+        }
+        if event.text == Key.Space {
+            DiskUsage.choose(DiskUsage.current);
+            return accept;
+        }
+        if event.text == Key.Backspace || (event.text == Key.UpArrow && event.modifiers.alt) {
+            DiskUsage.up();
+            return accept;
+        }
+        reject
+    }
+    changed has-focus => {
+        if !self.has-focus {
+            DiskUsage.list-focus(false);
+        }
+    }
+
+    view := ListView {
+        for line[index] in DiskUsage.lines: Row {
+            line: line;
+            index: index;
+            focused: root.has-focus && DiskUsage.current == index;
+            narrow: root.narrow;
+        }
+    }
+}
+
+// What the panel says of the line chosen.
+component Panel inherits Card {
+    in property <bool> narrow;
+    width: root.narrow ? Theme.disk-panel-width-narrow : Theme.disk-panel-width;
+    VerticalLayout {
+        padding: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        HorizontalLayout {
+            spacing: Theme.spacing-s;
+            Text {
+                horizontal-stretch: 1;
+                text: DiskUsage.detail.kind == DiskLineKind.unexplained ? @tr("Espace non expliqué") : DiskUsage.detail.name;
+                color: Theme.text;
+                font-weight: Theme.weight-semibold;
+                wrap: word-wrap;
+            }
+            IconButton {
+                icon: @image-url("../assets/icons/x.svg");
+                label: @tr("Fermer");
+                clicked => {
+                    DiskUsage.close-detail();
+                }
+            }
+        }
+        if DiskUsage.detail.kind == DiskLineKind.unexplained: Detail {
+            text: @tr("Cette place existe bien sur le disque. Elle vient le plus souvent de : dossiers qu'on ne peut ouvrir qu'avec les droits administrateur ; fichiers supprimés mais encore ouverts par un programme (la place revient quand il se ferme) ; la réserve du système de fichiers, gardée pour que le système continue de tourner.");
+            wrap: word-wrap;
+        }
+        if DiskUsage.detail.kind == DiskLineKind.unexplained && DiskUsage.unreadable > 0: Detail {
+            text: @tr("Dossiers illisibles pendant l'analyse : {}.", DiskUsage.unreadable);
+            wrap: word-wrap;
+        }
+        if DiskUsage.detail.kind != DiskLineKind.unexplained: VerticalLayout {
+            spacing: Theme.spacing-s;
+            Detail {
+                text: @tr("Chemin complet");
+            }
+            Text {
+                text: DiskUsage.detail.path;
+                color: Theme.text;
+                wrap: word-wrap;
+            }
+            Detail {
+                text: @tr("Taille sur le disque : {}", Words.size(DiskUsage.detail.allocated));
+            }
+            if DiskUsage.detail.sparse: Detail {
+                text: @tr("Fichier creux : il annonce {} mais n'occupe que {}. Les parties vides ne sont pas écrites sur le disque.", Words.size(DiskUsage.detail.apparent), Words.size(DiskUsage.detail.allocated));
+                wrap: word-wrap;
+            }
+            if DiskUsage.detail.kind == DiskLineKind.folder: Detail {
+                text: @tr("Fichiers : {}. Sous-dossiers : {}.", DiskUsage.detail.files, DiskUsage.detail.folders);
+            }
+            if DiskUsage.detail.kind == DiskLineKind.link: Detail {
+                text: @tr("Un lien n'est jamais suivi : c'est son dossier qui s'ouvre.");
+                wrap: word-wrap;
+            }
+            if DiskUsage.detail.openable: ActionButton {
+                text: @tr("Ouvrir dans le gestionnaire de fichiers");
+                icon: @image-url("../assets/icons/external-link.svg");
+                wrapped: true;
+                enabled: !DiskUsage.opening;
+                clicked => {
+                    DiskUsage.open-chosen();
+                }
+            }
+            if DiskUsage.open-refused: Detail {
+                text: @tr("Le gestionnaire de fichiers n'a pas pu s'ouvrir.");
+                color: Theme.warning;
+                wrap: word-wrap;
+            }
+            if DiskUsage.detail.cache: VerticalLayout {
+                spacing: Theme.spacing-s;
+                Detail {
+                    text: @tr("Pour vider les caches sans risque, passez plutôt par le Nettoyeur.");
+                    wrap: word-wrap;
+                }
+                ActionButton {
+                    text: @tr("Aller au Nettoyeur");
+                    kind: ButtonKind.ghost;
+                    clicked => {
+                        DiskUsage.open-cleaner();
+                    }
+                }
+            }
+            if DiskUsage.detail.analyzable: ActionButton {
+                text: @tr("Analyser ce disque");
+                kind: ButtonKind.ghost;
+                clicked => {
+                    DiskUsage.analyze-mount(DiskUsage.chosen);
+                }
+            }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+}
+
+// The analysis running, then its result: what is seen, folder by folder.
+component Browse inherits FocusScope {
+    property <bool> running: DiskUsage.step == DiskStep.opening || DiskUsage.step == DiskStep.scanning;
+    // « Arrêter » gone with the analysis: the focus to the list.
+    changed running => {
+        if !root.running {
+            lines.focus();
+        }
+    }
+    key-pressed(event) => {
+        if event.text == Key.Escape && root.running {
+            DiskUsage.stop();
+            return accept;
+        }
+        reject
+    }
+
+    VerticalLayout {
+        padding: Screen.page-margin;
+        spacing: Theme.spacing-l;
+        HorizontalLayout {
+            spacing: Theme.spacing-m;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Theme.spacing-xs;
+                Title {
+                    text: @tr("Espace disque");
+                }
+                Detail {
+                    text: root.running ? @tr("{}, {}", DiskWords.target(), DiskUsage.target-path)
+                        : DiskUsage.minutes == 0 ? @tr("{}, {}, analysé à l'instant", DiskWords.target(), DiskUsage.target-path)
+                        : @tr("{}, {}, analysé il y a {} min", DiskWords.target(), DiskUsage.target-path, DiskUsage.minutes);
+                    overflow: elide;
+                }
+            }
+            // The focus on it, for Escape to reach the page.
+            if root.running: ActionButton {
+                init => {
+                    self.focus();
+                }
+                text: @tr("Arrêter");
+                clicked => {
+                    DiskUsage.stop();
+                }
+            }
+            if !root.running: ActionButton {
+                text: @tr("Changer");
+                kind: ButtonKind.ghost;
+                clicked => {
+                    DiskUsage.change();
+                }
+            }
+            if !root.running: ActionButton {
+                text: @tr("Analyser à nouveau");
+                clicked => {
+                    DiskUsage.again();
+                }
+            }
+        }
+        if root.running: VerticalLayout {
+            vertical-stretch: 0;
+            spacing: Theme.spacing-s;
+            Detail {
+                text: DiskUsage.step == DiskStep.opening ? @tr("Ouverture…")
+                    : @tr("Analyse… {} fichiers, {}. Rien n'est supprimé.", DiskUsage.files-seen, Words.size(DiskUsage.seen));
+            }
+            ProgressBar {
+                indeterminate: !DiskUsage.determinate;
+                progress: DiskUsage.done;
+                label: @tr("Avancement de l'analyse");
+            }
+            Detail {
+                text: @tr("Vous pouvez déjà parcourir ce qui a été vu. Échap arrête l'analyse.");
+            }
+        }
+        if DiskUsage.phase == DiskPhase.stopped && !root.running: Banner {
+            text: @tr("Analyse arrêtée : tailles partielles. Les dossiers pas encore parcourus ne sont pas comptés.");
+        }
+        if DiskUsage.files-state == DiskFiles.changed: Banner {
+            text: @tr("Ce dossier a changé depuis l'analyse : ses fichiers ne sont plus listés.");
+            warning: true;
+        }
+        if DiskUsage.files-state == DiskFiles.partial: Banner {
+            text: @tr("Certains fichiers de ce dossier n'ont pas pu être relus : ils ne sont pas listés.");
+            warning: true;
+        }
+        if DiskUsage.files-state == DiskFiles.unreadable: Banner {
+            text: @tr("Les fichiers de ce dossier n'ont pas pu être relus : seuls ses sous-dossiers sont listés.");
+            warning: true;
+        }
+        if DiskUsage.volume-bar: VerticalLayout {
+            vertical-stretch: 0;
+            spacing: Theme.spacing-s;
+            VolumeBar {
+                seen: DiskUsage.seen-part;
+                unexplained: DiskUsage.unexplained-part;
+                free: DiskUsage.free-part;
+            }
+            HorizontalLayout {
+                spacing: Theme.spacing-l;
+                Swatch {
+                    tone: Theme.disk-seen;
+                    text: @tr("Vu par Okapi : {}", Words.size(DiskUsage.seen));
+                }
+                Swatch {
+                    tone: Theme.disk-unexplained;
+                    text: @tr("Non expliqué : {}", Words.size(DiskUsage.unexplained));
+                }
+                Swatch {
+                    tone: Theme.disk-free;
+                    text: @tr("Libre : {}", Words.size(DiskUsage.free));
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+                Detail {
+                    text: @tr("{} au total", Words.size(DiskUsage.total));
+                }
+            }
+        }
+        if DiskUsage.unexplained-untold: Detail {
+            text: @tr("L'espace que l'analyse n'a pas pu voir ne peut pas être calculé pour ce disque.");
+            wrap: word-wrap;
+        }
+        // The trail: each folder above, a click away.
+        HorizontalLayout {
+            vertical-stretch: 0;
+            spacing: Theme.spacing-xs;
+            alignment: start;
+            for name[index] in DiskUsage.trail: HorizontalLayout {
+                spacing: Theme.spacing-xs;
+                if index > 0: Icon {
+                    source: @image-url("../assets/icons/chevron-right.svg");
+                    colorize: Theme.text-3;
+                    width: Theme.icon-small;
+                    height: Theme.icon-small;
+                    y: (parent.height - self.height) / 2;
+                }
+                if index < DiskUsage.trail.length - 1: ActionButton {
+                    text: index == 0 ? DiskWords.target() : name;
+                    kind: ButtonKind.ghost;
+                    clicked => {
+                        DiskUsage.go-to(index);
+                    }
+                }
+                // The folder shown: no link, said as the current one.
+                if index == DiskUsage.trail.length - 1: Text {
+                    text: index == 0 ? DiskWords.target() : name;
+                    vertical-alignment: center;
+                    color: Theme.text;
+                    font-weight: Theme.weight-semibold;
+                    accessible-role: text;
+                    accessible-description: @tr("dossier affiché");
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            Detail {
+                vertical-alignment: center;
+                text: DiskUsage.folder-partial ? @tr("au moins {} dans ce dossier", Words.size(DiskUsage.folder-size))
+                    : @tr("{} dans ce dossier", Words.size(DiskUsage.folder-size));
+            }
+        }
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: Theme.spacing-l;
+            Card {
+                horizontal-stretch: 1;
+                lines := Lines {
+                    narrow: Screen.narrow;
+                }
+            }
+            if DiskUsage.chosen >= 0: Panel {
+                narrow: Screen.narrow;
+            }
+        }
+    }
+}
+
+export component DiskUsagePage inherits VerticalLayout {
+    if DiskUsage.step == DiskStep.start: Start {
+        vertical-stretch: 1;
+    }
+    if DiskUsage.step != DiskStep.start: Browse {
+        vertical-stretch: 1;
+    }
+}

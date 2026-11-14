@@ -1,0 +1,154 @@
+import { Size } from "cleaner-model.slint";
+import { VolumeShown } from "dashboard-model.slint";
+
+// Where the screen stands.
+export enum DiskStep { start, opening, scanning, result }
+
+// How the analysis of the result ended, or that it still runs.
+export enum DiskPhase { running, complete, stopped }
+
+// Whether the volumes to choose from are known yet.
+export enum DiskVolumes { reading, ready, unavailable }
+
+// Why the analysis asked did not start: its folder could not be opened, or
+// the volume is not read (yet, or any more).
+export enum DiskRefusal { none, folder, volume }
+
+// Whether the files of the folder shown are listed: they could not be read
+// again, or it is no longer the folder the analysis read.
+export enum DiskFiles { listed, changed, unreadable, partial }
+
+// What a line is.
+export enum DiskLineKind { folder, file, link, other, others, unexplained }
+
+// What a line says beside its size.
+export enum DiskLineState {
+    read,
+    // Read, something below not read (yet, or ever): « au moins ».
+    partial,
+    pending,
+    // Could not be opened; `denied`, for want of the administrator's rights.
+    unreadable,
+    denied,
+    changed,
+    // Another disk, never entered; or this disk, mounted apart.
+    other-mount,
+    mounted-apart,
+    // A name of a file counted in another folder: its size greyed.
+    counted-elsewhere,
+}
+
+// One line of the list: a folder, a file, « Autres » or the space left
+// unexplained. `tall` lines carry a line of state below the name;
+// `talls-before` counts those above, for the list to know where a line
+// sits.
+export struct DiskLine {
+    kind: DiskLineKind,
+    state: DiskLineState,
+    name: string,
+    size: Size,
+    has-size: bool,
+    // Of the bar, against the largest line.
+    bar: float,
+    percent: int,
+    below-one: bool,
+    // Within « Autres ».
+    indented: bool,
+    tall: bool,
+    talls-before: int,
+    // Where a name was counted, the disk a mount is, or how many lines
+    // « Autres » holds.
+    detail: string,
+    count: int,
+    // « Autres » unfolded.
+    expanded: bool,
+    // A folder read: Enter goes into it.
+    enterable: bool,
+}
+
+// What the panel says of the line chosen.
+export struct DiskDetail {
+    kind: DiskLineKind,
+    state: DiskLineState,
+    name: string,
+    path: string,
+    allocated: Size,
+    apparent: Size,
+    sparse: bool,
+    // Written with its thousands apart.
+    files: string,
+    folders: int,
+    // A folder of caches: the Cleaner empties those safely.
+    cache: bool,
+    // The file manager can be asked to show it.
+    openable: bool,
+    // Another disk, among the volumes offered: it can be analyzed.
+    analyzable: bool,
+}
+
+// The disk usage screen: Rust fills it, the page shows it and calls back.
+export global DiskUsage {
+    in property <DiskStep> step;
+    in property <DiskPhase> phase;
+    in property <DiskVolumes> volumes-state;
+    in property <[VolumeShown]> volumes;
+    // The start chosen: the home folder (-1) or a volume.
+    in-out property <int> choice: -1;
+    // What is analyzed: the home folder, or a volume; and where.
+    in property <VolumeShown> target-volume;
+    in property <string> target-path;
+    in property <bool> target-is-home;
+    // The trail, from the root down to the folder shown.
+    in property <[string]> trail;
+    in property <[DiskLine]> lines;
+    // The line with the keyboard's focus, and the one chosen for the panel.
+    in-out property <int> current: 0;
+    in property <int> chosen: -1;
+    in property <DiskDetail> detail;
+    in property <Size> folder-size;
+    in property <bool> folder-partial;
+    // While it runs: files seen, and of a volume, how far.
+    in property <string> files-seen;
+    in property <Size> seen;
+    in property <bool> determinate;
+    in property <float> done;
+    // The bar of a volume: seen, unexplained, free.
+    in property <bool> volume-bar;
+    in property <float> seen-part;
+    in property <float> unexplained-part;
+    in property <float> free-part;
+    in property <Size> unexplained;
+    in property <Size> free;
+    in property <Size> total;
+    // Why the unexplained space is not told at this root: another mount of
+    // this disk, or a pool.
+    in property <bool> unexplained-untold;
+    in property <int> unreadable;
+    // Minutes since the analysis ended.
+    in property <int> minutes;
+    // What went wrong, said in a banner.
+    in property <DiskRefusal> start-refused;
+    in property <bool> open-refused;
+    in property <DiskFiles> files-state;
+    // A call to the file manager is on its way.
+    in property <bool> opening;
+
+    callback analyze-home();
+    callback analyze-volume(int);
+    callback stop();
+    callback change();
+    callback again();
+    callback enter(int);
+    callback up();
+    callback go-to(int);
+    callback choose(int);
+    callback close-detail();
+    // The line under the pointer (its index), or none (-1); whether the
+    // user moves in the list with the keyboard (the focus on `current`):
+    // what they are on keeps its place.
+    callback point(int);
+    callback list-focus(bool);
+    callback open-chosen();
+    callback open-cleaner();
+    callback analyze-mount(int);
+}

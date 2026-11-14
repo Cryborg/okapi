@@ -172,6 +172,25 @@ impl Directory {
     }
 }
 
+/// A descriptor of the object at `path` that only names it (`O_PATH`: its
+/// content is never opened, a pipe never blocks), and what it is: what the
+/// desktop portal takes to show an object in the file manager. A link in
+/// the last component is followed, as the portal refuses a descriptor that
+/// does not; with `directory`, anything but a directory is refused.
+///
+/// # Errors
+///
+/// The system's error: absent, not a directory when one is asked...
+pub fn open_path(path: &Path, directory: bool) -> io::Result<(OwnedFd, EntryStatus)> {
+    let mut flags = OFlags::PATH | OFlags::CLOEXEC;
+    if directory {
+        flags |= OFlags::DIRECTORY;
+    }
+    let fd = openat(CWD, path, flags, Mode::empty())?;
+    let status = status(&statx(&fd, "", AtFlags::EMPTY_PATH, WANTED)?)?;
+    Ok((fd, status))
+}
+
 /// Whether `error` says the process, or the system, ran out of open file
 /// descriptors (`EMFILE`, `ENFILE`): no refusal of the file itself.
 #[must_use]
@@ -330,6 +349,58 @@ mod tests {
             directory.status().unwrap().allocated.is_some(),
             "a folder's own"
         );
+    }
+
+    #[test]
+    fn a_path_is_named_by_a_descriptor_that_never_opens_it() {
+        let (temporary, _) = directory();
+        let folder = temporary.path().join("folder");
+        fs::create_dir(&folder).unwrap();
+        let file = temporary.path().join("file");
+        fs::write(&file, b"x").unwrap();
+        let (_, status) = open_path(&folder, true).unwrap();
+        assert_eq!(status.kind, EntryType::Directory);
+        assert_eq!(
+            Some(status.identity),
+            crate::file_identity(&fs::symlink_metadata(&folder).unwrap())
+        );
+        assert_eq!(
+            open_path(&file, true).unwrap_err().kind(),
+            io::ErrorKind::NotADirectory,
+            "a file is no folder"
+        );
+        let (descriptor, file_status) = open_path(&file, false).unwrap();
+        assert_eq!(file_status.kind, EntryType::File);
+        assert_eq!(
+            Some(file_status.identity),
+            crate::file_identity(&fs::symlink_metadata(&file).unwrap())
+        );
+        // It names the file, nothing more: never read, never inherited.
+        assert_eq!(
+            rustix::io::read(&descriptor, &mut [0_u8; 1]),
+            Err(Errno::BADF)
+        );
+        assert!(
+            rustix::io::fcntl_getfd(&descriptor)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+        // A pipe with no writer would block an opening that reads.
+        let pipe = temporary.path().join("pipe");
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            &pipe,
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::from_raw_mode(0o600),
+            0,
+        )
+        .unwrap();
+        let (_, pipe_status) = open_path(&pipe, false).unwrap();
+        assert_eq!(pipe_status.kind, EntryType::Other);
+        let link = temporary.path().join("link");
+        symlink(&folder, &link).unwrap();
+        let (_, followed) = open_path(&link, true).unwrap();
+        assert_eq!(followed.identity, status.identity, "followed to its target");
     }
 
     #[test]

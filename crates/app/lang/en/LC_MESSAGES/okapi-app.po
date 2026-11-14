@@ -1430,3 +1430,315 @@ msgstr "Your previous choices could not be read from {}: the boxes are as by def
 msgctxt "ResultsPage"
 msgid "Vos derniers changements de cases n'ont pas pu être enregistrés : ils seront oubliés à la fermeture d'Okapi."
 msgstr "Your last changes to the boxes could not be saved: they will be forgotten when Okapi closes."
+
+msgctxt "DiskWords"
+msgid "Autres"
+msgstr "Others"
+
+msgctxt "DiskWords"
+msgid "Espace non expliqué"
+msgstr "Unexplained space"
+
+msgctxt "DiskWords"
+msgid "Dossier personnel"
+msgstr "Home folder"
+
+msgctxt "DiskWords"
+msgid "{} éléments, moins de 1 % chacun"
+msgstr "{} items, under 1% each"
+
+msgctxt "DiskWords"
+msgid "Pas encore parcouru"
+msgstr "Not read yet"
+
+msgctxt "DiskWords"
+msgid "En cours, la taille va encore grandir"
+msgstr "In progress, the size will still grow"
+
+msgctxt "DiskWords"
+msgid "Taille partielle : l'analyse a été arrêtée"
+msgstr "Partial size: the analysis was stopped"
+
+msgctxt "DiskWords"
+msgid "Taille partielle : un dossier dessous est illisible"
+msgstr "Partial size: a folder below is unreadable"
+
+msgctxt "DiskWords"
+msgid "Illisible : il faut les droits administrateur"
+msgstr "Unreadable: it needs administrator rights"
+
+msgctxt "DiskWords"
+msgid "Illisible"
+msgstr "Unreadable"
+
+msgctxt "DiskWords"
+msgid "Modifié pendant l'analyse"
+msgstr "Changed during the analysis"
+
+msgctxt "DiskWords"
+msgid "Autre disque : {}, non parcouru ici"
+msgstr "Another disk: {}, not read here"
+
+msgctxt "DiskWords"
+msgid "Monté à part, non parcouru ici"
+msgstr "Mounted apart, not read here"
+
+msgctxt "DiskWords"
+msgid "Lien dur, compté dans {}"
+msgstr "Hard link, counted in {}"
+
+msgctxt "DiskWords"
+msgid "Occupé, mais Okapi n'a pas pu voir par quoi"
+msgstr "Used, but Okapi could not see by what"
+
+msgctxt "DiskWords"
+msgid "inconnue"
+msgstr "unknown"
+
+msgctxt "DiskWords"
+msgid "non compté"
+msgstr "not counted"
+
+msgctxt "DiskWords"
+msgid "au moins {}"
+msgstr "at least {}"
+
+msgctxt "DiskWords"
+msgid "< 1 %"
+msgstr "< 1%"
+
+msgctxt "DiskWords"
+msgid "{} %"
+msgstr "{}%"
+
+msgctxt "DiskWords"
+msgid "dossier"
+msgstr "folder"
+
+msgctxt "DiskWords"
+msgid "groupe"
+msgstr "group"
+
+msgctxt "DiskWords"
+msgid "fichier"
+msgstr "file"
+
+msgctxt "Start"
+msgid "Espace disque"
+msgstr "Disk space"
+
+msgctxt "Start"
+msgid "Voyez ce qui prend de la place, dossier par dossier. Cet écran ne supprime rien."
+msgstr "See what takes up space, folder by folder. This screen deletes nothing."
+
+msgctxt "Start"
+msgid "Ce dossier n'a pas pu être ouvert : rien n'a été analysé."
+msgstr "This folder could not be opened: nothing was analyzed."
+
+msgctxt "Start"
+msgid "Ce disque n'est pas lu en ce moment (débranché, ou il ne répond pas) : rien n'a été analysé."
+msgstr "This disk is not read at the moment (unplugged, or not answering): nothing was analyzed."
+
+msgctxt "Start"
+msgid "Que voulez-vous analyser ?"
+msgstr "What do you want to analyze?"
+
+msgctxt "Start"
+msgid "Dossier personnel"
+msgstr "Home folder"
+
+msgctxt "Start"
+msgid "Conseillé"
+msgstr "Recommended"
+
+msgctxt "Start"
+msgid "Vos documents, médias, projets et les données de vos applications. C'est là que l'espace part le plus souvent."
+msgstr "Your documents, media, projects and your applications' data. That is where space goes most often."
+
+msgctxt "Start"
+msgid "Ou un disque entier"
+msgstr "Or a whole disk"
+
+msgctxt "Start"
+msgid "Lecture des disques…"
+msgstr "Reading the disks…"
+
+msgctxt "Start"
+msgid "Les disques ne peuvent pas être lus pour l'instant."
+msgstr "The disks cannot be read for now."
+
+msgctxt "Start"
+msgid "{} libres sur {}"
+msgstr "{} free of {}"
+
+msgctxt "Start"
+msgid "Sur un disque entier, certains dossiers système ne s'ouvrent qu'avec les droits administrateur. Leur place apparaîtra comme « espace non expliqué »."
+msgstr "On a whole disk, some system folders only open with administrator rights. Their space will show as \"unexplained space\"."
+
+msgctxt "Start"
+msgid "Analyser"
+msgstr "Analyze"
+
+msgctxt "Lines"
+msgid "Contenu du dossier"
+msgstr "Folder contents"
+
+msgctxt "Panel"
+msgid "Espace non expliqué"
+msgstr "Unexplained space"
+
+msgctxt "Panel"
+msgid "Fermer"
+msgstr "Close"
+
+msgctxt "Panel"
+msgid "Cette place existe bien sur le disque. Elle vient le plus souvent de : dossiers qu'on ne peut ouvrir qu'avec les droits administrateur ; fichiers supprimés mais encore ouverts par un programme (la place revient quand il se ferme) ; la réserve du système de fichiers, gardée pour que le système continue de tourner."
+msgstr "This space does exist on the disk. It most often comes from: folders that only open with administrator rights; files deleted but still open in a program (the space comes back when it closes); the filesystem's reserve, kept so that the system keeps running."
+
+msgctxt "Panel"
+msgid "Dossiers illisibles pendant l'analyse : {}."
+msgstr "Folders unreadable during the analysis: {}."
+
+msgctxt "Panel"
+msgid "Chemin complet"
+msgstr "Full path"
+
+msgctxt "Panel"
+msgid "Taille sur le disque : {}"
+msgstr "Size on disk: {}"
+
+msgctxt "Panel"
+msgid "Fichier creux : il annonce {} mais n'occupe que {}. Les parties vides ne sont pas écrites sur le disque."
+msgstr "Sparse file: it announces {} but takes only {}. Its empty parts are not written to the disk."
+
+msgctxt "Panel"
+msgid "Fichiers : {}. Sous-dossiers : {}."
+msgstr "Files: {}. Subfolders: {}."
+
+msgctxt "Panel"
+msgid "Un lien n'est jamais suivi : c'est son dossier qui s'ouvre."
+msgstr "A link is never followed: its folder opens."
+
+msgctxt "Panel"
+msgid "Ouvrir dans le gestionnaire de fichiers"
+msgstr "Open in the file manager"
+
+msgctxt "Panel"
+msgid "Le gestionnaire de fichiers n'a pas pu s'ouvrir."
+msgstr "The file manager could not open."
+
+msgctxt "Panel"
+msgid "Pour vider les caches sans risque, passez plutôt par le Nettoyeur."
+msgstr "To empty caches safely, use the Cleaner instead."
+
+msgctxt "Panel"
+msgid "Aller au Nettoyeur"
+msgstr "Go to the Cleaner"
+
+msgctxt "Panel"
+msgid "Analyser ce disque"
+msgstr "Analyze this disk"
+
+msgctxt "Browse"
+msgid "Espace disque"
+msgstr "Disk space"
+
+msgctxt "Browse"
+msgid "{}, {}"
+msgstr "{}, {}"
+
+msgctxt "Browse"
+msgid "{}, {}, analysé à l'instant"
+msgstr "{}, {}, analyzed just now"
+
+msgctxt "Browse"
+msgid "{}, {}, analysé il y a {} min"
+msgstr "{}, {}, analyzed {} min ago"
+
+msgctxt "Browse"
+msgid "Arrêter"
+msgstr "Stop"
+
+msgctxt "Browse"
+msgid "Changer"
+msgstr "Change"
+
+msgctxt "Browse"
+msgid "Analyser à nouveau"
+msgstr "Analyze again"
+
+msgctxt "Browse"
+msgid "Ouverture…"
+msgstr "Opening…"
+
+msgctxt "Browse"
+msgid "Analyse… {} fichiers, {}. Rien n'est supprimé."
+msgstr "Analyzing… {} files, {}. Nothing is deleted."
+
+msgctxt "Browse"
+msgid "Avancement de l'analyse"
+msgstr "Analysis progress"
+
+msgctxt "Browse"
+msgid "Vous pouvez déjà parcourir ce qui a été vu. Échap arrête l'analyse."
+msgstr "You can already browse what was seen. Escape stops the analysis."
+
+msgctxt "Browse"
+msgid "Analyse arrêtée : tailles partielles. Les dossiers pas encore parcourus ne sont pas comptés."
+msgstr "Analysis stopped: partial sizes. Folders not read yet are not counted."
+
+msgctxt "Browse"
+msgid "Ce dossier a changé depuis l'analyse : ses fichiers ne sont plus listés."
+msgstr "This folder changed since the analysis: its files are no longer listed."
+
+msgctxt "Browse"
+msgid "Les fichiers de ce dossier n'ont pas pu être relus : seuls ses sous-dossiers sont listés."
+msgstr "This folder's files could not be read again: only its subfolders are listed."
+
+msgctxt "Browse"
+msgid "Certains fichiers de ce dossier n'ont pas pu être relus : ils ne sont pas listés."
+msgstr "Some of this folder's files could not be read again: they are not listed."
+
+msgctxt "Browse"
+msgid "Vu par Okapi : {}"
+msgstr "Seen by Okapi: {}"
+
+msgctxt "Browse"
+msgid "Non expliqué : {}"
+msgstr "Unexplained: {}"
+
+msgctxt "Browse"
+msgid "Libre : {}"
+msgstr "Free: {}"
+
+msgctxt "Browse"
+msgid "{} au total"
+msgstr "{} in all"
+
+msgctxt "Browse"
+msgid "L'espace que l'analyse n'a pas pu voir ne peut pas être calculé pour ce disque."
+msgstr "The space the analysis could not see cannot be worked out for this disk."
+
+msgctxt "Browse"
+msgid "au moins {} dans ce dossier"
+msgstr "at least {} in this folder"
+
+msgctxt "Browse"
+msgid "{} dans ce dossier"
+msgstr "{} in this folder"
+
+msgctxt "Sidebar"
+msgid "Espace disque"
+msgstr "Disk space"
+
+msgctxt "DiskWords"
+msgid "{}, {}"
+msgstr "{}, {}"
+
+msgctxt "DiskWords"
+msgid "{}, {}, {}"
+msgstr "{}, {}, {}"
+
+msgctxt "Browse"
+msgid "dossier affiché"
+msgstr "folder shown"

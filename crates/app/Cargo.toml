@@ -18,6 +18,10 @@ okapi-tools = { workspace = true, features = ["disk-usage", "monitor"] }
 slint = { workspace = true }
 tracing = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+futures-lite = { workspace = true }
+zbus = { workspace = true }
+
 [dev-dependencies]
 okapi-rules = { workspace = true, features = ["test-support"] }
 png = { workspace = true }

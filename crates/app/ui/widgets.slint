@@ -145,12 +145,15 @@ export component ActionButton inherits Rectangle {
     in property <ButtonKind> kind: ButtonKind.secondary;
     in property <bool> large;
     in property <bool> enabled: true;
+    // Its text goes to the line when it is too long, in a narrow panel.
+    in property <bool> wrapped;
     // The keyboard's focus is on it.
     out property <bool> focused: keys.has-focus;
     callback clicked;
 
     forward-focus: keys;
-    height: large ? Theme.control-height-large : Theme.control-height;
+    height: wrapped ? max(Theme.control-height, content.preferred-height)
+        : large ? Theme.control-height-large : Theme.control-height;
     border-radius: large ? Theme.radius-large : Theme.radius-medium;
     opacity: enabled ? 1 : Theme.disabled-opacity;
     background: kind == ButtonKind.danger ? (hovered ? Theme.danger-hover : Theme.danger)
@@ -197,11 +200,13 @@ export component ActionButton inherits Rectangle {
         border-radius: root.border-radius;
     }
 
-    HorizontalLayout {
+    content := HorizontalLayout {
         padding-left: large ? Theme.spacing-xl : Theme.spacing-l;
         padding-right: self.padding-left;
+        padding-top: wrapped ? Theme.spacing-s : 0;
+        padding-bottom: self.padding-top;
         spacing: Theme.spacing-s;
-        alignment: center;
+        alignment: wrapped ? stretch : center;
         if root.icon.width > 0: Icon {
             source: root.icon;
             colorize: label.color;
@@ -216,6 +221,8 @@ export component ActionButton inherits Rectangle {
             font-size: large ? Theme.font-heading : Theme.font-label;
             font-weight: Theme.weight-medium;
             vertical-alignment: center;
+            wrap: wrapped ? word-wrap : no-wrap;
+            horizontal-stretch: wrapped ? 1 : 0;
         }
     }
 }

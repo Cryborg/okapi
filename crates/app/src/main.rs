@@ -14,6 +14,7 @@ use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 mod cleaner;
 mod dashboard;
 mod dates;
+mod disk_usage;
 mod elevation;
 mod kept_selections;
 mod receipt;
@@ -24,6 +25,7 @@ mod sidebar;
 
 use cleaner::{CleanerEvent, CleanerScreen, Seams};
 use dashboard::{DashboardScreen, DashboardSeams};
+use disk_usage::DiskUsageScreen;
 
 /// The interface, as Slint generates it from `ui/`.
 mod ui {
@@ -92,6 +94,7 @@ fn window(
     window.set_license_name(env!("CARGO_PKG_LICENSE").into());
     window.set_repository(env!("CARGO_PKG_REPOSITORY").into());
     window.set_license_paragraphs(ModelRc::from(Rc::new(VecModel::from(license_paragraphs()))));
+    let disk = DiskUsageScreen::attach(&window, seams.disk.clone(), language);
     let screen = CleanerScreen::attach(&window, seams, language);
     let closing = screen.clone();
     window
@@ -105,7 +108,7 @@ fn window(
         let scale = window.as_ref().map(|window| window.window().scale_factor());
         tracing::debug!(chosen_folded, narrow, ?size, ?scale, "sidebar shown");
     });
-    let dashboard = attach_home(&window, &screen, home);
+    let dashboard = attach_home(&window, &screen, &disk, home);
     Ok((window, screen, dashboard))
 }
 
@@ -114,9 +117,14 @@ fn window(
 fn attach_home(
     window: &AppWindow,
     screen: &CleanerScreen,
+    disk: &DiskUsageScreen,
     home: DashboardSeams,
 ) -> DashboardScreen {
     let dashboard = DashboardScreen::attach(window, home);
+    let volumes = dashboard.clone();
+    disk.read_volumes_from(Rc::new(move || volumes.volumes()));
+    // Held here, by the page's callback, as long as the window is.
+    let disk = disk.clone();
     let heard = dashboard.clone();
     let cleaner = screen.clone();
     let shown_home = dashboard.clone();
@@ -127,6 +135,7 @@ fn attach_home(
             cleaner.refresh();
         }
         shown_home.page_shown(page);
+        disk.page_shown(page);
     });
     let analyzing = screen.clone();
     window
@@ -391,9 +400,11 @@ mod tests {
         }
         press(&window, slint::platform::Key::Return);
         assert_eq!(window.get_page(), Page::About);
-        // Backtab goes back to home; Escape does nothing.
-        press(&window, slint::platform::Key::Backtab);
-        press(&window, slint::platform::Key::Backtab);
+        // Backtab goes back to home, past disk usage and the cleaner; Escape
+        // does nothing.
+        for _ in 0..SIDEBAR_ENTRIES - 1 {
+            press(&window, slint::platform::Key::Backtab);
+        }
         press(&window, slint::platform::Key::Escape);
         assert_eq!(window.get_page(), Page::About);
         // Back on home, with Space.
@@ -634,9 +645,14 @@ mod tests {
             let mut read = 0;
             for line in source.lines() {
                 let declaration = line.trim_start();
-                if let Some(rest) = ["export component ", "component ", "export global "]
-                    .iter()
-                    .find_map(|keyword| declaration.strip_prefix(keyword))
+                if let Some(rest) = [
+                    "export component ",
+                    "component ",
+                    "export global ",
+                    "global ",
+                ]
+                .iter()
+                .find_map(|keyword| declaration.strip_prefix(keyword))
                 {
                     component = rest.split_whitespace().next().unwrap().to_owned();
                 }
@@ -669,7 +685,9 @@ mod tests {
     }
 
     /// Texts the same in both languages.
-    const SAME_IN_ENGLISH: [&str; 7] = [
+    const SAME_IN_ENGLISH: [&str; 9] = [
+        "{}, {}",
+        "{}, {}, {}",
         "Version {}",
         "{} {}",
         "{} {} {}",
@@ -730,6 +748,11 @@ mod tests {
             "AddDialog",
             "ResetDialog",
             "Toast",
+            "DiskWords",
+            "Start",
+            "Lines",
+            "Panel",
+            "Browse",
         ] {
             assert!(
                 texts.iter().any(|(component, _)| component == context),

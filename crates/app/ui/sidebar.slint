@@ -2,7 +2,7 @@ import { Theme, Brand } from "theme.slint";
 import { IconButton } from "widgets.slint";
 
 // The screens the sidebar leads to: only those that exist.
-export enum Page { home, cleaner, about }
+export enum Page { home, cleaner, disk-usage, about }
 
 // One entry of the sidebar: its icon and words carry it, never colour alone.
 // Reached with Tab, chosen with Enter or Space, its focus ring visible.
@@ -163,6 +163,16 @@ export component Sidebar inherits Rectangle {
             active: root.page == Page.cleaner;
             clicked => {
                 root.navigate(Page.cleaner);
+            }
+        }
+
+        NavItem {
+            icon: @image-url("../assets/icons/hard-drive.svg");
+            label: @tr("Espace disque");
+            folded: root.folded;
+            active: root.page == Page.disk-usage;
+            clicked => {
+                root.navigate(Page.disk-usage);
             }
         }
 

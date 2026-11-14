@@ -119,6 +119,13 @@ struct Cleaned {
     at: Option<i64>,
 }
 
+/// What the sampler is told to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reading {
+    Layout,
+    VolumesAlone,
+}
+
 struct State {
     window: slint::Weak<ui::AppWindow>,
     seams: DashboardSeams,
@@ -140,6 +147,9 @@ struct State {
     /// element, and the focus in it.
     cells: Rc<VecModel<ui::WidgetCell>>,
     watched: BTreeSet<Source>,
+    /// What the sampler is told to read: the layout's sources, or the
+    /// volumes alone for the disk usage screen.
+    reading: Reading,
     /// In the Personnaliser mode.
     editing: bool,
     /// None when the layout cannot be kept.
@@ -244,6 +254,7 @@ impl DashboardScreen {
             widgets,
             cells,
             watched,
+            reading: Reading::Layout,
             editing: false,
             saver,
             banners: LayoutBanners {
@@ -807,10 +818,36 @@ impl DashboardScreen {
         }
     }
 
-    /// Follows the page shown: read while the Home page is, nothing else.
+    /// The volumes as last read; `None` before a first reading.
+    pub fn volumes(&self) -> Option<Result<Vec<Volume>, Unavailable>> {
+        self.0.borrow().volumes.clone()
+    }
+
+    /// Follows the page shown: read while the Home page is; the volumes
+    /// alone while the disk usage screen is; nothing else.
     pub fn page_shown(&self, page: ui::Page) {
-        if page == ui::Page::Home {
+        if page == ui::Page::DiskUsage {
+            tracing::info!("disk usage shown: volumes read alone");
+            {
+                let mut state = self.0.borrow_mut();
+                state.reading = Reading::VolumesAlone;
+                // A reading made before a pause is not the space now: the
+                // analysis of a volume starts from it.
+                state.volumes = None;
+                (state.seams.commands)(Command::Watch(BTreeSet::from([Source::Volumes])));
+                (state.seams.commands)(Command::Resume);
+            }
+            self.customize(false);
+            self.dismiss_toast();
+        } else if page == ui::Page::Home {
             tracing::info!("dashboard shown: readings resumed");
+            {
+                let mut state = self.0.borrow_mut();
+                if state.reading == Reading::VolumesAlone {
+                    state.reading = Reading::Layout;
+                    (state.seams.commands)(Command::Watch(state.watched.clone()));
+                }
+            }
             // The readings before the pause would be joined to those after
             // as if two seconds apart: the curve starts again.
             self.0.borrow_mut().uses.clear();
@@ -1375,7 +1412,8 @@ fn reading<T>(read: Option<&Result<T, Unavailable>>) -> Result<&T, ui::ReadingSt
     }
 }
 
-fn volume(volume: &Volume) -> ui::VolumeShown {
+/// What a volume shows, here and on the disk usage screen.
+pub(crate) fn volume(volume: &Volume) -> ui::VolumeShown {
     let (naming, name) = match &volume.name {
         VolumeName::System => (ui::VolumeNaming::System, String::new()),
         VolumeName::Home => (ui::VolumeNaming::Home, String::new()),
@@ -1697,14 +1735,14 @@ pub mod tests {
     }
 
     /// What the test sends as the sampler, and the commands the page gave.
-    struct Sampler {
-        sink: Option<Sender<Sample>>,
-        commands: Rc<RefCell<Vec<Command>>>,
+    pub struct Sampler {
+        pub sink: Option<Sender<Sample>>,
+        pub commands: Rc<RefCell<Vec<Command>>>,
     }
 
     /// Seams reading `state`, on the machine's clock in UTC, their
     /// commands noted.
-    fn noting(state: Option<PathBuf>) -> (DashboardSeams, Sampler) {
+    pub fn noting(state: Option<PathBuf>) -> (DashboardSeams, Sampler) {
         let (sink, samples) = mpsc::channel();
         let commands = Rc::new(RefCell::new(Vec::new()));
         let noted = Rc::clone(&commands);
@@ -1797,7 +1835,7 @@ pub mod tests {
     }
 
     /// Lets the page take in what was sent.
-    fn take_in() {
+    pub fn take_in() {
         i_slint_backend_testing::mock_elapsed_time(TAKE_SAMPLES_EVERY);
         slint::platform::update_timers_and_animations();
     }
@@ -1983,6 +2021,60 @@ pub mod tests {
         let directories = Directories::new();
         let (seams, sampler) = directories.seams();
         let window = on_home(seams);
+        sampler.commands.borrow_mut().clear();
+        go_to(&window, "À propos");
+        go_to(&window, "Accueil");
+        assert_eq!(
+            *sampler.commands.borrow(),
+            [Command::Pause, Command::Resume]
+        );
+    }
+
+    #[test]
+    fn the_home_page_follows_its_widgets_again_after_the_disk_usage_screen() {
+        let directories = Directories::new();
+        let (seams, sampler) = directories.seams();
+        let (window, home) = home_screen(seams);
+        let watched = sampler
+            .commands
+            .borrow()
+            .iter()
+            .rev()
+            .find_map(|command| match command {
+                Command::Watch(sources) => Some(sources.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_ne!(watched, BTreeSet::from([Source::Volumes]));
+        sampler
+            .sink
+            .as_ref()
+            .unwrap()
+            .send(Sample::Volumes(Ok(vec![known(
+                VolumeName::System,
+                GB,
+                2 * GB,
+            )])))
+            .unwrap();
+        take_in();
+        assert!(home.volumes().is_some());
+        sampler.commands.borrow_mut().clear();
+        go_to(&window, "Espace disque");
+        assert_eq!(
+            *sampler.commands.borrow(),
+            [
+                Command::Watch(BTreeSet::from([Source::Volumes])),
+                Command::Resume
+            ]
+        );
+        assert!(home.volumes().is_none(), "a reading of before, forgotten");
+        sampler.commands.borrow_mut().clear();
+        go_to(&window, "Accueil");
+        assert_eq!(
+            *sampler.commands.borrow(),
+            [Command::Watch(watched), Command::Resume]
+        );
+        // Once only: the next round trip pauses and resumes alone.
         sampler.commands.borrow_mut().clear();
         go_to(&window, "À propos");
         go_to(&window, "Accueil");
@@ -2710,9 +2802,9 @@ pub mod tests {
         ));
     }
 
-    const GB: u64 = 1_000_000_000;
+    pub const GB: u64 = 1_000_000_000;
 
-    fn known(name: VolumeName, used: u64, total: u64) -> Volume {
+    pub fn known(name: VolumeName, used: u64, total: u64) -> Volume {
         Volume {
             name,
             mount_point: PathBuf::from("/okapi-test"),
@@ -2726,7 +2818,7 @@ pub mod tests {
         }
     }
 
-    fn silent(name: &str, space: VolumeSpace) -> Volume {
+    pub fn silent(name: &str, space: VolumeSpace) -> Volume {
         Volume {
             name: VolumeName::Source(name.to_owned()),
             mount_point: PathBuf::from("/mnt/share"),

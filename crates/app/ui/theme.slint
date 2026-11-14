@@ -211,6 +211,18 @@ export global Theme {
     out property <length> disk-size-width: 84px;
     out property <length> disk-volume-bar-height: 12px;
     out property <length> disk-volume-gap: 2px;
+    // The duplicates screen (okapi.css, `--ok-dup-*`): a group's header, a
+    // copy on two lines (its path, then its date and a reason), the copies'
+    // indent under the group's name, the column of a copy's fate (it fits
+    // « Gardée : hors Téléchargements » and English 30 % longer), the
+    // details panel, a step's dot while searching. No colour of its own.
+    out property <length> duplicate-head-height: 44px;
+    out property <length> duplicate-copy-height: 52px;
+    out property <length> duplicate-indent: 50px;
+    out property <length> duplicate-fate-width: 224px;
+    out property <length> duplicate-panel-width: 300px;
+    out property <length> duplicate-panel-width-narrow: 248px;
+    out property <length> duplicate-step-dot: 24px;
 }
 
 // What the window's width decides for every page. Set by `AppWindow` alone.

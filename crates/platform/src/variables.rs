@@ -52,6 +52,15 @@ pub fn config_directory() -> Option<PathBuf> {
     xdg_directory_from(CONFIG, |name| env::var_os(name), env::home_dir())
 }
 
+/// Where the user's data lives: `$XDG_DATA_HOME`, or `~/.local/share`.
+#[must_use]
+pub fn data_home() -> Option<PathBuf> {
+    DATA.resolve(
+        |name| env::var_os(name),
+        usable_home(env::home_dir()).as_deref(),
+    )
+}
+
 /// The `applications` folders `.desktop` files are looked for in, most
 /// personal first: that of `$XDG_DATA_HOME`, then of each `$XDG_DATA_DIRS`.
 pub(crate) fn data_directories() -> Vec<PathBuf> {

@@ -143,7 +143,8 @@ impl Exclusions {
     }
 
     /// Whether the object of `identity` is an excluded directory.
-    pub(crate) fn excludes_identity(&self, identity: FileIdentity) -> bool {
+    #[must_use]
+    pub fn excludes_identity(&self, identity: FileIdentity) -> bool {
         self.identities.contains(&identity)
     }
 
@@ -161,7 +162,8 @@ impl Exclusions {
 
     /// Whether `path` is excluded, by a prefix or by the extension of any of
     /// its components: an excluded directory covers what lies below it.
-    pub(crate) fn excludes(&self, path: &Path) -> bool {
+    #[must_use]
+    pub fn excludes(&self, path: &Path) -> bool {
         let by_extension = path.components().any(|component| {
             let Component::Normal(name) = component else {
                 return false;

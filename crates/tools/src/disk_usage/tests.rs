@@ -667,35 +667,6 @@ fn a_folder_whose_parent_was_replaced_is_not_listed() {
 }
 
 #[test]
-fn a_device_or_a_mount_root_marks_another_mount() {
-    let status = |device: u64, mount_root: Option<bool>| okapi_platform::EntryStatus {
-        kind: okapi_platform::EntryType::Directory,
-        identity: okapi_platform::FileIdentity::new(device, 1),
-        last_change: std::time::SystemTime::UNIX_EPOCH,
-        modified: std::time::SystemTime::UNIX_EPOCH,
-        size: 0,
-        allocated: None,
-        links: 2,
-        owner: 0,
-        sticky: false,
-        locked: false,
-        mount_root,
-    };
-    assert!(scan::other_mount(&status(7, Some(true)), 7), "a bind mount");
-    assert!(scan::other_mount(&status(8, Some(true)), 7));
-    assert!(!scan::other_mount(&status(7, Some(false)), 7));
-    assert!(
-        !scan::other_mount(&status(8, Some(false)), 7),
-        "a btrfs subvolume"
-    );
-    assert!(
-        scan::other_mount(&status(8, None), 7),
-        "unknown: another device is taken as a mount"
-    );
-    assert!(!scan::other_mount(&status(7, None), 7));
-}
-
-#[test]
 fn the_files_of_a_folder_are_read_again_largest_first() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path();

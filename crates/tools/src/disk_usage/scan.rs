@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use okapi_platform::{Directory, EntryStatus, EntryType, FileIdentity};
 
 use super::tree::{Child, NodeId, NodeState, Size, Tree, View};
+use crate::mounts::mounts_below;
 
 /// The most threads [`default_threads`] gives: more only adds contention on
 /// one disk.
@@ -396,38 +397,6 @@ impl Drop for UsageScan {
     }
 }
 
-/// The mount points strictly below `root`, and the filesystem `root` is on.
-fn mounts_below(root: &Path) -> (BTreeSet<PathBuf>, Option<String>) {
-    match okapi_platform::mounts() {
-        Ok(list) => {
-            if list.malformed > 0 {
-                tracing::warn!(
-                    lines = list.malformed,
-                    "mounts partly unreadable: a mount missed is read for being one"
-                );
-            }
-            let filesystem = list
-                .mounts
-                .iter()
-                .filter(|mount| root.starts_with(&mount.mount_point))
-                .max_by_key(|mount| mount.mount_point.components().count())
-                .map(|mount| mount.filesystem.clone());
-            let below = list
-                .mounts
-                .into_iter()
-                .map(|mount| mount.mount_point)
-                .filter(|point| point.starts_with(root) && point != root)
-                .collect();
-            (below, filesystem)
-        }
-        Err(error) => {
-            // Each directory is still read for being a mount root.
-            tracing::warn!(%error, "mounts unreadable: a mount that stopped answering may hold the analysis");
-            (BTreeSet::new(), None)
-        }
-    }
-}
-
 fn cancel(shared: &Shared) {
     if shared.outcome.get().is_some() || shared.cancelled.swap(true, Ordering::AcqRel) {
         return;
@@ -547,11 +516,7 @@ fn work(shared: &Shared) {
             Ok(children) => running.children = children,
             Err(panic) => {
                 // The thread lives on; the directory is said unreadable.
-                let message = panic
-                    .downcast_ref::<&str>()
-                    .map(|message| (*message).to_owned())
-                    .or_else(|| panic.downcast_ref::<String>().cloned())
-                    .unwrap_or_default();
+                let message = crate::panic_message(&*panic);
                 count(&shared.counts.panicked, 1);
                 tracing::error!(path = %path.display(), message, "reading a directory panicked: left unread");
                 lock(&shared.tree).fail(node, NodeState::Unreadable(io::ErrorKind::Other));
@@ -611,16 +576,6 @@ fn open(source: Source) -> Result<(Directory, EntryStatus), Failure> {
     Ok((directory, status))
 }
 
-/// Whether a directory, read as `status`, is the root of another mount: as
-/// the system says, or, when it cannot, by its device (a btrfs subvolume
-/// then counts as one).
-pub(crate) const fn other_mount(status: &EntryStatus, root_device: u64) -> bool {
-    match status.mount_root {
-        Some(mount_root) => mount_root,
-        None => status.identity.device() != root_device,
-    }
-}
-
 /// What an entry that is not a directory takes: its length stands for what
 /// it takes on disk when the system does not say.
 pub(crate) fn file_size(status: &EntryStatus) -> Size {
@@ -676,7 +631,7 @@ fn read_entry(
         }
     };
     if status.kind == EntryType::Directory {
-        let other_mount = other_mount(&status, shared.root_device);
+        let other_mount = status.other_mount(shared.root_device);
         if other_mount {
             count(&shared.counts.other_mounts, 1);
             tracing::debug!(path = %path.display(), "mount not entered");
@@ -910,6 +865,7 @@ mod tests {
             identity: FileIdentity::new(1, 1),
             last_change: std::time::SystemTime::UNIX_EPOCH,
             modified: std::time::SystemTime::UNIX_EPOCH,
+            changed: std::time::SystemTime::UNIX_EPOCH,
             size: 1000,
             allocated: None,
             links: 1,
@@ -935,6 +891,7 @@ mod tests {
             identity,
             last_change: std::time::SystemTime::UNIX_EPOCH,
             modified: std::time::SystemTime::UNIX_EPOCH,
+            changed: std::time::SystemTime::UNIX_EPOCH,
             size: 0,
             allocated: None,
             links: 2,

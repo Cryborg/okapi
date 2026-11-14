@@ -21,7 +21,7 @@ mod space;
 mod system;
 mod units;
 
-pub use block::{device_labels, removable};
+pub use block::{device_labels, removable, rotational};
 pub use desktop::application_name;
 pub use memory::{MemoryStatus, memory};
 pub use mounts::{Device, Mount, MountClass, MountList, mounts};

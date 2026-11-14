@@ -7,6 +7,7 @@ mod elevation;
 mod identity;
 mod probe;
 mod session;
+mod trash;
 #[cfg(target_os = "linux")]
 mod variables;
 
@@ -17,7 +18,7 @@ pub use browser::{Holder, RunningBrowser, UnknownHolder, holder};
 pub use directory::open_path;
 pub use directory::{
     DESCRIPTOR_REMOVAL_SUPPORTED, Directory, EntryStatus, EntryType, Ownership, ROOT_USER,
-    mount_root, out_of_descriptors, sticky_allows, tells_mount_roots,
+    Unreached, mount_root, out_of_descriptors, reach, sticky_allows, tells_mount_roots,
 };
 #[cfg(target_os = "linux")]
 pub use elevation::{HELPER_PATH, PKEXEC_PATH};
@@ -25,13 +26,14 @@ pub use identity::{FileIdentity, IDENTITY_SUPPORTED, file_identity, last_change,
 pub use probe::{
     CpuTimes, DesktopSession, Device, MemoryStatus, Mount, MountClass, MountList, ProcessList,
     ProcessMemory, Space, application_name, cpu_times, desktop_id, desktop_session, device_labels,
-    distribution, kernel_release, load_average, memory, mounts, processes, removable, space,
-    uptime,
+    distribution, kernel_release, load_average, memory, mounts, processes, removable, rotational,
+    space, uptime,
 };
 pub use session::sync_directory;
 pub use session::{
     create_private_directory, effective_user, open_for_reading, open_journal, real_user,
     running_as_root,
 };
+pub use trash::{Trash, TrashError};
 #[cfg(target_os = "linux")]
 pub use variables::{VariablesError, config_directory, state_directory, template_variables};

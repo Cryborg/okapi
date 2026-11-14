@@ -38,6 +38,9 @@ pub struct EntryStatus {
     pub last_change: SystemTime,
     /// When its content last changed.
     pub modified: SystemTime,
+    /// When its inode last changed (`ctime`): a write moves it, even one
+    /// that sets `modified` back.
+    pub changed: SystemTime,
     /// How many names it has (hard links).
     pub links: u64,
     /// The user that owns it.
@@ -58,6 +61,87 @@ pub struct EntryStatus {
     pub mount_root: Option<bool>,
 }
 
+/// Why [`reach`] did not reach a folder.
+#[derive(Debug, thiserror::Error)]
+pub enum Unreached {
+    /// Something on the way is no longer what it was: gone, a link or a
+    /// file in a folder's place, another folder, another filesystem.
+    #[error("a folder on the way changed")]
+    Changed,
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+/// Opens the folder `below` names under the folder `root` (an absolute,
+/// canonical path), never through a link: `root` is reached from the
+/// filesystem root one name at a time and must still be `root_identity`;
+/// each folder below it must be a plain folder of its mount
+/// ([`EntryStatus::other_mount`]). Each folder opened is checked to be the one read before opening.
+///
+/// # Errors
+///
+/// [`Unreached::Changed`] when anything on the way is no longer what it was,
+/// [`Unreached::Io`] for the system's refusal.
+pub fn reach(
+    root: &std::path::Path,
+    root_identity: FileIdentity,
+    below: &[&std::ffi::OsStr],
+) -> Result<Directory, Unreached> {
+    use std::path::Component;
+
+    let mut directory = Directory::open(std::path::Path::new("/"))?;
+    for component in root.components() {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(name) => directory = enter(&directory, name, |_| true)?,
+            // A canonical path holds none of these.
+            Component::Prefix(_) | Component::CurDir | Component::ParentDir => {
+                return Err(Unreached::Changed);
+            }
+        }
+    }
+    if directory.status()?.identity != root_identity {
+        return Err(Unreached::Changed);
+    }
+    let device = root_identity.device();
+    for name in below {
+        directory = enter(&directory, name, |status| !status.other_mount(device))?;
+    }
+    Ok(directory)
+}
+
+/// Opens the folder `name` of `parent`, read first and accepted by `allowed`,
+/// and checked to be the one read once opened.
+fn enter(
+    parent: &Directory,
+    name: &std::ffi::OsStr,
+    allowed: impl Fn(&EntryStatus) -> bool,
+) -> Result<Directory, Unreached> {
+    let status = parent.status_of(name).map_err(gone_or_failed)?;
+    if status.kind != EntryType::Directory || !allowed(&status) {
+        return Err(Unreached::Changed);
+    }
+    // Swapped for a link meanwhile, it fails to open.
+    let opened = parent.open_child(name).map_err(gone_or_failed)?;
+    if opened.status()?.identity == status.identity {
+        Ok(opened)
+    } else {
+        Err(Unreached::Changed)
+    }
+}
+
+/// An entry gone, or no longer a folder (a link fails to open as one), has
+/// changed; any other error is the system's.
+fn gone_or_failed(error: std::io::Error) -> Unreached {
+    use std::io::ErrorKind;
+
+    match error.kind() {
+        ErrorKind::NotFound | ErrorKind::NotADirectory => Unreached::Changed,
+        _ if system::link_refused(&error) => Unreached::Changed,
+        _ => Unreached::Io(error),
+    }
+}
+
 /// The administrator: the user that may remove anything in a sticky
 /// directory, and the only one the privileged helper runs as.
 pub const ROOT_USER: u32 = 0;
@@ -72,6 +156,18 @@ pub struct Ownership {
 }
 
 impl EntryStatus {
+    /// Whether this directory is the root of another mount than that of the
+    /// device `root_device` a walk started on: as the system says, or, when
+    /// it cannot, by its device (a btrfs subvolume then counts as one). One
+    /// rule for every walk and every way back down.
+    #[must_use]
+    pub const fn other_mount(&self, root_device: u64) -> bool {
+        match self.mount_root {
+            Some(mount_root) => mount_root,
+            None => self.identity.device() != root_device,
+        }
+    }
+
     #[must_use]
     #[cfg_attr(
         not(target_os = "linux"),
@@ -124,6 +220,7 @@ mod tests {
             identity: FileIdentity::new(1, 1),
             last_change: SystemTime::UNIX_EPOCH,
             modified: SystemTime::UNIX_EPOCH,
+            changed: SystemTime::UNIX_EPOCH,
             size: 0,
             allocated: None,
             links: 1,
@@ -168,10 +265,116 @@ mod tests {
     }
 
     #[test]
+    fn a_mount_root_or_another_device_is_another_mount() {
+        let status = |device: u64, mount_root: Option<bool>| EntryStatus {
+            identity: FileIdentity::new(device, 1),
+            mount_root,
+            ..status(0, false, false)
+        };
+        assert!(status(7, Some(true)).other_mount(7), "a bind mount");
+        assert!(status(8, Some(true)).other_mount(7));
+        assert!(!status(7, Some(false)).other_mount(7));
+        assert!(!status(8, Some(false)).other_mount(7), "a btrfs subvolume");
+        assert!(
+            status(8, None).other_mount(7),
+            "unknown: another device is a mount"
+        );
+        assert!(!status(7, None).other_mount(7));
+    }
+
+    #[test]
     fn nothing_removes_what_is_locked() {
         let open = status(1, false, false);
         let locked = status(1, false, true);
         assert!(!removal_allowed(0, &locked, &open));
         assert!(!removal_allowed(0, &open, &locked));
+    }
+
+    #[cfg(target_os = "linux")]
+    mod reaching {
+        use std::ffi::OsStr;
+        use std::fs;
+        use std::os::unix::fs::symlink;
+        use std::path::Path;
+
+        use super::super::*;
+
+        fn identity(path: &Path) -> FileIdentity {
+            crate::file_identity(&fs::symlink_metadata(path).unwrap()).unwrap()
+        }
+
+        #[test]
+        fn a_folder_is_reached_below_its_root() {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = fs::canonicalize(temporary.path()).unwrap();
+            fs::create_dir_all(root.join("a/b")).unwrap();
+            fs::write(root.join("a/b/file"), b"x").unwrap();
+            let names = [OsStr::new("a"), OsStr::new("b")];
+            let reached = reach(&root, identity(&root), &names).unwrap();
+            assert_eq!(
+                reached.status().unwrap().identity,
+                identity(&root.join("a/b"))
+            );
+        }
+
+        #[test]
+        fn a_link_on_the_way_or_another_root_is_a_change() {
+            let temporary = tempfile::tempdir().unwrap();
+            let base = fs::canonicalize(temporary.path()).unwrap();
+            let root = base.join("root");
+            fs::create_dir_all(root.join("a")).unwrap();
+            fs::create_dir_all(base.join("elsewhere/a")).unwrap();
+            let names = [OsStr::new("a")];
+            // The root reached through a link: refused, though it leads there.
+            symlink(&root, base.join("alias")).unwrap();
+            let through = reach(&base.join("alias"), identity(&root), &names);
+            assert!(matches!(through, Err(Unreached::Changed)));
+            // Another folder at the root's path.
+            let other = reach(&base.join("elsewhere"), identity(&root), &names);
+            assert!(matches!(other, Err(Unreached::Changed)));
+            // A folder below swapped for a link to a folder of that name.
+            fs::rename(root.join("a"), base.join("a moved")).unwrap();
+            symlink(base.join("elsewhere/a"), root.join("a")).unwrap();
+            assert!(matches!(
+                reach(&root, identity(&root), &names),
+                Err(Unreached::Changed)
+            ));
+            // Gone, or a file in its place.
+            fs::remove_file(root.join("a")).unwrap();
+            assert!(matches!(
+                reach(&root, identity(&root), &names),
+                Err(Unreached::Changed)
+            ));
+            fs::write(root.join("a"), b"x").unwrap();
+            assert!(matches!(
+                reach(&root, identity(&root), &names),
+                Err(Unreached::Changed)
+            ));
+        }
+
+        #[test]
+        fn a_folder_refused_is_a_refusal_not_a_change() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let temporary = tempfile::tempdir().unwrap();
+            let root = fs::canonicalize(temporary.path()).unwrap();
+            fs::create_dir_all(root.join("closed/inner")).unwrap();
+            fs::set_permissions(root.join("closed"), fs::Permissions::from_mode(0o000)).unwrap();
+            let names = [OsStr::new("closed"), OsStr::new("inner")];
+            let reached = reach(&root, identity(&root), &names);
+            fs::set_permissions(root.join("closed"), fs::Permissions::from_mode(0o700)).unwrap();
+            if reached.is_ok() {
+                eprintln!("skipped: root enters every folder");
+                return;
+            }
+            assert!(
+                matches!(
+                    reached,
+                    Err(Unreached::Io(ref error))
+                        if error.kind() == std::io::ErrorKind::PermissionDenied
+                ),
+                "{reached:?}"
+            );
+        }
     }
 }

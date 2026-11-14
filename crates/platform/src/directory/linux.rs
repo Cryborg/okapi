@@ -1,12 +1,13 @@
 use std::ffi::{OsStr, OsString};
+use std::fs::File;
 use std::io;
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 use rustix::fs::{
-    Access, AtFlags, CWD, Dir, FileType, Mode, OFlags, Statx, StatxAttributes, StatxFlags,
-    StatxTimestamp, accessat, makedev, openat, statx, unlinkat,
+    Access, AtFlags, CWD, Dir, FileType, Mode, OFlags, RenameFlags, Statx, StatxAttributes,
+    StatxFlags, StatxTimestamp, accessat, makedev, mkdirat, openat, renameat_with, statx, unlinkat,
 };
 use rustix::io::Errno;
 
@@ -19,6 +20,25 @@ const OPEN_FLAGS: OFlags = OFlags::RDONLY
     .union(OFlags::DIRECTORY)
     .union(OFlags::NOFOLLOW)
     .union(OFlags::CLOEXEC);
+
+/// A file is opened for reading only, never through a link, never blocking
+/// (a pipe), never as the controlling terminal (a device).
+const FILE_FLAGS: OFlags = OFlags::RDONLY
+    .union(OFlags::NOFOLLOW)
+    .union(OFlags::NONBLOCK)
+    .union(OFlags::NOCTTY)
+    .union(OFlags::CLOEXEC);
+
+/// A new file is created for writing, never over anything, a link
+/// included.
+const NEW_FILE_FLAGS: OFlags = OFlags::WRONLY
+    .union(OFlags::CREATE)
+    .union(OFlags::EXCL)
+    .union(OFlags::NOFOLLOW)
+    .union(OFlags::CLOEXEC);
+
+/// What a file Okapi creates allows: its owner only may read or write it.
+const PRIVATE_FILE: u32 = 0o600;
 
 /// How an entry is read: never through its link, never mounting an automount
 /// point, and as fresh as `stat` gives it. Never `AT_STATX_DONT_SYNC`: the
@@ -149,6 +169,76 @@ impl Directory {
         })
     }
 
+    /// Opens the plain file `name` for reading and reads its status on the
+    /// descriptor opened (a file swapped after a check is seen by its
+    /// identity). It refuses a link; it opens without blocking and refuses
+    /// anything but a plain file, so a pipe put in its place never holds the
+    /// caller.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::InvalidInput`] when `name` is not a single name or
+    /// not a plain file, or the system's error: a link, absent...
+    pub fn open_file(&self, name: &OsStr) -> io::Result<(File, EntryStatus)> {
+        let fd = openat(&self.fd, single_name(name)?, FILE_FLAGS, Mode::empty())?;
+        let status = status(&statx(&fd, "", AtFlags::EMPTY_PATH, WANTED)?)?;
+        if status.kind != EntryType::File {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        Ok((File::from(fd), status))
+    }
+
+    /// Creates the subdirectory `name`, open to its owner only.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::InvalidInput`] when `name` is not a single name, or
+    /// the system's error ([`io::ErrorKind::AlreadyExists`] when something,
+    /// a link included, has that name).
+    pub fn create_directory(&self, name: &OsStr) -> io::Result<()> {
+        Ok(mkdirat(
+            &self.fd,
+            single_name(name)?,
+            Mode::from_raw_mode(crate::session::PRIVATE_DIRECTORY),
+        )?)
+    }
+
+    /// Creates the file `name`, which must not exist (not even as a link),
+    /// open to its owner only, for writing: what reserves a name.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::InvalidInput`] when `name` is not a single name, or
+    /// the system's error ([`io::ErrorKind::AlreadyExists`] when taken).
+    pub fn create_new_file(&self, name: &OsStr) -> io::Result<File> {
+        let fd = openat(
+            &self.fd,
+            single_name(name)?,
+            NEW_FILE_FLAGS,
+            Mode::from_raw_mode(PRIVATE_FILE),
+        )?;
+        Ok(File::from(fd))
+    }
+
+    /// Moves the entry `name` (a link moved as a link) into `target` as
+    /// `new_name`, never over an entry already there, and never by a copy:
+    /// another filesystem fails ([`io::ErrorKind::CrossesDevices`]).
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::InvalidInput`] when a name is not a single name, or
+    /// the system's error ([`io::ErrorKind::AlreadyExists`] when `new_name`
+    /// is taken).
+    pub fn move_to(&self, name: &OsStr, target: &Self, new_name: &OsStr) -> io::Result<()> {
+        Ok(renameat_with(
+            &self.fd,
+            single_name(name)?,
+            &target.fd,
+            single_name(new_name)?,
+            RenameFlags::NOREPLACE,
+        )?)
+    }
+
     /// Removes the entry `name` that is not a directory (a link is removed,
     /// never what it points to).
     ///
@@ -189,6 +279,12 @@ pub fn open_path(path: &Path, directory: bool) -> io::Result<(OwnedFd, EntryStat
     let fd = openat(CWD, path, flags, Mode::empty())?;
     let status = status(&statx(&fd, "", AtFlags::EMPTY_PATH, WANTED)?)?;
     Ok((fd, status))
+}
+
+/// Whether `error` is the refusal to open a link where none is followed
+/// (`ELOOP`): something was swapped for a link.
+pub(crate) fn link_refused(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(Errno::LOOP.raw_os_error())
 }
 
 /// Whether `error` says the process, or the system, ran out of open file
@@ -275,6 +371,7 @@ fn status(stat: &Statx) -> io::Result<EntryStatus> {
         ),
         last_change: later_of(modified, changed),
         modified,
+        changed,
         size: stat.stx_size,
         allocated,
         links: u64::from(stat.stx_nlink),
@@ -318,6 +415,43 @@ mod tests {
             Some(directory.status().unwrap().identity),
             crate::file_identity(&own)
         );
+    }
+
+    #[test]
+    fn a_plain_file_is_opened_for_reading_and_read_on_its_descriptor() {
+        use std::io::Read as _;
+
+        let (temporary, directory) = directory();
+        fs::write(temporary.path().join("file"), b"12345").unwrap();
+        let (mut file, status) = directory.open_file(OsStr::new("file")).unwrap();
+        assert_eq!(status, directory.status_of(OsStr::new("file")).unwrap());
+        let mut content = String::new();
+        file.read_to_string(&mut content).unwrap();
+        assert_eq!(content, "12345");
+    }
+
+    #[test]
+    fn only_a_plain_file_is_opened_never_a_link_a_pipe_or_a_folder() {
+        let (temporary, directory) = directory();
+        fs::write(temporary.path().join("target"), b"12345").unwrap();
+        symlink("target", temporary.path().join("link")).unwrap();
+        rustix::fs::mknodat(
+            CWD,
+            temporary.path().join("pipe"),
+            FileType::Fifo,
+            Mode::from_raw_mode(0o600),
+            0,
+        )
+        .unwrap();
+        fs::create_dir(temporary.path().join("folder")).unwrap();
+        // A link is refused by `O_NOFOLLOW` itself.
+        let link = directory.open_file(OsStr::new("link")).unwrap_err();
+        assert_eq!(link.raw_os_error(), Some(Errno::LOOP.raw_os_error()));
+        // Without `O_NONBLOCK`, opening a pipe nobody writes to would hang.
+        for name in ["pipe", "folder"] {
+            let error = directory.open_file(OsStr::new(name)).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{name}");
+        }
     }
 
     #[test]
@@ -445,12 +579,18 @@ mod tests {
         assert_eq!(Some(status.last_change), crate::last_change(&by_path));
         let ahead = std::time::SystemTime::now() + std::time::Duration::from_hours(24);
         fs::File::open(&path).unwrap().set_modified(ahead).unwrap();
+        let status = directory.status_of(OsStr::new("extracted")).unwrap();
+        assert_eq!(status.last_change, ahead);
+        // The inode's own change date, which a date ahead never hides.
+        let by_path = fs::symlink_metadata(&path).unwrap();
+        assert!(status.changed < ahead);
         assert_eq!(
-            directory
-                .status_of(OsStr::new("extracted"))
-                .unwrap()
-                .last_change,
-            ahead
+            status.changed,
+            crate::identity::instant(
+                std::os::unix::fs::MetadataExt::ctime(&by_path),
+                u32::try_from(std::os::unix::fs::MetadataExt::ctime_nsec(&by_path)).unwrap()
+            )
+            .unwrap()
         );
     }
 
@@ -533,8 +673,52 @@ mod tests {
             assert!(inner.status_of(name).is_err());
             assert!(inner.open_child(name).is_err());
             assert!(inner.remove_directory(name).is_err());
+            assert!(inner.open_file(name).is_err());
+            assert!(inner.create_new_file(name).is_err());
+            assert!(inner.create_directory(name).is_err());
+            assert!(inner.move_to(name, &inner, OsStr::new("moved")).is_err());
+            fs::write(temporary.path().join("inner/file"), b"x").unwrap();
+            assert!(inner.move_to(OsStr::new("file"), &inner, name).is_err());
         }
-        assert!(temporary.path().join("outside").exists());
+        assert_eq!(fs::read(temporary.path().join("outside")).unwrap(), b"x");
+        assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn what_okapi_creates_is_its_owner_s_alone_and_never_replaces_anything() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (temporary, directory) = directory();
+        let mode = |name: &str| {
+            fs::metadata(temporary.path().join(name))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        directory.create_directory(OsStr::new("folder")).unwrap();
+        drop(directory.create_new_file(OsStr::new("file")).unwrap());
+        assert_eq!((mode("folder"), mode("file")), (0o700, 0o600));
+        let taken = |error: io::Error| error.kind() == io::ErrorKind::AlreadyExists;
+        assert!(taken(
+            directory.create_new_file(OsStr::new("file")).unwrap_err()
+        ));
+        // Not even through a link, dangling or not.
+        symlink("nowhere", temporary.path().join("link")).unwrap();
+        assert!(taken(
+            directory.create_new_file(OsStr::new("link")).unwrap_err()
+        ));
+        assert!(!temporary.path().join("nowhere").exists());
+        fs::write(temporary.path().join("other"), b"other").unwrap();
+        fs::write(temporary.path().join("file"), b"file").unwrap();
+        let moved = directory.move_to(OsStr::new("other"), &directory, OsStr::new("file"));
+        assert!(taken(moved.unwrap_err()));
+        assert_eq!(fs::read(temporary.path().join("file")).unwrap(), b"file");
+        assert_eq!(fs::read(temporary.path().join("other")).unwrap(), b"other");
+        directory
+            .move_to(OsStr::new("other"), &directory, OsStr::new("free"))
+            .unwrap();
+        assert_eq!(fs::read(temporary.path().join("free")).unwrap(), b"other");
     }
 
     #[test]

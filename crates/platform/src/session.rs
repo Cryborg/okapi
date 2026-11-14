@@ -39,6 +39,11 @@ pub fn running_as_root() -> bool {
     effective_user() == Some(crate::directory::ROOT_USER)
 }
 
+/// What a directory Okapi creates allows: its owner only may read or enter
+/// it.
+#[cfg(unix)]
+pub(crate) const PRIVATE_DIRECTORY: u32 = 0o700;
+
 /// Creates `directory` and its missing parents, `directory` itself readable
 /// by its owner only (what Okapi keeps there may list file names), and makes
 /// it so if it already existed: through a
@@ -53,13 +58,14 @@ pub fn create_private_directory(directory: &Path) -> io::Result<()> {
     {
         use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
-        /// Only its owner may read or enter it.
-        const PRIVATE: u32 = 0o700;
         std::fs::DirBuilder::new()
             .recursive(true)
-            .mode(PRIVATE)
+            .mode(PRIVATE_DIRECTORY)
             .create(directory)?;
-        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(PRIVATE))
+        std::fs::set_permissions(
+            directory,
+            std::fs::Permissions::from_mode(PRIVATE_DIRECTORY),
+        )
     }
     #[cfg(not(unix))]
     {

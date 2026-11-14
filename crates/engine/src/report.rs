@@ -825,8 +825,10 @@ impl ReportBuilder {
 
 /// A number that differs from one report to the next with overwhelming
 /// probability, so an identifier from another report (or another run) is not
-/// taken for one of this report.
-fn report_nonce() -> u64 {
+/// taken for one of this report, whether it comes from the scan or from a
+/// tool of `okapi-tools`.
+#[must_use]
+pub fn report_nonce() -> u64 {
     use std::hash::{BuildHasher, RandomState};
 
     RandomState::new().hash_one(SystemTime::now())

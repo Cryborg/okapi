@@ -1,0 +1,272 @@
+//! The listing: each folder searched, read down from its root one folder at
+//! a time, never through a link nor into another mount, keeps the plain
+//! files that could have a copy.
+
+use std::collections::{BTreeSet, HashSet};
+use std::ffi::OsString;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+use okapi_engine::Exclusions;
+use okapi_platform::{Directory, EntryStatus, EntryType, FileIdentity};
+
+use super::report::{Found, SearchStats, Seen};
+// A file in the trash is on its way out, never a copy that keeps another.
+use super::trash::TRASH_FOLDER;
+
+/// How many entries of a folder are read between two looks at the
+/// cancellation.
+const CANCEL_LOOK_EVERY: usize = 1024;
+/// What makes a folder a project: its files are never offered (a
+/// repository, its build, its dependencies), unless the user chose it as a
+/// folder to search.
+const PROJECT_MARK: &str = ".git";
+/// The dependencies a project keeps beside its code, never offered even
+/// outside a repository.
+const DEPENDENCIES: &str = "node_modules";
+const HIDDEN_PREFIX: u8 = b'.';
+
+/// The search was cancelled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Cancelled;
+
+/// What the listing honours.
+pub(crate) struct Listing<'a> {
+    /// The folders searched: each is walked from its own root only.
+    pub(crate) roots: &'a HashSet<FileIdentity>,
+    pub(crate) min_size: u64,
+    pub(crate) exclusions: &'a Exclusions,
+    /// The mount points below the roots, read once for each: never touched,
+    /// a mount that stopped answering would hold the search for good.
+    pub(crate) mounts: &'a BTreeSet<PathBuf>,
+    pub(crate) cancelled: &'a AtomicBool,
+    /// The plain files listed so far, for the progress.
+    pub(crate) files: &'a AtomicU64,
+}
+
+/// A folder to read: opened from its parent, it must still be the one
+/// listed there.
+struct Task {
+    parent: Rc<Directory>,
+    name: OsString,
+    path: PathBuf,
+    expected: FileIdentity,
+}
+
+/// One root's listing.
+struct Walk<'a, 'b> {
+    listing: &'b Listing<'a>,
+    root: usize,
+    device: u64,
+    stats: &'b mut SearchStats,
+    seen: &'b mut HashSet<FileIdentity>,
+    found: &'b mut Vec<Found>,
+}
+
+/// Lists the root `root` (its rank among the roots), opened as `directory`
+/// at `path`, into `found`. A file met again under another name, in this
+/// root or an earlier one (`seen`), is listed once.
+pub(crate) fn walk(
+    listing: &Listing<'_>,
+    root: usize,
+    directory: Directory,
+    path: &Path,
+    stats: &mut SearchStats,
+    seen: &mut HashSet<FileIdentity>,
+    found: &mut Vec<Found>,
+) -> Result<(), Cancelled> {
+    let device = match directory.status() {
+        Ok(own) => own.identity.device(),
+        Err(error) => {
+            stats.unreadable += 1;
+            tracing::debug!(path = %path.display(), %error, "folder searched unreadable");
+            return Ok(());
+        }
+    };
+    let mut walk = Walk {
+        listing,
+        root,
+        device,
+        stats,
+        seen,
+        found,
+    };
+    let mut stack = Vec::new();
+    walk.read(&Rc::new(directory), path, true, &mut stack)?;
+    while let Some(task) = stack.pop() {
+        if listing.cancelled.load(Ordering::Acquire) {
+            return Err(Cancelled);
+        }
+        if let Some(directory) = walk.open(&task) {
+            walk.read(&Rc::new(directory), &task.path, false, &mut stack)?;
+        }
+    }
+    Ok(())
+}
+
+impl Walk<'_, '_> {
+    /// Opens the task's folder, checked to be the one listed; `None`, and
+    /// counted, when it cannot be.
+    fn open(&mut self, task: &Task) -> Option<Directory> {
+        let opened = task.parent.open_child(&task.name).and_then(|directory| {
+            let status = directory.status()?;
+            Ok((directory, status))
+        });
+        match opened {
+            Ok((_, status)) if status.mount_root == Some(true) => {
+                // Mounted on since it was listed.
+                self.stats.other_mounts += 1;
+                tracing::debug!(path = %task.path.display(), "mount not entered");
+                None
+            }
+            Ok((directory, status)) if status.identity == task.expected => Some(directory),
+            Ok(_) => {
+                self.stats.changed_directories += 1;
+                tracing::debug!(path = %task.path.display(), "folder changed since listed: not read");
+                None
+            }
+            // Removed meanwhile: nothing to search there.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => {
+                self.stats.unreadable += 1;
+                tracing::debug!(path = %task.path.display(), %error, "folder unreadable");
+                None
+            }
+        }
+    }
+
+    /// Reads the folder `directory` at `path`: its files kept, its folders
+    /// pushed on `stack`. A project's folder is left whole, unless it is the
+    /// root the user chose.
+    fn read(
+        &mut self,
+        directory: &Rc<Directory>,
+        path: &Path,
+        root: bool,
+        stack: &mut Vec<Task>,
+    ) -> Result<(), Cancelled> {
+        let names = match directory.names() {
+            Ok(names) => names,
+            Err(error) => {
+                self.stats.unreadable += 1;
+                tracing::debug!(path = %path.display(), %error, "folder unreadable");
+                return Ok(());
+            }
+        };
+        self.stats.directories += 1;
+        if !root && names.iter().any(|name| name == PROJECT_MARK) {
+            self.stats.projects += 1;
+            tracing::debug!(path = %path.display(), "project: not searched");
+            return Ok(());
+        }
+        for (index, name) in names.into_iter().enumerate() {
+            if index % CANCEL_LOOK_EVERY == 0 && self.listing.cancelled.load(Ordering::Acquire) {
+                return Err(Cancelled);
+            }
+            self.entry(directory, path, name, stack);
+        }
+        Ok(())
+    }
+
+    /// Judges the entry `name` of `directory`, at `parent`.
+    fn entry(
+        &mut self,
+        directory: &Rc<Directory>,
+        parent: &Path,
+        name: OsString,
+        stack: &mut Vec<Task>,
+    ) {
+        let path = parent.join(&name);
+        // A mount point is never even read: one that stopped answering would
+        // hold the search for good.
+        if self.listing.mounts.contains(&path) {
+            self.stats.other_mounts += 1;
+            tracing::debug!(path = %path.display(), "mount not entered");
+            return;
+        }
+        let status = match directory.status_of(&name) {
+            Ok(status) => status,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+            Err(error) => {
+                self.stats.unreadable += 1;
+                tracing::debug!(path = %path.display(), %error, "entry unreadable");
+                return;
+            }
+        };
+        match status.kind {
+            EntryType::Directory => {
+                if let Some(expected) = self.folder(&name, &path, &status) {
+                    stack.push(Task {
+                        parent: Rc::clone(directory),
+                        name,
+                        path,
+                        expected,
+                    });
+                }
+            }
+            EntryType::File => self.file(path, &status),
+            // Never followed, never a copy: a link, a socket, a pipe.
+            EntryType::Link | EntryType::Other => {}
+        }
+    }
+
+    /// The identity a subfolder must still have when opened, `None` when it
+    /// is not searched (and counted).
+    fn folder(
+        &mut self,
+        name: &OsString,
+        path: &Path,
+        status: &EntryStatus,
+    ) -> Option<FileIdentity> {
+        let reason = if self.listing.roots.contains(&status.identity) {
+            "searched as its own root"
+        } else if name.as_encoded_bytes().first() == Some(&HIDDEN_PREFIX) {
+            self.stats.hidden_directories += 1;
+            "hidden"
+        } else if name == DEPENDENCIES {
+            self.stats.dependency_directories += 1;
+            "dependencies"
+        } else if name == TRASH_FOLDER {
+            self.stats.trash_directories += 1;
+            "trash"
+        } else if self.listing.exclusions.excludes(path)
+            || self.listing.exclusions.excludes_identity(status.identity)
+        {
+            self.stats.excluded += 1;
+            "excluded"
+        } else if status.other_mount(self.device) {
+            self.stats.other_mounts += 1;
+            "mount"
+        } else {
+            return Some(status.identity);
+        };
+        tracing::debug!(path = %path.display(), reason, "folder not searched");
+        None
+    }
+
+    /// Keeps the plain file at `path`, read as `status`, if it could have a
+    /// copy.
+    fn file(&mut self, path: PathBuf, status: &EntryStatus) {
+        self.stats.files += 1;
+        self.listing.files.fetch_add(1, Ordering::Relaxed);
+        // An empty file is never a copy worth moving: it frees nothing, and
+        // an empty file often marks something (`__init__.py`).
+        if status.size < self.listing.min_size.max(1) {
+            self.stats.below_minimum += 1;
+        } else if self.listing.exclusions.excludes(&path) {
+            self.stats.excluded += 1;
+        } else if !self.seen.insert(status.identity) {
+            // Another name of a file already listed: removing one would free
+            // nothing, and a file is never its own copy.
+            self.stats.other_names += 1;
+        } else {
+            self.found.push(Found {
+                path,
+                root: self.root,
+                status: Seen::of(status),
+            });
+        }
+    }
+}

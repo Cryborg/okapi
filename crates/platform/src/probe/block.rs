@@ -56,13 +56,7 @@ pub fn device_labels() -> io::Result<Vec<(PathBuf, String)>> {
 /// The system's error; [`io::ErrorKind::Unsupported`] outside Linux.
 #[cfg(target_os = "linux")]
 pub fn removable(source: &Path) -> io::Result<bool> {
-    let device = rustix::fs::stat(source)?.st_rdev;
-    let number = format!(
-        "{}:{}",
-        rustix::fs::major(device),
-        rustix::fs::minor(device)
-    );
-    removable_in_sysfs(&Path::new(SYS_BY_NUMBER).join(number), MAPPER_DEPTH)
+    removable_in_sysfs(&sysfs_entry(source)?, MAPPER_DEPTH)
 }
 
 /// Whether a block device can be unplugged: unknown here.
@@ -75,21 +69,86 @@ pub fn removable(_source: &Path) -> io::Result<bool> {
     super::unsupported()
 }
 
+/// Whether the block device at `source` is a rotating disk, where reading
+/// several files at once seeks back and forth; a device-mapper device is one
+/// when a disk below it is.
+///
+/// # Errors
+///
+/// The system's error (a disk that does not say); [`io::ErrorKind::Unsupported`]
+/// outside Linux.
+#[cfg(target_os = "linux")]
+pub fn rotational(source: &Path) -> io::Result<bool> {
+    rotational_in_sysfs(&sysfs_entry(source)?, MAPPER_DEPTH)
+}
+
+/// Whether a block device is a rotating disk: unknown here.
+///
+/// # Errors
+///
+/// [`io::ErrorKind::Unsupported`].
+#[cfg(not(target_os = "linux"))]
+pub fn rotational(_source: &Path) -> io::Result<bool> {
+    super::unsupported()
+}
+
+/// The sysfs entry of the block device at `source`, by its number.
+#[cfg(target_os = "linux")]
+fn sysfs_entry(source: &Path) -> io::Result<PathBuf> {
+    let device = rustix::fs::stat(source)?.st_rdev;
+    let number = format!(
+        "{}:{}",
+        rustix::fs::major(device),
+        rustix::fs::minor(device)
+    );
+    Ok(Path::new(SYS_BY_NUMBER).join(number))
+}
+
 /// Whether the device whose sysfs entry is `entry` can be unplugged.
 pub(crate) fn removable_in_sysfs(entry: &Path, depth: usize) -> io::Result<bool> {
+    // Too deep to tell: fixed, as an internal disk is.
+    any_disk(entry, depth, false, &|disk| {
+        if on_usb(disk) {
+            return Ok(true);
+        }
+        match std::fs::read_to_string(disk.join("removable")) {
+            Ok(flag) => Ok(flag.trim() == FLAG_SET),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
+    })
+}
+
+/// Whether the device whose sysfs entry is `entry` is a rotating disk.
+pub(crate) fn rotational_in_sysfs(entry: &Path, depth: usize) -> io::Result<bool> {
+    // Too deep to tell: rotating, the safe guess for how many threads read.
+    any_disk(entry, depth, true, &|disk| {
+        std::fs::read_to_string(disk.join("queue/rotational")).map(|flag| flag.trim() == FLAG_SET)
+    })
+}
+
+/// What sysfs writes for a flag that is set.
+const FLAG_SET: &str = "1";
+
+/// Whether `judge` says yes of a disk the device whose sysfs entry is
+/// `entry` lies on: the disk of a partition, each disk below a
+/// device-mapper device (no deeper than `depth` layers, `too_deep` past it).
+fn any_disk(
+    entry: &Path,
+    depth: usize,
+    too_deep: bool,
+    judge: &dyn Fn(&Path) -> io::Result<bool>,
+) -> io::Result<bool> {
     let resolved = std::fs::canonicalize(entry)?;
-    if on_usb(&resolved) {
-        return Ok(true);
-    }
     // Every disk has a `slaves` folder, empty unless it is made of others.
     let slaves = resolved.join("slaves");
     let layered = std::fs::read_dir(&slaves).is_ok_and(|mut entries| entries.next().is_some());
     if layered {
         if depth == 0 {
-            return Ok(false);
+            return Ok(too_deep);
         }
         for slave in std::fs::read_dir(&slaves)? {
-            if removable_in_sysfs(&slave?.path(), depth - 1)? {
+            if any_disk(&slave?.path(), depth - 1, too_deep, judge)? {
                 return Ok(true);
             }
         }
@@ -103,11 +162,7 @@ pub(crate) fn removable_in_sysfs(entry: &Path, depth: usize) -> io::Result<bool>
     } else {
         resolved
     };
-    match std::fs::read_to_string(disk.join("removable")) {
-        Ok(flag) => Ok(flag.trim() == "1"),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
-    }
+    judge(&disk)
 }
 
 /// Whether a resolved sysfs path goes through a USB bus.
@@ -190,5 +245,49 @@ mod tests {
             "no deeper than allowed"
         );
         assert!(removable_in_sysfs(&numbers.join("0:29"), MAPPER_DEPTH).is_err());
+    }
+
+    #[test]
+    fn a_rotating_disk_and_a_volume_over_one_are_rotational() {
+        let (root, numbers) = sysfs();
+        let devices = root.path().join("devices");
+        // The USB key spins (an old disk in a case), the internal one not.
+        let flag = |disk: &str, value: &str| {
+            let queue = devices.join(disk).join("queue");
+            fs::create_dir_all(&queue).unwrap();
+            fs::write(queue.join("rotational"), value).unwrap();
+        };
+        flag("pci0000:00/usb1/1-1/host6/block/sdb", "1\n");
+        flag("pci0000:00/nvme/nvme0/nvme0n1", "0\n");
+        let rotational =
+            |number: &str| rotational_in_sysfs(&numbers.join(number), MAPPER_DEPTH).unwrap();
+        assert!(rotational("8:17"), "a partition of a rotating disk");
+        assert!(!rotational("259:4"), "a partition of a solid state disk");
+        assert!(rotational("253:0"), "a volume over a rotating disk");
+        assert!(
+            rotational_in_sysfs(&numbers.join("253:0"), 0).unwrap(),
+            "too deep to tell: rotating"
+        );
+        // A volume over eight disks, one of them rotating: found wherever
+        // the listing of its slaves puts it.
+        for spinning in 0..8 {
+            let volume = devices.join(format!("virtual/block/dm-wide-{spinning}"));
+            fs::create_dir_all(volume.join("slaves")).unwrap();
+            for index in 0..8 {
+                let disk = devices.join(format!("wide-{spinning}/disk-{index}"));
+                fs::create_dir_all(disk.join("queue")).unwrap();
+                let flag = if index == spinning { "1\n" } else { "0\n" };
+                fs::write(disk.join("queue/rotational"), flag).unwrap();
+                symlink(&disk, volume.join(format!("slaves/disk-{index}"))).unwrap();
+            }
+            assert!(
+                rotational_in_sysfs(&volume, MAPPER_DEPTH).unwrap(),
+                "{spinning}"
+            );
+        }
+        assert!(
+            rotational_in_sysfs(&numbers.join("179:0"), MAPPER_DEPTH).is_err(),
+            "a disk that does not say"
+        );
     }
 }

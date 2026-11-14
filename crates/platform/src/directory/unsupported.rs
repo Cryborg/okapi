@@ -1,4 +1,5 @@
 use std::ffi::{OsStr, OsString};
+use std::fs::File;
 use std::io;
 use std::path::Path;
 
@@ -66,6 +67,42 @@ impl Directory {
     /// # Errors
     ///
     /// None.
+    pub fn open_file(&self, _name: &OsStr) -> io::Result<(File, EntryStatus)> {
+        match *self {}
+    }
+
+    /// Never called: no directory exists.
+    ///
+    /// # Errors
+    ///
+    /// None.
+    pub fn create_directory(&self, _name: &OsStr) -> io::Result<()> {
+        match *self {}
+    }
+
+    /// Never called: no directory exists.
+    ///
+    /// # Errors
+    ///
+    /// None.
+    pub fn create_new_file(&self, _name: &OsStr) -> io::Result<File> {
+        match *self {}
+    }
+
+    /// Never called: no directory exists.
+    ///
+    /// # Errors
+    ///
+    /// None.
+    pub fn move_to(&self, _name: &OsStr, _target: &Self, _new_name: &OsStr) -> io::Result<()> {
+        match *self {}
+    }
+
+    /// Never called: no directory exists.
+    ///
+    /// # Errors
+    ///
+    /// None.
     pub fn remove_file(&self, _name: &OsStr) -> io::Result<()> {
         match *self {}
     }
@@ -100,5 +137,10 @@ pub const fn tells_mount_roots() -> bool {
 /// told apart here.
 #[must_use]
 pub const fn out_of_descriptors(_error: &io::Error) -> bool {
+    false
+}
+
+/// Whether `error` is the refusal to open a link: no directory opens here.
+pub(crate) const fn link_refused(_error: &io::Error) -> bool {
     false
 }

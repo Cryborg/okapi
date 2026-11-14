@@ -225,6 +225,12 @@ export global Cleaner {
     in property <HistoryState> history;
     // The deletion log the user asked for is not written.
     in property <bool> deletion-log-lost;
+    // The file of the user's choices among the results, when it could not
+    // be read (empty otherwise): the results start as by default, and no
+    // change is kept.
+    in property <string> choices-unreadable;
+    // The last change of the boxes could not be kept.
+    in property <bool> choices-unsaved;
     // Why the administrator's part of the cleaning was not done.
     in property <RightsProblem> receipt-rights;
 

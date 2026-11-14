@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use okapi_engine::{Category, Origin, ScanGroup};
+use okapi_engine::{Category, Origin, OriginKey, ScanGroup};
 use okapi_rules::{ChromiumBrowserKind, Language};
 
 /// What the results need of one group of the report.
@@ -30,6 +30,10 @@ pub struct GroupFacts {
     pub admin: AdminState,
     /// Checked before the user chooses: the engine's one rule.
     pub checked_by_default: bool,
+    /// The keys of all its rules. The user's choice of it is kept by them
+    /// only when it is checked by default: a group left to choose or the
+    /// administrator's always starts unchecked (D-13).
+    pub keys: BTreeSet<OriginKey>,
     /// What the user's own scan saw of it: [`Self::numbers`] are shown.
     pub entries: usize,
     pub bytes: u64,
@@ -55,6 +59,7 @@ impl GroupFacts {
     pub fn of(group: &ScanGroup, language: Language, targets: &BTreeMap<Origin, String>) -> Self {
         let english = group.label().as_str();
         let needs_admin = group.needs_admin();
+        let checked_by_default = group.is_checked_by_default();
         Self {
             label: okapi_rules::label(language, english).to_owned(),
             label_alone: okapi_rules::group_label(language, group.browser(), english),
@@ -79,7 +84,8 @@ impl GroupFacts {
                     None
                 }),
             admin: AdminState::Locked,
-            checked_by_default: group.is_checked_by_default(),
+            checked_by_default,
+            keys: group.origins().iter().map(Origin::key).collect(),
             entries: group.items().len(),
             bytes: group.total_size(),
         }
@@ -173,6 +179,59 @@ impl Results {
             folded: BTreeSet::new(),
             folded_browsers: BTreeSet::new(),
         }
+    }
+
+    /// Unchecks, right after [`Self::new`] (then only the groups checked by
+    /// default are checked), those the user unchecked before: with one of
+    /// their rules in `unchecked`. It only ever unchecks: no choice kept
+    /// checks a group (invariant 5).
+    #[must_use]
+    pub fn unchecking(mut self, unchecked: &BTreeSet<OriginKey>) -> Self {
+        let groups = &self.groups;
+        let mut applied = BTreeSet::new();
+        self.checked.retain(|index| {
+            let matched: Vec<&OriginKey> = groups[*index].keys.intersection(unchecked).collect();
+            applied.extend(matched.iter().map(|key| (*key).clone()));
+            matched.is_empty()
+        });
+        let here = unchecked
+            .iter()
+            .filter(|key| groups.iter().any(|group| group.keys.contains(*key)))
+            .count();
+        tracing::info!(
+            ?applied,
+            not_in_this_analysis = unchecked.len() - here,
+            "choices kept: groups unchecked"
+        );
+        self
+    }
+
+    /// Keeps in `unchecked` what the user changed since `before`, the groups
+    /// checked then: the rules of each group checked by default whose box
+    /// changed, removed when it is checked, added when not; never those of
+    /// another group (D-13). Any other group, absent from this report or
+    /// untouched, keeps its choice. Whether `unchecked` changed.
+    pub fn remember(&self, before: &BTreeSet<usize>, unchecked: &mut BTreeSet<OriginKey>) -> bool {
+        let mut changed = false;
+        for index in before.symmetric_difference(&self.checked) {
+            let Some(group) = self
+                .groups
+                .get(*index)
+                .filter(|group| group.checked_by_default)
+            else {
+                continue;
+            };
+            let checked = self.checked.contains(index);
+            for key in &group.keys {
+                changed |= if checked {
+                    unchecked.remove(key)
+                } else {
+                    unchecked.insert(key.clone())
+                };
+            }
+            tracing::debug!(index, checked, keys = ?group.keys, "choice kept");
+        }
+        changed
     }
 
     #[must_use]
@@ -401,7 +460,6 @@ impl Results {
 
     /// The groups checked, by their index in the report: the screen takes
     /// them part by part ([`Self::user_checked`], [`Self::admin_checked`]).
-    #[cfg(test)]
     #[must_use]
     pub const fn checked(&self) -> &BTreeSet<usize> {
         &self.checked
@@ -561,6 +619,7 @@ mod tests {
             targets: None,
             admin: AdminState::Locked,
             checked_by_default: okapi_engine::checked_by_default(preselected, needs_admin),
+            keys: BTreeSet::new(),
             entries: 2,
             bytes: 10,
         }
@@ -926,5 +985,121 @@ mod tests {
         };
         let results = Results::new(vec![shared], BTreeSet::from([Category::Apps]));
         assert_eq!(shape(&results), "CG", "under Applications, no browser line");
+    }
+
+    fn keys(names: &[&str]) -> BTreeSet<OriginKey> {
+        names
+            .iter()
+            .map(|name| vec!["app".to_owned(), (*name).to_owned()])
+            .collect()
+    }
+
+    /// A group checked by default, its choice kept by the rules `names`.
+    fn kept(names: &[&str]) -> GroupFacts {
+        GroupFacts {
+            keys: keys(names),
+            ..group(&[Category::Apps], true, false)
+        }
+    }
+
+    /// Two groups kept by their rules (one of two), one left to choose and
+    /// one of the administrator's, whose keys are never kept (D-13).
+    fn remembered() -> Results {
+        Results::new(
+            vec![
+                kept(&["pip"]),
+                kept(&["npm", "yarn"]),
+                GroupFacts {
+                    keys: keys(&["mesa"]),
+                    ..group(&[Category::Apps], false, false)
+                },
+                GroupFacts {
+                    keys: keys(&["crash"]),
+                    ..group(&[Category::Apps], true, true)
+                },
+            ],
+            BTreeSet::from([Category::Apps]),
+        )
+    }
+
+    #[test]
+    fn a_choice_kept_only_ever_unchecks() {
+        let everything = keys(&["pip", "npm", "yarn", "mesa", "crash", "gone"]);
+        assert!(remembered().unchecking(&everything).checked().is_empty());
+        for one_rule in ["npm", "yarn"] {
+            assert_eq!(
+                *remembered().unchecking(&keys(&[one_rule])).checked(),
+                BTreeSet::from([0]),
+                "one rule of a group is enough: {one_rule}"
+            );
+        }
+        assert_eq!(
+            *remembered().unchecking(&BTreeSet::new()).checked(),
+            BTreeSet::from([0, 1]),
+            "never a group left to choose nor the administrator's"
+        );
+    }
+
+    #[test]
+    fn a_change_is_kept_even_when_the_last_group_changes_nothing() {
+        let mut unchecked = keys(&["pip"]);
+        let mut results = remembered().unchecking(&unchecked);
+        results.deselect_all();
+        assert!(
+            toggled(&mut results, 0, &mut unchecked),
+            "pip checked again by its category, npm with nothing to forget"
+        );
+        assert!(unchecked.is_empty());
+    }
+
+    /// Toggles the line `row` and keeps the change in `unchecked`: whether
+    /// it changed.
+    fn toggled(results: &mut Results, row: usize, unchecked: &mut BTreeSet<OriginKey>) -> bool {
+        let before = results.checked().clone();
+        results.toggle_row(row);
+        results.remember(&before, unchecked)
+    }
+
+    #[test]
+    fn only_the_boxes_the_user_changed_are_kept() {
+        let mut results = remembered().unchecking(&keys(&["gone"]));
+        let mut unchecked = keys(&["gone"]);
+        // Rows: the category, then the groups in order.
+        assert!(toggled(&mut results, 2, &mut unchecked), "npm unchecked");
+        assert!(
+            !toggled(&mut results, 3, &mut unchecked),
+            "left to choose, checked: nothing kept"
+        );
+        assert!(!toggled(&mut results, 3, &mut unchecked), "and unchecked");
+        assert_eq!(unchecked, keys(&["gone", "npm", "yarn"]));
+        assert!(
+            toggled(&mut results, 2, &mut unchecked),
+            "npm checked again"
+        );
+        assert_eq!(unchecked, keys(&["gone"]), "a rule absent stays");
+        let before = results.checked().clone();
+        results.fold_row(0);
+        assert!(
+            !results.remember(&before, &mut unchecked),
+            "a fold changes no box"
+        );
+        results.deselect_all();
+        assert_eq!(unchecked, keys(&["gone"]), "for this analysis only");
+        assert!(
+            !toggled(&mut results, 2, &mut unchecked),
+            "npm checked again: nothing to forget, and pip, unchecked by the deselection, not kept"
+        );
+        assert_eq!(unchecked, keys(&["gone"]));
+        assert!(
+            toggled(&mut results, 0, &mut unchecked),
+            "the category unchecks npm: kept, pip already unchecked is not"
+        );
+        assert_eq!(unchecked, keys(&["gone", "npm", "yarn"]));
+        assert!(
+            toggled(&mut results, 0, &mut unchecked),
+            "the category checks its groups by default again"
+        );
+        assert_eq!(*results.checked(), BTreeSet::from([0, 1]));
+        assert_eq!(unchecked, keys(&["gone"]));
     }
 }

@@ -37,8 +37,11 @@ pub enum AppFile {
     GpuCache,
 }
 
-/// The rule a group of entries comes from: a stable key, for remembering what
-/// the user selected (never an index, which a rule update would shift).
+/// A rule's name in what the user's choices keep: see [`Origin::key`].
+pub type OriginKey = Vec<String>;
+
+/// The rule a group of entries comes from, never an index (which a rule
+/// update would shift); what the user's choices keep of it is [`Origin::key`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Origin {
     /// A directory of `system.json`.
@@ -72,6 +75,36 @@ impl Origin {
                 path: deletion.path().clone(),
             }),
             Effect::Maintenance { .. } => None,
+        }
+    }
+
+    /// Its name in what the user's choices keep, from the rules' own texts
+    /// (never a translation nor an index): its kind, then what tells it
+    /// apart. An application's identifier is unique across its files, so a
+    /// rule moved from one to another keeps its key.
+    #[must_use]
+    pub fn key(&self) -> OriginKey {
+        match self {
+            Self::SystemTarget { subcategory, path } => {
+                vec![
+                    "systemTarget".to_owned(),
+                    subcategory.to_string(),
+                    path.to_string(),
+                ]
+            }
+            Self::SystemFile { subcategory, path } => {
+                vec![
+                    "systemFile".to_owned(),
+                    subcategory.to_string(),
+                    path.to_string(),
+                ]
+            }
+            Self::App { id, .. } => vec!["app".to_owned(), id.to_string()],
+            Self::Browser { browser, directory } => vec![
+                "browser".to_owned(),
+                browser.key().to_owned(),
+                directory.to_string(),
+            ],
         }
     }
 
@@ -797,6 +830,42 @@ mod tests {
     use okapi_rules::{Label, RuleId, TemplatePath};
 
     use super::*;
+
+    #[test]
+    fn a_rule_s_key_is_its_name_in_the_rules() {
+        let label = |text: &str| Label::try_from(text.to_owned()).unwrap();
+        let path = |text: &str| TemplatePath::try_from(text.to_owned()).unwrap();
+        let target = Origin::SystemTarget {
+            subcategory: label("Crash reports"),
+            path: path("/var/crash"),
+        };
+        assert_eq!(
+            target.key(),
+            ["systemTarget", "Crash reports", "/var/crash"]
+        );
+        let file = Origin::SystemFile {
+            subcategory: label("Crash reports"),
+            path: path("/var/crash"),
+        };
+        assert_eq!(file.key(), ["systemFile", "Crash reports", "/var/crash"]);
+        for app_file in [AppFile::Apps, AppFile::Gaming] {
+            let app = Origin::App {
+                file: app_file,
+                id: RuleId::try_from("pip".to_owned()).unwrap(),
+            };
+            assert_eq!(app.key(), ["app", "pip"], "the same in any file");
+        }
+        let browser = Origin::Browser {
+            browser: ChromiumBrowserKind::OperaGx,
+            directory: RelativePath::try_from("Cache/Cache_Data".to_owned()).unwrap(),
+        };
+        assert_eq!(browser.key(), ["browser", "operaGX", "Cache/Cache_Data"]);
+        let other_subcategory = Origin::SystemTarget {
+            subcategory: label("Logs"),
+            path: path("/var/crash"),
+        };
+        assert_ne!(other_subcategory.key(), target.key());
+    }
 
     #[test]
     fn each_rule_file_has_its_category() {

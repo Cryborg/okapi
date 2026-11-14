@@ -3,7 +3,8 @@
 //! beside it (`dashboard.json`), one line per cleaning in
 //! `$XDG_STATE_HOME/okapi/history.jsonl`, the summary of the last analysis
 //! beside it (`last-analysis.json`), how the user last left the interface
-//! (`interface.json`, there too), and every trace in the journal. A
+//! (`interface.json`, there too), what they unchecked among the results
+//! (`selections.json`, there too), and every trace in the journal. A
 //! cleaning's receipt becomes its history line here, the one form both
 //! interfaces write; nothing here depends on an interface.
 
@@ -13,6 +14,7 @@ mod history;
 mod interface_state;
 pub mod journal;
 mod last_analysis;
+mod selections;
 mod settings;
 
 use std::io;
@@ -27,6 +29,7 @@ pub use history::{
 };
 pub use interface_state::InterfaceState;
 pub use last_analysis::LastAnalysis;
+pub use selections::Selections;
 pub use settings::Settings;
 
 /// A file Okapi keeps could not be used.

@@ -3,8 +3,8 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme, Screen } from "theme.slint";
 import {
-    ActionButton, ButtonKind, Badge, Card, CheckMark, Detail, Footer, FocusRing, Icon, IconButton,
-    IconNote, Line, ModalFrame, Title,
+    ActionButton, Banner, ButtonKind, Badge, Card, CheckMark, Detail, Footer, FocusRing, Icon,
+    IconButton, IconNote, Line, ModalFrame, Title,
 } from "widgets.slint";
 import {
     AdminRow, BrowserStep, CheckState, Cleaner, IssueKind, IssueShown, ProblemBanner, ResultBadge,
@@ -543,6 +543,14 @@ export component ResultsPage inherits VerticalLayout {
         }
         if Cleaner.problem != SetupProblem.none: ProblemBanner { }
         if Cleaner.rights-waiting > 0 || Cleaner.rights-step != RightsStep.idle: RightsBanner { }
+        if Cleaner.choices-unreadable != "": Banner {
+            warning: true;
+            text: @tr("Vos choix précédents n'ont pas pu être lus dans {} : les cases sont comme par défaut, et vos changements ne sont pas retenus pour ne pas écraser ce fichier.", Cleaner.choices-unreadable);
+        }
+        if Cleaner.choices-unsaved: Banner {
+            warning: true;
+            text: @tr("Vos derniers changements de cases n'ont pas pu être enregistrés : ils seront oubliés à la fermeture d'Okapi.");
+        }
         Card {
             vertical-stretch: 1;
             accessible-role: list;

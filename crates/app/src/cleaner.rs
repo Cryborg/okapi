@@ -25,6 +25,7 @@ use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 use okapi_helper::{Operation, Reply};
 
 use crate::elevation::{ElevationFailure, ElevationStep, Launcher};
+use crate::kept_selections::{KeptSelections, Unkept};
 use crate::results::{AdminState, CheckState, GroupFacts, Line, Results};
 use crate::shown::{show, shown, size};
 use crate::ui;
@@ -44,6 +45,9 @@ const CANCEL_WAIT: Duration = Duration::from_secs(5);
 /// of a double click on what it showed before: "Analyser" and "Annuler
 /// l'analyse" share a place, so a double click would start and cancel.
 const SECOND_CLICK: Duration = Duration::from_millis(500);
+/// How long after a choice among the results whether it was kept is
+/// looked at: a write is done well within it.
+const WRITE_CHECK: Duration = Duration::from_millis(300);
 
 /// What a scan is prepared from, read from the machine each time it is
 /// needed: the settings may change between two analyses.
@@ -782,6 +786,9 @@ struct State {
     /// The last analysis that found something, and the user's choice in it:
     /// what a cleaning takes its identifiers from (invariant 1).
     held: Option<Held>,
+    /// The user's choices among the results, kept from one analysis to the
+    /// next; none when they are not kept.
+    kept: Option<KeptSelections>,
     /// The confirmation of a cleaning, open.
     confirming: Option<cleaning::Confirming>,
     /// The question about an open browser, before the cleaning confirmed.
@@ -795,6 +802,10 @@ struct State {
     timer: Rc<slint::Timer>,
     /// Runs for [`SECOND_CLICK`] after the screen changes.
     settling: slint::Timer,
+    /// Looks, a little after a choice, at whether it was kept.
+    write_check: slint::Timer,
+    /// The last choice among the results could not be kept.
+    choices_unsaved: bool,
     listener: Option<Listener>,
 }
 
@@ -835,6 +846,7 @@ impl CleanerScreen {
             stop_model: Rc::new(VecModel::default()),
             task: None,
             held: None,
+            kept: None,
             confirming: None,
             asking: None,
             asked_to_close: BTreeSet::new(),
@@ -844,6 +856,8 @@ impl CleanerScreen {
             note_model: Rc::new(VecModel::default()),
             timer: Rc::new(slint::Timer::default()),
             settling: slint::Timer::default(),
+            write_check: slint::Timer::default(),
+            choices_unsaved: false,
             listener: None,
         };
         let cleaner = window.global::<ui::Cleaner>();
@@ -1279,7 +1293,8 @@ impl CleanerScreen {
     }
 
     /// Keeps the report of an analysis that found something, its results
-    /// checked as the engine says.
+    /// checked as the engine says, less the groups the user unchecked
+    /// before (choices kept only ever uncheck).
     fn hold(&self, report: ScanReport) {
         let mut state = self.0.borrow_mut();
         let chosen = state
@@ -1298,10 +1313,14 @@ impl CleanerScreen {
             .collect();
         let notes: Vec<_> = report.issues().iter().filter_map(note_shown).collect();
         show(&state.note_model, notes);
+        let mut results = Results::new(groups, chosen);
+        if let Some(kept) = &state.kept {
+            results = results.unchecking(kept.unchecked());
+        }
         // A new analysis: what waits for the rights is locked again, and
         // what was said of the rights before is over.
         state.held = Some(Held {
-            results: Results::new(groups, chosen),
+            results,
             report: Arc::new(report),
             granted: None,
         });
@@ -1321,16 +1340,38 @@ impl CleanerScreen {
             return;
         }
         {
-            let mut state = self.0.borrow_mut();
+            let mut guard = self.0.borrow_mut();
+            let state = &mut *guard;
             let Some(held) = state.held.as_mut() else {
                 return;
             };
             let Ok(row) = usize::try_from(row) else {
                 return;
             };
+            let before = held.results.checked().clone();
             change(&mut held.results, row);
+            if let Some(kept) = state.kept.as_mut() {
+                kept.update(&held.results, &before);
+            }
         }
+        self.check_write();
+    }
+
+    /// Shows the results, and whether the last choice among them was kept:
+    /// looked at again a little later while its write is not done.
+    fn check_write(&self) {
         self.show_results();
+        let state = self.0.borrow();
+        if state.kept.as_ref().is_some_and(KeptSelections::writing) {
+            let weak = Rc::downgrade(&self.0);
+            state
+                .write_check
+                .start(slint::TimerMode::SingleShot, WRITE_CHECK, move || {
+                    if let Some(state) = weak.upgrade() {
+                        Self(state).check_write();
+                    }
+                });
+        }
     }
 
     /// Whether the results may change: never under an open confirmation,
@@ -1349,6 +1390,8 @@ impl CleanerScreen {
         frozen
     }
 
+    /// Unchecks every group, for this analysis only: one click to clean
+    /// one thing this time is no lasting choice (the choices kept are left).
     fn deselect_all(&self) {
         if self.is_settling("deselection") || self.results_frozen("deselection") {
             return;
@@ -1361,7 +1404,16 @@ impl CleanerScreen {
 
     /// Shows the results held, if any.
     fn show_results(&self) {
+        {
+            let mut state = self.0.borrow_mut();
+            if let Some(kept) = state.kept.as_mut() {
+                state.choices_unsaved = !kept.all_kept();
+            }
+        }
         self.with_window(|window, state| {
+            window
+                .global::<ui::Cleaner>()
+                .set_choices_unsaved(state.choices_unsaved);
             let Some(held) = &state.held else {
                 return;
             };
@@ -1433,15 +1485,48 @@ impl CleanerScreen {
         self.refresh();
     }
 
-    /// Cancels a task under way and waits for it a little: the window is
+    /// Keeps the user's choices among the results from now on; when they
+    /// could not be read, says so on the results, which then start as by
+    /// default.
+    pub fn keep_selections(&self, kept: Result<KeptSelections, Unkept>) {
+        match kept {
+            Ok(kept) => self.0.borrow_mut().kept = Some(kept),
+            Err(Unkept::Unreadable(path)) => {
+                if let Some(window) = self.0.borrow().window.upgrade() {
+                    window
+                        .global::<ui::Cleaner>()
+                        .set_choices_unreadable(path.display().to_string().into());
+                } else {
+                    tracing::warn!("no window to say the choices are unreadable");
+                }
+            }
+            // Rare, and traced: without a state directory the history is
+            // not kept either.
+            Err(Unkept::NoDirectory | Unkept::NoWriter) => {}
+        }
+    }
+
+    /// Cancels a task under way, lets the last choice among the results be
+    /// written meanwhile, then waits for the task a little: the window is
     /// closing. A cleaning is only left here when the user insisted on
     /// closing ([`Self::close_requested`]) or the event loop ended: its
     /// history line is then lost unless it finishes meanwhile.
     pub fn shut_down(&self) {
-        let Some(task) = self.0.borrow_mut().task.take() else {
+        let task = self.0.borrow_mut().task.take();
+        if let Some(task) = &task {
+            task.cancel().cancel();
+        }
+        // The last choice among the results is written whatever runs, while
+        // the task stops.
+        let mut state = self.0.borrow_mut();
+        state.write_check.stop();
+        if let Some(kept) = state.kept.as_mut() {
+            kept.shut_down();
+        }
+        drop(state);
+        let Some(task) = task else {
             return;
         };
-        task.cancel().cancel();
         let started = Instant::now();
         while !task.is_finished() && started.elapsed() < STOP_WAIT {
             thread::sleep(STOP_POLL);
@@ -1493,6 +1578,7 @@ pub mod tests {
             targets: Some(BTreeSet::from(["/var/crash".to_owned()])),
             admin: AdminState::Locked,
             checked_by_default: false,
+            keys: BTreeSet::new(),
             entries: 1,
             bytes: 1,
         };

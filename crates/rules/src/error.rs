@@ -123,6 +123,16 @@ pub enum RulesError {
         "{os} rules, system.json: `{path}` is the path of a target that needs the administrator and of another target"
     )]
     DuplicateAdminTarget { os: Os, path: String },
+
+    /// A target is remembered by its subcategory and its path.
+    #[error(
+        "{os} rules, system.json: two targets of the subcategory `{subcategory}` delete `{path}`"
+    )]
+    DuplicateTarget {
+        os: Os,
+        subcategory: String,
+        path: String,
+    },
 }
 
 /// A template path or a variable value cannot be used to build a real path.

@@ -241,6 +241,7 @@ impl RuleSet {
         rules.check_unique_rule_ids()?;
         rules.check_unique_database_labels()?;
         rules.check_unique_admin_targets()?;
+        rules.check_unique_targets()?;
         Ok(rules)
     }
 
@@ -413,6 +414,34 @@ impl RuleSet {
         match shared {
             Some(path) => Err(RulesError::DuplicateAdminTarget {
                 os: self.os,
+                path: path.to_string(),
+            }),
+            None => Ok(()),
+        }
+    }
+
+    /// The user's choices remember a target by its subcategory and the path
+    /// it deletes (`okapi_engine::Origin::key`): no two targets that delete
+    /// share both, nor two single files. Told apart by `childSubdir` alone,
+    /// they would be two groups the same choice stands for.
+    fn check_unique_targets(&self) -> Result<(), RulesError> {
+        let targets =
+            self.system
+                .clean_targets()
+                .iter()
+                .filter_map(|target| match target.effect() {
+                    Effect::Delete(deletion) => Some((target.subcategory(), deletion.path())),
+                    Effect::Maintenance { .. } => None,
+                });
+        let files = self
+            .system
+            .single_file_targets()
+            .iter()
+            .map(|file| (file.subcategory(), file.path()));
+        match first_duplicate(targets).or_else(|| first_duplicate(files)) {
+            Some((subcategory, path)) => Err(RulesError::DuplicateTarget {
+                os: self.os,
+                subcategory: subcategory.to_string(),
                 path: path.to_string(),
             }),
             None => Ok(()),
@@ -950,14 +979,55 @@ mod tests {
                 "{error}"
             );
         }
-        let ordinary = r#"{"path": "/var/tmp", "subcategory": "Temp"}"#;
-        let twice = format!(r#"{{"type": "system", "cleanTargets": [{ordinary}, {ordinary}]}}"#);
-        load_minimal_with(RuleFileKind::System, &twice)
-            .expect("ordinary targets are never asked for by their path");
         let maintenance = r#"{"path": "/var/crash", "subcategory": "Crash", "needsAdmin": true, "cleanupAction": "journal-vacuum"}"#;
         let beside = format!(r#"{{"type": "system", "cleanTargets": [{admin}, {maintenance}]}}"#);
         load_minimal_with(RuleFileKind::System, &beside)
             .expect("a maintenance operation deletes nothing: no rule to the helper");
+    }
+
+    #[test]
+    fn rejects_two_targets_remembered_alike() {
+        let whole = r#"{"path": "/var/tmp", "subcategory": "Temp"}"#;
+        let under = r#"{"path": "/var/tmp", "subcategory": "Temp", "childSubdir": "x"}"#;
+        let elsewhere = r#"{"path": "/var/tmp", "subcategory": "Other"}"#;
+        let targets = |pair: [&str; 2]| {
+            load_minimal_with(
+                RuleFileKind::System,
+                &format!(
+                    r#"{{"type": "system", "cleanTargets": [{}, {}]}}"#,
+                    pair[0], pair[1]
+                ),
+            )
+        };
+        for pair in [[whole, under], [whole, whole]] {
+            let error = targets(pair).unwrap_err();
+            assert!(
+                matches!(&error, RulesError::DuplicateTarget { subcategory, path, .. } if subcategory == "Temp" && path == "/var/tmp"),
+                "{error}"
+            );
+        }
+        targets([whole, elsewhere]).expect("another subcategory: another rule");
+        let maintenance =
+            r#"{"path": "/var/tmp", "subcategory": "Temp", "cleanupAction": "journal-vacuum"}"#;
+        targets([whole, maintenance]).expect("a maintenance operation deletes nothing");
+        let single = r#"{"path": "/var/tmp", "subcategory": "Temp"}"#;
+        load_minimal_with(
+            RuleFileKind::System,
+            &format!(r#"{{"type": "system", "cleanTargets": [{whole}], "singleFileTargets": [{single}]}}"#),
+        )
+        .expect("a target and a single file are remembered apart");
+        let file = r#"{"path": "/var/log/x.log", "subcategory": "Logs"}"#;
+        let error = load_minimal_with(
+            RuleFileKind::System,
+            &format!(
+                r#"{{"type": "system", "cleanTargets": [], "singleFileTargets": [{file}, {file}]}}"#
+            ),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, RulesError::DuplicateTarget { path, .. } if path == "/var/log/x.log"),
+            "{error}"
+        );
     }
 
     #[test]

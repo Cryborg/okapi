@@ -1,8 +1,7 @@
-//! Keeps what the window keeps (the dashboard's layout, the interface's
-//! state), off the interface's thread: a write syncs the disk, which the
-//! window must never wait for. One thread per kind of value writes them in
-//! order, only the latest of those waiting (the others are passed by it),
-//! and says whether each write kept it.
+//! Keeps what the window keeps, off the interface's thread: a write syncs
+//! the disk, which the window must never wait for. One thread per kind of
+//! value writes them in order, only the latest of those waiting (the others
+//! are passed by it), and says whether each write kept it.
 
 use std::io;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};

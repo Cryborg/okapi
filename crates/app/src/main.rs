@@ -15,6 +15,7 @@ mod cleaner;
 mod dashboard;
 mod dates;
 mod elevation;
+mod kept_selections;
 mod receipt;
 mod results;
 mod saving;
@@ -193,6 +194,9 @@ fn main() -> ExitCode {
     };
     tracing::info!("window created");
     let fold = sidebar::KeptFold::attach(&window, okapi_platform::state_directory());
+    screen.keep_selections(kept_selections::KeptSelections::start(
+        okapi_platform::state_directory(),
+    ));
     let ran = window.run();
     screen.shut_down();
     home.shut_down();

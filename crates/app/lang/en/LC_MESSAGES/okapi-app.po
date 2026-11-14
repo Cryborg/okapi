@@ -1422,3 +1422,11 @@ msgstr "Restore the default layout"
 msgctxt "DashboardPage"
 msgid "Ajouter un widget"
 msgstr "Add a widget"
+
+msgctxt "ResultsPage"
+msgid "Vos choix précédents n'ont pas pu être lus dans {} : les cases sont comme par défaut, et vos changements ne sont pas retenus pour ne pas écraser ce fichier."
+msgstr "Your previous choices could not be read from {}: the boxes are as by default, and your changes are not kept so as not to overwrite that file."
+
+msgctxt "ResultsPage"
+msgid "Vos derniers changements de cases n'ont pas pu être enregistrés : ils seront oubliés à la fermeture d'Okapi."
+msgstr "Your last changes to the boxes could not be saved: they will be forgotten when Okapi closes."

@@ -90,7 +90,7 @@ impl LastAnalysis {
     /// have counted (the caches of a snap whose data went). A cleaning that
     /// removed nothing counts too, and so would a history touched by hand:
     /// the summary is then said outdated, which costs a new analysis. Not
-    /// seen: a cleaning cut short before its line was written, a history
+    /// seen: a cleaning or an uninstallation cut short before its line was written, a history
     /// restored with an older date, a clock set back, or a history on a
     /// filesystem whose clock lags. No history: not outdated.
     ///
@@ -206,17 +206,22 @@ mod tests {
     #[test]
     fn an_uninstallation_recorded_after_the_analysis_makes_it_outdated() {
         let directory = tempfile::tempdir().unwrap();
+        // An hour ago: the history written after it.
         let analysis = LastAnalysis {
-            time: crate::history::seconds(SystemTime::now()),
+            time: crate::history::seconds(SystemTime::now()) - 3600,
             reclaimable_bytes: 1,
             entries: 1,
+        };
+        let later = LastAnalysis {
+            time: analysis.time + 2 * 3600,
+            ..analysis
         };
         assert!(!analysis.outdated(directory.path()).unwrap(), "no history");
         History::open(directory.path())
             .unwrap()
             .record_uninstall(&crate::UninstallEntry {
                 time: analysis.time,
-                source: "deb".to_owned(),
+                source: crate::UninstallSource::Deb,
                 name: "GIMP".to_owned(),
                 packages: vec!["gimp".to_owned()],
                 freed_bytes: 1,
@@ -224,6 +229,10 @@ mod tests {
             })
             .unwrap();
         assert!(analysis.outdated(directory.path()).unwrap());
+        assert!(
+            !later.outdated(directory.path()).unwrap(),
+            "an analysis after it"
+        );
     }
 
     #[test]

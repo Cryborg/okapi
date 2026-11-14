@@ -242,8 +242,7 @@ pub enum Opened {
 pub struct UninstallEntry {
     /// Seconds since the clock's origin, negative before it.
     pub time: i64,
-    /// Who removed it, by a stable name of the caller's (`deb`, `snap`).
-    pub source: String,
+    pub source: UninstallSource,
     /// The application, as the user saw it.
     pub name: String,
     /// What went, by the names its source gives (packages, a snap).
@@ -253,6 +252,14 @@ pub struct UninstallEntry {
     pub freed_bytes: u64,
     /// Its data went with it.
     pub data_removed: bool,
+}
+
+/// Who removed an application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UninstallSource {
+    Deb,
+    Snap,
 }
 
 /// The kind a line says: a cleaning's says none, and one unknown makes the
@@ -987,7 +994,7 @@ mod tests {
             .unwrap()
             .record_uninstall(&UninstallEntry {
                 time,
-                source: "snap".to_owned(),
+                source: UninstallSource::Snap,
                 name: "Android Studio".to_owned(),
                 packages: vec!["android-studio".to_owned()],
                 freed_bytes: 3,

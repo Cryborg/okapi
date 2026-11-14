@@ -315,6 +315,19 @@ export component DashboardPage inherits Rectangle {
             accessible-role: none;
             content-height: page.preferred-height;
 
+            // While a widget is moved with the keys, the wheel leaves the page
+            // where it is: the grip taken out of view would lose the focus
+            // (Slint takes it from what cannot be seen, with the reason a Tab
+            // gives), which would put the widget back. Under the page, it
+            // takes the wheel alone: nothing above it wants that.
+            if Dashboard.moving.shown && !Dashboard.moving.by-pointer: TouchArea {
+                width: page.width;
+                height: page.height;
+                scroll-event(event) => {
+                    accept
+                }
+            }
+
             page := VerticalLayout {
                 width: view.visible-width;
                 padding: Screen.page-margin;
@@ -628,6 +641,7 @@ export component DashboardPage inherits Rectangle {
                     }
                 }
             }
+
         }
 
         // Where the widget picked up is shown, said as it changes; out of

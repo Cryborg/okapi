@@ -4300,6 +4300,50 @@ pub mod tests {
     }
 
     #[test]
+    fn the_wheel_leaves_a_widget_moved_with_the_keys_where_it_is() {
+        use slint::platform::{Key, WindowEvent};
+        let directories = Directories::new();
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        // Lower than the page: it scrolls.
+        window
+            .window()
+            .set_size(slint::PhysicalSize::new(1280, 420));
+        slint::platform::update_timers_and_animations();
+        customizing(&window);
+        picking_up(&window, "Récupérable");
+        let top = frame(&window, "Récupérable").1;
+        let wheel = WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(640.0, 300.0),
+            delta_x: 0.0,
+            delta_y: -400.0,
+        };
+        for _ in 0..5 {
+            window.window().dispatch_event(wheel.clone());
+            slint::platform::update_timers_and_animations();
+        }
+        assert!(moving(&window).shown, "still moved with the keys");
+        assert!(
+            (frame(&window, "Récupérable").1 - top).abs() < 1.0,
+            "the page stays"
+        );
+        pressing(&window, Key::RightArrow);
+        assert_eq!(moving(&window).to, 1, "the arrows still move it");
+        pressing(&window, Key::Escape);
+        assert!(!moving(&window).shown);
+        // Not moved any more: the wheel scrolls the page again.
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(640.0, 300.0),
+                delta_x: 0.0,
+                delta_y: -100.0,
+            });
+        slint::platform::update_timers_and_animations();
+        assert!(frame(&window, "Récupérable").1 < top - 1.0, "scrolled");
+    }
+
+    #[test]
     fn space_picks_up_and_puts_down_and_the_arrows_move_one_place_at_a_time() {
         use slint::platform::Key;
         let directories = Directories::new();

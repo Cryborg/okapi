@@ -168,7 +168,9 @@ struct Moving {
 /// What the page says of the layout kept.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct LayoutBanners {
-    /// The layout kept could not be read; until one is kept.
+    /// The layout kept could not be read at launch, the default one shown:
+    /// no change is kept this session, as it would replace that file with
+    /// the layout shown (D-10); the next launch reads it again.
     unreadable: bool,
     /// The last change could not be kept.
     save_failed: bool,
@@ -768,16 +770,22 @@ impl DashboardScreen {
                 state.watched = watched;
             }
             let layout = layout_of(&state.widgets);
-            match state.saver.as_ref().map(|saver| saver.save(layout)) {
-                Some(true) => {}
-                Some(false) => {
-                    tracing::error!("dashboard layout writer gone: changes no longer kept");
-                    state.saver = None;
-                    state.banners.save_failed = true;
-                }
-                None => {
-                    tracing::warn!("dashboard layout not kept: no writer");
-                    state.banners.save_failed = true;
+            if state.banners.unreadable {
+                tracing::warn!(
+                    "dashboard layout not kept: the one there, unreadable, would be replaced"
+                );
+            } else {
+                match state.saver.as_ref().map(|saver| saver.save(layout)) {
+                    Some(true) => {}
+                    Some(false) => {
+                        tracing::error!("dashboard layout writer gone: changes no longer kept");
+                        state.saver = None;
+                        state.banners.save_failed = true;
+                    }
+                    None => {
+                        tracing::warn!("dashboard layout not kept: no writer");
+                        state.banners.save_failed = true;
+                    }
                 }
             }
         }
@@ -873,8 +881,6 @@ impl DashboardScreen {
                 None | Some(LastWrite::Nothing) => {}
                 Some(LastWrite::Kept(kept)) => {
                     state.banners.save_failed = !kept;
-                    // Kept, the layout shown is the one on disk.
-                    state.banners.unreadable &= !kept;
                     if !kept {
                         tracing::warn!("dashboard layout not kept: said");
                     }
@@ -1055,7 +1061,7 @@ fn read_layout(directory: Option<&Path>) -> (Vec<(WidgetKind, WidgetSize)>, bool
     match DashboardLayout::load(directory) {
         Ok(loaded) => (widgets_shown(loaded.as_ref()), false),
         Err(error) => {
-            tracing::warn!(%error, "dashboard layout unreadable: the default one is shown");
+            tracing::warn!(%error, "dashboard layout unreadable: the default one is shown, no change kept");
             (widgets_shown(None), true)
         }
     }
@@ -1796,10 +1802,7 @@ pub mod tests {
         for title in ["Récupérable", "Disques", "Mémoire", "Processeur", "Système"] {
             widget(&window, title);
         }
-        assert!(!shows(
-            &window,
-            "Votre disposition n'a pas pu être lue, la disposition par défaut est affichée."
-        ));
+        assert!(!shows(&window, UNREADABLE));
         assert_eq!(
             sampler.commands.borrow()[0],
             Command::Watch(BTreeSet::from([
@@ -1888,16 +1891,16 @@ pub mod tests {
         );
     }
 
+    /// The banner of a layout kept that cannot be read.
+    const UNREADABLE: &str = "Votre disposition n'a pas pu être lue : la disposition par défaut est affichée, et vos changements ne sont pas enregistrés pour ne pas écraser le fichier.";
+
     #[test]
     fn an_unreadable_layout_says_so_and_shows_the_default_one() {
         let directories = Directories::new();
         fs::write(DashboardLayout::path(&directories.config), "{").unwrap();
         let (seams, _sampler) = directories.seams();
         let window = on_home(seams);
-        assert!(shows(
-            &window,
-            "Votre disposition n'a pas pu être lue, la disposition par défaut est affichée."
-        ));
+        assert!(shows(&window, UNREADABLE));
         widget(&window, "Disques");
     }
 
@@ -3335,26 +3338,18 @@ pub mod tests {
         });
         customizing(&window);
         button(&window, "Retirer Disques").invoke_accessible_default_action();
-        until_said(&window, |window| {
-            shows(window, "Votre disposition n'a pas pu être enregistrée.")
-        });
+        until_said(&window, |window| shows(window, NOT_KEPT));
     }
 
     #[test]
     fn with_nowhere_to_keep_it_a_change_says_so_at_once() {
         let (seams, _sampler) = noting(None);
         let window = on_home(seams);
-        assert!(!shows(
-            &window,
-            "Votre disposition n'a pas pu être enregistrée."
-        ));
+        assert!(!shows(&window, NOT_KEPT));
         customizing(&window);
         button(&window, "Retirer Disques").invoke_accessible_default_action();
         slint::platform::update_timers_and_animations();
-        assert!(shows(
-            &window,
-            "Votre disposition n'a pas pu être enregistrée."
-        ));
+        assert!(shows(&window, NOT_KEPT));
     }
 
     #[test]
@@ -3640,19 +3635,29 @@ pub mod tests {
         });
     }
 
+    /// The banner of a change not kept.
+    const NOT_KEPT: &str = "Votre disposition n'a pas pu être enregistrée.";
+
     #[test]
-    fn an_unreadable_layout_is_said_until_one_is_kept() {
+    fn an_unreadable_layout_is_never_replaced_even_once_repaired() {
         let directories = Directories::new();
-        fs::write(DashboardLayout::path(&directories.config), "{").unwrap();
+        let path = DashboardLayout::path(&directories.config);
+        fs::write(&path, "{").unwrap();
         let (seams, _sampler) = directories.seams();
-        let window = on_home(seams);
-        let unreadable =
-            "Votre disposition n'a pas pu être lue, la disposition par défaut est affichée.";
-        assert!(shows(&window, unreadable));
+        let (window, home) = home_screen(seams);
+        assert!(shows(&window, UNREADABLE));
+        // Repaired by the user while the page shows the default one: a
+        // change of that default must not replace it.
+        let repaired = r#"{"version": 1, "widgets": [{"kind": "memory", "size": "small"}]}"#;
+        fs::write(&path, repaired).unwrap();
         customizing(&window);
-        // A change without a note, and no reading: only the write says.
+        // Two changes: not one of them is kept.
         button(&window, "Petit").invoke_accessible_default_action();
-        until_said(&window, |window| !shows(window, unreadable));
+        button(&window, "Large").invoke_accessible_default_action();
+        home.shut_down();
+        assert_eq!(fs::read_to_string(&path).unwrap(), repaired);
+        assert!(shows(&window, UNREADABLE));
+        assert!(!shows(&window, NOT_KEPT), "the one banner says it");
     }
 
     #[test]
@@ -3668,7 +3673,7 @@ pub mod tests {
             })),
             ..seams
         });
-        let failed = "Votre disposition n'a pas pu être enregistrée.";
+        let failed = NOT_KEPT;
         customizing(&window);
         button(&window, "Retirer Disques").invoke_accessible_default_action();
         until_said(&window, |window| shows(window, failed));
@@ -3894,9 +3899,7 @@ pub mod tests {
         });
         customizing(&window);
         button(&window, "Retirer Disques").invoke_accessible_default_action();
-        until_said(&window, |window| {
-            shows(window, "Votre disposition n'a pas pu être enregistrée.")
-        });
+        until_said(&window, |window| shows(window, NOT_KEPT));
     }
 
     #[test]

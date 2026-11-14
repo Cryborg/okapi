@@ -43,8 +43,7 @@ impl InterfaceState {
     ///
     /// [`StoreError::Unreadable`], [`StoreError::BrokenLink`],
     /// [`StoreError::NotAFile`], [`StoreError::TooLarge`],
-    /// [`StoreError::UnsupportedVersion`] (a later Okapi's, which saving
-    /// would downgrade) or [`StoreError::Invalid`].
+    /// [`StoreError::UnsupportedVersion`] or [`StoreError::Invalid`].
     pub fn load(directory: &Path) -> Result<Self, StoreError> {
         let path = Self::path(directory);
         let Some(raw) = file::read_versioned::<RawInterfaceState>(&path, INTERFACE_STATE_VERSION)?
@@ -59,14 +58,17 @@ impl InterfaceState {
         Ok(state)
     }
 
-    /// Keeps the state in `directory`, replacing the one there whole.
+    /// Keeps the state in `directory`, replacing the one there whole,
+    /// unless that one cannot be read: it is then left as it is.
     ///
     /// # Errors
     ///
-    /// Those of an atomic write: [`StoreError::BrokenLink`],
+    /// Those of [`Self::load`] for a state there that cannot be read, and
+    /// those of an atomic write: [`StoreError::BrokenLink`],
     /// [`StoreError::NotAFile`] (a link there is never written through) or
     /// [`StoreError::Unwritable`].
     pub fn save(&self, directory: &Path) -> Result<(), StoreError> {
+        file::replaceable(Self::load(directory))?;
         file::write_versioned(
             directory,
             INTERFACE_STATE_FILE,
@@ -103,6 +105,27 @@ mod tests {
                 serde_json::json!({ "version": 1, "sidebarFolded": folded })
             );
         }
+    }
+
+    #[test]
+    fn a_state_that_cannot_be_read_is_never_replaced() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = InterfaceState::path(directory.path());
+        let folded = InterfaceState {
+            sidebar_folded: true,
+        };
+        for text in [
+            "{",
+            r#"{"version": 1}"#,
+            r#"{"version": 1, "sidebarFolded": "yes"}"#,
+        ] {
+            fs::write(&path, text).unwrap();
+            assert!(folded.save(directory.path()).is_err(), "{text}");
+            assert_eq!(fs::read_to_string(&path).unwrap(), text);
+        }
+        fs::remove_file(&path).unwrap();
+        folded.save(directory.path()).unwrap();
+        assert_eq!(InterfaceState::load(directory.path()).unwrap(), folded);
     }
 
     #[test]

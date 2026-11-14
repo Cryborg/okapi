@@ -382,7 +382,7 @@ export component DashboardPage inherits Rectangle {
 
                 if Dashboard.layout-unreadable: Banner {
                     warning: true;
-                    text: @tr("Votre disposition n'a pas pu être lue, la disposition par défaut est affichée.");
+                    text: @tr("Votre disposition n'a pas pu être lue : la disposition par défaut est affichée, et vos changements ne sont pas enregistrés pour ne pas écraser le fichier.");
                 }
 
                 if Dashboard.save-failed: Banner {

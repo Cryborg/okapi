@@ -156,6 +156,20 @@ pub(crate) fn write_versioned<T: Serialize>(
     write_atomically(directory, name, &bytes)
 }
 
+/// Whether the file whose reading is `read` may be replaced: one that cannot
+/// be read never is (D-10: replacing it would lose what the user had set,
+/// theirs to repair), which is traced. Judged just before the write: one
+/// damaged in that very instant may still be replaced.
+///
+/// # Errors
+///
+/// That of `read`.
+pub(crate) fn replaceable<T>(read: Result<T, StoreError>) -> Result<(), StoreError> {
+    read.map(drop).inspect_err(|error| {
+        tracing::warn!(%error, "file unreadable: left as it is, not replaced");
+    })
+}
+
 /// Checks the version of the JSON `bytes` read from `path` before their
 /// content: a later Okapi may add fields, which must be told as a later
 /// version, not as a mistake.

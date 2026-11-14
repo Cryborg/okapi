@@ -51,8 +51,8 @@ pub struct DashboardLayout {
     pub widgets: Vec<DashboardWidget>,
 }
 
-/// A layout read back, and how many of its entries were left out: saving it
-/// again drops them for good, which the interface must not do unsaid.
+/// A layout read back, and how many of its entries were left out (traced):
+/// saving it again drops them for good.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedLayout {
     pub layout: DashboardLayout,
@@ -132,14 +132,17 @@ impl DashboardLayout {
         }))
     }
 
-    /// Keeps the layout in `directory`, replacing the one there whole.
+    /// Keeps the layout in `directory`, replacing the one there whole,
+    /// unless that one cannot be read: it is then left as it is.
     ///
     /// # Errors
     ///
-    /// Those of an atomic write: [`StoreError::BrokenLink`],
+    /// Those of [`Self::load`] for a layout there that cannot be read, and
+    /// those of an atomic write: [`StoreError::BrokenLink`],
     /// [`StoreError::NotAFile`] (a link there is never written through) or
     /// [`StoreError::Unwritable`].
     pub fn save(&self, directory: &Path) -> Result<(), StoreError> {
+        file::replaceable(Self::load(directory))?;
         file::write_versioned(directory, DASHBOARD_FILE, DASHBOARD_VERSION, self)
     }
 }
@@ -239,6 +242,31 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_value(size).unwrap(), name);
         }
+    }
+
+    #[test]
+    fn a_layout_that_cannot_be_read_is_never_replaced() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = DashboardLayout::path(directory.path());
+        let layout = DashboardLayout {
+            widgets: vec![widget("disks", WidgetSize::Wide)],
+        };
+        for text in ["{", r#"{"version": 1, "widgets": "x"}"#] {
+            fs::write(&path, text).unwrap();
+            assert!(layout.save(directory.path()).is_err(), "{text}");
+            assert_eq!(fs::read_to_string(&path).unwrap(), text);
+        }
+        // A layout with entries left out is read: it is replaced.
+        fs::write(
+            &path,
+            r#"{"version": 1, "widgets": [{"kind": "memory", "size": "small"}, 3]}"#,
+        )
+        .unwrap();
+        layout.save(directory.path()).unwrap();
+        assert_eq!(
+            DashboardLayout::load(directory.path()).unwrap(),
+            Some(whole(layout))
+        );
     }
 
     #[test]

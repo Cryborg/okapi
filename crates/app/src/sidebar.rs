@@ -3,7 +3,7 @@
 //! the interface's thread.
 
 use std::cell::RefCell;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use okapi_store::InterfaceState;
@@ -31,8 +31,8 @@ impl std::fmt::Debug for KeptFold {
 impl KeptFold {
     /// Folds `window`'s sidebar as the user last left it, kept in
     /// `directory`, and keeps each new choice there. A state that cannot be
-    /// read leaves the sidebar unfolded, traced, and is not replaced (see
-    /// [`write`]).
+    /// read leaves the sidebar unfolded, traced, and is not replaced (D-10,
+    /// `InterfaceState::save`).
     pub fn attach(window: &AppWindow, directory: Option<PathBuf>) -> Self {
         let Some(directory) = directory else {
             tracing::warn!("no state directory: the sidebar's fold is not kept");
@@ -46,7 +46,8 @@ impl KeptFold {
         }
         let saver = match Saver::start(
             SAVER_NAME,
-            Box::new(move |state: &InterfaceState| write(&directory, *state)),
+            // Whether it is kept: the store traces why not.
+            Box::new(move |state: &InterfaceState| state.save(&directory).is_ok()),
         ) {
             Ok(saver) => Rc::new(RefCell::new(saver)),
             Err(error) => {
@@ -77,27 +78,10 @@ impl KeptFold {
     }
 }
 
-/// Replaces the state kept in `directory` by `state`, unless the one there
-/// cannot be read: a later Okapi's would be downgraded, and a damaged one
-/// is left as found, for whoever reads the journal. Judged just before each
-/// write, not once at launch, as another Okapi may have written it since;
-/// one written in that very instant may still be replaced. Whether it is
-/// kept (the store traces why not).
-fn write(directory: &Path, state: InterfaceState) -> bool {
-    tracing::debug!(
-        folded = state.sidebar_folded,
-        "interface state read again before it is written"
-    );
-    if let Err(error) = InterfaceState::load(directory) {
-        tracing::warn!(%error, folded = state.sidebar_folded, "interface state unreadable: left as it is, the sidebar's fold not kept");
-        return false;
-    }
-    state.save(directory).is_ok()
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
 
     use okapi_rules::Language;
 
@@ -158,9 +142,8 @@ mod tests {
         assert!(!folded(&launched(&state).0), "opens unfolded again");
     }
 
-    /// What a later Okapi or a damage leaves: never replaced.
-    const UNREADABLE: [&str; 4] = [
-        r#"{"version": 2, "sidebarFolded": true, "theme": "dark"}"#,
+    /// What a damage leaves: never replaced.
+    const UNREADABLE: [&str; 3] = [
         "{",
         r#"{"version": 1}"#,
         r#"{"version": 1, "sidebarFolded": "yes"}"#,
@@ -191,7 +174,7 @@ mod tests {
             let directory = tempfile::tempdir().unwrap();
             let path = InterfaceState::path(directory.path());
             let (window, kept) = launched(directory.path());
-            // A later Okapi, launched beside this one, keeps its own.
+            // Damaged while the window is open.
             fs::write(&path, text).unwrap();
             button(&window, "Replier la barre latérale").invoke_accessible_default_action();
             kept.shut_down();

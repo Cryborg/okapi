@@ -1016,8 +1016,8 @@ msgid "Accueil"
 msgstr "Home"
 
 msgctxt "DashboardPage"
-msgid "Votre disposition n'a pas pu être lue, la disposition par défaut est affichée."
-msgstr "Your layout could not be read: the default one is shown."
+msgid "Votre disposition n'a pas pu être lue : la disposition par défaut est affichée, et vos changements ne sont pas enregistrés pour ne pas écraser le fichier."
+msgstr "Your layout could not be read: the default one is shown, and your changes are not saved so as not to overwrite the file."
 
 msgctxt "DashboardPage"
 msgid "Votre tableau de bord est vide"

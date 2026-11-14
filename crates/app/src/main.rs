@@ -17,6 +17,8 @@ mod dates;
 mod disk_usage;
 mod elevation;
 mod kept_selections;
+#[cfg(target_os = "linux")]
+mod portal;
 mod receipt;
 mod results;
 mod saving;

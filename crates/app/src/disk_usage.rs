@@ -1,11 +1,10 @@
 //! The disk usage screen: an analysis of the home folder or of a volume
 //! (`okapi_tools::disk_usage`) on threads of its own, read every half second
 //! folder by folder, its lines sorted and gathered (`rows`), the folder
-//! chosen opened in the file manager through the desktop portal (`portal`).
+//! chosen opened in the file manager through the desktop portal
+//! (`crate::portal`).
 //! Nothing here removes anything.
 
-#[cfg(target_os = "linux")]
-mod portal;
 mod rows;
 
 use std::cell::RefCell;
@@ -121,6 +120,8 @@ impl DiskSeams {
 /// The system's way to the file manager: the desktop portal.
 #[cfg(target_os = "linux")]
 fn open_in_file_manager(request: &OpenRequest, done: Box<dyn FnOnce(bool)>) {
+    use crate::portal;
+
     let opened = still_analyzed(
         okapi_platform::open_path(&request.path, request.folder),
         request.expected,

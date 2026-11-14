@@ -59,9 +59,63 @@ fn desktop_name(path: &Path, languages: &[&str]) -> io::Result<Option<String>> {
 }
 
 pub(crate) fn parse_desktop_name(text: &str, languages: &[&str]) -> Option<String> {
+    parse_desktop_entry(text, languages).name
+}
+
+/// What a `.desktop` file says of its application, read as data: its
+/// command (`Exec`) is never read.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DesktopEntry {
+    /// In the language asked when the file has it, else its plain `Name`.
+    pub name: Option<String>,
+    /// A name in the icon theme, or a path.
+    pub icon: Option<String>,
+    /// `Type=Application`.
+    pub application: bool,
+    pub no_display: bool,
+    pub hidden: bool,
+    pub only_show_in: Vec<String>,
+    pub not_show_in: Vec<String>,
+}
+
+impl DesktopEntry {
+    /// Whether the menu of a session on `desktops` (`XDG_CURRENT_DESKTOP`)
+    /// shows it: an application, neither hidden nor kept from the menu,
+    /// meant for one of them if it names any, for none it refuses.
+    #[must_use]
+    pub fn shown_in(&self, desktops: &[String]) -> bool {
+        let names = |list: &[String]| list.iter().any(|desktop| desktops.contains(desktop));
+        self.application
+            && !self.no_display
+            && !self.hidden
+            && (self.only_show_in.is_empty() || names(&self.only_show_in))
+            && !names(&self.not_show_in)
+    }
+}
+
+/// What the `.desktop` file at `path` says of its application, its name in
+/// `language` when it has it.
+///
+/// # Errors
+///
+/// The system's error, or [`io::ErrorKind::InvalidData`] when the file is
+/// not UTF-8 or far too long for one.
+pub fn desktop_entry(path: &Path, language: Language) -> io::Result<DesktopEntry> {
+    read_capped(path, DESKTOP_LIMIT).map(|text| parse_desktop_entry(&text, names_in(language)))
+}
+
+pub(crate) fn parse_desktop_entry(text: &str, languages: &[&str]) -> DesktopEntry {
     let mut in_entry = false;
     let mut plain = None;
     let mut localized: Vec<Option<&str>> = vec![None; languages.len()];
+    let mut entry = DesktopEntry::default();
+    let list = |value: &str| {
+        value
+            .split(';')
+            .filter(|desktop| !desktop.is_empty())
+            .map(str::to_owned)
+            .collect()
+    };
     for line in text.lines().map(str::trim) {
         if line.starts_with('[') {
             in_entry = line == ENTRY_GROUP;
@@ -74,22 +128,32 @@ pub(crate) fn parse_desktop_name(text: &str, languages: &[&str]) -> Option<Strin
             continue;
         };
         let (key, value) = (key.trim(), value.trim());
-        if key == "Name" {
-            plain = Some(value);
-        } else if let Some(language) = key
-            .strip_prefix("Name[")
-            .and_then(|rest| rest.strip_suffix(']'))
-            && let Some(rank) = languages.iter().position(|wanted| *wanted == language)
-        {
-            localized[rank] = Some(value);
+        match key {
+            "Name" => plain = Some(value),
+            "Icon" => entry.icon = Some(value.to_owned()).filter(|icon| !icon.is_empty()),
+            "Type" => entry.application = value == "Application",
+            "NoDisplay" => entry.no_display = value == "true",
+            "Hidden" => entry.hidden = value == "true",
+            "OnlyShowIn" => entry.only_show_in = list(value),
+            "NotShowIn" => entry.not_show_in = list(value),
+            _ => {
+                if let Some(language) = key
+                    .strip_prefix("Name[")
+                    .and_then(|rest| rest.strip_suffix(']'))
+                    && let Some(rank) = languages.iter().position(|wanted| *wanted == language)
+                {
+                    localized[rank] = Some(value);
+                }
+            }
         }
     }
-    localized
+    entry.name = localized
         .into_iter()
         .flatten()
         .chain(plain)
         .find(|name| !name.is_empty())
-        .map(str::to_owned)
+        .map(str::to_owned);
+    entry
 }
 
 /// Where `.desktop` files are looked for, most personal first: the
@@ -154,6 +218,45 @@ Name[fr]=Nouvelle fenêtre de navigation privée
             parse_desktop_name("[Desktop Entry]\nType=Application\n", &[]),
             None
         );
+    }
+
+    #[test]
+    fn an_entry_says_its_icon_and_whether_the_menu_shows_it() {
+        let gnome = ["ubuntu".to_owned(), "GNOME".to_owned()];
+        let entry = parse_desktop_entry(
+            "[Desktop Entry]\nType=Application\nName=Files\nIcon=org.gnome.Nautilus\n\
+             Exec=nautilus\n\n[Desktop Action new]\nIcon=other\nNoDisplay=true\n",
+            &[],
+        );
+        assert_eq!(entry.name.as_deref(), Some("Files"));
+        assert_eq!(
+            entry.icon.as_deref(),
+            Some("org.gnome.Nautilus"),
+            "never an action's"
+        );
+        assert!(
+            entry.shown_in(&gnome),
+            "an action's NoDisplay is not its own"
+        );
+        for hiding in [
+            "Type=Application\nNoDisplay=true",
+            "Type=Application\nHidden=true",
+            "Type=Link",
+            "Name=No type",
+            "Type=Application\nOnlyShowIn=KDE;XFCE;",
+            "Type=Application\nNotShowIn=GNOME;",
+        ] {
+            let entry = parse_desktop_entry(&format!("[Desktop Entry]\n{hiding}\n"), &[]);
+            assert!(!entry.shown_in(&gnome), "{hiding}");
+        }
+        let only_gnome = parse_desktop_entry(
+            "[Desktop Entry]\nType=Application\nOnlyShowIn=GNOME;\n",
+            &[],
+        );
+        assert!(only_gnome.shown_in(&gnome));
+        assert!(!only_gnome.shown_in(&[]), "a session that names no desktop");
+        let empty_icon = parse_desktop_entry("[Desktop Entry]\nIcon=\n", &[]);
+        assert_eq!(empty_icon.icon, None);
     }
 
     #[test]

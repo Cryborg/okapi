@@ -22,7 +22,7 @@ mod system;
 mod units;
 
 pub use block::{device_labels, removable, rotational};
-pub use desktop::application_name;
+pub use desktop::{DesktopEntry, application_name, desktop_entry};
 pub use memory::{MemoryStatus, memory};
 pub use mounts::{Device, Mount, MountClass, MountList, mounts};
 pub use processes::{ProcessList, ProcessMemory, processes};

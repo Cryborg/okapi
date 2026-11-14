@@ -655,6 +655,7 @@ fn the_descent_goes_through_plain_directories_of_the_root_device_only() {
         last_change: SystemTime::UNIX_EPOCH,
         modified: SystemTime::UNIX_EPOCH,
         size: 0,
+        allocated: None,
         links: 1,
         owner: 0,
         sticky: false,

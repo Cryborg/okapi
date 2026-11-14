@@ -95,3 +95,10 @@ pub fn mount_root(_path: &Path) -> io::Result<Option<bool>> {
 pub const fn tells_mount_roots() -> bool {
     false
 }
+
+/// Whether `error` says the process ran out of open file descriptors: not
+/// told apart here.
+#[must_use]
+pub const fn out_of_descriptors(_error: &io::Error) -> bool {
+    false
+}

@@ -9,7 +9,7 @@ mod system;
 #[path = "directory/unsupported.rs"]
 mod system;
 
-pub use system::{Directory, mount_root, tells_mount_roots};
+pub use system::{Directory, mount_root, out_of_descriptors, tells_mount_roots};
 
 /// Whether [`Directory`] works on this system. Elsewhere it cannot be opened
 /// ([`std::io::ErrorKind::Unsupported`]): on macOS the scan works but cleaning
@@ -48,6 +48,9 @@ pub struct EntryStatus {
     pub locked: bool,
     /// Its size in bytes.
     pub size: u64,
+    /// The bytes it takes on disk (blocks of 512 bytes), less than its size
+    /// for a sparse file; `None` when the system does not say.
+    pub allocated: Option<u64>,
     /// Whether it is the root of a mount, which catches a bind mount of the
     /// same device; `None` when the system cannot tell.
     pub mount_root: Option<bool>,
@@ -120,6 +123,7 @@ mod tests {
             last_change: SystemTime::UNIX_EPOCH,
             modified: SystemTime::UNIX_EPOCH,
             size: 0,
+            allocated: None,
             links: 1,
             owner,
             sticky,

@@ -15,7 +15,7 @@ pub use browser::{CHROMIUM_LOCK, FIREFOX_LOCK, LockKind, lock_is_live};
 pub use browser::{Holder, RunningBrowser, UnknownHolder, holder};
 pub use directory::{
     DESCRIPTOR_REMOVAL_SUPPORTED, Directory, EntryStatus, EntryType, Ownership, ROOT_USER,
-    mount_root, sticky_allows, tells_mount_roots,
+    mount_root, out_of_descriptors, sticky_allows, tells_mount_roots,
 };
 #[cfg(target_os = "linux")]
 pub use elevation::{HELPER_PATH, PKEXEC_PATH};

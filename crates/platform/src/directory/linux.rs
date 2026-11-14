@@ -36,6 +36,12 @@ const NEEDED: StatxFlags = StatxFlags::TYPE
     .union(StatxFlags::CTIME)
     .union(StatxFlags::SIZE);
 
+/// What is asked beside [`NEEDED`]: an entry without it is still read.
+const WANTED: StatxFlags = NEEDED.union(StatxFlags::BLOCKS);
+
+/// The unit of `stx_blocks`, whatever the filesystem's own block.
+const BLOCK_SIZE: u64 = 512;
+
 /// An open directory, whose entries are read and removed relative to it: a
 /// directory swapped for a link after being opened is never followed.
 #[derive(Debug)]
@@ -62,7 +68,7 @@ impl Directory {
     /// The system's error, or [`io::ErrorKind::Unsupported`] when it cannot
     /// give a type, an identity and dates.
     pub fn status(&self) -> io::Result<EntryStatus> {
-        status(&statx(&self.fd, "", AtFlags::EMPTY_PATH, NEEDED)?)
+        status(&statx(&self.fd, "", AtFlags::EMPTY_PATH, WANTED)?)
     }
 
     /// Whether the process may remove `entry`, read through
@@ -128,7 +134,7 @@ impl Directory {
     /// [`io::ErrorKind::InvalidInput`] when `name` is not a single name, or
     /// the errors of [`Self::status`].
     pub fn status_of(&self, name: &OsStr) -> io::Result<EntryStatus> {
-        status(&statx(&self.fd, single_name(name)?, ENTRY_FLAGS, NEEDED)?)
+        status(&statx(&self.fd, single_name(name)?, ENTRY_FLAGS, WANTED)?)
     }
 
     /// Opens the subdirectory `name`, refusing a link.
@@ -164,6 +170,15 @@ impl Directory {
     pub fn remove_directory(&self, name: &OsStr) -> io::Result<()> {
         Ok(unlinkat(&self.fd, single_name(name)?, AtFlags::REMOVEDIR)?)
     }
+}
+
+/// Whether `error` says the process, or the system, ran out of open file
+/// descriptors (`EMFILE`, `ENFILE`): no refusal of the file itself.
+#[must_use]
+pub fn out_of_descriptors(error: &io::Error) -> bool {
+    error.raw_os_error().is_some_and(|code| {
+        code == Errno::MFILE.raw_os_error() || code == Errno::NFILE.raw_os_error()
+    })
 }
 
 /// Whether this system tells a mount root from a plain directory (Linux 5.8
@@ -230,6 +245,9 @@ fn status(stat: &Statx) -> io::Result<EntryStatus> {
         .stx_attributes
         .intersects(StatxAttributes::IMMUTABLE | StatxAttributes::APPEND);
     let mode = Mode::from_raw_mode(u32::from(stat.stx_mode));
+    let allocated = StatxFlags::from_bits_retain(stat.stx_mask)
+        .contains(StatxFlags::BLOCKS)
+        .then(|| stat.stx_blocks.saturating_mul(BLOCK_SIZE));
     Ok(EntryStatus {
         kind,
         identity: FileIdentity::new(
@@ -239,6 +257,7 @@ fn status(stat: &Statx) -> io::Result<EntryStatus> {
         last_change: later_of(modified, changed),
         modified,
         size: stat.stx_size,
+        allocated,
         links: u64::from(stat.stx_nlink),
         owner: stat.stx_uid,
         sticky: kind == EntryType::Directory && mode.contains(Mode::SVTX),
@@ -271,10 +290,69 @@ mod tests {
         assert_eq!(Some(status.identity), crate::file_identity(&by_path));
         assert_eq!(Some(status.last_change), crate::last_change(&by_path));
         assert_eq!(status.size, 5);
+        assert_eq!(
+            status.allocated,
+            Some(std::os::unix::fs::MetadataExt::blocks(&by_path) * 512)
+        );
         let own = fs::symlink_metadata(temporary.path()).unwrap();
         assert_eq!(
             Some(directory.status().unwrap().identity),
             crate::file_identity(&own)
+        );
+    }
+
+    #[test]
+    fn what_an_entry_takes_on_disk_is_read() {
+        let (temporary, directory) = directory();
+        // Data that no filesystem keeps inline nor compresses.
+        let mut state: u32 = 0x2545_F491;
+        let data: Vec<u8> = (0..1 << 20)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state.to_le_bytes()[0]
+            })
+            .collect();
+        fs::write(temporary.path().join("data"), &data).unwrap();
+        let status = directory.status_of(OsStr::new("data")).unwrap();
+        let by_path = fs::symlink_metadata(temporary.path().join("data")).unwrap();
+        assert_eq!(
+            status.allocated,
+            Some(std::os::unix::fs::MetadataExt::blocks(&by_path) * 512)
+        );
+        assert!(
+            status
+                .allocated
+                .is_some_and(|allocated| allocated >= 1 << 20)
+        );
+        assert!(
+            directory.status().unwrap().allocated.is_some(),
+            "a folder's own"
+        );
+    }
+
+    #[test]
+    fn running_out_of_descriptors_is_no_refusal() {
+        let raw = io::Error::from_raw_os_error;
+        assert!(out_of_descriptors(&raw(Errno::MFILE.raw_os_error())));
+        assert!(out_of_descriptors(&raw(Errno::NFILE.raw_os_error())));
+        assert!(!out_of_descriptors(&raw(Errno::ACCESS.raw_os_error())));
+        assert!(!out_of_descriptors(&io::ErrorKind::Other.into()));
+    }
+
+    #[test]
+    fn a_sparse_file_takes_less_than_its_size() {
+        let (temporary, directory) = directory();
+        let file = fs::File::create(temporary.path().join("sparse")).unwrap();
+        file.set_len(10 << 20).unwrap();
+        let status = directory.status_of(OsStr::new("sparse")).unwrap();
+        assert_eq!(status.size, 10 << 20);
+        assert!(
+            status
+                .allocated
+                .is_some_and(|allocated| allocated < 1 << 20),
+            "{status:?}"
         );
     }
 

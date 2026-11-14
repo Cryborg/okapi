@@ -7,7 +7,8 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use super::{App, Reading, Rest, Source, SourceReading};
+use super::uninstall::Target;
+use super::{App, AppSize, Reading, Rest, Source, SourceReading};
 
 /// What snapd says of one revision.
 #[derive(Debug, Deserialize)]
@@ -60,7 +61,7 @@ pub fn read_snaps(
     reading: &Reading,
 ) -> SourceReading {
     let _span = tracing::info_span!("snaps").entered();
-    let revisions: Vec<Revision> = match serde_json::from_value(result.clone()) {
+    let revisions = match Vec::<Revision>::deserialize(result) {
         Ok(revisions) => revisions,
         Err(error) => {
             tracing::warn!(%error, "snapd's list unreadable");
@@ -104,7 +105,10 @@ pub fn read_snaps(
                 files.sort_unstable();
                 files.into_iter().find_map(|file| {
                     let path = Path::new(file);
-                    reading.launcher(&root.join(path.strip_prefix("/").unwrap_or(path)))
+                    reading.launcher(
+                        &root.join(path.strip_prefix("/").unwrap_or(path)),
+                        &reading.icons,
+                    )
                 })
             })
             .flatten();
@@ -125,12 +129,15 @@ pub fn read_snaps(
             publisher: active.publisher.map(|publisher| publisher.display_name),
             origin: None,
             icon,
-            app_bytes: Some(active.installed_size),
-            deployment: None,
+            size: AppSize::Known(active.installed_size),
             old_bytes,
             old_versions: old.len(),
             data: home.map(|home| home.join("snap").join(&name)),
             system: false,
+            target: Some(Target::Snap {
+                name: name.clone(),
+                purge: false,
+            }),
         });
     }
     tracing::info!(apps = apps.len(), rest = rest.count, "snaps read");

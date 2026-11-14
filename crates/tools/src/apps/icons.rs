@@ -1,23 +1,30 @@
 //! The icon of an application, found in the system's folders only and
 //! turned into pixels away from the interface: an icon comes from its
-//! publisher, so it is read with bounds (size, dimensions), never through a
-//! link, and an SVG never reads another file (`<image href>`).
+//! publisher, so it is read with bounds (size, dimensions), never when the
+//! file itself is a link, and an SVG never reads another file
+//! (`<image href>`).
 
-use std::io::{self, Read as _};
+use std::io;
 use std::path::{Component, Path, PathBuf};
 
 /// Far beyond any icon.
-const MOST_BYTES: u64 = 1024 * 1024;
+const MOST_BYTES: usize = 1024 * 1024;
 /// The widest and tallest PNG decoded.
 const MOST_SIDE: u32 = 512;
-/// The side an SVG is drawn at: the largest shown (44 px), twice for a
-/// screen at double scale.
+/// The side an SVG is drawn at: twice the largest icon shown (the theme's
+/// `app-icon-large`), for a screen at double scale.
 pub const DRAWN_SIDE: u16 = 88;
-/// The sizes of the `hicolor` theme looked into, after `scalable`, the
-/// largest first.
+/// The sizes of the `hicolor` theme looked into, after `scalable`: the
+/// smallest as large as [`DRAWN_SIDE`] first, then the larger, then the
+/// smaller, so that no more is decoded than is shown.
 const SIZES: [&str; 10] = [
-    "512x512", "256x256", "128x128", "96x96", "64x64", "48x48", "32x32", "24x24", "22x22", "16x16",
+    "96x96", "128x128", "256x256", "512x512", "64x64", "48x48", "32x32", "24x24", "22x22", "16x16",
 ];
+/// Where the system's shared files are.
+const SHARE: &str = "/usr/share";
+/// Where snapd keeps its state, and mounts the snaps.
+const SNAPD: &str = "/var/lib/snapd";
+const SNAPS: &str = "/snap";
 /// The start of a gzip stream: an SVGZ, never read.
 const GZIP: [u8; 2] = [0x1f, 0x8b];
 
@@ -56,18 +63,15 @@ impl IconRoots {
     /// The system's: never under a home folder.
     #[must_use]
     pub fn system() -> Self {
+        // A flatpak's icons are looked for in its own deployment: those of
+        // the installation's exports are links to them.
         Self {
-            themes: [
-                "/usr/share/icons",
-                "/var/lib/snapd/desktop/icons",
-                "/var/lib/flatpak/exports/share/icons",
-            ]
-            .map(PathBuf::from)
-            .to_vec(),
-            pixmaps: vec![PathBuf::from("/usr/share/pixmaps")],
-            absolute: ["/usr/share", "/snap", "/var/lib/snapd", "/var/lib/flatpak"]
-                .map(PathBuf::from)
-                .to_vec(),
+            themes: vec![
+                Path::new(SHARE).join("icons"),
+                Path::new(SNAPD).join("desktop/icons"),
+            ],
+            pixmaps: vec![Path::new(SHARE).join("pixmaps")],
+            absolute: [SHARE, SNAPS, SNAPD].map(PathBuf::from).to_vec(),
         }
     }
 }
@@ -87,7 +91,7 @@ pub fn find(icon: &str, roots: &IconRoots) -> Option<PathBuf> {
         }
         return is_file(path).then(|| path.to_owned());
     }
-    if icon.is_empty() || icon.contains(['/', '\0']) || icon == "." || icon == ".." {
+    if !okapi_platform::names_a_file(icon) {
         tracing::debug!(icon, "icon name refused");
         return None;
     }
@@ -125,7 +129,9 @@ fn is_file(path: &Path) -> bool {
 #[derive(Debug, thiserror::Error)]
 pub enum IconError {
     #[error("cannot be read: {0}")]
-    Io(#[from] io::Error),
+    Io(io::Error),
+    #[error("a link, a folder, a pipe or a device: not a file")]
+    NotAFile,
     #[error("larger than {MOST_BYTES} bytes")]
     TooLarge,
     #[error("{width} x {height} pixels, beyond {MOST_SIDE}")]
@@ -147,34 +153,24 @@ pub enum IconError {
 /// [`IconError`]: it cannot be read, is too large, or is not a PNG or an
 /// SVG that can be drawn.
 pub fn load(path: &Path) -> Result<IconPixels, IconError> {
-    let bytes = read_bounded(path)?;
-    let loaded = if path.extension().is_some_and(|extension| extension == "svg") {
-        draw_svg(&bytes)
-    } else {
-        decode_png(&bytes)
-    };
+    let loaded = okapi_platform::read_regular_capped(path, MOST_BYTES)
+        .map_err(|error| match error.kind() {
+            io::ErrorKind::InvalidData => IconError::TooLarge,
+            io::ErrorKind::InvalidInput => IconError::NotAFile,
+            // A link as the file itself is refused by the system (`ELOOP`).
+            _ => IconError::Io(error),
+        })
+        .and_then(|bytes| {
+            if path.extension().is_some_and(|extension| extension == "svg") {
+                draw_svg(&bytes)
+            } else {
+                decode_png(&bytes)
+            }
+        });
     if let Err(error) = &loaded {
         tracing::debug!(path = %path.display(), %error, "icon not loaded");
     }
     loaded
-}
-
-/// The bytes of `path`, never through a link nor from a pipe, at most
-/// [`MOST_BYTES`].
-fn read_bounded(path: &Path) -> Result<Vec<u8>, IconError> {
-    use rustix::fs::{Mode, OFlags};
-    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-    let file =
-        std::fs::File::from(rustix::fs::open(path, flags, Mode::empty()).map_err(io::Error::from)?);
-    if !file.metadata()?.is_file() {
-        return Err(IconError::Io(io::Error::from(io::ErrorKind::InvalidInput)));
-    }
-    let mut bytes = Vec::new();
-    file.take(MOST_BYTES + 1).read_to_end(&mut bytes)?;
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MOST_BYTES {
-        return Err(IconError::TooLarge);
-    }
-    Ok(bytes)
 }
 
 fn decode_png(bytes: &[u8]) -> Result<IconPixels, IconError> {
@@ -187,7 +183,7 @@ fn decode_png(bytes: &[u8]) -> Result<IconPixels, IconError> {
     }
     let size = reader
         .output_buffer_size()
-        .ok_or_else(|| IconError::Unknown("no size".to_owned()))?;
+        .ok_or(IconError::TooWide { width, height })?;
     let mut buffer = vec![0; size];
     let frame = reader.next_frame(&mut buffer)?;
     buffer.truncate(frame.buffer_size());
@@ -240,10 +236,16 @@ fn draw_svg(bytes: &[u8]) -> Result<IconPixels, IconError> {
     let mut pixmap =
         tiny_skia::Pixmap::new(side, side).ok_or_else(|| IconError::Svg("no pixmap".to_owned()))?;
     let drawing = tree.size();
-    let scale = f32::from(DRAWN_SIDE) / drawing.width().max(drawing.height());
+    let drawn = f32::from(DRAWN_SIDE);
+    let scale = drawn / drawing.width().max(drawing.height());
+    // A drawing that is not square is centred.
+    let (left, top) = (
+        (drawn - drawing.width() * scale) / 2.0,
+        (drawn - drawing.height() * scale) / 2.0,
+    );
     resvg::render(
         &tree,
-        tiny_skia::Transform::from_scale(scale, scale),
+        tiny_skia::Transform::from_scale(scale, scale).post_translate(left, top),
         &mut pixmap.as_mut(),
     );
     Ok(IconPixels {
@@ -348,38 +350,120 @@ mod tests {
         );
     }
 
+    /// A PNG of `color` whose first pixel is `first` (its channels, or its
+    /// palette's index) and every other pixel 0.
+    fn png_with(width: u32, height: u32, color: png::ColorType, first: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut encoder = png::Encoder::new(&mut bytes, width, height);
+        encoder.set_color(color);
+        encoder.set_depth(png::BitDepth::Eight);
+        if color == png::ColorType::Indexed {
+            encoder.set_palette(vec![0, 0, 0, 10, 20, 30]);
+        }
+        let mut data = vec![0; usize::try_from(width * height).unwrap() * first.len()];
+        data[..first.len()].copy_from_slice(first);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&data)
+            .unwrap();
+        bytes
+    }
+
     #[test]
-    fn a_png_of_any_colour_type_becomes_rgba() {
+    fn a_png_of_any_colour_type_becomes_rgba_its_channels_in_their_place() {
         let base = tempfile::tempdir().unwrap();
-        for color in [
-            png::ColorType::Rgba,
-            png::ColorType::Rgb,
-            png::ColorType::GrayscaleAlpha,
-            png::ColorType::Grayscale,
-            png::ColorType::Indexed,
+        for (color, first, rgba) in [
+            (
+                png::ColorType::Rgba,
+                &[10, 20, 30, 40][..],
+                [10, 20, 30, 40],
+            ),
+            (png::ColorType::Rgb, &[10, 20, 30], [10, 20, 30, 255]),
+            (
+                png::ColorType::GrayscaleAlpha,
+                &[40, 200],
+                [40, 40, 40, 200],
+            ),
+            (png::ColorType::Grayscale, &[40], [40, 40, 40, 255]),
+            (png::ColorType::Indexed, &[1], [10, 20, 30, 255]),
         ] {
             let path = base.path().join("icon.png");
-            write(&path, &png(3, 2, color));
+            write(&path, &png_with(3, 2, color, first));
             let pixels = load(&path).unwrap();
             assert_eq!((pixels.width, pixels.height), (3, 2), "{color:?}");
             assert_eq!(pixels.rgba.len(), 3 * 2 * 4, "{color:?}");
+            assert_eq!(pixels.rgba[..4], rgba, "{color:?}");
+            assert_ne!(
+                pixels.rgba[pixels.rgba.len() - 4..],
+                rgba,
+                "{color:?}: the first pixel first"
+            );
             assert!(!pixels.premultiplied);
         }
     }
 
     #[test]
-    fn an_icon_too_large_or_too_wide_is_refused() {
+    fn an_icon_too_large_too_wide_too_tall_or_not_a_file_is_refused() {
         let base = tempfile::tempdir().unwrap();
-        let wide = base.path().join("wide.png");
-        write(&wide, &png(MOST_SIDE + 1, 1, png::ColorType::Grayscale));
-        assert!(matches!(load(&wide), Err(IconError::TooWide { .. })));
-        let heavy = base.path().join("heavy.png");
-        write(&heavy, &vec![0; usize::try_from(MOST_BYTES).unwrap() + 1]);
-        assert!(matches!(load(&heavy), Err(IconError::TooLarge)));
+        let at = |name: &str, bytes: &[u8]| {
+            let path = base.path().join(name);
+            write(&path, bytes);
+            path
+        };
+        let gray = png::ColorType::Grayscale;
+        assert!(matches!(
+            load(&at("wide.png", &png(MOST_SIDE + 1, 1, gray))),
+            Err(IconError::TooWide { .. })
+        ));
+        assert!(matches!(
+            load(&at("tall.png", &png(1, MOST_SIDE + 1, gray))),
+            Err(IconError::TooWide { .. })
+        ));
+        assert!(
+            load(&at("most.png", &png(MOST_SIDE, MOST_SIDE, gray))).is_ok(),
+            "the bound itself"
+        );
+        assert!(matches!(
+            load(&at("heavy.png", &vec![0; MOST_BYTES + 1])),
+            Err(IconError::TooLarge)
+        ));
+        assert!(
+            !matches!(
+                load(&at("just.png", &vec![0; MOST_BYTES])),
+                Err(IconError::TooLarge)
+            ),
+            "the bound itself is read"
+        );
+        assert!(matches!(
+            load(Path::new("/dev/zero")),
+            Err(IconError::NotAFile)
+        ));
+        assert!(matches!(load(base.path()), Err(IconError::NotAFile)));
+    }
+
+    fn citing(href: &str) -> String {
+        format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="16" height="16"><image width="16" height="16" xlink:href="{href}"/></svg>"#
+        )
+    }
+
+    /// What resvg draws of `svg` with its own way of reading images: the
+    /// witness that a citation would be drawn but for Okapi's.
+    fn drawn_by_default(svg: &str) -> bool {
+        use resvg::{tiny_skia, usvg};
+        let tree = usvg::Tree::from_data(svg.as_bytes(), &usvg::Options::default()).unwrap();
+        let mut pixmap = tiny_skia::Pixmap::new(16, 16).unwrap();
+        resvg::render(
+            &tree,
+            tiny_skia::Transform::identity(),
+            &mut pixmap.as_mut(),
+        );
+        pixmap.data().iter().any(|byte| *byte != 0)
     }
 
     #[test]
-    fn an_svg_is_drawn_and_never_reads_another_file() {
+    fn an_svg_is_drawn_centred_and_never_reads_another_file_nor_data_in_it() {
         let base = tempfile::tempdir().unwrap();
         let plain = base.path().join("plain.svg");
         write(&plain, SVG.as_bytes());
@@ -387,23 +471,46 @@ mod tests {
         let side = u32::from(DRAWN_SIDE);
         assert_eq!((drawn.width, drawn.height), (side, side));
         assert!(drawn.premultiplied);
-        assert_eq!(&drawn.rgba[..4], [255, 0, 0, 255], "drawn to its edge");
+        assert_eq!(
+            drawn.rgba[..4],
+            [255, 0, 0, 255],
+            "drawn to its first corner"
+        );
+        assert_eq!(
+            drawn.rgba[drawn.rgba.len() - 4..],
+            [255, 0, 0, 255],
+            "and to its last"
+        );
 
-        // A drawing beside it, cited by its path: never read (an SVG is
-        // read whatever the features, a PNG only with Slint's).
+        // Twice as wide as tall: a band in the middle, nothing above it.
+        let wide = base.path().join("wide.svg");
+        write(
+            &wide,
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="16"><rect width="32" height="16" fill="red"/></svg>"#,
+        );
+        let drawn = load(&wide).unwrap();
+        let row = |y: u32| usize::try_from(y * side * 4).unwrap();
+        assert_eq!(drawn.rgba[row(0) + 3], 0, "nothing at the top");
+        assert_eq!(drawn.rgba[row(side / 2) + 3], 255, "the band in the middle");
+
+        // A drawing beside it, cited by its path; another, inside it.
         let other = base.path().join("other.svg");
         write(&other, SVG.as_bytes());
-        let citing = base.path().join("citing.svg");
-        write(
-            &citing,
-            format!(
-                r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="16" height="16"><image width="16" height="16" xlink:href="{}"/></svg>"#,
-                other.display()
-            )
-            .as_bytes(),
+        let inline = format!(
+            "data:image/svg+xml;base64,{}",
+            "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHJlY3Qgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2IiBmaWxsPSJyZWQiLz48L3N2Zz4="
         );
-        let drawn = load(&citing).unwrap();
-        assert!(drawn.rgba.iter().all(|byte| *byte == 0), "nothing drawn");
+        for href in [other.display().to_string(), inline] {
+            let svg = citing(&href);
+            assert!(drawn_by_default(&svg), "the witness reads it: {href}");
+            let citing_path = base.path().join("citing.svg");
+            write(&citing_path, svg.as_bytes());
+            let drawn = load(&citing_path).unwrap();
+            assert!(
+                drawn.rgba.iter().all(|byte| *byte == 0),
+                "nothing drawn: {href}"
+            );
+        }
 
         let compressed = base.path().join("compressed.svg");
         write(&compressed, &[0x1f, 0x8b, 8, 0]);

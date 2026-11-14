@@ -5,6 +5,7 @@
 use std::io;
 use std::num::NonZeroUsize;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::disk_usage::{NodeId, Outcome, UsageScan};
@@ -25,70 +26,48 @@ pub enum Measured {
     NotMeasured,
 }
 
-/// A measure under way, stopped by [`Measuring::cancel`] from another
-/// thread.
-#[derive(Debug)]
-pub struct Measuring {
-    scan: UsageScan,
-}
-
-impl Measuring {
-    /// Starts measuring `folder`. Never on the interface's thread: opening
-    /// a folder may wait.
-    ///
-    /// # Errors
-    ///
-    /// What it is, when there is nothing to measure.
-    pub fn start(folder: &Path) -> Result<Self, Measured> {
-        match std::fs::symlink_metadata(folder) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(Measured::Absent),
-            Err(error) => {
-                tracing::debug!(path = %folder.display(), %error, "folder not measured");
-                return Err(Measured::NotMeasured);
-            }
-            Ok(metadata) if !metadata.is_dir() => {
-                tracing::debug!(path = %folder.display(), link = metadata.is_symlink(), "not a folder: not measured");
-                return Err(Measured::NotMeasured);
-            }
-            Ok(_) => {}
-        }
-        UsageScan::start(folder, NonZeroUsize::MIN)
-            .map(|scan| Self { scan })
-            .map_err(|error| {
-                tracing::debug!(path = %folder.display(), %error, "folder not measured");
-                Measured::NotMeasured
-            })
-    }
-
-    /// Stops the measure: what was read is kept, said partial.
-    pub fn cancel(&self) {
-        self.scan.cancel();
-    }
-
-    /// Waits for the measure to end, then says it.
-    #[must_use]
-    pub fn finish(self) -> Measured {
-        let outcome = loop {
-            if let Some(outcome) = self.scan.wait(WAIT_STEP) {
-                break outcome;
-            }
-        };
-        let Some(view) = self.scan.view(NodeId::ROOT) else {
-            return Measured::NotMeasured;
-        };
-        let measured = Measured::Bytes {
-            bytes: view.directory.total.allocated,
-            partial: view.directory.partial || outcome == Outcome::Cancelled,
-        };
-        tracing::debug!(path = %self.scan.root().display(), ?measured, "folder measured");
-        measured
-    }
-}
-
-/// Measures `folder` to its end.
+/// Measures `folder` on one thread, stopped (what was read said partial)
+/// once `stop` is set. Never on the interface's thread: opening a folder
+/// may wait.
 #[must_use]
-pub fn measure(folder: &Path) -> Measured {
-    Measuring::start(folder).map_or_else(|measured| measured, Measuring::finish)
+pub fn measure(folder: &Path, stop: &AtomicBool) -> Measured {
+    match std::fs::symlink_metadata(folder) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Measured::Absent,
+        Err(error) => {
+            tracing::debug!(path = %folder.display(), %error, "folder not measured");
+            return Measured::NotMeasured;
+        }
+        Ok(metadata) if !metadata.is_dir() => {
+            tracing::debug!(path = %folder.display(), link = metadata.is_symlink(), "not a folder: not measured");
+            return Measured::NotMeasured;
+        }
+        Ok(_) => {}
+    }
+    let scan = match UsageScan::start(folder, NonZeroUsize::MIN) {
+        Ok(scan) => scan,
+        Err(error) => {
+            tracing::debug!(path = %folder.display(), %error, "folder not measured");
+            return Measured::NotMeasured;
+        }
+    };
+    let outcome = loop {
+        if stop.load(Ordering::Relaxed) {
+            scan.cancel();
+        }
+        if let Some(outcome) = scan.wait(WAIT_STEP) {
+            break outcome;
+        }
+    };
+    let Some(view) = scan.view(NodeId::ROOT) else {
+        tracing::warn!(path = %folder.display(), "a measure without its root: not measured");
+        return Measured::NotMeasured;
+    };
+    let measured = Measured::Bytes {
+        bytes: view.directory.total.allocated,
+        partial: view.directory.partial || outcome == Outcome::Cancelled,
+    };
+    tracing::debug!(path = %folder.display(), ?measured, "folder measured");
+    measured
 }
 
 #[cfg(test)]
@@ -101,7 +80,8 @@ mod tests {
         let data = root.path().join("data");
         std::fs::create_dir(&data).unwrap();
         std::fs::write(data.join("big"), vec![1_u8; 64 * 1024]).unwrap();
-        let Measured::Bytes { bytes, partial } = measure(&data) else {
+        let go = AtomicBool::new(false);
+        let Measured::Bytes { bytes, partial } = measure(&data, &go) else {
             panic!("measured");
         };
         assert!(bytes >= 64 * 1024, "{bytes}");
@@ -110,11 +90,15 @@ mod tests {
         let link = root.path().join("link");
         std::os::unix::fs::symlink(&data, &link).unwrap();
         assert_eq!(
-            measure(&link),
+            measure(&link, &go),
             Measured::NotMeasured,
             "a link, never followed"
         );
-        assert_eq!(measure(&root.path().join("none")), Measured::Absent);
-        assert_eq!(measure(&data.join("big")), Measured::NotMeasured, "a file");
+        assert_eq!(measure(&root.path().join("none"), &go), Measured::Absent);
+        assert_eq!(
+            measure(&data.join("big"), &go),
+            Measured::NotMeasured,
+            "a file"
+        );
     }
 }

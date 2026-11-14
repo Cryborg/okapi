@@ -1,6 +1,7 @@
 //! The packages dpkg keeps (`/var/lib/dpkg`), read as files: which are
-//! installed, their size, whether the system needs them, which installed
-//! by hand, and which install a launcher. Never read while dpkg writes.
+//! installed, their size, whether the system needs them, which came as
+//! dependencies, and which install a launcher. Read only once
+//! [`pending_updates`] says dpkg is not writing (its caller checks).
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -127,20 +128,48 @@ pub fn parse_status(text: &str) -> Status {
     status
 }
 
+/// The packages apt says came as dependencies (`extended_states`).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Automatic {
+    /// By name and architecture.
+    pairs: HashSet<(String, String)>,
+    /// By name alone: apt files a package of every architecture (`all`)
+    /// under the system's own.
+    names: HashSet<String>,
+}
+
+impl Automatic {
+    /// Whether `package` came as a dependency.
+    #[must_use]
+    pub fn brought(&self, package: &DebPackage) -> bool {
+        if package.architecture == "all" {
+            self.names.contains(&package.name)
+        } else {
+            self.pairs
+                .contains(&(package.name.clone(), package.architecture.clone()))
+        }
+    }
+}
+
 /// The packages `text` (apt's `extended_states`) says came in as
-/// dependencies, by name and architecture.
+/// dependencies.
 #[must_use]
-pub fn parse_automatic(text: &str) -> HashSet<(String, String)> {
-    paragraphs(text)
-        .map(fields)
-        .filter(|fields| fields.get("Auto-Installed") == Some(&"1"))
-        .filter_map(|fields| {
-            Some((
-                (*fields.get("Package")?).to_owned(),
-                (*fields.get("Architecture")?).to_owned(),
-            ))
-        })
-        .collect()
+pub fn parse_automatic(text: &str) -> Automatic {
+    let mut automatic = Automatic::default();
+    for fields in paragraphs(text).map(fields) {
+        if fields.get("Auto-Installed") != Some(&"1") {
+            continue;
+        }
+        if let (Some(name), Some(architecture)) =
+            (fields.get("Package"), fields.get("Architecture"))
+        {
+            automatic.names.insert((*name).to_owned());
+            automatic
+                .pairs
+                .insert(((*name).to_owned(), (*architecture).to_owned()));
+        }
+    }
+    automatic
 }
 
 /// How many updates dpkg has not yet folded into `status`: some means it is
@@ -201,12 +230,16 @@ pub fn launchers(dpkg: &Path) -> io::Result<(Vec<(String, PathBuf)>, usize)> {
     Ok((found, unreadable))
 }
 
-/// The launchers of the menu among the files `list` names.
+/// The launchers of the menu among the files `list` names, read as bytes:
+/// a name of another file that is not UTF-8 loses nothing.
 fn listed_launchers(list: &Path) -> io::Result<Vec<PathBuf>> {
     let mut launchers = Vec::new();
-    for line in BufReader::new(fs::File::open(list)?).lines() {
+    for line in BufReader::new(fs::File::open(list)?).split(b'\n') {
         let line = line?;
-        if line.starts_with(LAUNCHERS) && line.ends_with(LAUNCHER_SUFFIX) {
+        if let Ok(line) = std::str::from_utf8(&line)
+            && line.starts_with(LAUNCHERS)
+            && line.ends_with(LAUNCHER_SUFFIX)
+        {
             launchers.push(PathBuf::from(line));
         }
     }
@@ -254,6 +287,11 @@ Architecture: i386
 Version: 2
 Section: libs
 
+Package: awaited
+Status: install ok triggers-awaited
+Architecture: amd64
+Installed-Size: abc
+
 Package: ubuntu-desktop-minimal
 Status: hold ok installed
 Section: universe/metapackages
@@ -275,7 +313,13 @@ Status: install ok installed
             .collect();
         assert_eq!(
             names,
-            ["gimp", "base-files", "libfoo", "ubuntu-desktop-minimal"]
+            [
+                "gimp",
+                "base-files",
+                "libfoo",
+                "awaited",
+                "ubuntu-desktop-minimal"
+            ]
         );
         assert_eq!(status.unreadable, 1, "the paragraph without its package");
         let gimp = &status.installed[0];
@@ -283,12 +327,17 @@ Status: install ok installed
         assert_eq!(gimp.version, "3.0.4-1");
         assert!(!gimp.system && !gimp.metapackage);
         assert!(status.installed[1].system, "essential and required");
+        assert_eq!(status.installed[1].installed_bytes, Some(1024));
+        assert_eq!(
+            status.installed[3].installed_bytes, None,
+            "a size unreadable"
+        );
         let libfoo = &status.installed[2];
         assert_eq!(
             (libfoo.installed_bytes, libfoo.architecture.as_str()),
             (None, "i386")
         );
-        assert!(status.installed[3].metapackage, "in an archive area");
+        assert!(status.installed[4].metapackage, "in an archive area");
     }
 
     #[test]
@@ -306,12 +355,28 @@ Status: install ok installed
         let automatic = parse_automatic(
             "Package: libfoo\nArchitecture: i386\nAuto-Installed: 1\n\n\
              Package: gimp\nArchitecture: amd64\nAuto-Installed: 0\n\n\
+             Package: orca\nArchitecture: amd64\nAuto-Installed: 1\n\n\
              Package: nameless-arch\nAuto-Installed: 1\n",
         );
-        assert_eq!(
-            automatic,
-            HashSet::from([("libfoo".to_owned(), "i386".to_owned())])
+        let package = |name: &str, architecture: &str| DebPackage {
+            name: name.to_owned(),
+            architecture: architecture.to_owned(),
+            version: String::new(),
+            installed_bytes: None,
+            system: false,
+            metapackage: false,
+        };
+        assert!(automatic.brought(&package("libfoo", "i386")));
+        assert!(
+            !automatic.brought(&package("libfoo", "amd64")),
+            "another architecture"
         );
+        assert!(!automatic.brought(&package("gimp", "amd64")));
+        assert!(
+            automatic.brought(&package("orca", "all")),
+            "filed by apt under the system's architecture"
+        );
+        assert!(!automatic.brought(&package("nameless-arch", "all")));
     }
 
     #[test]
@@ -342,7 +407,7 @@ Status: install ok installed
         .unwrap();
         fs::write(
             info.join("libfoo:i386.list"),
-            "/usr/share/applications/foo.desktop\n",
+            b"/usr/share/\xff\xfe\n/usr/share/applications/foo.desktop\n",
         )
         .unwrap();
         fs::write(

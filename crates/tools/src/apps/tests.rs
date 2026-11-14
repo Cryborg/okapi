@@ -108,7 +108,14 @@ fn a_package_with_launchers_is_one_app_and_the_others_their_rest() {
     );
     let gimp = &apps[0];
     assert_eq!(gimp.id, "gimp:amd64");
-    assert_eq!(gimp.app_bytes, Some(3 * 1024));
+    assert_eq!(gimp.size, AppSize::Known(3 * 1024));
+    assert_eq!(
+        gimp.target,
+        Some(uninstall::Target::Deb {
+            package: "gimp".to_owned(),
+            architecture: "amd64".to_owned()
+        })
+    );
     assert_eq!(gimp.origin, Some(Origin::AsDependency));
     assert_eq!(
         gimp.icon.as_deref(),
@@ -191,7 +198,14 @@ fn a_snap_keeps_its_old_versions_and_the_others_are_its_rest() {
     assert_eq!(apps.len(), 1);
     let studio = &apps[0];
     assert_eq!(studio.name, "Android Studio");
-    assert_eq!(studio.app_bytes, Some(3000));
+    assert_eq!(studio.size, AppSize::Known(3000));
+    assert_eq!(
+        studio.target,
+        Some(uninstall::Target::Snap {
+            name: "android-studio".to_owned(),
+            purge: false
+        })
+    );
     assert_eq!(
         (studio.old_bytes, studio.old_versions),
         (1500, 2),
@@ -252,12 +266,229 @@ fn a_flatpak_is_read_from_its_active_deployment_never_through_a_link_elsewhere()
     ));
     assert_eq!(apps.len(), 1, "{apps:?}");
     assert_eq!(apps[0].id, "org.gimp.GIMP");
-    assert_eq!(apps[0].deployment, Some(gimp));
-    assert_eq!(apps[0].app_bytes, None, "measured");
+    assert_eq!(apps[0].size, AppSize::ToMeasure(gimp), "measured");
+    assert_eq!(apps[0].target, None, "never uninstalled yet");
     assert_eq!(apps[0].data, Some(home.join(".var/app/org.gimp.GIMP")));
     assert_eq!(rest, Rest::default());
     assert_eq!(
         read_flatpaks(&[root.path().join("none")], None, &reading(root.path())),
         SourceReading::Absent
     );
+}
+
+fn app(source: Source, id: &str, data: Option<PathBuf>) -> App {
+    App {
+        source,
+        id: id.to_owned(),
+        package: id.to_owned(),
+        name: id.to_owned(),
+        version: String::new(),
+        publisher: None,
+        origin: None,
+        icon: None,
+        size: AppSize::Known(1),
+        old_bytes: 0,
+        old_versions: 0,
+        data,
+        system: false,
+        target: None,
+    }
+}
+
+#[test]
+fn a_slow_source_never_holds_the_others_and_each_says_its_folders_then_its_end() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("snap/x");
+    fs::create_dir_all(&data).unwrap();
+    let (release, released) = mpsc::channel::<()>();
+    let slow: Reader = Box::new(move || {
+        released.recv().unwrap();
+        SourceReading::Absent
+    });
+    let quick_app = app(Source::Snap, "x", Some(data));
+    let quick: Reader = Box::new(move || SourceReading::Read {
+        apps: vec![quick_app],
+        rest: Rest::default(),
+    });
+    let (sink, arrivals) = mpsc::channel();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    read_all(
+        vec![(Source::Deb, slow), (Source::Snap, quick)],
+        &sink,
+        &stop,
+    );
+    drop(sink);
+    let next = || arrivals.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(matches!(
+        next(),
+        Arrival::Source(Source::Snap, SourceReading::Read { .. })
+    ));
+    assert!(matches!(
+        next(),
+        Arrival::Measured(key, Part::Data, measure::Measured::Bytes { .. }) if key.id == "x"
+    ));
+    release.send(()).unwrap();
+    assert!(matches!(
+        next(),
+        Arrival::Source(Source::Deb, SourceReading::Absent)
+    ));
+    assert!(
+        arrivals.recv_timeout(Duration::from_secs(10)).is_err(),
+        "every sender gone"
+    );
+}
+
+#[test]
+fn a_package_of_another_architecture_or_of_every_one_keeps_its_own_launcher_and_origin() {
+    let root = tempfile::tempdir().unwrap();
+    let places = debs(root.path());
+    write(
+        &places.dpkg.join("status"),
+        "Package: libbar\nStatus: install ok installed\nArchitecture: amd64\nInstalled-Size: 4\n\n\
+         Package: libbar\nStatus: install ok installed\nArchitecture: i386\nInstalled-Size: 2\n\n\
+         Package: orca\nStatus: install ok installed\nArchitecture: all\nInstalled-Size: 1\n\n\
+         Package: editor\nStatus: install ok installed\nArchitecture: amd64\n",
+    );
+    write(
+        &places.dpkg.join("info/libbar:i386.list"),
+        "/usr/share/applications/bar.desktop\n",
+    );
+    write(
+        &places.dpkg.join("info/orca.list"),
+        "/usr/share/applications/orca.desktop\n",
+    );
+    write(
+        &places.dpkg.join("info/editor.list"),
+        "/usr/share/applications/editor.desktop\n",
+    );
+    let applications = root.path().join("usr/share/applications");
+    write(&applications.join("bar.desktop"), &launcher("Bar", ""));
+    write(&applications.join("orca.desktop"), &launcher("Orca", ""));
+    write(
+        &applications.join("editor.desktop"),
+        &launcher("Editor", ""),
+    );
+    // apt files a package of every architecture under the system's.
+    write(
+        &places.extended_states,
+        "Package: orca\nArchitecture: amd64\nAuto-Installed: 1\n",
+    );
+    let (found, rest) = apps(read_debs(&places, &reading(root.path())));
+    let ids: Vec<&str> = found.iter().map(|app| app.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["libbar:i386", "orca:all", "editor:amd64"],
+        "never the other architecture's"
+    );
+    assert_eq!(found[1].origin, Some(Origin::AsDependency));
+    assert_eq!(found[2].origin, Some(Origin::ByUser));
+    assert_eq!(found[2].size, AppSize::Unknown, "no size made up");
+    assert_eq!(
+        rest,
+        Rest {
+            count: 1,
+            bytes: 4 * 1024
+        }
+    );
+
+    // apt's state unreadable: the origin is unknown, never « by you ».
+    fs::remove_file(&places.extended_states).unwrap();
+    fs::create_dir(&places.extended_states).unwrap();
+    let (found, _) = apps(read_debs(&places, &reading(root.path())));
+    assert!(found.iter().all(|app| app.origin.is_none()), "{found:?}");
+}
+
+#[test]
+fn only_a_snap_of_type_app_with_a_launcher_is_an_app_and_one_all_disabled_is_rest() {
+    let root = tempfile::tempdir().unwrap();
+    let applications = root.path().join("var/lib/snapd/desktop/applications");
+    write(
+        &applications.join("base_tool.desktop"),
+        &launcher("A base with a launcher", ""),
+    );
+    let list = serde_json::json!([
+        { "name": "base", "type": "base", "status": "active", "installed-size": 7,
+          "apps": [{ "name": "tool", "desktop-file": "/var/lib/snapd/desktop/applications/base_tool.desktop" }] },
+        { "name": "gone", "type": "app", "status": "installed", "installed-size": 3 },
+        { "name": "gone", "type": "app", "status": "installed", "installed-size": 2 },
+    ]);
+    let (found, rest) = apps(read_snaps(&list, root.path(), None, &reading(root.path())));
+    assert_eq!(found, Vec::new());
+    assert_eq!(
+        rest,
+        Rest {
+            count: 2,
+            bytes: 7 + 3 + 2
+        }
+    );
+}
+
+#[test]
+fn an_active_deployment_elsewhere_is_never_read_even_when_it_exists() {
+    let root = tempfile::tempdir().unwrap();
+    let user = root.path().join("user");
+    // A real folder with a real launcher, out of the branch's folder.
+    write(
+        &root
+            .path()
+            .join("elsewhere/export/share/applications/org.example.Away.desktop"),
+        &launcher("Away", ""),
+    );
+    let branch = user.join("app/org.example.Away/x86_64/stable");
+    fs::create_dir_all(&branch).unwrap();
+    for target in ["../../../../elsewhere", "/tmp", ".", ".."] {
+        let _ = fs::remove_file(branch.join("active"));
+        std::os::unix::fs::symlink(target, branch.join("active")).unwrap();
+        assert_eq!(
+            read_flatpaks(std::slice::from_ref(&user), None, &reading(root.path())),
+            SourceReading::Read {
+                apps: Vec::new(),
+                rest: Rest::default()
+            },
+            "{target}"
+        );
+    }
+}
+
+#[test]
+fn a_flatpak_installed_twice_is_one_line() {
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    let user = root.path().join("user");
+    let in_system = deploy(&system, "org.gimp.GIMP", "abc123");
+    deploy(&user, "org.gimp.GIMP", "abc123");
+    let (found, _) = apps(read_flatpaks(&[system, user], None, &reading(root.path())));
+    assert_eq!(found.len(), 1);
+    assert_eq!(
+        found[0].size,
+        AppSize::ToMeasure(in_system),
+        "the system's first"
+    );
+}
+
+#[test]
+fn a_reading_stopped_sends_its_source_and_measures_nothing() {
+    use std::sync::mpsc;
+
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("data");
+    fs::create_dir_all(&data).unwrap();
+    let measured = app(Source::Snap, "x", Some(data));
+    let reader: Reader = Box::new(move || SourceReading::Read {
+        apps: vec![measured],
+        rest: Rest::default(),
+    });
+    let (sink, arrivals) = mpsc::channel();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    read_all(vec![(Source::Snap, reader)], &sink, &stop);
+    drop(sink);
+    let arrived: Vec<Arrival> = arrivals.iter().collect();
+    assert_eq!(arrived.len(), 1, "{arrived:?}");
+    assert!(matches!(
+        arrived[0],
+        Arrival::Source(Source::Snap, SourceReading::Read { .. })
+    ));
 }

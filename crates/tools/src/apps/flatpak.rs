@@ -3,9 +3,11 @@
 //! the deployment in use, beside it, whose launcher says the name. Its size
 //! is measured, its data is `~/.var/app/<id>`.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use super::{App, Reading, Rest, Source, SourceReading, names_a_folder};
+use super::icons::IconRoots;
+use super::{App, AppSize, Reading, Rest, Source, SourceReading, names_a_folder};
 
 /// The system's installation.
 pub const SYSTEM_INSTALLATION: &str = "/var/lib/flatpak";
@@ -20,29 +22,33 @@ pub fn installations(home: Option<&Path>) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The names of the folders in `folder` that may be names, sorted; none
-/// when it cannot be listed (traced).
-fn subfolders(folder: &Path) -> Vec<String> {
-    let entries = match std::fs::read_dir(folder) {
-        Ok(entries) => entries,
-        Err(error) => {
-            tracing::debug!(path = %folder.display(), %error, "flatpak folder not listed");
-            return Vec::new();
-        }
-    };
-    let mut names: Vec<String> = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .filter(|name| {
-            let safe = names_a_folder(name);
-            if !safe {
-                tracing::warn!(name, "a flatpak folder's name refused");
+/// The names of the folders in `folder` that may be names, sorted.
+///
+/// # Errors
+///
+/// The system's error listing it.
+fn subfolders(folder: &Path) -> std::io::Result<Vec<String>> {
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(folder)? {
+        let name = entry?.file_name();
+        match name.to_str() {
+            Some(name) if names_a_folder(name) => names.push(name.to_owned()),
+            _ => {
+                tracing::warn!(?name, folder = %folder.display(), "a flatpak folder's name refused");
             }
-            safe
-        })
-        .collect();
+        }
+    }
     names.sort_unstable();
-    names
+    Ok(names)
+}
+
+/// [`subfolders`], none when it cannot be listed (traced).
+fn subfolders_or_none(folder: &Path) -> Vec<String> {
+    subfolders(folder)
+        .inspect_err(
+            |error| tracing::warn!(path = %folder.display(), %error, "flatpak folder not listed"),
+        )
+        .unwrap_or_default()
 }
 
 /// The deployment `active` names in `branch`, if it is a folder beside it
@@ -54,7 +60,10 @@ fn deployment(branch: &Path) -> Option<PathBuf> {
             |error| tracing::debug!(path = %active.display(), %error, "no active deployment"),
         )
         .ok()?;
-    let name = target.to_str().filter(|name| names_a_folder(name))?;
+    let Some(name) = target.to_str().filter(|name| names_a_folder(name)) else {
+        tracing::warn!(path = %active.display(), target = %target.display(), "the active deployment is not beside it: refused");
+        return None;
+    };
     let deployment = branch.join(name);
     let is_folder = std::fs::symlink_metadata(&deployment).is_ok_and(|metadata| metadata.is_dir());
     if !is_folder {
@@ -82,19 +91,40 @@ pub fn read_flatpaks(
     }
     let mut apps = Vec::new();
     let mut rest = Rest::default();
+    let mut seen = HashSet::new();
     for installation in present {
         let app_folder = installation.join("app");
-        for id in subfolders(&app_folder) {
-            for arch in subfolders(&app_folder.join(&id)) {
-                for branch in subfolders(&app_folder.join(&id).join(&arch)) {
+        let ids = match subfolders(&app_folder) {
+            Ok(ids) => ids,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => {
+                tracing::warn!(path = %app_folder.display(), %error, "flatpak installation unreadable");
+                return SourceReading::Failed(error.to_string());
+            }
+        };
+        for id in ids {
+            for arch in subfolders_or_none(&app_folder.join(&id)) {
+                for branch in subfolders_or_none(&app_folder.join(&id).join(&arch)) {
                     let branch = app_folder.join(&id).join(&arch).join(&branch);
                     let Some(deployment) = deployment(&branch) else {
                         continue;
                     };
-                    let launcher = deployment
-                        .join("export/share/applications")
-                        .join(format!("{id}.desktop"));
-                    let Some((name, icon)) = reading.launcher(&launcher) else {
+                    // The system's installation first, then the user's; a
+                    // branch, then another: one line per application.
+                    if !seen.insert(id.clone()) {
+                        tracing::warn!(id, branch = %branch.display(), "a flatpak installed twice: shown once");
+                        continue;
+                    }
+                    let export = deployment.join("export/share");
+                    // Its exported icons, beside its launcher: those under
+                    // the installation's exports are links to them.
+                    let roots = IconRoots {
+                        themes: vec![export.join("icons")],
+                        pixmaps: Vec::new(),
+                        absolute: vec![deployment.clone()],
+                    };
+                    let launcher = export.join("applications").join(format!("{id}.desktop"));
+                    let Some((name, icon)) = reading.launcher(&launcher, &roots) else {
                         rest.count += 1;
                         continue;
                     };
@@ -107,12 +137,12 @@ pub fn read_flatpaks(
                         publisher: None,
                         origin: None,
                         icon,
-                        app_bytes: None,
-                        deployment: Some(deployment),
+                        size: AppSize::ToMeasure(deployment),
                         old_bytes: 0,
                         old_versions: 0,
                         data: home.map(|home| home.join(".var/app").join(&id)),
                         system: false,
+                        target: None,
                     });
                 }
             }

@@ -1,11 +1,13 @@
 //! The texts of the rules as the user reads them (D-3): the French of each
 //! label shown, from `lang/fr.po`, keyed by the English the data write; the
-//! English is the data itself. And the one rule every interface follows to
-//! choose its language.
+//! English is the data itself. And the language of the session, which both
+//! interfaces follow unless the user chose one in the settings.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::sync::OnceLock;
+
+use serde::{Deserialize, Serialize};
 
 use crate::BrowserKind;
 
@@ -19,10 +21,13 @@ const LABEL: &str = "label";
 /// list of languages, then the locale (D-7).
 pub const SESSION_VARIABLES: [&str; 4] = ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"];
 
-/// The language of the texts shown.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The language of the texts shown, written by its code where the user
+/// chooses it (`settings.json`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Language {
+    #[serde(rename = "fr")]
     French,
+    #[serde(rename = "en")]
     English,
 }
 
@@ -32,7 +37,8 @@ impl Language {
     /// by the first language of it that Okapi speaks (English when there is
     /// none, the texts untranslated); otherwise the locale, from `LC_ALL`,
     /// `LC_MESSAGES` or `LANG` (the first not empty); English when nothing
-    /// says French. Every interface follows this one rule. As glibc,
+    /// says French. Both interfaces follow it, unless the settings choose a
+    /// language (`okapi_store::Settings::language`). As glibc,
     /// `C.UTF-8` is the `C` locale.
     #[must_use]
     pub fn of_session(read: impl Fn(&str) -> Option<OsString>) -> Self {
@@ -241,6 +247,20 @@ mod tests {
                     .map(|directory| directory.label().to_string())
             })
             .collect()
+    }
+
+    #[test]
+    fn a_language_is_written_by_its_code() {
+        for (language, code) in [(Language::French, "\"fr\""), (Language::English, "\"en\"")] {
+            assert_eq!(serde_json::to_string(&language).unwrap(), code);
+            assert_eq!(serde_json::from_str::<Language>(code).unwrap(), language);
+        }
+        for unknown in ["\"de\"", "\"French\"", "\"FR\""] {
+            assert!(
+                serde_json::from_str::<Language>(unknown).is_err(),
+                "{unknown}"
+            );
+        }
     }
 
     #[test]

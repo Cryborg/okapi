@@ -4,6 +4,8 @@ import { AboutPage } from "about.slint";
 import { CleanerPage } from "cleaner.slint";
 import { DashboardPage } from "dashboard.slint";
 import { DiskUsagePage } from "disk-usage.slint";
+import { SettingsPage } from "settings.slint";
+import { EntryError, ExclusionKind, ExclusionRow, LanguageChoice, Preferences, SettingsState, ThemeChoice } from "settings-model.slint";
 import { DiskDetail, DiskFiles, DiskLine, DiskLineKind, DiskLineState, DiskPhase, DiskRefusal, DiskStep, DiskUsage, DiskVolumes } from "disk-usage-model.slint";
 import {
     AddableWidget, CellPlace, Dashboard, DayKind, FocusPart, FocusRequest, Moment, ReadingState, Reclaimable, ReclaimableState, SystemShown, Toast,
@@ -22,6 +24,9 @@ export {
     OutcomeKind, ResultBadge, ResultRow, RowState, ScanRow, SetupProblem, Size, SizeUnit,
     StopReason, StopShown,
     DiskDetail, DiskFiles, DiskLine, DiskLineKind, DiskLineState, DiskPhase, DiskRefusal, DiskStep, DiskUsage, DiskVolumes,
+    EntryError, ExclusionKind, ExclusionRow, LanguageChoice, Preferences, SettingsState, ThemeChoice,
+    // Read by the tests, to see the theme applied.
+    Theme,
 }
 
 export component AppWindow inherits Window {
@@ -102,6 +107,9 @@ export component AppWindow inherits Window {
                 vertical-stretch: 1;
             }
             if root.page == Page.disk-usage: DiskUsagePage {
+                vertical-stretch: 1;
+            }
+            if root.page == Page.settings: SettingsPage {
                 vertical-stretch: 1;
             }
             if root.page == Page.about: AboutPage {

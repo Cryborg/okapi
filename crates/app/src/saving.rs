@@ -3,6 +3,7 @@
 //! value writes them in order, only the latest of those waiting (the others
 //! are passed by it), and says whether each write kept it.
 
+use std::cell::Cell;
 use std::io;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
@@ -10,9 +11,12 @@ use std::time::{Duration, Instant};
 
 /// How long each writer is waited for, as the window closes, to finish its
 /// last write.
-const LAST_WRITE_WAIT: Duration = Duration::from_secs(2);
+pub(crate) const LAST_WRITE_WAIT: Duration = Duration::from_secs(2);
 /// How often it looks whether that write is done.
 const LAST_WRITE_POLL: Duration = Duration::from_millis(10);
+/// How long after a value is handed whether it was kept is looked at: a
+/// write is done well within it.
+pub(crate) const WRITE_CHECK: Duration = Duration::from_millis(300);
 
 /// Writes a value; whether it is kept (the write traces why not).
 pub type Write<T> = Box<dyn Fn(&T) -> bool + Send>;
@@ -31,7 +35,11 @@ pub(crate) enum LastWrite {
 /// The thread that writes the values.
 pub(crate) struct Saver<T> {
     values: Option<Sender<T>>,
-    kept: Receiver<bool>,
+    /// Whether each write kept its value, and how many values handed it
+    /// covered (those it passed, and its own).
+    kept: Receiver<(bool, usize)>,
+    /// The values handed whose write has not been said yet.
+    unsaid: Cell<usize>,
     thread: Option<JoinHandle<()>>,
     /// The thread's name, which its traces carry.
     name: &'static str,
@@ -50,6 +58,7 @@ impl<T: Send + 'static> Saver<T> {
         Ok(Self {
             values: Some(values),
             kept,
+            unsaid: Cell::new(0),
             thread: Some(thread),
             name,
         })
@@ -57,9 +66,14 @@ impl<T: Send + 'static> Saver<T> {
 
     /// Hands `value` to the thread; false when the thread is gone.
     pub(crate) fn save(&self, value: T) -> bool {
-        self.values
+        let handed = self
+            .values
             .as_ref()
-            .is_some_and(|values| values.send(value).is_ok())
+            .is_some_and(|values| values.send(value).is_ok());
+        if handed {
+            self.unsaid.set(self.unsaid.get() + 1);
+        }
+        handed
     }
 
     /// What the writes done since the last look said.
@@ -67,12 +81,44 @@ impl<T: Send + 'static> Saver<T> {
         let mut last = LastWrite::Nothing;
         loop {
             match self.kept.try_recv() {
-                Ok(kept) => last = LastWrite::Kept(kept),
+                Ok((kept, covered)) => {
+                    self.unsaid.set(self.unsaid.get().saturating_sub(covered));
+                    last = LastWrite::Kept(kept);
+                }
                 Err(TryRecvError::Empty) => return last,
                 // What was said before it went comes first.
                 Err(TryRecvError::Disconnected) if last != LastWrite::Nothing => return last,
                 Err(TryRecvError::Disconnected) => return LastWrite::Gone,
             }
+        }
+    }
+
+    /// Whether a value handed has not been said written yet, as
+    /// [`Self::last_write`] last saw.
+    pub(crate) fn writing(&self) -> bool {
+        self.unsaid.get() > 0
+    }
+
+    /// Waits a little for every value handed to be written, then what
+    /// those writes said ([`Self::last_write`]): what reads the file next
+    /// reads them, unless a write is stuck beyond the wait (traced).
+    pub(crate) fn settle(&self) -> LastWrite {
+        let started = Instant::now();
+        let mut last = LastWrite::Nothing;
+        loop {
+            match self.last_write() {
+                LastWrite::Nothing => {}
+                LastWrite::Gone => return LastWrite::Gone,
+                said @ LastWrite::Kept(_) => last = said,
+            }
+            if self.unsaid.get() == 0 {
+                return last;
+            }
+            if started.elapsed() >= LAST_WRITE_WAIT {
+                tracing::warn!(writer = self.name, waited = ?LAST_WRITE_WAIT, unsaid = self.unsaid.get(), "writer still busy: what reads the file now may not see the last value");
+                return last;
+            }
+            thread::sleep(LAST_WRITE_POLL);
         }
     }
 
@@ -99,7 +145,12 @@ impl<T: Send + 'static> Saver<T> {
 
 /// Writes the latest of the values waiting, until no one can hand one any
 /// more; the last one handed is written even then.
-fn run<T>(name: &'static str, waiting: &Receiver<T>, said: &Sender<bool>, write: &Write<T>) {
+fn run<T>(
+    name: &'static str,
+    waiting: &Receiver<T>,
+    said: &Sender<(bool, usize)>,
+    write: &Write<T>,
+) {
     while let Ok(mut value) = waiting.recv() {
         let mut passed = 0_usize;
         while let Ok(newer) = waiting.try_recv() {
@@ -112,7 +163,7 @@ fn run<T>(name: &'static str, waiting: &Receiver<T>, said: &Sender<bool>, write:
         let kept = write(&value);
         tracing::debug!(writer = name, kept, "write done");
         // The window gone, there is no one to tell.
-        let _ = said.send(kept);
+        let _ = said.send((kept, passed + 1));
     }
 }
 
@@ -172,6 +223,53 @@ mod tests {
         saver.shut_down();
         assert_eq!(*written.lock().unwrap(), [1, 3]);
         assert_eq!(saver.last_write(), LastWrite::Kept(true));
+    }
+
+    #[test]
+    fn settling_waits_for_every_value_handed_even_those_passed() {
+        let (go, gone) = mpsc::channel();
+        let (start, started) = mpsc::channel();
+        let (write, written) = noting(gone, start);
+        let saver = Saver::start(NAME, write).unwrap();
+        assert!(saver.save(layout(1)));
+        started.recv().unwrap();
+        assert!(saver.save(layout(2)));
+        assert!(saver.save(layout(3)));
+        // The first write says it is done; the third, passing the second,
+        // is still to come.
+        go.send(()).unwrap();
+        let mut waited = 0;
+        while saver.unsaid.get() == 3 {
+            saver.last_write();
+            thread::sleep(LAST_WRITE_POLL);
+            waited += 1;
+            assert!(waited < 1000, "the first write never said");
+        }
+        assert_eq!(saver.unsaid.get(), 2);
+        started.recv().unwrap();
+        go.send(()).unwrap();
+        assert_eq!(saver.settle(), LastWrite::Kept(true));
+        assert_eq!(*written.lock().unwrap(), [1, 3]);
+        assert_eq!(saver.unsaid.get(), 0);
+        assert_eq!(
+            saver.settle(),
+            LastWrite::Nothing,
+            "nothing left to wait for"
+        );
+    }
+
+    #[test]
+    fn settling_gives_up_on_a_write_stuck_beyond_the_wait() {
+        let (_go, gone) = mpsc::channel();
+        let (start, started) = mpsc::channel();
+        let (write, _written) = noting(gone, start);
+        let saver = Saver::start(NAME, write).unwrap();
+        assert!(saver.save(layout(1)));
+        started.recv().unwrap();
+        let begun = Instant::now();
+        assert_eq!(saver.settle(), LastWrite::Nothing);
+        assert!(begun.elapsed() >= LAST_WRITE_WAIT);
+        assert_eq!(saver.unsaid.get(), 1);
     }
 
     #[test]

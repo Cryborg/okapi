@@ -36,7 +36,10 @@ const LICENSE: &str = include_str!("../../../LICENSE");
 const CRATES_NOTICES: &str = include_str!("../CRATES_NOTICES");
 
 fn main() -> ExitCode {
-    let language = Language::of_session(|name| env::var_os(name));
+    let session = Language::of_session(|name| env::var_os(name));
+    // Settings that cannot be read leave the session's: an analysis says
+    // why in it (`load_settings`).
+    let language = Settings::language(okapi_platform::config_directory().as_deref(), session);
     let say = |message: &Message<'_>| text(language, message);
     let mut output = Output::new();
     let run = match args::parse(env::args_os().skip(1)) {
@@ -99,6 +102,7 @@ fn main() -> ExitCode {
         version = env!("CARGO_PKG_VERSION"),
         arguments = ?env::args_os().skip(1).collect::<Vec<_>>(),
         ?language,
+        session_language = ?session,
         session = ?SESSION_VARIABLES.map(|name| (name, env::var_os(name))),
         journal = ?journal,
         "okapi started"

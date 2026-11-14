@@ -507,7 +507,8 @@ Options :
   -V, --version        la version
 
 Réglages : {settings}
-  (exclusions, ajoutées à --exclude ; minAgeMinutes ; deletionLog)
+  (exclusions, ajoutées à --exclude ; minAgeMinutes ; deletionLog ;
+  language, \"fr\" ou \"en\", sinon celle de la session)
 Historique des nettoyages : {history}
 
 Codes de sortie : 0 succès, 1 échec, 2 arguments ou réglages invalides,
@@ -538,7 +539,8 @@ Options:
   -V, --version        the version
 
 Settings: {settings}
-  (exclusions, added to --exclude; minAgeMinutes; deletionLog)
+  (exclusions, added to --exclude; minAgeMinutes; deletionLog;
+  language, \"fr\" or \"en\", else the session's)
 Cleaning history: {history}
 
 Exit codes: 0 success, 1 failure, 2 invalid arguments or settings,

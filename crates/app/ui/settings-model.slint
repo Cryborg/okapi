@@ -1,0 +1,90 @@
+// What the settings screen shows of `settings.json`, and what the user
+// changes there: Rust reads and writes the file (`crate::settings`).
+import { Palette } from "std-widgets.slint";
+
+// Whether the settings can be changed here: never before they are read.
+export enum SettingsState {
+    // No settings directory is known.
+    no-directory,
+    editable,
+    // The file is a link (dotfiles): never written (D-9).
+    linked,
+    // The file cannot be read: never replaced (D-10).
+    unreadable,
+    // The thread that writes them did not start, or is gone.
+    no-writer,
+}
+
+// What an exclusion is, read on the disk as it shows.
+export enum ExclusionKind { folder, file, extension, absent, invalid }
+
+export struct ExclusionRow {
+    // As written, a path below the home folder as `~/…`.
+    text: string,
+    kind: ExclusionKind,
+}
+
+export enum LanguageChoice { system, french, english }
+
+export enum ThemeChoice { system, light, dark }
+
+// Why what was typed is not added.
+export enum EntryError { none, invalid, unreadable, duplicate, not-text, chooser }
+
+export global Preferences {
+    in property <SettingsState> state;
+    // A change could not be written: said until one is, or until the
+    // user reads the file again.
+    in property <bool> saving-failed;
+    in property <[ExclusionRow]> exclusions;
+    // The ages offered, as `age` says them; the one chosen (-1: the file
+    // holds another); the one the file holds, and the engine's default.
+    in property <[string]> min-age-options;
+    in property <int> min-age-chosen;
+    in property <string> min-age-written;
+    in property <int> default-min-age;
+    in property <bool> deletion-log;
+    // Where the history lives, and the settings file, as shown; empty
+    // when unknown.
+    in property <string> state-directory;
+    in property <string> settings-file;
+    in property <LanguageChoice> language;
+    in property <ThemeChoice> theme;
+    // What is typed to add, cleared by Rust once added.
+    in-out property <string> entry;
+    in-out property <EntryError> entry-error;
+    // The folder chooser is open.
+    in property <bool> browsing;
+    // The title of the folder chooser, read by Rust.
+    out property <string> chooser-title: @tr("Choisir un dossier à exclure");
+
+    callback add(string);
+    callback remove(int);
+    callback browse();
+    callback choose-min-age(int);
+    callback toggle-deletion-log();
+    callback choose-language(LanguageChoice);
+    callback choose-theme(ThemeChoice);
+    // Read again: as the page shows, or as the user asks (`read-again`,
+    // which also takes back what an earlier failure said).
+    callback reload();
+    callback read-again();
+
+    // Forces the palette's scheme, which `Theme` and Slint's own widgets
+    // follow. Not called while the interface follows the desktop from the
+    // start: once forced, the palette no longer follows the desktop, and
+    // following it again means forcing the desktop's scheme of the moment.
+    public function show-theme(dark: bool) {
+        Palette.color-scheme = dark ? ColorScheme.dark : ColorScheme.light;
+    }
+
+    out property <int> minutes-per-hour: 60;
+
+    // An age in minutes, as a choice says it.
+    public pure function age(minutes: int) -> string {
+        if minutes < minutes-per-hour || mod(minutes, minutes-per-hour) != 0 {
+            return @tr("{} min", minutes);
+        }
+        @tr("{} h", minutes / minutes-per-hour)
+    }
+}

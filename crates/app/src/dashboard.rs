@@ -1822,7 +1822,7 @@ pub mod tests {
 
     /// The window on the Home page, and the page itself.
     fn home_screen(seams: DashboardSeams) -> (ui::AppWindow, DashboardScreen) {
-        let (window, _cleaner, home) =
+        let (window, _cleaner, home, _settings) =
             crate::wide_window(seams_never_scanning(), seams, Language::French);
         (window, home)
     }
@@ -1830,7 +1830,8 @@ pub mod tests {
     /// The window on the Home page at the mockup's size (three columns,
     /// every widget in view), its cleaner working through `cleaner`.
     fn on_home_with(cleaner: Seams, seams: DashboardSeams) -> ui::AppWindow {
-        let (window, _cleaner, _home) = crate::wide_window(cleaner, seams, Language::French);
+        let (window, _cleaner, _home, _settings) =
+            crate::wide_window(cleaner, seams, Language::French);
         window
     }
 

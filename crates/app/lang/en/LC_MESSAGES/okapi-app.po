@@ -1742,3 +1742,199 @@ msgstr "{}, {}, {}"
 msgctxt "Browse"
 msgid "dossier affiché"
 msgstr "folder shown"
+
+msgctxt "Sidebar"
+msgid "Réglages"
+msgstr "Settings"
+
+msgctxt "Exclusions"
+msgid "Dossier"
+msgstr "Folder"
+
+msgctxt "Exclusions"
+msgid "Fichier"
+msgstr "File"
+
+msgctxt "Exclusions"
+msgid "Extension"
+msgstr "Extension"
+
+msgctxt "Exclusions"
+msgid "Absent"
+msgstr "Missing"
+
+msgctxt "Exclusions"
+msgid "Invalide"
+msgstr "Invalid"
+
+msgctxt "Exclusions"
+msgid "Exclusions"
+msgstr "Exclusions"
+
+msgctxt "Exclusions"
+msgid "Okapi ne touche jamais à ce qui est listé ici. Un dossier exclut tout ce qu'il contient ; une extension s'écrit *.ext."
+msgstr "Okapi never touches what is listed here. A folder excludes everything in it; an extension is written *.ext."
+
+msgctxt "Exclusions"
+msgid "Aucune exclusion."
+msgstr "No exclusions."
+
+msgctxt "ProblemBanner"
+msgid "Le dernier changement des réglages s'enregistre encore : rien ne démarre avant qu'il soit écrit."
+msgstr "The last change of the settings is still being saved: nothing starts until it is."
+
+msgctxt "ProblemBanner"
+msgid "Le dernier changement des réglages n'a pas pu être enregistré : rien ne démarre. Refaites-le dans Réglages."
+msgstr "The last change of the settings could not be saved: nothing starts. Make it again in Settings."
+
+msgctxt "Exclusions"
+msgid "Retirer {} des exclusions"
+msgstr "Remove {} from the exclusions"
+
+msgctxt "Exclusions"
+msgid "Ajouter une exclusion"
+msgstr "Add an exclusion"
+
+msgctxt "Exclusions"
+msgid "Chemin ou *.ext"
+msgstr "Path or *.ext"
+
+msgctxt "Exclusions"
+msgid "Parcourir"
+msgstr "Browse"
+
+msgctxt "Exclusions"
+msgid "Ajouter"
+msgstr "Add"
+
+msgctxt "Exclusions"
+msgid "Un chemin absolu (/… ou ~/…) ou une extension *.ext."
+msgstr "An absolute path (/… or ~/…) or an extension *.ext."
+
+msgctxt "Exclusions"
+msgid "Cet emplacement ne se lit pas."
+msgstr "This location cannot be read."
+
+msgctxt "Exclusions"
+msgid "Déjà dans la liste."
+msgstr "Already in the list."
+
+msgctxt "Exclusions"
+msgid "Ce chemin a des caractères que les réglages ne savent pas écrire."
+msgstr "This path has characters the settings cannot hold."
+
+msgctxt "Exclusions"
+msgid "Le sélecteur de dossiers n'a pas pu s'ouvrir : écrivez le chemin."
+msgstr "The folder chooser could not open: type the path."
+
+msgctxt "General"
+msgid "Âge minimal des fichiers retirés"
+msgstr "Minimum age of files removed"
+
+msgctxt "General"
+msgid "Un fichier modifié plus récemment n'est jamais retiré. Réglé à {} min dans le fichier."
+msgstr "A file modified more recently is never removed. Set to {} min in the file."
+
+msgctxt "General"
+msgid "Un fichier modifié plus récemment n'est jamais retiré. Par défaut : {}."
+msgstr "A file modified more recently is never removed. Default: {}."
+
+msgctxt "General"
+msgid "Journal des suppressions"
+msgstr "Deletion log"
+
+msgctxt "General"
+msgid "Garde, pour chaque nettoyage, la liste des chemins retirés."
+msgstr "Keeps, for each cleaning, the list of the paths removed."
+
+msgctxt "General"
+msgid "Garde, pour chaque nettoyage, la liste des chemins retirés dans {}."
+msgstr "Keeps, for each cleaning, the list of the paths removed in {}."
+
+msgctxt "General"
+msgid "Activé"
+msgstr "On"
+
+msgctxt "General"
+msgid "Désactivé"
+msgstr "Off"
+
+msgctxt "General"
+msgid "Langue"
+msgstr "Language"
+
+msgctxt "General"
+msgid "S'applique au prochain démarrage d'Okapi."
+msgstr "Applies the next time Okapi starts."
+
+msgctxt "General"
+msgid "Système"
+msgstr "System"
+
+msgctxt "General"
+msgid "Français"
+msgstr "Français"
+
+msgctxt "General"
+msgid "English"
+msgstr "English"
+
+msgctxt "General"
+msgid "Thème"
+msgstr "Theme"
+
+msgctxt "General"
+msgid "« Système » suit le thème clair ou sombre du bureau."
+msgstr "“System” follows the desktop's light or dark theme."
+
+msgctxt "General"
+msgid "Clair"
+msgstr "Light"
+
+msgctxt "General"
+msgid "Sombre"
+msgstr "Dark"
+
+msgctxt "SettingsPage"
+msgid "Réglages"
+msgstr "Settings"
+
+msgctxt "SettingsPage"
+msgid "Chaque changement est enregistré tout de suite."
+msgstr "Each change is saved at once."
+
+msgctxt "SettingsPage"
+msgid "Vos réglages sont un lien : modifiez-les à la main."
+msgstr "Your settings are a link: edit them by hand."
+
+msgctxt "SettingsPage"
+msgid "Okapi ne sait pas où ranger ses réglages : ni XDG_CONFIG_HOME ni HOME ne sont utilisables."
+msgstr "Okapi does not know where to keep its settings: neither XDG_CONFIG_HOME nor HOME can be used."
+
+msgctxt "SettingsPage"
+msgid "{} ne se lit pas : corrigez-le ou supprimez-le. Okapi ne le remplace pas."
+msgstr "{} cannot be read: fix it or delete it. Okapi does not replace it."
+
+msgctxt "SettingsPage"
+msgid "Okapi ne peut pas enregistrer ses réglages : le détail est dans le journal."
+msgstr "Okapi cannot save its settings: the details are in the log."
+
+msgctxt "SettingsPage"
+msgid "Relire"
+msgstr "Read again"
+
+msgctxt "SettingsPage"
+msgid "Ce réglage n'a pas pu être enregistré (le détail est dans le journal)."
+msgstr "This setting could not be saved (the details are in the log)."
+
+msgctxt "Preferences"
+msgid "Choisir un dossier à exclure"
+msgstr "Choose a folder to exclude"
+
+msgctxt "Preferences"
+msgid "{} min"
+msgstr "{} min"
+
+msgctxt "Preferences"
+msgid "{} h"
+msgstr "{} h"

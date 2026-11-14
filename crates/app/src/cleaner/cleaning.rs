@@ -1076,7 +1076,8 @@ mod tests {
 
     use super::super::tests::{
         SIDEBAR_STOPS, Sandbox, button, checkbox, let_the_screen_settle, on_cleaner, press, resize,
-        settle_files, shows, shows_a_text_starting, start_of, step, watch_until,
+        seams_never_scanning, settle_files, shows, shows_a_text_starting, start_of, step,
+        watch_until,
     };
     use super::super::{Inputs, Seams};
     use crate::ui;
@@ -1872,7 +1873,7 @@ mod tests {
         };
         let (window, _screen) = on_results(Seams {
             read: Rc::new(move || Ok(inputs.clone())),
-            ..Seams::system()
+            ..seams_never_scanning()
         });
         confirm(&window);
         watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
@@ -1901,7 +1902,7 @@ mod tests {
                 }
                 Ok(read)
             }),
-            ..Seams::system()
+            ..seams_never_scanning()
         });
         deleting.set(true);
         confirm(&window);

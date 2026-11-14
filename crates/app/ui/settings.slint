@@ -1,0 +1,551 @@
+// The settings screen (docs/design/maquette/project/Settings.dc.html):
+// the exclusions, and the general settings, each change written at once.
+import { Theme, Screen } from "theme.slint";
+import {
+    ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, IconButton, Line,
+    ScrolledList, Title,
+} from "widgets.slint";
+import { EntryError, ExclusionKind, LanguageChoice, Preferences, SettingsState, ThemeChoice } from "settings-model.slint";
+
+// One choice among a few, its segments side by side, the one chosen raised.
+// Each segment is a radio button; Tab reaches each, Enter or Space chooses.
+component Segmented inherits Rectangle {
+    // The group's name, read with each segment.
+    in property <string> label;
+    in property <[string]> options;
+    // None when -1.
+    in property <int> chosen;
+    in property <bool> enabled: true;
+    callback choose(int);
+
+    height: Theme.segment-height + 2 * Theme.segmented-inset;
+    border-radius: Theme.radius-medium;
+    background: Theme.surface-2;
+    border-width: Theme.border-width;
+    border-color: Theme.border;
+    opacity: enabled ? 1 : Theme.disabled-opacity;
+    accessible-role: groupbox;
+    accessible-label: label;
+
+    HorizontalLayout {
+        padding: Theme.segmented-inset;
+        spacing: Theme.segment-gap;
+        for option[index] in root.options: Rectangle {
+            property <bool> pressed: index == root.chosen;
+            height: Theme.segment-height;
+            border-radius: Theme.radius-small;
+            background: pressed ? Theme.surface : touch.has-hover && root.enabled ? Theme.surface-hover : transparent;
+            drop-shadow-color: pressed ? Theme.shadow-1 : transparent;
+            drop-shadow-blur: Theme.shadow-1-blur;
+            drop-shadow-offset-y: Theme.shadow-1-offset;
+            accessible-role: radio-button;
+            accessible-label: option;
+            accessible-checkable: true;
+            accessible-checked: pressed;
+            accessible-enabled: root.enabled;
+            accessible-action-default => {
+                if root.enabled {
+                    root.choose(index);
+                }
+            }
+            forward-focus: keys;
+
+            keys := FocusScope {
+                focus-on-tab-navigation: root.enabled;
+                key-pressed(event) => {
+                    if root.enabled && !event.repeat && (event.text == Key.Return || event.text == Key.Space) {
+                        root.choose(index);
+                        return accept;
+                    }
+                    reject
+                }
+            }
+
+            touch := TouchArea {
+                enabled: root.enabled;
+                clicked => {
+                    root.choose(index);
+                }
+            }
+
+            FocusRing {
+                shown: keys.has-focus;
+                border-radius: parent.border-radius;
+            }
+
+            HorizontalLayout {
+                padding-left: Theme.spacing-m;
+                padding-right: Theme.spacing-m;
+                Text {
+                    text: option;
+                    accessible-role: none;
+                    color: pressed ? Theme.text : Theme.text-2;
+                    font-size: Theme.font-small;
+                    font-weight: pressed ? Theme.weight-semibold : Theme.weight-medium;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+// On or off, read as a switch; Enter or Space turns it.
+component Switch inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <bool> enabled: true;
+    callback toggled;
+
+    width: Theme.switch-width;
+    height: Theme.switch-height;
+    border-radius: Theme.radius-pill;
+    background: on ? Theme.accent : Theme.track;
+    border-width: Theme.border-width;
+    border-color: on ? Theme.accent : Theme.border-strong;
+    opacity: enabled ? 1 : Theme.disabled-opacity;
+    accessible-role: switch;
+    accessible-label: label;
+    accessible-checkable: true;
+    accessible-checked: on;
+    accessible-enabled: enabled;
+    accessible-action-default => {
+        if enabled {
+            root.toggled();
+        }
+    }
+    forward-focus: keys;
+
+    keys := FocusScope {
+        focus-on-tab-navigation: root.enabled;
+        key-pressed(event) => {
+            if root.enabled && !event.repeat && (event.text == Key.Return || event.text == Key.Space) {
+                root.toggled();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.toggled();
+        }
+    }
+
+    FocusRing {
+        x: -Theme.focus-width;
+        y: -Theme.focus-width;
+        width: parent.width + 2 * Theme.focus-width;
+        height: parent.height + 2 * Theme.focus-width;
+        shown: keys.has-focus;
+        border-radius: Theme.radius-pill;
+    }
+
+    Rectangle {
+        x: root.on ? root.width - self.width - Theme.switch-inset : Theme.switch-inset;
+        width: Theme.switch-knob;
+        height: Theme.switch-knob;
+        border-radius: Theme.radius-pill;
+        background: root.on ? Theme.on-accent : Theme.text-2;
+    }
+}
+
+// A field to type a line in; Enter says it is done. Bordered in the danger
+// colour when what it holds is refused.
+component EntryField inherits Rectangle {
+    in property <string> label;
+    in property <string> placeholder;
+    in-out property <string> text;
+    in property <bool> refused;
+    in property <bool> enabled: true;
+    callback accepted(string);
+    callback edited;
+
+    height: Theme.control-height;
+    border-radius: Theme.radius-medium;
+    border-width: input.has-focus || refused ? Theme.focus-width : Theme.border-width;
+    border-color: refused ? Theme.danger : input.has-focus ? Theme.focus : Theme.border-strong;
+    background: Theme.surface;
+    opacity: enabled ? 1 : Theme.disabled-opacity;
+    forward-focus: input;
+
+    HorizontalLayout {
+        padding-left: Theme.spacing-m;
+        padding-right: Theme.spacing-m;
+        Rectangle {
+            input := TextInput {
+                text <=> root.text;
+                enabled: root.enabled;
+                single-line: true;
+                color: Theme.text;
+                font-size: Theme.font-label;
+                vertical-alignment: center;
+                accessible-label: root.label;
+                accessible-placeholder-text: root.placeholder;
+                accepted => {
+                    root.accepted(self.text);
+                }
+                edited => {
+                    root.edited();
+                }
+            }
+            if root.text == "": Text {
+                text: root.placeholder;
+                // Read with the field.
+                accessible-role: none;
+                color: Theme.text-3;
+                font-size: Theme.font-label;
+                vertical-alignment: center;
+                x: 0;
+            }
+        }
+    }
+}
+
+// A row of the general settings: its name and what it does, its control on
+// the right.
+component SettingRow inherits HorizontalLayout {
+    in property <string> name;
+    in property <string> description;
+    padding: Theme.spacing-l;
+    padding-left: Theme.setting-row-padding;
+    padding-right: Theme.setting-row-padding;
+    spacing: Theme.spacing-l;
+    VerticalLayout {
+        horizontal-stretch: 1;
+        alignment: center;
+        spacing: Theme.spacing-xxs;
+        Line {
+            text: root.name;
+            // The control reads it.
+            accessible-role: none;
+        }
+        Detail {
+            text: root.description;
+        }
+    }
+    VerticalLayout {
+        alignment: center;
+        @children
+    }
+}
+
+component Separator inherits Rectangle {
+    height: Theme.border-width;
+    background: Theme.border;
+}
+
+component Exclusions inherits Card {
+    in property <bool> enabled;
+    property <bool> refused: Preferences.entry-error != EntryError.none;
+
+    // What its badge says of an exclusion, read with its line.
+    pure function kind-word(kind: ExclusionKind) -> string {
+        if kind == ExclusionKind.folder {
+            return @tr("Dossier");
+        }
+        if kind == ExclusionKind.file {
+            return @tr("Fichier");
+        }
+        if kind == ExclusionKind.extension {
+            return @tr("Extension");
+        }
+        if kind == ExclusionKind.absent {
+            return @tr("Absent");
+        }
+        @tr("Invalide")
+    }
+
+    VerticalLayout {
+        padding: Theme.spacing-xl;
+        spacing: Theme.spacing-l;
+
+        VerticalLayout {
+            spacing: Theme.spacing-xs;
+            Text {
+                text: @tr("Exclusions");
+                color: Theme.text;
+                font-size: Theme.font-heading;
+                font-weight: Theme.weight-semibold;
+            }
+            Detail {
+                text: @tr("Okapi ne touche jamais à ce qui est listé ici. Un dossier exclut tout ce qu'il contient ; une extension s'écrit *.ext.");
+            }
+        }
+
+        if Preferences.exclusions.length == 0: Detail {
+            text: @tr("Aucune exclusion.");
+        }
+        // As high as its lines, scrolled when the window is lower.
+        if Preferences.exclusions.length > 0: Rectangle {
+            vertical-stretch: 1;
+            min-height: Theme.exclusion-row-height;
+            preferred-height: self.max-height;
+            max-height: Preferences.exclusions.length * Theme.exclusion-row-height + 2 * Theme.border-width;
+            border-radius: Theme.radius-medium;
+            border-width: Theme.border-width;
+            border-color: Theme.border;
+            clip: true;
+            ScrolledList {
+                label: @tr("Exclusions");
+                ring-radius: Theme.radius-medium;
+                content-height: Preferences.exclusions.length * Theme.exclusion-row-height;
+                VerticalLayout {
+                    for row[index] in Preferences.exclusions: Rectangle {
+                        height: Theme.exclusion-row-height;
+                        accessible-role: list-item;
+                        accessible-label: row.text;
+                        accessible-description: root.kind-word(row.kind);
+                        HorizontalLayout {
+                            padding-left: Theme.spacing-m;
+                            padding-right: Theme.spacing-s;
+                            spacing: Theme.spacing-m;
+                            Icon {
+                                source: row.kind == ExclusionKind.folder ? @image-url("../assets/icons/folder.svg") : @image-url("../assets/icons/file.svg");
+                                colorize: Theme.text-2;
+                                y: (parent.height - self.height) / 2;
+                            }
+                            Text {
+                                horizontal-stretch: 1;
+                                text: row.text;
+                                // Read by its line.
+                                accessible-role: none;
+                                color: Theme.text;
+                                font-size: Theme.font-label;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Badge {
+                                    text: root.kind-word(row.kind);
+                                    tone: row.kind == ExclusionKind.invalid ? Theme.danger : Theme.text-2;
+                                    tone-soft: row.kind == ExclusionKind.invalid ? Theme.danger-soft : Theme.surface-2;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                if root.enabled: IconButton {
+                                    icon: @image-url("../assets/icons/x.svg");
+                                    label: @tr("Retirer {} des exclusions", row.text);
+                                    clicked => {
+                                        Preferences.remove(index);
+                                    }
+                                }
+                            }
+                        }
+                        if index < Preferences.exclusions.length - 1: Separator {
+                            y: parent.height - self.height;
+                        }
+                    }
+                }
+            }
+        }
+
+        VerticalLayout {
+            spacing: Theme.spacing-s;
+            Line {
+                text: @tr("Ajouter une exclusion");
+                // The field reads it.
+                accessible-role: none;
+            }
+            HorizontalLayout {
+                spacing: Theme.spacing-s;
+                EntryField {
+                    horizontal-stretch: 1;
+                    label: @tr("Ajouter une exclusion");
+                    placeholder: @tr("Chemin ou *.ext");
+                    text <=> Preferences.entry;
+                    refused: root.refused;
+                    enabled: root.enabled;
+                    accepted(text) => {
+                        Preferences.add(text);
+                    }
+                    edited => {
+                        Preferences.entry-error = EntryError.none;
+                    }
+                }
+                ActionButton {
+                    text: @tr("Parcourir");
+                    icon: @image-url("../assets/icons/folder.svg");
+                    enabled: root.enabled && !Preferences.browsing;
+                    clicked => {
+                        Preferences.browse();
+                    }
+                }
+                ActionButton {
+                    text: @tr("Ajouter");
+                    icon: @image-url("../assets/icons/plus.svg");
+                    enabled: root.enabled;
+                    clicked => {
+                        Preferences.add(Preferences.entry);
+                    }
+                }
+            }
+            if root.refused: Text {
+                text: Preferences.entry-error == EntryError.invalid ? @tr("Un chemin absolu (/… ou ~/…) ou une extension *.ext.")
+                    : Preferences.entry-error == EntryError.unreadable ? @tr("Cet emplacement ne se lit pas.")
+                    : Preferences.entry-error == EntryError.duplicate ? @tr("Déjà dans la liste.")
+                    : Preferences.entry-error == EntryError.not-text ? @tr("Ce chemin a des caractères que les réglages ne savent pas écrire.")
+                    : @tr("Le sélecteur de dossiers n'a pas pu s'ouvrir : écrivez le chemin.");
+                accessible-live-region: polite;
+                color: Theme.danger;
+                font-size: Theme.font-small;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+component General inherits Card {
+    in property <bool> enabled;
+
+    VerticalLayout {
+        SettingRow {
+            name: @tr("Âge minimal des fichiers retirés");
+            description: Preferences.min-age-chosen < 0
+                ? @tr("Un fichier modifié plus récemment n'est jamais retiré. Réglé à {} min dans le fichier.", Preferences.min-age-written)
+                : @tr("Un fichier modifié plus récemment n'est jamais retiré. Par défaut : {}.", Preferences.age(Preferences.default-min-age));
+            Segmented {
+                label: @tr("Âge minimal des fichiers retirés");
+                options: Preferences.min-age-options;
+                chosen: Preferences.min-age-chosen;
+                enabled: root.enabled;
+                choose(index) => {
+                    Preferences.choose-min-age(index);
+                }
+            }
+        }
+        Separator { }
+        SettingRow {
+            name: @tr("Journal des suppressions");
+            description: Preferences.state-directory == ""
+                ? @tr("Garde, pour chaque nettoyage, la liste des chemins retirés.")
+                : @tr("Garde, pour chaque nettoyage, la liste des chemins retirés dans {}.", Preferences.state-directory);
+            HorizontalLayout {
+                spacing: Theme.spacing-m;
+                Detail {
+                    text: Preferences.deletion-log ? @tr("Activé") : @tr("Désactivé");
+                    // The switch says it.
+                    accessible-role: none;
+                    vertical-alignment: center;
+                    wrap: no-wrap;
+                }
+                Switch {
+                    label: @tr("Journal des suppressions");
+                    on: Preferences.deletion-log;
+                    enabled: root.enabled;
+                    toggled => {
+                        Preferences.toggle-deletion-log();
+                    }
+                }
+            }
+        }
+        Separator { }
+        SettingRow {
+            name: @tr("Langue");
+            description: @tr("S'applique au prochain démarrage d'Okapi.");
+            Segmented {
+                label: @tr("Langue");
+                options: [@tr("Système"), @tr("Français"), @tr("English")];
+                chosen: Preferences.language == LanguageChoice.french ? 1 : Preferences.language == LanguageChoice.english ? 2 : 0;
+                enabled: root.enabled;
+                choose(index) => {
+                    Preferences.choose-language(index == 1 ? LanguageChoice.french : index == 2 ? LanguageChoice.english : LanguageChoice.system);
+                }
+            }
+        }
+        Separator { }
+        SettingRow {
+            name: @tr("Thème");
+            description: @tr("« Système » suit le thème clair ou sombre du bureau.");
+            Segmented {
+                label: @tr("Thème");
+                options: [@tr("Système"), @tr("Clair"), @tr("Sombre")];
+                chosen: Preferences.theme == ThemeChoice.light ? 1 : Preferences.theme == ThemeChoice.dark ? 2 : 0;
+                enabled: root.enabled;
+                choose(index) => {
+                    Preferences.choose-theme(index == 1 ? ThemeChoice.light : index == 2 ? ThemeChoice.dark : ThemeChoice.system);
+                }
+            }
+        }
+    }
+}
+
+export component SettingsPage inherits VerticalLayout {
+    property <bool> enabled: Preferences.state == SettingsState.editable;
+
+    // Made each time the page shows: the file may have changed since.
+    init => {
+        Preferences.reload();
+    }
+
+    padding: Screen.page-margin;
+    spacing: Theme.spacing-xl;
+
+    VerticalLayout {
+        spacing: Theme.spacing-xs;
+        Title {
+            text: @tr("Réglages");
+        }
+        Detail {
+            text: @tr("Chaque changement est enregistré tout de suite.");
+        }
+    }
+
+    if Preferences.state == SettingsState.linked: Banner {
+        text: @tr("Vos réglages sont un lien : modifiez-les à la main.");
+    }
+    if Preferences.state == SettingsState.no-writer: Banner {
+        warning: true;
+        text: @tr("Okapi ne peut pas enregistrer ses réglages : le détail est dans le journal.");
+    }
+    if Preferences.state == SettingsState.no-directory: Banner {
+        warning: true;
+        text: @tr("Okapi ne sait pas où ranger ses réglages : ni XDG_CONFIG_HOME ni HOME ne sont utilisables.");
+    }
+    if Preferences.state == SettingsState.unreadable: HorizontalLayout {
+        spacing: Theme.spacing-m;
+        Banner {
+            horizontal-stretch: 1;
+            warning: true;
+            text: @tr("{} ne se lit pas : corrigez-le ou supprimez-le. Okapi ne le remplace pas.", Preferences.settings-file);
+        }
+        VerticalLayout {
+            alignment: center;
+            ActionButton {
+                text: @tr("Relire");
+                icon: @image-url("../assets/icons/rotate-ccw.svg");
+                clicked => {
+                    Preferences.read-again();
+                }
+            }
+        }
+    }
+    if Preferences.saving-failed: Banner {
+        warning: true;
+        text: @tr("Ce réglage n'a pas pu être enregistré (le détail est dans le journal).");
+    }
+
+    HorizontalLayout {
+        vertical-stretch: 1;
+        spacing: Theme.spacing-l;
+        alignment: stretch;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: start;
+            Exclusions {
+                enabled: root.enabled;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: start;
+            General {
+                enabled: root.enabled;
+            }
+        }
+    }
+}

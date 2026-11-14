@@ -13,7 +13,7 @@ export struct CategoryChoice {
 }
 
 // Why an analysis or a cleaning cannot start; the detail is in the journal.
-export enum SetupProblem { none, variables, rules, settings, min-age, exclusion, history, start, rights-changed }
+export enum SetupProblem { none, variables, rules, settings, min-age, exclusion, history, start, rights-changed, settings-saving, settings-unsaved }
 
 export enum CleanerStep { idle, planning, scanning, cancelling, outcome, results, cleaning, receipt }
 
@@ -380,6 +380,10 @@ export component ProblemBanner inherits Banner {
         ? @tr("Les règles de nettoyage sont illisibles : rien ne peut démarrer. Le détail est dans le journal.")
         : Cleaner.problem == SetupProblem.settings
         ? @tr("Les réglages sont illisibles : rien ne peut démarrer. Le détail est dans le journal.")
+        : Cleaner.problem == SetupProblem.settings-saving
+        ? @tr("Le dernier changement des réglages s'enregistre encore : rien ne démarre avant qu'il soit écrit.")
+        : Cleaner.problem == SetupProblem.settings-unsaved
+        ? @tr("Le dernier changement des réglages n'a pas pu être enregistré : rien ne démarre. Refaites-le dans Réglages.")
         : Cleaner.problem == SetupProblem.min-age
         ? @tr("L'âge minimal des réglages remonte avant l'horloge : rien ne serait assez ancien.")
         : Cleaner.problem == SetupProblem.start

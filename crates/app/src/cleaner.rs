@@ -45,9 +45,6 @@ const CANCEL_WAIT: Duration = Duration::from_secs(5);
 /// of a double click on what it showed before: "Analyser" and "Annuler
 /// l'analyse" share a place, so a double click would start and cancel.
 const SECOND_CLICK: Duration = Duration::from_millis(500);
-/// How long after a choice among the results whether it was kept is
-/// looked at: a write is done well within it.
-const WRITE_CHECK: Duration = Duration::from_millis(300);
 
 /// What a scan is prepared from, read from the machine each time it is
 /// needed: the settings may change between two analyses.
@@ -78,6 +75,12 @@ pub enum Problem {
     /// The settings changed since the rights were obtained: root's part would
     /// not honour them, so nothing is removed and the rights are to obtain again.
     RightsChanged,
+    /// The last change of the settings is still being written: what is
+    /// read would miss it, so nothing starts until it is.
+    SettingsSaving,
+    /// The last change of the settings could not be written: said once,
+    /// nothing starts then.
+    SettingsUnsaved,
 }
 
 mod browsers;
@@ -115,6 +118,8 @@ pub struct Seams {
     pub elevate: Elevate,
     /// What the disk usage screen reads and asks of the machine.
     pub disk: crate::disk_usage::DiskSeams,
+    /// What the settings screen reads and asks of the machine.
+    pub settings: crate::settings::SettingsSeams,
 }
 
 impl std::fmt::Debug for Seams {
@@ -126,6 +131,7 @@ impl std::fmt::Debug for Seams {
 impl Seams {
     /// The session's variables, the user's settings, and the real scan.
     pub fn system() -> Self {
+        let disk = crate::disk_usage::DiskSeams::system();
         Self {
             read: Rc::new(read_system),
             work: Arc::new(|job, cancel, progress| {
@@ -153,7 +159,8 @@ impl Seams {
                     launcher.run(operation, line, cancel, steps)
                 })
             },
-            disk: crate::disk_usage::DiskSeams::system(),
+            settings: crate::settings::SettingsSeams::system(disk.home.clone()),
+            disk,
         }
     }
 }
@@ -525,6 +532,8 @@ const fn problem(problem: Option<Problem>) -> ui::SetupProblem {
         Some(Problem::History) => ui::SetupProblem::History,
         Some(Problem::Start) => ui::SetupProblem::Start,
         Some(Problem::RightsChanged) => ui::SetupProblem::RightsChanged,
+        Some(Problem::SettingsSaving) => ui::SetupProblem::SettingsSaving,
+        Some(Problem::SettingsUnsaved) => ui::SetupProblem::SettingsUnsaved,
     }
 }
 
@@ -1367,13 +1376,15 @@ impl CleanerScreen {
         let state = self.0.borrow();
         if state.kept.as_ref().is_some_and(KeptSelections::writing) {
             let weak = Rc::downgrade(&self.0);
-            state
-                .write_check
-                .start(slint::TimerMode::SingleShot, WRITE_CHECK, move || {
+            state.write_check.start(
+                slint::TimerMode::SingleShot,
+                crate::saving::WRITE_CHECK,
+                move || {
                     if let Some(state) = weak.upgrade() {
                         Self(state).check_write();
                     }
-                });
+                },
+            );
         }
     }
 
@@ -1621,6 +1632,8 @@ pub mod tests {
                 now: jiff::Timestamp::now,
                 threads: std::num::NonZeroUsize::MIN,
             },
+            // No settings read nor written.
+            settings: crate::settings::tests::nowhere(),
             ..Seams::system()
         }
     }
@@ -1995,7 +2008,7 @@ pub mod tests {
         };
         let (window, _screen) = on_cleaner(Seams {
             read: Rc::new(move || Ok(inputs.clone())),
-            ..Seams::system()
+            ..seams_never_scanning()
         });
         button(&window, "Analyser").invoke_accessible_default_action();
         watch_until(&window, |window| step(window) == ui::CleanerStep::Outcome);
@@ -2014,7 +2027,7 @@ pub mod tests {
         let inputs = sandbox.inputs(None);
         let (window, _screen) = on_cleaner(Seams {
             read: Rc::new(move || Ok(inputs.clone())),
-            ..Seams::system()
+            ..seams_never_scanning()
         });
         button(&window, "Analyser").invoke_accessible_default_action();
         watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
@@ -2166,7 +2179,7 @@ pub mod tests {
             let inputs = self.inputs(Some(state_directory));
             Seams {
                 read: Rc::new(move || Ok(inputs.clone())),
-                ..Seams::system()
+                ..seams_never_scanning()
             }
         }
 
@@ -2193,7 +2206,7 @@ pub mod tests {
 
     /// The window on the cleaner, in `language`.
     pub fn on_cleaner_in(seams: Seams, language: Language) -> (ui::AppWindow, CleanerScreen) {
-        let (window, screen, _home) =
+        let (window, screen, _home, _settings) =
             crate::wide_window(seams, crate::dashboard::tests::inert(), language);
         let cleaner = match language {
             Language::French => "Nettoyeur",
@@ -2391,7 +2404,7 @@ pub mod tests {
             Seams {
                 read: Rc::new(|| Ok(defaults())),
                 work,
-                ..Seams::system()
+                ..seams_never_scanning()
             },
             Scripted { go, started, sent },
         )
@@ -2767,7 +2780,7 @@ pub mod tests {
     }
 
     /// The entries of the sidebar, each a stop of Tab.
-    pub const SIDEBAR_ENTRIES: usize = 4;
+    pub const SIDEBAR_ENTRIES: usize = 5;
     /// The stops of Tab in the sidebar of a wide window: its fold button,
     /// then its entries.
     pub const SIDEBAR_STOPS: usize = SIDEBAR_ENTRIES + 1;

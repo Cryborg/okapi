@@ -30,7 +30,7 @@ pub use history::{
 pub use interface_state::InterfaceState;
 pub use last_analysis::LastAnalysis;
 pub use selections::Selections;
-pub use settings::Settings;
+pub use settings::{Settings, Theme};
 
 /// A file Okapi keeps could not be used.
 #[derive(Debug, Error)]

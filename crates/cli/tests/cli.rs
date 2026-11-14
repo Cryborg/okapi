@@ -640,6 +640,36 @@ fn unusable_settings_stop_before_any_scan() {
 }
 
 #[test]
+fn the_language_chosen_in_the_settings_wins_over_the_session() {
+    if running_as_root() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let help = |sandbox: &Sandbox| {
+        String::from_utf8_lossy(&sandbox.run_in_french(&["--help"]).stdout).into_owned()
+    };
+    assert!(
+        help(&sandbox).contains("Utilisation"),
+        "no settings: the session's"
+    );
+    sandbox.settings(r#"{"version": 1, "language": "en"}"#);
+    assert!(help(&sandbox).contains("Usage:"), "{}", help(&sandbox));
+    sandbox.settings(r#"{"version": 1, "language": "fr"}"#);
+    let output = sandbox.run_with(&["--help"], &sandbox.root.join("state"), "C");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Utilisation"));
+    // Settings that cannot be read leave the session's language, which
+    // then says why they cannot be read.
+    sandbox.settings(r#"{"version": 1, "language": "de"}"#);
+    let output = sandbox.run_in_french(&["--apps"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("est invalide"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn settings_behind_a_dangling_link_stop_the_cleaning() {
     if running_as_root() {
         return;

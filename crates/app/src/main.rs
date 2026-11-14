@@ -22,12 +22,14 @@ mod portal;
 mod receipt;
 mod results;
 mod saving;
+mod settings;
 mod shown;
 mod sidebar;
 
 use cleaner::{CleanerEvent, CleanerScreen, Seams};
 use dashboard::{DashboardScreen, DashboardSeams};
 use disk_usage::DiskUsageScreen;
+use settings::SettingsScreen;
 
 /// The interface, as Slint generates it from `ui/`.
 mod ui {
@@ -74,14 +76,17 @@ fn license_paragraphs() -> Vec<SharedString> {
 /// that does not answer within it is said to.
 const SPACE_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// The screens a window holds, beyond what Slint does alone.
+type Screens = (AppWindow, CleanerScreen, DashboardScreen, SettingsScreen);
+
 /// The window in `language`, filled with what it shows of Okapi itself, its
-/// cleaner reading, scanning and cleaning through `seams`, its Home page
-/// reading through `home`.
+/// cleaner reading, scanning and cleaning through `seams`, its settings
+/// read and written through them too, its Home page reading through `home`.
 fn window(
-    seams: Seams,
+    mut seams: Seams,
     home: DashboardSeams,
     language: Language,
-) -> Result<(AppWindow, CleanerScreen, DashboardScreen), slint::PlatformError> {
+) -> Result<Screens, slint::PlatformError> {
     let window = AppWindow::new()?;
     // Slint's own texts in the language of the rules' labels: the French
     // source is the bundle's empty language. Known once a component exists.
@@ -96,8 +101,32 @@ fn window(
     window.set_license_name(env!("CARGO_PKG_LICENSE").into());
     window.set_repository(env!("CARGO_PKG_REPOSITORY").into());
     window.set_license_paragraphs(ModelRc::from(Rc::new(VecModel::from(license_paragraphs()))));
+    let settings = SettingsScreen::attach(&window, seams.settings.clone());
+    // What the cleaner reads of the settings waits for the changes under
+    // way, and is refused while one is stuck, or once after one failed: an
+    // exclusion just added is never missed by the next cleaning without a
+    // word.
+    let read = Rc::clone(&seams.read);
+    let settled = settings.clone();
+    seams.read = Rc::new(move || {
+        if let Err(unsaved) = settled.wait_for_writes() {
+            tracing::error!(
+                ?unsaved,
+                "the last change of the settings is not on the disk: not read, nothing starts"
+            );
+            return Err(match unsaved {
+                settings::Unsaved::Pending => cleaner::Problem::SettingsSaving,
+                settings::Unsaved::Failed => cleaner::Problem::SettingsUnsaved,
+            });
+        }
+        read()
+    });
     let disk = DiskUsageScreen::attach(&window, seams.disk.clone(), language);
     let screen = CleanerScreen::attach(&window, seams, language);
+    // Once the writes are done, the cleaner reads them again: a refusal
+    // they caused is lifted, or a failure said there.
+    let refreshed = screen.clone();
+    settings.when_written(Rc::new(move || refreshed.refresh()));
     let closing = screen.clone();
     window
         .window()
@@ -111,7 +140,7 @@ fn window(
         tracing::debug!(chosen_folded, narrow, ?size, ?scale, "sidebar shown");
     });
     let dashboard = attach_home(&window, &screen, &disk, home);
-    Ok((window, screen, dashboard))
+    Ok((window, screen, dashboard, settings))
 }
 
 /// Binds the Home page to `window`: it follows the page shown, its
@@ -206,22 +235,25 @@ fn main() -> ExitCode {
         rotation.trace();
     }
     journal::trace_panics();
-    // The language, from the variables gettext reads (D-7).
-    let language = Language::of_session(|name| std::env::var_os(name));
+    let session = Language::of_session(|name| std::env::var_os(name));
+    let language =
+        okapi_store::Settings::language(okapi_platform::config_directory().as_deref(), session);
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         ?language,
+        session_language = ?session,
         session = ?SESSION_VARIABLES.map(|name| (name, std::env::var_os(name))),
         "app started"
     );
-    let (window, screen, home) = match window(Seams::system(), home_seams(language), language) {
-        Ok(window) => window,
-        Err(error) => {
-            tracing::error!(error = %error, detail = ?error, "window not created");
-            diagnostic(&format!("no window: {error}"));
-            return ExitCode::FAILURE;
-        }
-    };
+    let (window, screen, home, settings) =
+        match window(Seams::system(), home_seams(language), language) {
+            Ok(window) => window,
+            Err(error) => {
+                tracing::error!(error = %error, detail = ?error, "window not created");
+                diagnostic(&format!("no window: {error}"));
+                return ExitCode::FAILURE;
+            }
+        };
     tracing::info!("window created");
     let fold = sidebar::KeptFold::attach(&window, okapi_platform::state_directory());
     screen.keep_selections(kept_selections::KeptSelections::start(
@@ -231,6 +263,7 @@ fn main() -> ExitCode {
     screen.shut_down();
     home.shut_down();
     fold.shut_down();
+    settings.shut_down();
     match ran {
         Ok(()) => {
             tracing::info!("app closed");
@@ -247,11 +280,7 @@ fn main() -> ExitCode {
 /// The window at the mockup's size: the testing backend makes it narrower
 /// than the sidebar's threshold, which would fold it.
 #[cfg(test)]
-fn wide_window(
-    seams: Seams,
-    home: DashboardSeams,
-    language: Language,
-) -> (AppWindow, CleanerScreen, DashboardScreen) {
+fn wide_window(seams: Seams, home: DashboardSeams, language: Language) -> Screens {
     const MOCKUP: slint::PhysicalSize = slint::PhysicalSize::new(1280, 800);
     i_slint_backend_testing::init_no_event_loop();
     let built = window(seams, home, language).unwrap();
@@ -522,7 +551,14 @@ mod tests {
         let window = test_window();
         // Each page's title, after the sidebar and the margin. The other
         // pages are measured with their state, next to it.
-        for (page, title) in [("Nettoyeur", "Nettoyeur"), ("À propos", "À propos")] {
+        for (page, title) in [
+            ("Nettoyeur", "Nettoyeur"),
+            (
+                "Réglages",
+                "Chaque changement est enregistré tout de suite.",
+            ),
+            ("À propos", "À propos"),
+        ] {
             button(&window, page).invoke_accessible_default_action();
             resize(&window, 1280);
             let wide = start_of(&window, title);
@@ -687,7 +723,7 @@ mod tests {
     }
 
     /// Texts the same in both languages.
-    const SAME_IN_ENGLISH: [&str; 9] = [
+    const SAME_IN_ENGLISH: [&str; 15] = [
         "{}, {}",
         "{}, {}, {}",
         "Version {}",
@@ -697,6 +733,12 @@ mod tests {
         "Distribution",
         "{} · {}",
         "{} ({})",
+        "Exclusions",
+        "Extension",
+        "Français",
+        "English",
+        "{} min",
+        "{} h",
     ];
 
     #[test]
@@ -755,6 +797,10 @@ mod tests {
             "Lines",
             "Panel",
             "Browse",
+            "Exclusions",
+            "General",
+            "SettingsPage",
+            "Preferences",
         ] {
             assert!(
                 texts.iter().any(|(component, _)| component == context),

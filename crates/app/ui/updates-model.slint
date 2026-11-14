@@ -1,0 +1,92 @@
+import { Size } from "cleaner-model.slint";
+import { Moment } from "dashboard-model.slint";
+
+// Where the screen stands: never searched yet, searching, read.
+export enum UpdatesStep { idle, searching, read }
+
+// What a source came to: not on this system, read, or failed.
+export enum SourceState { absent, read, failed }
+
+// Why a source failed, as the user is told (`okapi_tools::updates::Failure`).
+export enum SourceFailure { busy, offline, refused, unanswered, broken }
+
+// How an update matters, in the order shown.
+export enum UpdateKind { security, other, blocked }
+
+// A package of the system with an update waiting: its version as the
+// package names it, and as a screen reader says it (`3.5.1`).
+export struct SystemLine {
+    name: string,
+    summary: string,
+    version: string,
+    spoken-version: string,
+    kind: UpdateKind,
+}
+
+// A snap with a newer revision waiting.
+export struct SnapLine {
+    title: string,
+    publisher: string,
+    verified: bool,
+    version: string,
+    size: Size,
+    has-size: bool,
+}
+
+// The updates screen: Rust fills it, the page shows it and calls back. It
+// installs nothing.
+export global Updates {
+    in property <UpdatesStep> step;
+    // The search downloads the package lists first.
+    in property <bool> refreshing;
+    // Another program holds the package manager: the search waits for it.
+    in property <bool> waiting;
+    // A list was read before: shown, faded, while a search runs; and it is
+    // still that one (no source has told the new one yet).
+    in property <bool> has-read;
+    in property <bool> previous-shown;
+    // Since the last reading: minutes, then the moment.
+    in property <int> minutes;
+    in property <Moment> read-at;
+    // The distribution's name, if known.
+    in property <string> distribution;
+
+    in property <SourceState> system-state;
+    in property <SourceFailure> system-failure;
+    // Waiting to be installed, of security among them, and held back by
+    // the system (listed, never waiting).
+    in property <int> system-count;
+    in property <int> system-security;
+    in property <int> system-held;
+    // The packages shown (the first ones, or all), and how many more there
+    // are.
+    in property <[SystemLine]> system-lines;
+    in property <int> system-more;
+    in-out property <bool> system-expanded;
+    // The lists were not downloaded again this time; or, not downloaded
+    // this time, they are old or of an unknown age: dated, never « à jour ».
+    in property <bool> refresh-failed;
+    in property <SourceFailure> refresh-failure;
+    in property <bool> lists-old;
+    in property <bool> has-listed-at;
+    in property <Moment> listed-at;
+
+    in property <SourceState> snaps-state;
+    in property <SourceFailure> snaps-failure;
+    in property <[SnapLine]> snap-lines;
+    in property <Size> snaps-size;
+    in property <bool> has-snaps-size;
+    in property <bool> has-next-refresh;
+    in property <Moment> next-refresh;
+
+    // A restart is awaited, and the packages that asked for it.
+    in property <bool> reboot;
+    in property <[string]> reboot-packages;
+    in-out property <bool> reboot-expanded;
+
+    // Downloads the package lists, then reads again.
+    callback search-now();
+    // The last search, again.
+    callback retry();
+    callback show-all-system();
+}

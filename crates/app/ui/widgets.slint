@@ -461,7 +461,8 @@ export component ScrolledText inherits FocusScope {
 }
 
 // A line that says something about the whole screen: a note, or a
-// warning. Read when it shows.
+// warning. Read when it shows. What it is given goes at its end (a button
+// that answers it).
 export component Banner inherits Rectangle {
     in property <string> text;
     in property <bool> warning;
@@ -486,6 +487,7 @@ export component Banner inherits Rectangle {
             vertical-alignment: center;
             accessible-role: none;
         }
+        @children
     }
 }
 

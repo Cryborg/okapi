@@ -1,0 +1,710 @@
+// The updates screen (docs/design/mises-a-jour/project/Updates.dc.html):
+// what waits, source by source; nothing is installed from here.
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Screen } from "theme.slint";
+import { Words } from "cleaner-model.slint";
+import { DashboardWords } from "dashboard-widgets.slint";
+import { DayKind } from "dashboard-model.slint";
+import { ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, Line, ProgressBar, ReadIconNote, Title } from "widgets.slint";
+import { Updates, UpdatesStep, SourceState, SourceFailure, UpdateKind, SystemLine, SnapLine } from "updates-model.slint";
+
+// What the screen says, the same for the eye and the ear.
+global UpdatesWords {
+    // Why a source could not be read.
+    pure public function failure(failure: SourceFailure) -> string {
+        if failure == SourceFailure.busy {
+            return @tr("Une autre installation est en cours. Réessayez dans un moment.");
+        }
+        if failure == SourceFailure.offline {
+            return @tr("La recherche n'a pas pu joindre Internet.");
+        }
+        if failure == SourceFailure.refused {
+            return @tr("Le système a refusé la recherche : elle demande une session ouverte sur cet écran.");
+        }
+        if failure == SourceFailure.unanswered {
+            return @tr("Le gestionnaire de mises à jour ne répond pas.");
+        }
+        @tr("Le gestionnaire de mises à jour n'a pas pu répondre. Le détail est dans le journal.")
+    }
+
+    // "47 mises à jour, dont 5 de sécurité".
+    pure public function count(count: int, security: int) -> string {
+        if count == 1 {
+            return security == 1 ? @tr("1 mise à jour, de sécurité") : @tr("1 mise à jour");
+        }
+        security > 0 ? @tr("{} mises à jour, dont {} de sécurité", count, security) : @tr("{} mises à jour", count)
+    }
+
+    // When the list was read: « il y a 2 min ».
+    pure public function when() -> string {
+        if Updates.minutes < 1 {
+            return @tr("à l'instant");
+        }
+        Updates.minutes < 60 ? @tr("il y a {} min", Updates.minutes) : DashboardWords.moment(Updates.read-at)
+    }
+
+    // What the screen sums up at its top: never a count that passes for all
+    // when the system was not checked.
+    pure public function summary() -> string {
+        let snaps = Updates.snaps-state == SourceState.read ? Updates.snap-lines.length : 0;
+        let system = Updates.system-state == SourceState.read ? Updates.system-count : 0;
+        if Updates.system-state == SourceState.failed && snaps > 0 {
+            return snaps == 1 ? @tr("1 mise à jour d'appli, le système n'a pas pu être vérifié")
+                : @tr("{} mises à jour d'applis, le système n'a pas pu être vérifié", snaps);
+        }
+        if Updates.snaps-state == SourceState.failed && system > 0 {
+            return system == 1 ? @tr("1 mise à jour du système, les applis n'ont pas pu être vérifiées")
+                : @tr("{} mises à jour du système, les applis n'ont pas pu être vérifiées", system);
+        }
+        if Updates.system-state == SourceState.absent && snaps > 0 {
+            return snaps == 1 ? @tr("1 mise à jour d'appli, les paquets du système ne sont pas vérifiés")
+                : @tr("{} mises à jour d'applis, les paquets du système ne sont pas vérifiés", snaps);
+        }
+        system + snaps > 0 ? UpdatesWords.count(system + snaps, Updates.system-security) : ""
+    }
+
+    pure public function kind(kind: UpdateKind) -> string {
+        kind == UpdateKind.security ? @tr("Sécurité") : kind == UpdateKind.blocked ? @tr("Retenue") : ""
+    }
+
+    // What a screen reader says of a package.
+    pure public function spoken-system(line: SystemLine) -> string {
+        if line.kind == UpdateKind.security {
+            return @tr("{}, mise à jour de sécurité, version {}", line.name, line.spoken-version);
+        }
+        if line.kind == UpdateKind.blocked {
+            return @tr("{}, retenue par le système, version {}", line.name, line.spoken-version);
+        }
+        @tr("{}, mise à jour, version {}", line.name, line.spoken-version)
+    }
+
+    // What a screen reader says of a snap.
+    pure public function spoken-snap(line: SnapLine) -> string {
+        let who = line.verified ? @tr("{}, de {}, éditeur vérifié", line.title, line.publisher)
+            : line.publisher != "" ? @tr("{}, de {}", line.title, line.publisher) : line.title;
+        line.has-size ? @tr("{}, version {}, {} à télécharger", who, line.version, Words.size(line.size))
+            : @tr("{}, version {}", who, line.version)
+    }
+
+    pure public function system-name() -> string {
+        Updates.distribution == "" ? @tr("Système") : @tr("Système {}", Updates.distribution)
+    }
+}
+
+// What failed in a block, with « Réessayer ».
+component Inline inherits VerticalLayout {
+    in property <string> text;
+    padding: Theme.spacing-m;
+    Banner {
+        text: root.text;
+        warning: true;
+        ActionButton {
+            text: @tr("Réessayer");
+            y: (parent.height - self.height) / 2;
+            enabled: Updates.step != UpdatesStep.searching;
+            clicked => {
+                Updates.retry();
+            }
+        }
+    }
+}
+
+// A line of a block that has no list: « Aucune mise à jour ».
+component Quiet inherits HorizontalLayout {
+    in property <string> text;
+    padding: Theme.spacing-l;
+    Line {
+        text: root.text;
+    }
+}
+
+// The head of a block that folds: the whole line is the button.
+component FoldHead inherits Rectangle {
+    in property <bool> expanded;
+    in property <string> label;
+    callback toggled;
+    min-height: Theme.updates-head-height;
+    border-radius: Theme.radius-large;
+    background: touch.has-hover ? Theme.surface-hover : transparent;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-expandable: true;
+    accessible-expanded: root.expanded;
+    accessible-action-default => {
+        root.toggled();
+    }
+    forward-focus: keys;
+    keys := FocusScope {
+        key-pressed(event) => {
+            if !event.repeat && (event.text == Key.Return || event.text == Key.Space) {
+                root.toggled();
+                return accept;
+            }
+            reject
+        }
+    }
+    touch := TouchArea {
+        clicked => {
+            root.toggled();
+        }
+    }
+    FocusRing {
+        shown: keys.has-focus;
+        border-radius: root.border-radius;
+    }
+    HorizontalLayout {
+        padding-left: Theme.spacing-l;
+        padding-right: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        Icon {
+            source: root.expanded ? @image-url("../assets/icons/chevron-down.svg") : @image-url("../assets/icons/chevron-right.svg");
+            colorize: Theme.text-2;
+            y: (parent.height - self.height) / 2;
+        }
+        @children
+    }
+}
+
+// A line of a block, apart from the one above.
+component Row inherits Rectangle {
+    in property <length> row-height: Theme.updates-row-height;
+    min-height: root.row-height;
+    Rectangle {
+        y: 0;
+        height: Theme.border-width;
+        background: Theme.border;
+    }
+    HorizontalLayout {
+        padding-left: Theme.spacing-l;
+        padding-right: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        @children
+    }
+}
+
+component SystemRow inherits Row {
+    in property <SystemLine> line;
+    accessible-role: list-item;
+    accessible-label: UpdatesWords.spoken-system(root.line);
+    HorizontalLayout {
+        width: Theme.updates-badge-width;
+        alignment: start;
+        if root.line.kind != UpdateKind.other: Badge {
+            text: UpdatesWords.kind(root.line.kind);
+            icon: root.line.kind == UpdateKind.security ? @image-url("../assets/icons/shield.svg") : @image-url("../assets/icons/ban.svg");
+            tone: root.line.kind == UpdateKind.security ? Theme.security : Theme.text-2;
+            tone-soft: root.line.kind == UpdateKind.security ? Theme.security-soft : Theme.surface-2;
+            y: (parent.height - self.height) / 2;
+        }
+    }
+    Text {
+        width: Screen.narrow ? Theme.updates-name-width-narrow : Theme.updates-name-width;
+        text: root.line.name;
+        accessible-role: none;
+        color: Theme.text;
+        font-size: Theme.font-label;
+        font-weight: Theme.weight-medium;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    summary := Text {
+        horizontal-stretch: 1;
+        text: root.line.summary;
+        accessible-role: none;
+        color: Theme.text-2;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+        overflow: elide;
+        TouchArea {
+            if root.line.summary != "": Tooltip {
+                text: @markdown("\{root.line.summary}");
+            }
+        }
+    }
+    Text {
+        width: Screen.narrow ? Theme.updates-version-width-narrow : Theme.updates-version-width;
+        text: root.line.version;
+        accessible-role: none;
+        color: Theme.text-3;
+        font-size: Theme.font-small;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+component SnapRow inherits Row {
+    in property <SnapLine> line;
+    row-height: Theme.updates-app-row-height;
+    accessible-role: list-item;
+    accessible-label: UpdatesWords.spoken-snap(root.line);
+    Rectangle {
+        width: Theme.updates-app-icon;
+        height: Theme.updates-app-icon;
+        y: (parent.height - self.height) / 2;
+        border-radius: Theme.radius-medium;
+        background: Theme.surface-2;
+        border-width: Theme.border-width;
+        border-color: Theme.border;
+        Icon {
+            source: @image-url("../assets/icons/app-window.svg");
+            colorize: Theme.text-2;
+        }
+    }
+    VerticalLayout {
+        horizontal-stretch: 1;
+        alignment: center;
+        spacing: Theme.spacing-xxs;
+        Text {
+            text: root.line.title;
+            accessible-role: none;
+            color: Theme.text;
+            font-size: Theme.font-label;
+            font-weight: Theme.weight-medium;
+            overflow: elide;
+        }
+        if root.line.publisher != "": HorizontalLayout {
+            spacing: Theme.spacing-xs;
+            alignment: start;
+            Text {
+                text: root.line.publisher;
+                accessible-role: none;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                overflow: elide;
+            }
+            if root.line.verified: Icon {
+                source: @image-url("../assets/icons/circle-check.svg");
+                colorize: Theme.accent;
+                width: Theme.icon-badge;
+                height: Theme.icon-badge;
+                y: (parent.height - self.height) / 2;
+            }
+            if root.line.verified: Text {
+                text: @tr("vérifié");
+                accessible-role: none;
+                color: Theme.text-2;
+                font-size: Theme.font-caption;
+                vertical-alignment: center;
+            }
+        }
+    }
+    Text {
+        width: Screen.narrow ? Theme.updates-version-width-narrow : Theme.updates-version-width;
+        text: root.line.version;
+        accessible-role: none;
+        color: Theme.text-3;
+        font-size: Theme.font-small;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Text {
+        width: Theme.updates-size-width;
+        text: root.line.has-size ? Words.size(root.line.size) : "";
+        accessible-role: none;
+        color: Theme.text;
+        font-size: Theme.font-label;
+        font-weight: Theme.weight-semibold;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+}
+
+// The head of a source, above its block.
+component SourceTitle inherits HorizontalLayout {
+    in property <image> icon;
+    in property <string> name;
+    in property <string> kind;
+    in property <string> aside;
+    spacing: Theme.spacing-s;
+    Icon {
+        source: root.icon;
+        colorize: Theme.text-2;
+        y: (parent.height - self.height) / 2;
+    }
+    Text {
+        text: root.name;
+        color: Theme.text;
+        font-size: Theme.font-heading;
+        font-weight: Theme.weight-semibold;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Detail {
+        horizontal-stretch: 1;
+        text: root.kind;
+        vertical-alignment: center;
+        wrap: no-wrap;
+    }
+    @children
+    if root.aside != "": Detail {
+        text: root.aside;
+        vertical-alignment: center;
+        wrap: no-wrap;
+    }
+}
+
+// The note that says snapd updates its snaps by itself.
+component SnapNote inherits ReadIconNote {
+    alignment: start;
+    icon: @image-url("../assets/icons/clock.svg");
+    tone: Theme.text-2;
+    text: Updates.has-next-refresh
+        ? @tr("Les applis snap se mettent à jour seules. Prochain passage {}.", DashboardWords.moment(Updates.next-refresh))
+        : @tr("Les applis snap se mettent à jour seules.");
+}
+
+// The whole screen's state when there is no list to show: all up to date,
+// or no source at all.
+component Settled inherits Card {
+    in property <bool> no-source;
+    property <bool> system-read: Updates.system-state == SourceState.read;
+    property <bool> snaps-read: Updates.snaps-state == SourceState.read;
+    VerticalLayout {
+        padding: Theme.spacing-xxl;
+        spacing: Theme.spacing-l;
+        alignment: center;
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: Theme.updates-empty-icon;
+                height: Theme.updates-empty-icon;
+                border-radius: Theme.radius-pill;
+                background: root.no-source ? Theme.surface-2 : Theme.success-soft;
+                Icon {
+                    source: root.no-source ? @image-url("../assets/icons/package.svg") : @image-url("../assets/icons/circle-check.svg");
+                    colorize: root.no-source ? Theme.text-2 : Theme.success;
+                    width: Theme.icon-large;
+                    height: Theme.icon-large;
+                }
+            }
+        }
+        Text {
+            text: root.no-source ? @tr("Okapi ne trouve pas de gestionnaire de mises à jour sur ce système.")
+                : root.system-read ? @tr("Tout est à jour") : @tr("Les applis sont à jour");
+            color: Theme.text;
+            font-size: root.no-source ? Theme.font-heading : Theme.font-title;
+            font-weight: Theme.weight-semibold;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+            accessible-role: text;
+            accessible-live-region: polite;
+        }
+        Detail {
+            text: root.no-source ? @tr("Okapi lit les mises à jour d'apt (PackageKit) et de snap. Aucun des deux n'a été trouvé ici.")
+                : @tr("Rien à faire pour le moment.");
+            horizontal-alignment: center;
+        }
+        if !root.no-source: VerticalLayout {
+            spacing: Theme.spacing-xs;
+            alignment: center;
+            if root.system-read: Line {
+                text: @tr("{} : aucune mise à jour", UpdatesWords.system-name());
+                horizontal-alignment: center;
+            }
+            if Updates.system-state == SourceState.absent: Line {
+                text: @tr("Paquets du système : non vérifiés, PackageKit n'est pas installé");
+                horizontal-alignment: center;
+            }
+            if root.snaps-read: Line {
+                text: @tr("Applis : aucune mise à jour");
+                horizontal-alignment: center;
+            }
+        }
+        if root.snaps-read: HorizontalLayout {
+            alignment: center;
+            SnapNote { }
+        }
+    }
+}
+
+export component UpdatesPage inherits VerticalLayout {
+    property <bool> searching: Updates.step == UpdatesStep.searching;
+    property <bool> read: Updates.step == UpdatesStep.read;
+    property <bool> no-source: Updates.system-state == SourceState.absent && Updates.snaps-state == SourceState.absent;
+    property <bool> nothing-waits: (Updates.system-state != SourceState.read || Updates.system-count == 0)
+        && (Updates.snaps-state != SourceState.read || Updates.snap-lines.length == 0);
+    // Up to date only by lists known to be recent: an old or undated list
+    // says nothing of what came out since.
+    property <bool> settled: root.read && !Updates.refresh-failed && !Updates.lists-old
+        && Updates.system-state != SourceState.failed && Updates.snaps-state != SourceState.failed
+        && root.nothing-waits;
+    property <bool> blocks: (root.read || (root.searching && Updates.has-read)) && !root.settled;
+
+    ScrollView {
+        vertical-stretch: 1;
+        VerticalLayout {
+            padding: Screen.page-margin;
+            spacing: Theme.spacing-l;
+            alignment: start;
+
+            HorizontalLayout {
+                spacing: Theme.spacing-m;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Theme.spacing-xxs;
+                    Title {
+                        text: @tr("Mises à jour");
+                    }
+                    // The summary stands out, the moment does not: read as one.
+                    if root.read: Rectangle {
+                        accessible-role: text;
+                        accessible-label: UpdatesWords.summary() == "" ? @tr("Recherché {}", UpdatesWords.when())
+                            : @tr("{}, recherché {}", UpdatesWords.summary(), UpdatesWords.when());
+                        HorizontalLayout {
+                            alignment: start;
+                            if UpdatesWords.summary() != "": Text {
+                                text: @tr("{}, ", UpdatesWords.summary());
+                                accessible-role: none;
+                                color: Theme.text;
+                                font-size: Theme.font-small;
+                                font-weight: Theme.weight-semibold;
+                                overflow: elide;
+                            }
+                            Detail {
+                                text: UpdatesWords.summary() == "" ? @tr("Recherché {}", UpdatesWords.when())
+                                    : @tr("recherché {}", UpdatesWords.when());
+                                accessible-role: none;
+                                wrap: no-wrap;
+                                overflow: elide;
+                            }
+                        }
+                    }
+                    if !root.read: Detail {
+                        text: @tr("Ce qui attend une mise à jour sur cet ordinateur. Cet écran n'installe rien.");
+                    }
+                }
+                ActionButton {
+                    text: root.searching ? @tr("Recherche…") : @tr("Rechercher maintenant");
+                    icon: @image-url("../assets/icons/rotate-ccw.svg");
+                    kind: ButtonKind.secondary;
+                    enabled: !root.searching;
+                    y: 0;
+                    clicked => {
+                        Updates.search-now();
+                    }
+                }
+            }
+
+            if Updates.reboot && root.read: Rectangle {
+                background: Theme.surface-2;
+                border-radius: Theme.radius-medium;
+                border-width: Theme.border-width;
+                border-color: Theme.border;
+                accessible-role: groupbox;
+                accessible-label: @tr("Redémarrage attendu");
+                VerticalLayout {
+                    HorizontalLayout {
+                        padding: Theme.spacing-xs;
+                        padding-left: Theme.spacing-m;
+                        spacing: Theme.spacing-s;
+                        Icon {
+                            source: @image-url("../assets/icons/rotate-ccw.svg");
+                            colorize: Theme.text-2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                        Line {
+                            horizontal-stretch: 1;
+                            text: @tr("Un redémarrage termine des mises à jour déjà installées. Redémarrez quand cela vous arrange.");
+                            vertical-alignment: center;
+                        }
+                        if Updates.reboot-packages.length > 0: FoldHead {
+                            min-height: Theme.control-height;
+                            width: self.preferred-width;
+                            expanded: Updates.reboot-expanded;
+                            label: Updates.reboot-packages.length == 1 ? @tr("1 paquet") : @tr("{} paquets", Updates.reboot-packages.length);
+                            toggled => {
+                                Updates.reboot-expanded = !Updates.reboot-expanded;
+                            }
+                            Text {
+                                text: parent.label;
+                                accessible-role: none;
+                                color: Theme.text;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                    if Updates.reboot-expanded: VerticalLayout {
+                        padding-left: Theme.spacing-xxl + Theme.spacing-m;
+                        padding-bottom: Theme.spacing-m;
+                        spacing: Theme.spacing-xs;
+                        for name in Updates.reboot-packages: Detail {
+                            text: name;
+                            color: Theme.text;
+                        }
+                        Detail {
+                            text: @tr("Okapi ne redémarre rien lui-même.");
+                            color: Theme.text-3;
+                        }
+                    }
+                }
+            }
+
+            if root.searching: Card {
+                VerticalLayout {
+                    padding: Theme.spacing-l;
+                    spacing: Theme.spacing-s;
+                    HorizontalLayout {
+                        spacing: Theme.spacing-s;
+                        Line {
+                            horizontal-stretch: 1;
+                            text: Updates.waiting ? @tr("Une autre installation est en cours : la recherche attend qu'elle finisse.")
+                                : Updates.refreshing ? @tr("Téléchargement des listes de paquets, puis recherche des mises à jour…")
+                                : @tr("Recherche des mises à jour…");
+                            accessible-role: text;
+                            accessible-live-region: polite;
+                        }
+                        Detail {
+                            text: @tr("Rien n'est installé.");
+                            vertical-alignment: center;
+                            wrap: no-wrap;
+                        }
+                    }
+                    ProgressBar {
+                        indeterminate: true;
+                        label: @tr("Recherche en cours, durée inconnue");
+                    }
+                }
+            }
+            if root.searching && Updates.previous-shown: Detail {
+                text: @tr("En attendant, voici la dernière liste, recherchée {}.", UpdatesWords.when());
+            }
+
+            if root.settled: Settled {
+                no-source: root.no-source;
+            }
+
+            if root.blocks: VerticalLayout {
+                spacing: Theme.spacing-xl;
+                opacity: root.searching ? Theme.updates-stale : 1;
+
+                if Updates.system-state != SourceState.absent: VerticalLayout {
+                    spacing: Theme.spacing-s;
+                    SourceTitle {
+                        icon: @image-url("../assets/icons/package.svg");
+                        name: UpdatesWords.system-name();
+                        kind: @tr("paquets apt");
+                        if Updates.system-state == SourceState.read && (Updates.refresh-failed || Updates.lists-old): Badge {
+                            text: !Updates.has-listed-at ? @tr("Liste d'âge inconnu")
+                                : Updates.listed-at.day == DayKind.today ? @tr("Liste d'aujourd'hui")
+                                : Updates.listed-at.day == DayKind.yesterday ? @tr("Liste d'hier")
+                                : @tr("Liste du {}", DashboardWords.date(Updates.listed-at));
+                            // Read aloud: nothing else says how old the list is.
+                            accessible-role: text;
+                            accessible-label: self.text;
+                            icon: @image-url("../assets/icons/clock.svg");
+                            tone: Theme.text-2;
+                            tone-soft: Theme.surface-2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+                    Card {
+                        VerticalLayout {
+                            // The download failing first is its cause.
+                            if Updates.system-state == SourceState.failed: Inline {
+                                text: UpdatesWords.failure(Updates.refresh-failed ? Updates.refresh-failure : Updates.system-failure);
+                            }
+                            // The list shown is the old one: said only when there is one.
+                            if Updates.refresh-failed && Updates.system-state == SourceState.read: Inline {
+                                text: @tr("{} La liste date du dernier téléchargement réussi.", UpdatesWords.failure(Updates.refresh-failure));
+                            }
+                            if Updates.system-state == SourceState.read && Updates.system-count + Updates.system-held == 0: Quiet {
+                                text: Updates.lists-old ? @tr("Aucune mise à jour dans cette liste, qui n'est peut-être plus à jour : « Rechercher maintenant » la télécharge à nouveau.")
+                                    : @tr("Aucune mise à jour");
+                            }
+                            if Updates.system-state == SourceState.read && Updates.system-count + Updates.system-held > 0: FoldHead {
+                                property <string> what: Updates.system-count > 0 ? UpdatesWords.count(Updates.system-count, Updates.system-security)
+                                    : @tr("Retenues par le système : {}", Updates.system-held);
+                                expanded: Updates.system-expanded;
+                                label: Updates.system-expanded
+                                    ? @tr("{}, {}, déplié", UpdatesWords.system-name(), self.what)
+                                    : @tr("{}, {}, replié", UpdatesWords.system-name(), self.what);
+                                toggled => {
+                                    Updates.system-expanded = !Updates.system-expanded;
+                                }
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: parent.what;
+                                    accessible-role: none;
+                                    color: Theme.text;
+                                    font-size: Theme.font-label;
+                                    font-weight: Theme.weight-medium;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                                if Updates.system-security > 0: Badge {
+                                    text: @tr("{} de sécurité", Updates.system-security);
+                                    icon: @image-url("../assets/icons/shield.svg");
+                                    tone: Theme.security;
+                                    tone-soft: Theme.security-soft;
+                                    y: (parent.height - self.height) / 2;
+                                }
+                            }
+                            if Updates.system-state == SourceState.read && Updates.system-expanded: VerticalLayout {
+                                accessible-role: list;
+                                accessible-label: @tr("Paquets à mettre à jour, sécurité d'abord");
+                                for line in Updates.system-lines: SystemRow {
+                                    line: line;
+                                }
+                                if Updates.system-more > 0: Row {
+                                    HorizontalLayout {
+                                        padding-left: Theme.updates-badge-width + Theme.spacing-m;
+                                        alignment: start;
+                                        ActionButton {
+                                            text: Updates.system-more == 1 ? @tr("Afficher l'autre")
+                                                : @tr("Afficher les {} autres", Updates.system-more);
+                                            kind: ButtonKind.ghost;
+                                            y: (parent.height - self.height) / 2;
+                                            clicked => {
+                                                Updates.show-all-system();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Without PackageKit, the system's packages are said unchecked,
+                // never left out in silence.
+                if Updates.system-state == SourceState.absent: ReadIconNote {
+                    icon: @image-url("../assets/icons/package.svg");
+                    text: @tr("Paquets du système : non vérifiés, PackageKit n'est pas installé");
+                }
+
+                if Updates.snaps-state != SourceState.absent: VerticalLayout {
+                    spacing: Theme.spacing-s;
+                    SourceTitle {
+                        icon: @image-url("../assets/icons/app-window.svg");
+                        name: @tr("Applis");
+                        kind: @tr("snap");
+                        aside: Updates.snaps-state != SourceState.read || Updates.snap-lines.length == 0 ? ""
+                            : Updates.has-snaps-size ? @tr("{}, {}", UpdatesWords.count(Updates.snap-lines.length, 0), Words.size(Updates.snaps-size))
+                            : UpdatesWords.count(Updates.snap-lines.length, 0);
+                    }
+                    Card {
+                        VerticalLayout {
+                            if Updates.snaps-state == SourceState.failed: Inline {
+                                text: UpdatesWords.failure(Updates.snaps-failure);
+                            }
+                            if Updates.snaps-state == SourceState.read && Updates.snap-lines.length == 0: Quiet {
+                                text: @tr("Aucune mise à jour");
+                            }
+                            if Updates.snaps-state == SourceState.read: VerticalLayout {
+                                accessible-role: list;
+                                accessible-label: @tr("Applis à mettre à jour");
+                                for line in Updates.snap-lines: SnapRow {
+                                    line: line;
+                                }
+                            }
+                        }
+                    }
+                    if Updates.snaps-state == SourceState.read: SnapNote { }
+                }
+            }
+        }
+    }
+}

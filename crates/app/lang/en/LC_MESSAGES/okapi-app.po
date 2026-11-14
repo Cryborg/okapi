@@ -1938,3 +1938,323 @@ msgstr "{} min"
 msgctxt "Preferences"
 msgid "{} h"
 msgstr "{} h"
+
+msgctxt "Sidebar"
+msgid "Mises à jour"
+msgstr "Updates"
+
+msgctxt "UpdatesWords"
+msgid "Une autre installation est en cours. Réessayez dans un moment."
+msgstr "Another installation is running. Try again in a moment."
+
+msgctxt "UpdatesWords"
+msgid "La recherche n'a pas pu joindre Internet."
+msgstr "The search could not reach the Internet."
+
+msgctxt "UpdatesWords"
+msgid "Le système a refusé la recherche : elle demande une session ouverte sur cet écran."
+msgstr "The system refused the search: it needs a session open on this screen."
+
+msgctxt "UpdatesWords"
+msgid "Le gestionnaire de mises à jour ne répond pas."
+msgstr "The update manager does not answer."
+
+msgctxt "UpdatesWords"
+msgid "Le gestionnaire de mises à jour n'a pas pu répondre. Le détail est dans le journal."
+msgstr "The update manager could not answer. The details are in the log."
+
+msgctxt "UpdatesWords"
+msgid "1 mise à jour, de sécurité"
+msgstr "1 update, a security one"
+
+msgctxt "UpdatesWords"
+msgid "1 mise à jour"
+msgstr "1 update"
+
+msgctxt "UpdatesWords"
+msgid "{} mises à jour, dont {} de sécurité"
+msgstr "{} updates, {} of them for security"
+
+msgctxt "UpdatesWords"
+msgid "{} mises à jour"
+msgstr "{} updates"
+
+msgctxt "UpdatesWords"
+msgid "à l'instant"
+msgstr "just now"
+
+msgctxt "UpdatesWords"
+msgid "il y a {} min"
+msgstr "{} min ago"
+
+msgctxt "UpdatesWords"
+msgid "1 mise à jour d'appli, le système n'a pas pu être vérifié"
+msgstr "1 app update, the system could not be checked"
+
+msgctxt "UpdatesWords"
+msgid "{} mises à jour d'applis, le système n'a pas pu être vérifié"
+msgstr "{} app updates, the system could not be checked"
+
+msgctxt "UpdatesWords"
+msgid "1 mise à jour d'appli, les paquets du système ne sont pas vérifiés"
+msgstr "1 app update, the system packages are not checked"
+
+msgctxt "UpdatesWords"
+msgid "{} mises à jour d'applis, les paquets du système ne sont pas vérifiés"
+msgstr "{} app updates, the system packages are not checked"
+
+msgctxt "UpdatesWords"
+msgid "1 mise à jour du système, les applis n'ont pas pu être vérifiées"
+msgstr "1 system update, the apps could not be checked"
+
+msgctxt "UpdatesWords"
+msgid "{} mises à jour du système, les applis n'ont pas pu être vérifiées"
+msgstr "{} system updates, the apps could not be checked"
+
+msgctxt "UpdatesWords"
+msgid "Sécurité"
+msgstr "Security"
+
+msgctxt "UpdatesWords"
+msgid "Retenue"
+msgstr "Held back"
+
+msgctxt "UpdatesWords"
+msgid "{}, mise à jour de sécurité, version {}"
+msgstr "{}, security update, version {}"
+
+msgctxt "UpdatesWords"
+msgid "{}, retenue par le système, version {}"
+msgstr "{}, held back by the system, version {}"
+
+msgctxt "UpdatesWords"
+msgid "{}, mise à jour, version {}"
+msgstr "{}, update, version {}"
+
+msgctxt "UpdatesWords"
+msgid "{}, de {}, éditeur vérifié"
+msgstr "{}, by {}, verified publisher"
+
+msgctxt "UpdatesWords"
+msgid "{}, de {}"
+msgstr "{}, by {}"
+
+msgctxt "UpdatesWords"
+msgid "{}, version {}, {} à télécharger"
+msgstr "{}, version {}, {} to download"
+
+msgctxt "UpdatesWords"
+msgid "{}, version {}"
+msgstr "{}, version {}"
+
+msgctxt "UpdatesWords"
+msgid "Système"
+msgstr "System"
+
+msgctxt "UpdatesWords"
+msgid "Système {}"
+msgstr "{} system"
+
+msgctxt "Inline"
+msgid "Réessayer"
+msgstr "Try again"
+
+msgctxt "SnapRow"
+msgid "vérifié"
+msgstr "verified"
+
+msgctxt "SnapNote"
+msgid "Les applis snap se mettent à jour seules. Prochain passage {}."
+msgstr "Snap apps update by themselves. Next pass {}."
+
+msgctxt "SnapNote"
+msgid "Les applis snap se mettent à jour seules."
+msgstr "Snap apps update by themselves."
+
+msgctxt "Settled"
+msgid "Okapi ne trouve pas de gestionnaire de mises à jour sur ce système."
+msgstr "Okapi finds no update manager on this system."
+
+msgctxt "Settled"
+msgid "Tout est à jour"
+msgstr "Everything is up to date"
+
+msgctxt "Settled"
+msgid "Les applis sont à jour"
+msgstr "The apps are up to date"
+
+msgctxt "Settled"
+msgid "Okapi lit les mises à jour d'apt (PackageKit) et de snap. Aucun des deux n'a été trouvé ici."
+msgstr "Okapi reads the updates of apt (PackageKit) and snap. Neither was found here."
+
+msgctxt "Settled"
+msgid "Rien à faire pour le moment."
+msgstr "Nothing to do for now."
+
+msgctxt "Settled"
+msgid "{} : aucune mise à jour"
+msgstr "{}: no update"
+
+msgctxt "Settled"
+msgid "Paquets du système : non vérifiés, PackageKit n'est pas installé"
+msgstr "System packages: not checked, PackageKit is not installed"
+
+msgctxt "Settled"
+msgid "Applis : aucune mise à jour"
+msgstr "Apps: no update"
+
+msgctxt "UpdatesPage"
+msgid "Mises à jour"
+msgstr "Updates"
+
+msgctxt "UpdatesPage"
+msgid "Recherché {}"
+msgstr "Searched {}"
+
+msgctxt "UpdatesPage"
+msgid "{}, recherché {}"
+msgstr "{}, searched {}"
+
+msgctxt "UpdatesPage"
+msgid "{}, "
+msgstr "{}, "
+
+msgctxt "UpdatesPage"
+msgid "recherché {}"
+msgstr "searched {}"
+
+msgctxt "UpdatesPage"
+msgid "Ce qui attend une mise à jour sur cet ordinateur. Cet écran n'installe rien."
+msgstr "What waits for an update on this computer. This screen installs nothing."
+
+msgctxt "UpdatesPage"
+msgid "Recherche…"
+msgstr "Searching…"
+
+msgctxt "UpdatesPage"
+msgid "Rechercher maintenant"
+msgstr "Search now"
+
+msgctxt "UpdatesPage"
+msgid "Redémarrage attendu"
+msgstr "Restart awaited"
+
+msgctxt "UpdatesPage"
+msgid "Un redémarrage termine des mises à jour déjà installées. Redémarrez quand cela vous arrange."
+msgstr "A restart completes updates already installed. Restart when it suits you."
+
+msgctxt "UpdatesPage"
+msgid "1 paquet"
+msgstr "1 package"
+
+msgctxt "UpdatesPage"
+msgid "{} paquets"
+msgstr "{} packages"
+
+msgctxt "UpdatesPage"
+msgid "Okapi ne redémarre rien lui-même."
+msgstr "Okapi restarts nothing by itself."
+
+msgctxt "UpdatesPage"
+msgid "Une autre installation est en cours : la recherche attend qu'elle finisse."
+msgstr "Another installation is running: the search waits for it to end."
+
+msgctxt "UpdatesPage"
+msgid "Téléchargement des listes de paquets, puis recherche des mises à jour…"
+msgstr "Downloading the package lists, then searching for updates…"
+
+msgctxt "UpdatesPage"
+msgid "Recherche des mises à jour…"
+msgstr "Searching for updates…"
+
+msgctxt "UpdatesPage"
+msgid "Rien n'est installé."
+msgstr "Nothing is installed."
+
+msgctxt "UpdatesPage"
+msgid "Recherche en cours, durée inconnue"
+msgstr "Searching, time unknown"
+
+msgctxt "UpdatesPage"
+msgid "En attendant, voici la dernière liste, recherchée {}."
+msgstr "Meanwhile, here is the last list, searched {}."
+
+msgctxt "UpdatesPage"
+msgid "paquets apt"
+msgstr "apt packages"
+
+msgctxt "UpdatesPage"
+msgid "Liste du {}"
+msgstr "List of {}"
+
+msgctxt "UpdatesPage"
+msgid "{} La liste date du dernier téléchargement réussi."
+msgstr "{} The list is from the last successful download."
+
+msgctxt "UpdatesPage"
+msgid "Liste d'aujourd'hui"
+msgstr "Today's list"
+
+msgctxt "UpdatesPage"
+msgid "Liste d'hier"
+msgstr "Yesterday's list"
+
+msgctxt "UpdatesPage"
+msgid "Aucune mise à jour"
+msgstr "No update"
+
+msgctxt "UpdatesPage"
+msgid "Aucune mise à jour dans cette liste, qui n'est peut-être plus à jour : « Rechercher maintenant » la télécharge à nouveau."
+msgstr "No update in this list, which may be out of date: “Search now” downloads it again."
+
+msgctxt "UpdatesPage"
+msgid "Liste d'âge inconnu"
+msgstr "List of unknown age"
+
+msgctxt "UpdatesPage"
+msgid "Afficher l'autre"
+msgstr "Show the other one"
+
+msgctxt "UpdatesPage"
+msgid "Retenues par le système : {}"
+msgstr "Held back by the system: {}"
+
+msgctxt "UpdatesPage"
+msgid "Paquets du système : non vérifiés, PackageKit n'est pas installé"
+msgstr "System packages: not checked, PackageKit is not installed"
+
+msgctxt "UpdatesPage"
+msgid "{}, {}, déplié"
+msgstr "{}, {}, expanded"
+
+msgctxt "UpdatesPage"
+msgid "{}, {}, replié"
+msgstr "{}, {}, collapsed"
+
+msgctxt "UpdatesPage"
+msgid "{} de sécurité"
+msgstr "{} for security"
+
+msgctxt "UpdatesPage"
+msgid "Paquets à mettre à jour, sécurité d'abord"
+msgstr "Packages to update, security first"
+
+msgctxt "UpdatesPage"
+msgid "Afficher les {} autres"
+msgstr "Show the {} others"
+
+msgctxt "UpdatesPage"
+msgid "Applis"
+msgstr "Apps"
+
+msgctxt "UpdatesPage"
+msgid "snap"
+msgstr "snap"
+
+msgctxt "UpdatesPage"
+msgid "{}, {}"
+msgstr "{}, {}"
+
+msgctxt "UpdatesPage"
+msgid "Applis à mettre à jour"
+msgstr "Apps to update"

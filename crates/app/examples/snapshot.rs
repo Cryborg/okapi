@@ -721,11 +721,100 @@ fn home_tall(window: &ui::AppWindow, disks_large: bool) {
     dashboard.set_rows(ModelRc::new(VecModel::from(vec![2; 4])));
 }
 
+fn system_line(name: &str, summary: &str, version: &str, kind: ui::UpdateKind) -> ui::SystemLine {
+    ui::SystemLine {
+        name: name.into(),
+        summary: summary.into(),
+        version: version.into(),
+        spoken_version: version.into(),
+        kind,
+    }
+}
+
+fn snap_line(
+    title: &str,
+    publisher: &str,
+    verified: bool,
+    version: &str,
+    tenths: i32,
+) -> ui::SnapLine {
+    ui::SnapLine {
+        title: title.into(),
+        publisher: publisher.into(),
+        verified,
+        version: version.into(),
+        size: size(tenths / 10, tenths % 10, ui::SizeUnit::Megabyte),
+        has_size: true,
+    }
+}
+
+/// The updates screen: `pending` (folded or not), `searching`, `uptodate`
+/// or `locked`.
+fn updates(window: &ui::AppWindow, state: &str) {
+    use ui::UpdateKind::{Other, Security};
+
+    window.set_page(ui::Page::Updates);
+    let updates = window.global::<ui::Updates>();
+    let today = ui::Moment {
+        day: ui::DayKind::Today,
+        day_of_month: 0,
+        month: 0,
+        year: 0,
+        hour: 1,
+        minute: 37,
+    };
+    updates.set_distribution("Ubuntu 26.04 LTS".into());
+    updates.set_minutes(2);
+    updates.set_has_read(true);
+    updates.set_step(if state == "searching" {
+        ui::UpdatesStep::Searching
+    } else {
+        ui::UpdatesStep::Read
+    });
+    updates.set_system_state(if state == "locked" {
+        ui::SourceState::Failed
+    } else {
+        ui::SourceState::Read
+    });
+    updates.set_system_failure(ui::SourceFailure::Busy);
+    let up_to_date = state == "uptodate";
+    if !up_to_date {
+        updates.set_system_count(47);
+        updates.set_system_security(5);
+        updates.set_system_more(41);
+        updates.set_system_expanded(state == "pending-open");
+        updates.set_system_lines(ModelRc::new(VecModel::from(vec![
+            system_line("openssl", "Outils de chiffrement et certificats SSL/TLS", "3.5.1-1ubuntu2", Security),
+            system_line("libssl3t64", "Bibliothèque de chiffrement utilisée par la plupart des logiciels", "3.5.1-1ubuntu2", Security),
+            system_line("sudo-rs", "Lancer une commande avec les droits administrateur", "0.2.8-1ubuntu1", Security),
+            system_line("libxml2", "Lecture des fichiers XML", "2.14.3+dfsg-1ubuntu0.1", Security),
+            system_line("linux-firmware", "Microprogrammes pour le matériel", "20260410-0ubuntu3", Security),
+            system_line("libreoffice-core", "Suite bureautique LibreOffice : fichiers communs au traitement de texte, au tableur, aux présentations et aux autres modules", "4:25.8.4-0ubuntu1", Other),
+        ])));
+        updates.set_snap_lines(ModelRc::new(VecModel::from(vec![
+            snap_line("App Center", "Canonical", true, "1.0.4", 117),
+            snap_line("Firefox", "Mozilla", true, "147.0.1", 984),
+            snap_line("OBS Studio", "Snapcrafters", false, "32.0.2", 741),
+        ])));
+        updates.set_has_snaps_size(true);
+        updates.set_snaps_size(size(184, 2, ui::SizeUnit::Megabyte));
+    }
+    updates.set_snaps_state(ui::SourceState::Read);
+    updates.set_has_next_refresh(true);
+    updates.set_next_refresh(today);
+    updates.set_reboot(state.starts_with("pending"));
+    updates.set_reboot_packages(ModelRc::new(VecModel::from(vec![
+        "linux-image-generic".into(),
+        "linux-firmware".into(),
+        "dbus".into(),
+    ])));
+}
+
 fn main() {
     let mut arguments = std::env::args().skip(1);
     let screen = arguments.next().unwrap_or_else(|| String::from("results"));
     let out = arguments.next().unwrap_or_else(|| format!("{screen}.png"));
-    let (width, height) = if screen == "home-small" || screen == "disk-result-small" {
+    let (width, height) = if screen.ends_with("-small") {
         SMALL
     } else {
         LARGE
@@ -778,8 +867,17 @@ fn main() {
         "disk-start" => disk(&app, ui::DiskStep::Start),
         "disk-scanning" => disk(&app, ui::DiskStep::Scanning),
         "disk-result" | "disk-result-small" => disk(&app, ui::DiskStep::Result),
+        "updates" | "updates-open" | "updates-open-small" | "updates-searching"
+        | "updates-uptodate" | "updates-locked" => {
+            let state = match screen.trim_end_matches("-small") {
+                "updates" => "pending",
+                "updates-open" => "pending-open",
+                other => other.trim_start_matches("updates-"),
+            };
+            updates(&app, state);
+        }
         other => panic!(
-            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small"
+            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

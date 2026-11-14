@@ -120,6 +120,8 @@ pub struct Seams {
     pub disk: crate::disk_usage::DiskSeams,
     /// What the settings screen reads and asks of the machine.
     pub settings: crate::settings::SettingsSeams,
+    /// Where the updates screen reads what waits.
+    pub updates: crate::updates::UpdatesSeams,
 }
 
 impl std::fmt::Debug for Seams {
@@ -161,6 +163,7 @@ impl Seams {
             },
             settings: crate::settings::SettingsSeams::system(disk.home.clone()),
             disk,
+            updates: crate::updates::UpdatesSeams::system(),
         }
     }
 }
@@ -1634,6 +1637,8 @@ pub mod tests {
             },
             // No settings read nor written.
             settings: crate::settings::tests::nowhere(),
+            // No daemon asked: nothing on this system.
+            updates: crate::updates::tests::nothing(),
             ..Seams::system()
         }
     }
@@ -2780,7 +2785,7 @@ pub mod tests {
     }
 
     /// The entries of the sidebar, each a stop of Tab.
-    pub const SIDEBAR_ENTRIES: usize = 5;
+    pub const SIDEBAR_ENTRIES: usize = 6;
     /// The stops of Tab in the sidebar of a wide window: its fold button,
     /// then its entries.
     pub const SIDEBAR_STOPS: usize = SIDEBAR_ENTRIES + 1;

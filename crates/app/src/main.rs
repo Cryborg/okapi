@@ -25,11 +25,13 @@ mod saving;
 mod settings;
 mod shown;
 mod sidebar;
+mod updates;
 
 use cleaner::{CleanerEvent, CleanerScreen, Seams};
 use dashboard::{DashboardScreen, DashboardSeams};
 use disk_usage::DiskUsageScreen;
 use settings::SettingsScreen;
+use updates::UpdatesScreen;
 
 /// The interface, as Slint generates it from `ui/`.
 mod ui {
@@ -122,6 +124,7 @@ fn window(
         read()
     });
     let disk = DiskUsageScreen::attach(&window, seams.disk.clone(), language);
+    let updates = UpdatesScreen::attach(&window, seams.updates.clone());
     let screen = CleanerScreen::attach(&window, seams, language);
     // Once the writes are done, the cleaner reads them again: a refusal
     // they caused is lifted, or a failure said there.
@@ -139,16 +142,18 @@ fn window(
         let scale = window.as_ref().map(|window| window.window().scale_factor());
         tracing::debug!(chosen_folded, narrow, ?size, ?scale, "sidebar shown");
     });
-    let dashboard = attach_home(&window, &screen, &disk, home);
+    let dashboard = attach_home(&window, &screen, &disk, &updates, home);
     Ok((window, screen, dashboard, settings))
 }
 
 /// Binds the Home page to `window`: it follows the page shown, its
-/// "Analyser" asks `cleaner`, and it hears what `cleaner` does.
+/// "Analyser" asks `cleaner`, and it hears what `cleaner` does. The other
+/// screens follow the page shown too.
 fn attach_home(
     window: &AppWindow,
     screen: &CleanerScreen,
     disk: &DiskUsageScreen,
+    updates: &UpdatesScreen,
     home: DashboardSeams,
 ) -> DashboardScreen {
     let dashboard = DashboardScreen::attach(window, home);
@@ -156,6 +161,7 @@ fn attach_home(
     disk.read_volumes_from(Rc::new(move || volumes.volumes()));
     // Held here, by the page's callback, as long as the window is.
     let disk = disk.clone();
+    let updates = updates.clone();
     let heard = dashboard.clone();
     let cleaner = screen.clone();
     let shown_home = dashboard.clone();
@@ -167,6 +173,7 @@ fn attach_home(
         }
         shown_home.page_shown(page);
         disk.page_shown(page);
+        updates.page_shown(page);
     });
     let analyzing = screen.clone();
     window
@@ -351,7 +358,7 @@ mod tests {
         assert_eq!(window.get_page(), Page::Home, "opens on the home screen");
         assert!(!shows(&window, "#MadeWithSlint"));
         // Each entry read once, as a button, the current one selected.
-        for label in ["Accueil", "Nettoyeur", "À propos"] {
+        for label in ["Accueil", "Nettoyeur", "Mises à jour", "À propos"] {
             assert_eq!(
                 ElementHandle::find_by_accessible_label(&window, label)
                     .filter(|element| element.accessible_role() == Some(AccessibleRole::Button))
@@ -466,7 +473,7 @@ mod tests {
                 ElementHandle::find_by_element_id(&window, "NavItem::current").collect();
             assert!(marks.len() <= 1, "one current entry");
             let middle = marks.first()?.absolute_position().y + marks[0].size().height / 2.0;
-            ["Accueil", "Nettoyeur", "À propos"]
+            ["Accueil", "Nettoyeur", "Mises à jour", "À propos"]
                 .into_iter()
                 .find(|label| {
                     let entry = button(&window, label);
@@ -557,6 +564,7 @@ mod tests {
                 "Réglages",
                 "Chaque changement est enregistré tout de suite.",
             ),
+            ("Mises à jour", "Mises à jour"),
             ("À propos", "À propos"),
         ] {
             button(&window, page).invoke_accessible_default_action();
@@ -723,7 +731,7 @@ mod tests {
     }
 
     /// Texts the same in both languages.
-    const SAME_IN_ENGLISH: [&str; 15] = [
+    const SAME_IN_ENGLISH: [&str; 18] = [
         "{}, {}",
         "{}, {}, {}",
         "Version {}",
@@ -739,6 +747,9 @@ mod tests {
         "English",
         "{} min",
         "{} h",
+        "snap",
+        "{}, version {}",
+        "{}, ",
     ];
 
     #[test]
@@ -801,6 +812,12 @@ mod tests {
             "General",
             "SettingsPage",
             "Preferences",
+            "UpdatesWords",
+            "Inline",
+            "SnapRow",
+            "SnapNote",
+            "Settled",
+            "UpdatesPage",
         ] {
             assert!(
                 texts.iter().any(|(component, _)| component == context),

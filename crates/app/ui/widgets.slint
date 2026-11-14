@@ -1,6 +1,6 @@
 // The controls every screen shares, drawn from the mockup's components
 // (docs/design/maquette/project/Components.dc.html).
-import { ScrollView } from "std-widgets.slint";
+import { ListView, ScrollView } from "std-widgets.slint";
 import { Theme, Screen } from "theme.slint";
 
 export component Card inherits Rectangle {
@@ -327,6 +327,36 @@ export component Footer inherits Rectangle {
     }
 }
 
+// How far a key scrolls what shows `visible` of `content`, towards the top
+// above 0: the arrows a step, the pages a page, Home and End all the way; 0
+// for another key, or when nothing can scroll.
+global ScrollKeys {
+    public pure function step(event: KeyEvent, visible: length, content: length) -> length {
+        if content <= visible {
+            return 0px;
+        }
+        if event.text == Key.Home {
+            return content;
+        }
+        if event.text == Key.End {
+            return -content;
+        }
+        if event.text == Key.UpArrow {
+            return Theme.scroll-step;
+        }
+        if event.text == Key.DownArrow {
+            return -Theme.scroll-step;
+        }
+        if event.text == Key.PageUp {
+            return visible;
+        }
+        if event.text == Key.PageDown {
+            return -visible;
+        }
+        0px
+    }
+}
+
 // What scrolls within a screen, by the keyboard too: Tab reaches it, the
 // arrows, the pages, Home and End move it; with nothing to scroll, the keys
 // go on to what holds it.
@@ -359,40 +389,61 @@ export component ScrolledList inherits FocusScope {
     accessible-role: list;
     accessible-label: label;
     key-pressed(event) => {
-        if view.content-height <= view.visible-height {
+        let step = ScrollKeys.step(event, view.visible-height, view.content-height);
+        if step == 0px {
             return reject;
         }
-        if event.text == Key.Home {
-            root.scroll-by(view.content-height);
-            return accept;
-        }
-        if event.text == Key.End {
-            root.scroll-by(-view.content-height);
-            return accept;
-        }
-        if event.text == Key.UpArrow {
-            root.scroll-by(Theme.scroll-step);
-            return accept;
-        }
-        if event.text == Key.DownArrow {
-            root.scroll-by(-Theme.scroll-step);
-            return accept;
-        }
-        if event.text == Key.PageUp {
-            root.scroll-by(view.visible-height);
-            return accept;
-        }
-        if event.text == Key.PageDown {
-            root.scroll-by(-view.visible-height);
-            return accept;
-        }
-        reject
+        root.scroll-by(step);
+        accept
     }
 
     view := ScrollView {
         content-width: self.visible-width;
         content-height: root.content-height;
         @children
+    }
+
+    Rectangle {
+        border-radius: root.ring-radius;
+        border-width: root.has-focus ? Theme.focus-width : 0;
+        border-color: Theme.focus;
+    }
+}
+
+// A long text, a paragraph a row, scrolled as `ScrolledList` is: only the
+// paragraphs in view are laid out (the licenses of every crate built in,
+// laid out whole, took seconds at each width).
+export component ScrolledText inherits FocusScope {
+    in property <string> label;
+    in property <[string]> paragraphs;
+    in property <length> ring-radius: Theme.radius-small;
+
+    accessible-role: list;
+    accessible-label: label;
+    key-pressed(event) => {
+        let step = ScrollKeys.step(event, view.visible-height, view.content-height);
+        if step == 0px {
+            return reject;
+        }
+        view.content-y += step;
+        accept
+    }
+
+    view := ListView {
+        // A paragraph's widest word (a rule of `=`) never makes it scroll
+        // sideways: it wraps within the width shown.
+        content-width: self.visible-width;
+        // The whole is the one named list.
+        accessible-role: none;
+        for paragraph in root.paragraphs: VerticalLayout {
+            padding-bottom: Theme.spacing-s;
+            paragraph-text := Text {
+                text: paragraph;
+                color: Theme.text-2;
+                font-size: Theme.font-caption;
+                wrap: word-wrap;
+            }
+        }
     }
 
     Rectangle {

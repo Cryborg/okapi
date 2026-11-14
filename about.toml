@@ -1,0 +1,27 @@
+# What cargo-about needs to write the notices of the crates each binary
+# embeds, by scripts/notices.sh (the privileged helper's crates are among
+# the interface's).
+
+# The licenses Okapi accepts in what it embeds, and no more: a new one stops
+# the notices from being written, for a review. In this order: the first a
+# crate offers is the one shown (MIT's text, short, before Apache's).
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Zlib",
+    "ISC",
+    # Slint's, under which Okapi uses it: its crates are left out of the
+    # notices written (no text to give) and named in crates/app/THIRD_PARTY_NOTICES.
+    "LicenseRef-Slint-Royalty-free-2.0",
+]
+
+# What runs on Linux, Okapi's only target so far.
+targets = ["x86_64-unknown-linux-gnu"]
+# What the binaries embed, not what builds or tests them.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+# Okapi's own crates (`publish = false`) are under its own license.
+private = { ignore = true }

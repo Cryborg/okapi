@@ -8,6 +8,9 @@ edition = "2024"
 rust-version = "1.99"
 license = "MIT"
 repository = "https://github.com/Cryborg/okapi"
+# Okapi ships binaries, never crates: none is published (which also keeps
+# them out of the notices, about.toml).
+publish = false
 
 [workspace.dependencies]
 serde = { version = "1.0.229", features = ["derive"] }

@@ -15,6 +15,7 @@ Ce fichier ne porte que ce qui change le code qu'on écrit. Le « pourquoi » vi
 - Tests : `cargo test --workspace`
 - Lint : `cargo clippy --workspace --all-targets -- -D warnings` et `cargo fmt --all --check`
 - Lancer en local : `cargo run -p okapi-app` (interface), `cargo run -p okapi -- <args>` (CLI)
+- Notices des crates embarquées : `scripts/notices.sh` (son en-tête dit quand et comment)
 
 ## Architecture
 

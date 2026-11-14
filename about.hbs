@@ -1,0 +1,12 @@
+The licenses of the crates this program is built with (the Rust library
+crates it embeds and those that generate its code), each text followed by
+the crates it covers, as their packages give it.
+{{#each licenses}}
+
+================================================================================
+{{{name}}} ({{{id}}})
+Used by: {{#each used_by}}{{crate.name}} {{crate.version}}{{#unless @last}}, {{/unless}}{{/each}}
+================================================================================
+
+{{{text}}}
+{{/each}}

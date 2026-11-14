@@ -23,9 +23,10 @@ export {
 
 export component AppWindow inherits Window {
     in property <string> version;
-    // Its SPDX identifier (`MIT`), and the full texts of every license.
+    // Its SPDX identifier (`MIT`), and the full texts of every license, a
+    // paragraph each.
     in property <string> license-name;
-    in property <string> license-texts;
+    in property <[string]> license-paragraphs;
     in property <string> repository;
     in-out property <Page> page: Page.home;
     // The sidebar folded by the user's choice (a narrow window folds it too).
@@ -100,7 +101,7 @@ export component AppWindow inherits Window {
             if root.page == Page.about: AboutPage {
                 version: root.version;
                 license-name: root.license-name;
-                license-texts: root.license-texts;
+                license-paragraphs: root.license-paragraphs;
                 repository: root.repository;
             }
         }

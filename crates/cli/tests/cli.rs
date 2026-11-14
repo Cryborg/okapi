@@ -290,6 +290,11 @@ fn licenses_name_okapi_and_kudu() {
     assert_eq!(output.status.code(), Some(0));
     assert!(text.contains("MIT License"));
     assert!(text.contains("https://github.com/adventdevinc/kudu"));
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with("Used by: ") && line.contains("signal-hook ")),
+        "the crates built in"
+    );
 }
 
 #[test]

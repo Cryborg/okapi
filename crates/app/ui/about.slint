@@ -1,6 +1,6 @@
 import { AboutSlint } from "std-widgets.slint";
 import { Theme, Brand, Screen } from "theme.slint";
-import { Card, Line, Detail, Title, ScrolledList } from "widgets.slint";
+import { Card, Line, Detail, Title, ScrolledText } from "widgets.slint";
 
 // What Okapi is, under which licenses, and what it embeds. Slint's
 // royalty-free license requires AboutSlint on this screen, reached from the
@@ -9,7 +9,8 @@ export component AboutPage inherits Rectangle {
     in property <string> version;
     in property <string> license-name;
     in property <string> repository;
-    in property <string> license-texts;
+    // The full texts of every license, a paragraph each.
+    in property <[string]> license-paragraphs;
 
     VerticalLayout {
         padding: Screen.page-margin;
@@ -129,18 +130,11 @@ export component AboutPage inherits Rectangle {
                     }
                     // Reached with Tab, scrolled with the arrows, the pages,
                     // Home and End.
-                    notices-view := ScrolledList {
+                    ScrolledText {
                         accessible-role: groupbox;
                         label: @tr("Licences");
                         ring-radius: Theme.radius-medium;
-                        content-height: notices.preferred-height;
-                        notices := Text {
-                            width: notices-view.visible-width;
-                            text: root.license-texts;
-                            color: Theme.text-2;
-                            font-size: Theme.font-caption;
-                            wrap: word-wrap;
-                        }
+                        paragraphs: root.license-paragraphs;
                     }
                 }
             }

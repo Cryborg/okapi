@@ -4300,6 +4300,44 @@ pub mod tests {
     }
 
     #[test]
+    fn the_page_scrolls_with_the_keyboard_within_its_bounds() {
+        use slint::platform::Key;
+        let directories = Directories::new();
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        // Lower than the page: it scrolls.
+        window
+            .window()
+            .set_size(slint::PhysicalSize::new(1280, 420));
+        slint::platform::update_timers_and_animations();
+        // Past the sidebar, the page itself.
+        for _ in 0..=crate::cleaner::tests::SIDEBAR_STOPS {
+            pressing(&window, Key::Tab);
+        }
+        let top = |title: &str| frame(&window, title).1;
+        let start = top("Récupérable");
+        pressing(&window, Key::DownArrow);
+        let step = start - top("Récupérable");
+        assert!(step > 0.0, "down scrolls the page up");
+        pressing(&window, Key::UpArrow);
+        pressing(&window, Key::UpArrow);
+        assert!(
+            (top("Récupérable") - start).abs() < 0.5,
+            "never above the top"
+        );
+        pressing(&window, Key::End);
+        let bottom = top("Système");
+        pressing(&window, Key::PageDown);
+        pressing(&window, Key::DownArrow);
+        assert!((top("Système") - bottom).abs() < 0.5, "never below the end");
+        pressing(&window, Key::Home);
+        assert!(
+            (top("Récupérable") - start).abs() < 0.5,
+            "home goes back to the top"
+        );
+    }
+
+    #[test]
     fn the_wheel_leaves_a_widget_moved_with_the_keys_where_it_is() {
         use slint::platform::{Key, WindowEvent};
         let directories = Directories::new();

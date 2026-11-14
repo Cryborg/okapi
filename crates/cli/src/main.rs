@@ -32,6 +32,8 @@ use crate::text::{Message, text};
 
 /// Okapi's own license, shown by `okapi licenses`.
 const LICENSE: &str = include_str!("../../../LICENSE");
+/// The licenses of the crates built into this binary (`cargo about`).
+const CRATES_NOTICES: &str = include_str!("../CRATES_NOTICES");
 
 fn main() -> ExitCode {
     let language = Language::of_session(|name| env::var_os(name));
@@ -57,7 +59,7 @@ fn main() -> ExitCode {
             return informational(
                 &mut output,
                 language,
-                &[&header, LICENSE, THIRD_PARTY_NOTICES],
+                &[&header, LICENSE, THIRD_PARTY_NOTICES, CRATES_NOTICES],
             );
         }
         Ok(Command::Run(run)) => Ok(run),

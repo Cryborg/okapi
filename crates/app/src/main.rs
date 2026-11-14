@@ -9,7 +9,7 @@ use std::time::Duration;
 use okapi_rules::{Language, SESSION_VARIABLES};
 use okapi_store::journal;
 use okapi_tools::monitor::{Command, Sampler};
-use slint::ComponentHandle as _;
+use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 
 mod cleaner;
 mod dashboard;
@@ -43,6 +43,29 @@ const LICENSE: &str = include_str!("../../../LICENSE");
 /// What the interface itself embeds (Slint, Lucide), beyond what the rules
 /// do (`okapi_rules::THIRD_PARTY_NOTICES`).
 const INTERFACE_NOTICES: &str = include_str!("../THIRD_PARTY_NOTICES");
+/// The licenses of the crates built into this binary (`cargo about`).
+const CRATES_NOTICES: &str = include_str!("../CRATES_NOTICES");
+/// Every license text the About screen shows, in order.
+const LICENSE_TEXTS: [&str; 4] = [
+    LICENSE,
+    okapi_rules::THIRD_PARTY_NOTICES,
+    INTERFACE_NOTICES,
+    CRATES_NOTICES,
+];
+
+/// Every license text, a paragraph each: the About screen lays out only
+/// those in view.
+fn license_paragraphs() -> Vec<SharedString> {
+    LICENSE_TEXTS
+        .iter()
+        .flat_map(|text| text.split("\n\n"))
+        // Never `trim`: a license's own indentation is kept.
+        .map(|paragraph| paragraph.trim_matches('\n'))
+        .filter(|paragraph| !paragraph.trim().is_empty())
+        .map(SharedString::from)
+        .collect()
+}
+
 /// How long the dashboard waits for a filesystem to tell its space: a share
 /// that does not answer within it is said to.
 const SPACE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -68,11 +91,7 @@ fn window(
     window.set_version(env!("CARGO_PKG_VERSION").into());
     window.set_license_name(env!("CARGO_PKG_LICENSE").into());
     window.set_repository(env!("CARGO_PKG_REPOSITORY").into());
-    window.set_license_texts(
-        [LICENSE, okapi_rules::THIRD_PARTY_NOTICES, INTERFACE_NOTICES]
-            .join("\n\n")
-            .into(),
-    );
+    window.set_license_paragraphs(ModelRc::from(Rc::new(VecModel::from(license_paragraphs()))));
     let screen = CleanerScreen::attach(&window, seams, language);
     let closing = screen.clone();
     window
@@ -239,9 +258,37 @@ mod tests {
     use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 
     use super::*;
+
     use crate::cleaner::tests::{
         SIDEBAR_ENTRIES, SIDEBAR_STOPS, button, press, resize, shows, start_of, unnamed_images,
     };
+
+    /// The license paragraphs said once on the screen, first to last: what
+    /// is found by its text is that one.
+    fn said_once() -> Vec<SharedString> {
+        let paragraphs = license_paragraphs();
+        paragraphs
+            .iter()
+            .filter(|paragraph| paragraphs.iter().filter(|other| other == paragraph).count() == 1)
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn the_license_paragraphs_lose_no_word_and_stay_short() {
+        let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let whole = LICENSE_TEXTS.join("\n\n");
+        let paragraphs = license_paragraphs();
+        assert_eq!(
+            words(&paragraphs.join("\n\n")),
+            words(&whole),
+            "every word, in order"
+        );
+        // Laid out whole when in view: a text without blank lines would
+        // take the About screen back to seconds.
+        let longest = paragraphs.iter().map(SharedString::len).max().unwrap();
+        assert!(longest < 4_000, "{longest}");
+    }
 
     /// The window, its cleaner reading defaults and never scanning.
     fn test_window() -> AppWindow {
@@ -297,9 +344,14 @@ mod tests {
         ] {
             assert!(shows(&window, text), "{text}");
         }
-        let licenses = window.get_license_texts();
-        assert!(shows(&window, &licenses), "the licenses reach the screen");
-        for expected in ["MIT License", "Kudu", "Slint", "Lucide"] {
+        let once = said_once();
+        assert!(shows(&window, &once[0]), "the licenses reach the screen");
+        assert!(
+            !shows(&window, once.last().unwrap()),
+            "only what is in view is laid out"
+        );
+        let licenses = license_paragraphs().join("\n\n");
+        for expected in ["MIT License", "Kudu", "Slint", "Lucide", "serde 1."] {
             assert!(licenses.contains(expected), "{expected}");
         }
         button(&window, "Accueil").invoke_accessible_default_action();
@@ -528,33 +580,45 @@ mod tests {
         }
         press(&window, Key::Return);
         press(&window, Key::Tab);
-        let top = || {
-            ElementHandle::find_by_element_id(&window, "AboutPage::notices")
+        let once = said_once();
+        let (first, beyond, last) = (&once[0], &once[2], once.last().unwrap());
+        // Where a paragraph shows, none when it is not laid out.
+        let top = |paragraph: &str| {
+            ElementHandle::find_by_accessible_label(&window, paragraph)
                 .next()
-                .expect("the license texts (the element tree exists in debug builds only)")
-                .absolute_position()
-                .y
+                .map(|element| element.absolute_position().y)
         };
-        let start = top();
+        let start = top(first).unwrap();
         press(&window, Key::DownArrow);
-        let step = start - top();
+        let step = start - top(first).unwrap();
         assert!(step > 0.0, "down scrolls the text up");
         press(&window, Key::UpArrow);
         press(&window, Key::UpArrow);
-        assert!((top() - start).abs() < 0.5, "never above the first line");
+        assert!(
+            (top(first).unwrap() - start).abs() < 0.5,
+            "never above the first line"
+        );
+        assert_eq!(top(beyond), None, "beyond the first page");
         press(&window, Key::PageDown);
-        assert!(start - top() > step, "a page is more than a line");
+        assert_eq!(top(first), None, "a page is more than a line");
+        assert!(top(beyond).is_some(), "it reaches the next page");
         press(&window, Key::PageUp);
-        assert!((top() - start).abs() < 0.5, "a page back up");
+        assert!((top(first).unwrap() - start).abs() < 0.5, "a page back up");
+        assert_eq!(top(last), None, "the end not laid out yet");
         press(&window, Key::End);
-        let bottom = top();
-        assert!(bottom < start - step, "the end is further than a step");
+        let bottom = top(last).expect("the end shown");
         press(&window, Key::End);
         press(&window, Key::PageDown);
         press(&window, Key::DownArrow);
-        assert!((top() - bottom).abs() < 0.5, "the end is the last line");
+        assert!(
+            (top(last).unwrap() - bottom).abs() < 0.5,
+            "the end is the last line"
+        );
         press(&window, Key::Home);
-        assert!((top() - start).abs() < 0.5, "home goes back to the top");
+        assert!(
+            (top(first).unwrap() - start).abs() < 0.5,
+            "home goes back to the top"
+        );
     }
 
     /// Every `@tr` text of `ui/`, with the component it is in (its

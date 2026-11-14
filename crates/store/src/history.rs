@@ -235,11 +235,41 @@ pub enum Opened {
     Unavailable(HistoryUnavailable),
 }
 
+/// One application uninstalled, as kept in the history beside the
+/// cleanings: its line says its kind, a cleaning's does not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UninstallEntry {
+    /// Seconds since the clock's origin, negative before it.
+    pub time: i64,
+    /// Who removed it, by a stable name of the caller's (`deb`, `snap`).
+    pub source: String,
+    /// The application, as the user saw it.
+    pub name: String,
+    /// What went, by the names its source gives (packages, a snap).
+    pub packages: Vec<String>,
+    /// What it freed, as estimated before. Never `removedBytes`: a reader
+    /// that knows no kind would take the line for a cleaning's.
+    pub freed_bytes: u64,
+    /// Its data went with it.
+    pub data_removed: bool,
+}
+
+/// The kind a line says: a cleaning's says none, and one unknown makes the
+/// line unreadable.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum LineKind {
+    Uninstall,
+}
+
 #[derive(Serialize)]
-struct Line<'a> {
+struct Line<'a, T> {
     version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<LineKind>,
     #[serde(flatten)]
-    entry: &'a HistoryEntry,
+    entry: &'a T,
 }
 
 /// The history file, open for appending: opened before a cleaning so that a
@@ -314,10 +344,12 @@ impl History {
     }
 
     /// The last cleaning the history of `directory` keeps, read from its
-    /// last line alone: `None` when there is none, or when that line does
-    /// not say one (a write cut short, another version, too long), traced at
-    /// each reading. The line before is never taken for it: a cleaning came
-    /// after.
+    /// last line, past the lines of the applications uninstalled after it:
+    /// `None` when there is none, or when the line met does not say one (a
+    /// write cut short, another version or kind, too long), traced at each
+    /// reading. A line before one that cannot be read is never taken for
+    /// the last cleaning: a cleaning may have come after. All the lines read
+    /// are bounded together as one line is.
     ///
     /// # Errors
     ///
@@ -330,43 +362,7 @@ impl History {
             tracing::info!("no history: no last cleaning");
             return Ok(None);
         };
-        let started = Instant::now();
-        let (tail, scanned) =
-            last_line(&history, BLOCK, MAX_LINE).map_err(|error| StoreError::Unreadable {
-                path: path.clone(),
-                error,
-            })?;
-        let (start, end) = match tail {
-            Tail::Empty => {
-                tracing::info!(scanned, "history without a line: no last cleaning");
-                return Ok(None);
-            }
-            Tail::TooLong => {
-                tracing::warn!(scanned, max = MAX_LINE, elapsed = ?started.elapsed(), "last history line too long: not read");
-                return Ok(None);
-            }
-            Tail::Line { start, end } => (start, end),
-        };
-        let read = parse(&history, start, end, &path);
-        let elapsed = started.elapsed();
-        match read {
-            Ok(last) => {
-                tracing::info!(
-                    offset = start,
-                    length = end - start,
-                    scanned,
-                    ?elapsed,
-                    ?last,
-                    "last cleaning read"
-                );
-                Ok(Some(last))
-            }
-            Err(error @ (StoreError::Invalid { .. } | StoreError::UnsupportedVersion { .. })) => {
-                tracing::warn!(offset = start, length = end - start, scanned, ?elapsed, %error, "last history line unreadable: no last cleaning");
-                Ok(None)
-            }
-            Err(error) => Err(error),
-        }
+        find_last_cleaning(&history, &path, MAX_LINE)
     }
 
     /// Adds `entry` as one line, written at once and synced to the disk: `Ok`
@@ -379,11 +375,34 @@ impl History {
     ///
     /// [`StoreError::Unwritable`].
     pub fn record(&mut self, entry: &HistoryEntry) -> Result<(), StoreError> {
-        let line = Line {
+        self.write(&Line {
             version: HISTORY_VERSION,
+            kind: None,
             entry,
-        };
-        let mut bytes = serde_json::to_vec(&line).map_err(|error| StoreError::Unwritable {
+        })
+    }
+
+    /// Adds the line of `entry`, an application uninstalled, as [`record`]
+    /// adds a cleaning's.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Unwritable`], traced.
+    ///
+    /// [`record`]: Self::record
+    pub fn record_uninstall(&mut self, entry: &UninstallEntry) -> Result<(), StoreError> {
+        self.write(&Line {
+            version: HISTORY_VERSION,
+            kind: Some(LineKind::Uninstall),
+            entry,
+        })
+        .inspect_err(
+            |error| tracing::error!(%error, name = %entry.name, "uninstallation not recorded"),
+        )
+    }
+
+    fn write<T: Serialize>(&mut self, line: &Line<'_, T>) -> Result<(), StoreError> {
+        let mut bytes = serde_json::to_vec(line).map_err(|error| StoreError::Unwritable {
             path: self.path.clone(),
             error: io::Error::other(error),
         })?;
@@ -418,6 +437,70 @@ impl History {
     }
 }
 
+/// The last cleaning of `history` (at `path`), as [`History::last_cleaning`]
+/// finds it, reading at most `max_line` bytes of lines.
+fn find_last_cleaning(
+    history: &File,
+    path: &Path,
+    max_line: u64,
+) -> Result<Option<LastCleaning>, StoreError> {
+    let started = Instant::now();
+    let unreadable = |error| StoreError::Unreadable {
+        path: path.to_owned(),
+        error,
+    };
+    // Its length is taken once: a line added meanwhile is not seen.
+    let length = history.metadata().map_err(unreadable)?.len();
+    let mut until = length;
+    let mut scanned = 0;
+    let mut uninstalls = 0;
+    loop {
+        // The lines passed count against the bound, as one line would.
+        let room = max_line.saturating_sub(length - until);
+        let (tail, read) = last_line(history, until, BLOCK, room).map_err(unreadable)?;
+        scanned += read;
+        let (start, end) = match tail {
+            Tail::Empty => {
+                tracing::info!(
+                    scanned,
+                    uninstalls,
+                    "history without a cleaning line: no last cleaning"
+                );
+                return Ok(None);
+            }
+            Tail::TooLong => {
+                tracing::warn!(scanned, uninstalls, max = max_line, elapsed = ?started.elapsed(), "history lines too long: not read");
+                return Ok(None);
+            }
+            Tail::Line { start, end } => (start, end),
+        };
+        let elapsed = started.elapsed();
+        match parse(history, start, end, path) {
+            Ok(LineRead::Cleaning(last)) => {
+                tracing::info!(
+                    offset = start,
+                    length = end - start,
+                    scanned,
+                    uninstalls,
+                    ?elapsed,
+                    ?last,
+                    "last cleaning read"
+                );
+                return Ok(Some(last));
+            }
+            Ok(LineRead::Uninstall) => {
+                uninstalls += 1;
+                until = start;
+            }
+            Err(error @ (StoreError::Invalid { .. } | StoreError::UnsupportedVersion { .. })) => {
+                tracing::warn!(offset = start, length = end - start, scanned, uninstalls, ?elapsed, %error, "history line unreadable: no last cleaning");
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 /// The last cleaning a history keeps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LastCleaning {
@@ -428,12 +511,15 @@ pub struct LastCleaning {
     pub freed: Option<u64>,
 }
 
-/// What the last cleaning is read from in a line: the rest is skipped.
+/// What the last cleaning is read from in a line, in one pass: the rest is
+/// skipped. A cleaning's line says no kind and its bytes; an
+/// uninstallation's says its kind, and its time like any.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LastLine {
+    kind: Option<LineKind>,
     time: i64,
-    removed_bytes: u64,
+    removed_bytes: Option<u64>,
     admin: Option<AdminRecord>,
 }
 
@@ -453,10 +539,11 @@ enum Tail {
 /// `max_line` bytes long, and how many bytes were read to find it: read
 /// from the end by blocks of `block` bytes, none of them kept, so at most
 /// `max_line` of the line, as much of line breaks after it, and a block.
-/// Its length is taken once: a line added meanwhile is not seen.
-fn last_line(mut file: &File, block: u64, max_line: u64) -> io::Result<(Tail, u64)> {
+/// Only what lies before `until` is read: a line added since it was taken
+/// is not seen.
+fn last_line(mut file: &File, until: u64, block: u64, max_line: u64) -> io::Result<(Tail, u64)> {
     let in_bytes = |index: usize| u64::try_from(index).map_err(io::Error::other);
-    let length = file.metadata()?.len();
+    let length = until;
     let block = block.max(1);
     let mut buffer = vec![0; usize::try_from(block).map_err(io::Error::other)?];
     // The file is read from `position` to its end; `end` is where its last
@@ -497,10 +584,19 @@ fn last_line(mut file: &File, block: u64, max_line: u64) -> io::Result<(Tail, u6
     Ok((end.map_or(Tail::Empty, |end| within(0, end)), length))
 }
 
-/// The cleaning the line of `history` from `start` to `end` says, read as it
+/// What a line of the history says, for the last cleaning.
+#[derive(Debug, PartialEq, Eq)]
+enum LineRead {
+    Cleaning(LastCleaning),
+    /// An application uninstalled: the line before is read.
+    Uninstall,
+}
+
+/// What the line of `history` from `start` to `end` says, read as it
 /// streams by (a deletion log is skipped, never kept), its version checked
-/// first: a line of another version is never read as this one's.
-fn parse(history: &File, start: u64, end: u64, path: &Path) -> Result<LastCleaning, StoreError> {
+/// first: a line of another version is never read as this one's, nor one of
+/// a kind unknown as a cleaning's.
+fn parse(history: &File, start: u64, end: u64, path: &Path) -> Result<LineRead, StoreError> {
     let line = || {
         let mut reader = history;
         reader.seek(SeekFrom::Start(start))?;
@@ -514,13 +610,19 @@ fn parse(history: &File, start: u64, end: u64, path: &Path) -> Result<LastCleani
     file::check_version(line().map_err(unreadable)?, path, HISTORY_VERSION)?;
     let read: LastLine = serde_json::from_reader(line().map_err(unreadable)?)
         .map_err(|error| file::json_error(path, error))?;
-    Ok(LastCleaning {
+    if let Some(LineKind::Uninstall) = read.kind {
+        return Ok(LineRead::Uninstall);
+    }
+    let removed_bytes = read
+        .removed_bytes
+        .ok_or_else(|| file::json_error(path, serde::de::Error::missing_field("removedBytes")))?;
+    Ok(LineRead::Cleaning(LastCleaning {
         time: read.time,
         freed: read
             .admin
             .is_none_or(|admin| admin.done)
-            .then_some(read.removed_bytes),
-    })
+            .then_some(removed_bytes),
+    }))
 }
 
 /// Whether `file` is empty or ends with a line break. Its offset moves, which
@@ -876,6 +978,123 @@ mod tests {
         History::last_cleaning(directory).unwrap()
     }
 
+    fn length(file: &File) -> u64 {
+        file.metadata().unwrap().len()
+    }
+
+    fn uninstalled(directory: &Path, time: i64) {
+        History::open(directory)
+            .unwrap()
+            .record_uninstall(&UninstallEntry {
+                time,
+                source: "snap".to_owned(),
+                name: "Android Studio".to_owned(),
+                packages: vec!["android-studio".to_owned()],
+                freed_bytes: 3,
+                data_removed: false,
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn an_uninstallation_says_its_kind_and_never_removed_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        uninstalled(directory.path(), 5);
+        assert_eq!(
+            lines(directory.path()),
+            [serde_json::json!({
+                "version": 1,
+                "kind": "uninstall",
+                "time": 5,
+                "source": "snap",
+                "name": "Android Studio",
+                "packages": ["android-studio"],
+                "freedBytes": 3,
+                "dataRemoved": false,
+            })]
+        );
+    }
+
+    #[test]
+    fn the_last_cleaning_is_found_past_the_uninstallations_after_it() {
+        let directory = tempfile::tempdir().unwrap();
+        recorded(directory.path(), &[(100, 7, None)]);
+        uninstalled(directory.path(), 200);
+        uninstalled(directory.path(), 300);
+        assert_eq!(
+            last(directory.path()),
+            Some(LastCleaning {
+                time: 100,
+                freed: Some(7)
+            })
+        );
+        recorded(directory.path(), &[(400, 2, None)]);
+        assert_eq!(last(directory.path()).map(|last| last.time), Some(400));
+    }
+
+    #[test]
+    fn uninstallations_alone_are_no_last_cleaning() {
+        let directory = tempfile::tempdir().unwrap();
+        uninstalled(directory.path(), 200);
+        uninstalled(directory.path(), 300);
+        assert_eq!(last(directory.path()), None);
+    }
+
+    #[test]
+    fn a_line_cut_short_before_an_uninstallation_says_no_last_cleaning() {
+        let directory = tempfile::tempdir().unwrap();
+        recorded(directory.path(), &[(100, 7, None)]);
+        append(directory.path(), b"{\"version\":1,\"tim");
+        uninstalled(directory.path(), 200);
+        assert_eq!(last(directory.path()), None, "never the line before it");
+    }
+
+    #[test]
+    fn a_line_of_a_kind_unknown_says_no_last_cleaning() {
+        let directory = tempfile::tempdir().unwrap();
+        recorded(directory.path(), &[(100, 7, None)]);
+        append(
+            directory.path(),
+            b"{\"version\":1,\"kind\":\"install\",\"time\":200,\"removedBytes\":4}\n",
+        );
+        assert_eq!(last(directory.path()), None);
+    }
+
+    #[test]
+    fn a_line_without_its_facts_is_never_passed() {
+        for line in [
+            &b"{\"version\":1,\"kind\":\"uninstall\"}\n"[..],
+            b"{\"version\":1,\"time\":200}\n",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            recorded(directory.path(), &[(100, 7, None)]);
+            append(directory.path(), line);
+            assert_eq!(last(directory.path()), None, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn the_lines_read_back_are_bounded_together() {
+        let directory = tempfile::tempdir().unwrap();
+        recorded(directory.path(), &[(100, 7, None)]);
+        uninstalled(directory.path(), 200);
+        uninstalled(directory.path(), 300);
+        let path = History::path(directory.path());
+        let history = File::open(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let line_lengths: Vec<u64> = text.lines().map(|line| line.len() as u64 + 1).collect();
+        // Room for each line alone, not for the three together.
+        let longest = *line_lengths.iter().max().unwrap();
+        assert_eq!(find_last_cleaning(&history, &path, longest).unwrap(), None);
+        let all = line_lengths.iter().sum::<u64>();
+        assert_eq!(
+            find_last_cleaning(&history, &path, all)
+                .unwrap()
+                .map(|last| last.time),
+            Some(100)
+        );
+    }
+
     #[test]
     fn the_last_cleaning_is_the_last_line() {
         let directory = tempfile::tempdir().unwrap();
@@ -968,7 +1187,7 @@ mod tests {
             let file = File::open(&path).unwrap();
             for block in 1..=content.len() as u64 + 1 {
                 assert_eq!(
-                    last_line(&file, block, MAX_LINE).unwrap().0,
+                    last_line(&file, length(&file), block, MAX_LINE).unwrap().0,
                     Tail::Line { start, end },
                     "{content:?} by {block}"
                 );
@@ -983,15 +1202,18 @@ mod tests {
         std::fs::write(&path, b"first\n0123456789\n\n\n").unwrap();
         let file = File::open(&path).unwrap();
         for block in [2, 64] {
-            assert_eq!(last_line(&file, block, 9).unwrap().0, Tail::TooLong);
             assert_eq!(
-                last_line(&file, block, 10).unwrap().0,
+                last_line(&file, length(&file), block, 9).unwrap().0,
+                Tail::TooLong
+            );
+            assert_eq!(
+                last_line(&file, length(&file), block, 10).unwrap().0,
                 Tail::Line { start: 6, end: 16 },
                 "the line breaks after it never count"
             );
         }
         // Never read whole: given up once more than allowed and a block is read.
-        let (tail, read) = last_line(&file, 1, 4).unwrap();
+        let (tail, read) = last_line(&file, length(&file), 1, 4).unwrap();
         assert_eq!(tail, Tail::TooLong);
         assert!(read <= 3 + 4 + 1, "{read} bytes read");
     }
@@ -1004,11 +1226,14 @@ mod tests {
         recorded(directory.path(), &[(100, 7, None)]);
         let path = directory.path().join(HISTORY_FILE);
         let file = File::open(&path).unwrap();
-        let Tail::Line { start, end } = last_line(&file, BLOCK, MAX_LINE).unwrap().0 else {
+        let Tail::Line { start, end } = last_line(&file, length(&file), BLOCK, MAX_LINE).unwrap().0
+        else {
             panic!("a line");
         };
         recorded(directory.path(), &[(200, 9, None)]);
-        assert_eq!(parse(&file, start, end, &path).unwrap().time, 100);
+        assert!(
+            matches!(parse(&file, start, end, &path).unwrap(), LineRead::Cleaning(last) if last.time == 100)
+        );
     }
 
     #[test]

@@ -509,7 +509,7 @@ Options :
 Réglages : {settings}
   (exclusions, ajoutées à --exclude ; minAgeMinutes ; deletionLog ;
   language, \"fr\" ou \"en\", sinon celle de la session)
-Historique des nettoyages : {history}
+Historique (nettoyages et désinstallations) : {history}
 
 Codes de sortie : 0 succès, 1 échec, 2 arguments ou réglages invalides,
 3 permission refusée, 4 nettoyage partiel, 5 rien trouvé,
@@ -541,7 +541,7 @@ Options:
 Settings: {settings}
   (exclusions, added to --exclude; minAgeMinutes; deletionLog;
   language, \"fr\" or \"en\", else the session's)
-Cleaning history: {history}
+History (cleanings and uninstallations): {history}
 
 Exit codes: 0 success, 1 failure, 2 invalid arguments or settings,
 3 permission denied, 4 partial cleaning, 5 nothing found,

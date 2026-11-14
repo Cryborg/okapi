@@ -25,7 +25,7 @@ use thiserror::Error;
 pub use dashboard::{DashboardLayout, DashboardWidget, LoadedLayout, WidgetSize};
 pub use history::{
     AdminRecord, History, HistoryEntry, HistoryOutcome, HistoryUnavailable, LastCleaning, Opened,
-    seconds,
+    UninstallEntry, seconds,
 };
 pub use interface_state::InterfaceState;
 pub use last_analysis::LastAnalysis;

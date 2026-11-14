@@ -82,10 +82,12 @@ impl LastAnalysis {
         Ok(Some(analysis))
     }
 
-    /// Whether a cleaning was recorded since this analysis started (one
-    /// running beside it included), in the history of `directory`, by the
-    /// interface or the command line: only a cleaning opens or writes the
-    /// history, so its date tells, however long the history. A cleaning that
+    /// Whether a cleaning or an uninstallation was recorded since this
+    /// analysis started (one running beside it included), in the history of
+    /// `directory`, by the interface or the command line: only they open or
+    /// write the history, so its date tells, however long the history. An
+    /// uninstallation outdates it too, having removed files the analysis may
+    /// have counted (the caches of a snap whose data went). A cleaning that
     /// removed nothing counts too, and so would a history touched by hand:
     /// the summary is then said outdated, which costs a new analysis. Not
     /// seen: a cleaning cut short before its line was written, a history
@@ -199,6 +201,29 @@ mod tests {
                 "history changed at {changed} ms"
             );
         }
+    }
+
+    #[test]
+    fn an_uninstallation_recorded_after_the_analysis_makes_it_outdated() {
+        let directory = tempfile::tempdir().unwrap();
+        let analysis = LastAnalysis {
+            time: crate::history::seconds(SystemTime::now()),
+            reclaimable_bytes: 1,
+            entries: 1,
+        };
+        assert!(!analysis.outdated(directory.path()).unwrap(), "no history");
+        History::open(directory.path())
+            .unwrap()
+            .record_uninstall(&crate::UninstallEntry {
+                time: analysis.time,
+                source: "deb".to_owned(),
+                name: "GIMP".to_owned(),
+                packages: vec!["gimp".to_owned()],
+                freed_bytes: 1,
+                data_removed: false,
+            })
+            .unwrap();
+        assert!(analysis.outdated(directory.path()).unwrap());
     }
 
     #[test]

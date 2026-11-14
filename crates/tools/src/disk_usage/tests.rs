@@ -122,6 +122,11 @@ fn what_a_folder_takes_is_summed_at_every_level() {
         "the sparse file takes little"
     );
     assert_eq!(find(&scan, &["a"]).total, oracle(&root.join("a")));
+    let a = fs::symlink_metadata(root.join("a")).unwrap();
+    assert_eq!(
+        scan.identity(find(&scan, &["a"]).id),
+        Some(okapi_platform::FileIdentity::new(a.dev(), a.ino()))
+    );
     assert_eq!(find(&scan, &["a", "b"]).total, oracle(&root.join("a/b")));
     assert_eq!(scan.progress().files, 4);
     assert_eq!(scan.progress().directories, 3);
@@ -210,6 +215,8 @@ fn an_unreadable_folder_leaves_its_ancestors_partial() {
     }
     let scan = analyzed(root, 2);
     fs::set_permissions(&closed, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(scan.progress().unreadable, 1);
+    assert!(scan.settled());
     let entry = find(&scan, &["a", "closed"]);
     assert_eq!(
         entry.state,

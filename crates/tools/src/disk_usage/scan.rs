@@ -72,6 +72,9 @@ pub struct Progress {
     pub directories: u64,
     pub files: u64,
     pub allocated: u64,
+    /// Directories that could not be opened or listed: what they hold is
+    /// unknown.
+    pub unreadable: u64,
 }
 
 /// What the analysis met, counted for its last trace.
@@ -296,7 +299,23 @@ impl UsageScan {
             directories: read(&counts.directories),
             files: read(&counts.files),
             allocated: read(&counts.allocated),
+            unreadable: read(&counts.unreadable_directories),
         }
+    }
+
+    /// What the directory `of` was when the analysis listed it (device and
+    /// inode): what one opened again must still be; `None` for a mount
+    /// never read.
+    #[must_use]
+    pub fn identity(&self, of: NodeId) -> Option<FileIdentity> {
+        lock(&self.shared.tree).identity(of)
+    }
+
+    /// Whether no thread reads any more: an analysis cancelled may still
+    /// write the directories it was reading when it was.
+    #[must_use]
+    pub fn settled(&self) -> bool {
+        lock(&self.shared.work).in_flight == 0
     }
 
     /// The directory `of` and its subdirectories, with what each holds so
@@ -812,6 +831,18 @@ mod tests {
         false
     }
 
+    /// Whether a thread is in the reading of `settling`, for its test only.
+    static IN_SETTLING: AtomicBool = AtomicBool::new(false);
+
+    /// Holds the reading of the folder `settling` a moment, said.
+    fn settling(path: &Path) -> bool {
+        if path.file_name() == Some(std::ffi::OsStr::new("settling")) {
+            IN_SETTLING.store(true, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        false
+    }
+
     fn no_mounts(_root: &Path) -> (BTreeSet<PathBuf>, Option<String>) {
         (BTreeSet::new(), None)
     }
@@ -826,6 +857,31 @@ mod tests {
         let shared = Arc::clone(&scan.shared);
         drop(scan);
         assert_eq!(shared.outcome.get(), Some(&Outcome::Cancelled));
+    }
+
+    #[test]
+    fn a_cancelled_analysis_settles_once_its_last_reading_ends() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temporary.path().join("settling")).unwrap();
+        let scan = UsageScan::start_with(
+            temporary.path(),
+            NonZeroUsize::MIN,
+            no_mounts,
+            Some(settling),
+        )
+        .unwrap();
+        // `settling` held in its reading.
+        let started = std::time::Instant::now();
+        while !IN_SETTLING.load(Ordering::SeqCst) && started.elapsed() < Duration::from_secs(20) {
+            std::thread::yield_now();
+        }
+        scan.cancel();
+        assert_eq!(scan.wait(Duration::ZERO), Some(Outcome::Cancelled));
+        assert!(!scan.settled(), "`slow` still read");
+        while !scan.settled() && started.elapsed() < Duration::from_secs(20) {
+            std::thread::yield_now();
+        }
+        assert!(scan.settled());
     }
 
     #[test]

@@ -282,6 +282,12 @@ impl Tree {
         Some(lineage)
     }
 
+    /// What the directory `id` was when listed; `None` for a mount never
+    /// read.
+    pub(crate) fn identity(&self, id: NodeId) -> Option<FileIdentity> {
+        self.node(id)?.identity
+    }
+
     /// The names of the subdirectories of `id`.
     pub(crate) fn child_names(&self, id: NodeId) -> Vec<OsString> {
         let Some(node) = self.node(id) else {

@@ -13,8 +13,17 @@ jiff = { workspace = true, optional = true }
 okapi-engine = { workspace = true, optional = true }
 okapi-platform = { workspace = true, optional = true }
 okapi-rules = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
+
+# Never in `okapi-platform`: the privileged helper depends on it, and its
+# reviewed crates (`okapi-helper` tests) would grow with the bus.
+[target.'cfg(target_os = "linux")'.dependencies]
+async-io = { workspace = true, optional = true }
+futures-lite = { workspace = true, optional = true }
+zbus = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -26,6 +35,19 @@ monitor = ["dep:okapi-platform", "dep:okapi-rules", "dep:tracing"]
 disk-usage = ["dep:okapi-platform", "dep:thiserror", "dep:tracing"]
 # Copies of one content in the user's folders, read on threads of their own.
 duplicates = ["dep:okapi-platform", "dep:okapi-engine", "dep:blake3", "dep:jiff", "dep:thiserror", "dep:tracing"]
+# The package managers' daemons, asked and never run: PackageKit on the
+# system bus, snapd on its socket.
+packages = [
+    "dep:async-io",
+    "dep:futures-lite",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:thiserror",
+    "dep:tracing",
+    "dep:zbus",
+]
+# What waits for an update, read from those daemons.
+updates = ["packages", "dep:jiff", "dep:okapi-rules"]
 
 [[example]]
 name = "disk_usage"
@@ -34,6 +56,10 @@ required-features = ["disk-usage"]
 [[example]]
 name = "duplicates"
 required-features = ["duplicates"]
+
+[[example]]
+name = "packages"
+required-features = ["packages"]
 
 [lints]
 workspace = true

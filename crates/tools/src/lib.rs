@@ -8,6 +8,11 @@ pub mod duplicates;
 pub mod monitor;
 #[cfg(any(feature = "disk-usage", feature = "duplicates"))]
 mod mounts;
+#[cfg(feature = "packages")]
+pub mod packages;
+// Its sources are Linux's daemons.
+#[cfg(all(feature = "updates", target_os = "linux"))]
+pub mod updates;
 
 /// What a panic caught says, when it says it in words.
 #[cfg(any(feature = "disk-usage", feature = "duplicates"))]

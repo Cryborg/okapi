@@ -1,5 +1,7 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+# Names of products, not of code: never in backticks (`..` keeps clippy's own).
+doc-valid-idents = ["PackageKit", ".."]
 
 # Invariant 4: Okapi runs no command and sends no signal, the privileged
 # helper least of all; an exception is local and says why (`#[expect]`).

@@ -1,0 +1,349 @@
+//! snapd's REST interface, on its socket: no command is run (invariant 4).
+//! One request per connection, HTTP/1.1 with `Connection: close`; the
+//! answer's body is read whole, by its length or its chunks, within a
+//! deadline and a cap, then its envelope (`type`, `status-code`, `result`)
+//! is told apart: an error of snapd is a [`SnapdError::Refused`]. Reading
+//! only.
+
+use std::io::{self, Read as _, Write as _};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use serde::Deserialize;
+use serde_json::Value;
+
+/// Where snapd listens, for every user (its access checks are its own).
+const SOCKET: &str = "/run/snapd.socket";
+/// The longest a request waits: `select=refresh` asks the store.
+const WAIT: Duration = Duration::from_secs(60);
+/// What snapd says when its store cannot be reached (`client/errors.go`).
+pub const KIND_NETWORK_TIMEOUT: &str = "network-timeout";
+pub const KIND_DNS_FAILURE: &str = "dns-failure";
+/// What a publisher's `validation` is when the store vouches for it.
+pub const VALIDATION_VOUCHED: [&str; 2] = ["verified", "starred"];
+/// The largest answer read: beyond, snapd is not what answers.
+const LARGEST_ANSWER: usize = 16 * 1024 * 1024;
+/// What is read at a time.
+const READ_SIZE: usize = 64 * 1024;
+/// The end of an answer's head.
+const HEAD_END: &[u8] = b"\r\n\r\n";
+const LINE_END: &[u8] = b"\r\n";
+/// The envelope of an error.
+const ERROR_TYPE: &str = "error";
+/// How much of an answer that cannot be read is traced.
+const TRACED_EXCERPT: usize = 200;
+/// What an HTTP status of success is.
+const SUCCESS: std::ops::Range<u16> = 200..300;
+
+/// Why snapd gave no answer that could be used.
+#[derive(Debug, thiserror::Error)]
+pub enum SnapdError {
+    /// Nothing listens on its socket: snapd is not installed or not running.
+    #[error("snapd is not listening on {}: {source}", socket.display())]
+    Absent { socket: PathBuf, source: io::Error },
+    /// The socket was reached, then failed or fell silent.
+    #[error("snapd did not answer: {0}")]
+    Io(#[source] io::Error),
+    /// The answer ended before what it announced.
+    #[error("snapd's answer was cut after {read} bytes")]
+    Truncated { read: usize },
+    #[error("snapd's answer is beyond {LARGEST_ANSWER} bytes")]
+    TooLarge,
+    /// Not HTTP as snapd speaks it.
+    #[error("snapd's answer is malformed: {0}")]
+    Malformed(&'static str),
+    #[error("snapd's answer is not the JSON awaited: {0}")]
+    Json(#[from] serde_json::Error),
+    /// snapd answered with an error of its own; `kind` is empty when it
+    /// gave none.
+    #[error("snapd refused ({status}, {kind}): {message}")]
+    Refused {
+        status: u16,
+        kind: String,
+        message: String,
+    },
+}
+
+impl SnapdError {
+    /// Whether snapd fell silent past the deadline.
+    #[must_use]
+    pub fn timed_out(&self) -> bool {
+        matches!(self, Self::Io(error) if matches!(error.kind(), io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock))
+    }
+
+    /// Whether snapd said its store could not be reached.
+    #[must_use]
+    pub fn offline(&self) -> bool {
+        matches!(self, Self::Refused { kind, .. } if kind == KIND_NETWORK_TIMEOUT || kind == KIND_DNS_FAILURE)
+    }
+}
+
+/// snapd's envelope: `type` is `sync`, `async` or `error`.
+#[derive(Debug, Deserialize)]
+struct Envelope {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(rename = "status-code")]
+    status: u16,
+    #[serde(default)]
+    result: Value,
+}
+
+/// What an error's `result` says.
+#[derive(Debug, Deserialize)]
+struct ErrorResult {
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    message: String,
+}
+
+/// A snap with a newer revision in the store (`/v2/find?select=refresh`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Refresh {
+    pub name: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    pub version: String,
+    #[serde(default)]
+    pub publisher: Option<Publisher>,
+    #[serde(rename = "download-size", default)]
+    pub download_size: Option<u64>,
+}
+
+/// Who publishes a snap.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Publisher {
+    #[serde(rename = "display-name")]
+    pub display_name: String,
+    /// `verified` or `starred` when the store vouches for it.
+    #[serde(default)]
+    pub validation: Option<String>,
+}
+
+/// When snapd refreshes its snaps by itself (`/v2/system-info`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct Schedule {
+    /// The next automatic refresh, in RFC 3339, as its timer says it.
+    #[serde(default)]
+    pub next: Option<String>,
+    /// Until when refreshes are held (`refresh.hold`), in RFC 3339: the
+    /// timer does not know it.
+    #[serde(default)]
+    pub hold: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SystemInfo {
+    #[serde(default)]
+    refresh: Schedule,
+}
+
+/// snapd, reached on a socket.
+#[derive(Debug, Clone)]
+pub struct Snapd {
+    socket: PathBuf,
+    wait: Duration,
+}
+
+impl Snapd {
+    /// snapd on this system.
+    #[must_use]
+    pub fn system() -> Self {
+        Self::at(Path::new(SOCKET), WAIT)
+    }
+
+    /// snapd on `socket`, each request waiting `wait` at most.
+    #[must_use]
+    pub fn at(socket: &Path, wait: Duration) -> Self {
+        Self {
+            socket: socket.to_path_buf(),
+            wait,
+        }
+    }
+
+    /// The snaps with a newer revision waiting.
+    ///
+    /// # Errors
+    /// Whatever kept snapd from answering, or its refusal.
+    pub fn refreshes(&self) -> Result<Vec<Refresh>, SnapdError> {
+        Ok(serde_json::from_value(
+            self.get("/v2/find?select=refresh")?,
+        )?)
+    }
+
+    /// When snapd refreshes by itself.
+    ///
+    /// # Errors
+    /// Whatever kept snapd from answering, or its refusal.
+    pub fn schedule(&self) -> Result<Schedule, SnapdError> {
+        Ok(serde_json::from_value::<SystemInfo>(self.get("/v2/system-info")?)?.refresh)
+    }
+
+    /// What snapd answers to `path`: the `result` of its envelope.
+    fn get(&self, path: &str) -> Result<Value, SnapdError> {
+        let mut stream = UnixStream::connect(&self.socket).map_err(|source| {
+            if matches!(
+                source.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+            ) {
+                SnapdError::Absent {
+                    socket: self.socket.clone(),
+                    source,
+                }
+            } else {
+                SnapdError::Io(source)
+            }
+        })?;
+        stream
+            .set_write_timeout(Some(self.wait))
+            .map_err(SnapdError::Io)?;
+        stream
+            .write_all(&request_bytes(path))
+            .map_err(SnapdError::Io)?;
+        let raw = read_whole(&mut stream, Instant::now() + self.wait)?;
+        let (status, body) = parse_answer(&raw)?;
+        let envelope: Envelope = serde_json::from_slice(&body).inspect_err(|error| {
+            tracing::warn!(path, status, %error, body = %excerpt(&body), "snapd's answer is no envelope");
+        })?;
+        if envelope.kind == ERROR_TYPE
+            || !SUCCESS.contains(&status)
+            || !SUCCESS.contains(&envelope.status)
+        {
+            let (kind, message) =
+                match serde_json::from_value::<ErrorResult>(envelope.result.clone()) {
+                    Ok(said) => (said.kind, said.message),
+                    // Its words, whatever their shape: the error says them.
+                    Err(_) => (
+                        String::new(),
+                        excerpt(envelope.result.to_string().as_bytes()),
+                    ),
+                };
+            return Err(SnapdError::Refused {
+                status: if SUCCESS.contains(&status) {
+                    envelope.status
+                } else {
+                    status
+                },
+                kind,
+                message,
+            });
+        }
+        Ok(envelope.result)
+    }
+}
+
+/// The start of `bytes`, as text, for a trace.
+fn excerpt(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(&bytes[..bytes.len().min(TRACED_EXCERPT)]).into_owned()
+}
+
+/// The bytes of a request for `path`.
+fn request_bytes(path: &str) -> Vec<u8> {
+    format!(
+        "GET {path} HTTP/1.1\r\nHost: localhost\r\nUser-Agent: okapi\r\nConnection: close\r\n\r\n"
+    )
+    .into_bytes()
+}
+
+/// Everything until the connection closes, by `deadline`, within the cap.
+fn read_whole(stream: &mut UnixStream, deadline: Instant) -> Result<Vec<u8>, SnapdError> {
+    let mut raw = Vec::new();
+    let mut chunk = vec![0; READ_SIZE];
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(SnapdError::Io(io::ErrorKind::TimedOut.into()));
+        }
+        stream
+            .set_read_timeout(Some(left))
+            .map_err(SnapdError::Io)?;
+        let read = match stream.read(&mut chunk) {
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(SnapdError::Io(error)),
+        };
+        if read == 0 {
+            return Ok(raw);
+        }
+        raw.extend_from_slice(&chunk[..read]);
+        if raw.len() > LARGEST_ANSWER {
+            return Err(SnapdError::TooLarge);
+        }
+    }
+}
+
+/// The status and the body of an answer read whole.
+fn parse_answer(raw: &[u8]) -> Result<(u16, Vec<u8>), SnapdError> {
+    let head_length = find(raw, HEAD_END).ok_or(SnapdError::Truncated { read: raw.len() })?;
+    let head = std::str::from_utf8(&raw[..head_length])
+        .map_err(|_| SnapdError::Malformed("head not in UTF-8"))?;
+    let rest = &raw[head_length + HEAD_END.len()..];
+    let mut lines = head.split("\r\n");
+    let status = lines
+        .next()
+        .and_then(|line| line.strip_prefix("HTTP/1."))
+        .and_then(|line| line.split(' ').nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .ok_or(SnapdError::Malformed("no status line"))?;
+    let mut chunked = false;
+    let mut length = None;
+    for line in lines {
+        let Some((name, value)) = line.split_once(':') else {
+            return Err(SnapdError::Malformed("a header without a colon"));
+        };
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("transfer-encoding") {
+            chunked = value.eq_ignore_ascii_case("chunked");
+        } else if name.eq_ignore_ascii_case("content-length") {
+            length = Some(
+                value
+                    .parse::<usize>()
+                    .map_err(|_| SnapdError::Malformed("a length that is not a number"))?,
+            );
+        }
+    }
+    let body = if chunked {
+        dechunk(rest, raw.len())?
+    } else if let Some(length) = length {
+        rest.get(..length)
+            .ok_or(SnapdError::Truncated { read: raw.len() })?
+            .to_vec()
+    } else {
+        rest.to_vec()
+    };
+    Ok((status, body))
+}
+
+/// The body sent in chunks, put back together.
+fn dechunk(mut rest: &[u8], read: usize) -> Result<Vec<u8>, SnapdError> {
+    let mut body = Vec::new();
+    loop {
+        let line_length = find(rest, LINE_END).ok_or(SnapdError::Truncated { read })?;
+        let size = std::str::from_utf8(&rest[..line_length])
+            .ok()
+            .and_then(|line| line.split(';').next())
+            .and_then(|size| usize::from_str_radix(size.trim(), 16).ok())
+            .ok_or(SnapdError::Malformed("a chunk size that is not a number"))?;
+        rest = &rest[line_length + LINE_END.len()..];
+        if size == 0 {
+            return Ok(body);
+        }
+        let chunk = rest.get(..size).ok_or(SnapdError::Truncated { read })?;
+        body.extend_from_slice(chunk);
+        rest = rest
+            .get(size..)
+            .and_then(|after| after.strip_prefix(LINE_END))
+            .ok_or(SnapdError::Truncated { read })?;
+    }
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+#[cfg(test)]
+mod tests;

@@ -27,6 +27,9 @@ jiff = "0.2.43"
 # connection runs its own executor thread, on async-io.
 zbus = { version = "5.19.0", default-features = false, features = ["async-io"] }
 futures-lite = "2.6.1"
+# The deadline of a PackageKit transaction, raced against its signals: the
+# reactor zbus runs on already.
+async-io = "2.6.0"
 png = "0.18.1"
 # The key of a file's content, for the duplicates: cryptographic, so no
 # file can be made to look like another.

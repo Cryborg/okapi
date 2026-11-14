@@ -3270,14 +3270,19 @@ dependencies = [
 name = "okapi-tools"
 version = "0.1.0"
 dependencies = [
+ "async-io",
  "blake3",
+ "futures-lite",
  "jiff",
  "okapi-engine",
  "okapi-platform",
  "okapi-rules",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
+ "zbus",
 ]
 
 [[package]]

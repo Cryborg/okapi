@@ -97,6 +97,9 @@ export component Sidebar inherits Rectangle {
     in-out property <bool> chosen-folded;
     in property <bool> narrow;
     callback navigate(Page);
+    // The user chose to fold it or not (never said for a value set from
+    // outside).
+    callback fold-chosen(folded: bool);
 
     property <bool> folded: chosen-folded || narrow;
 
@@ -138,6 +141,7 @@ export component Sidebar inherits Rectangle {
                 accessible-expanded: !root.folded;
                 clicked => {
                     root.chosen-folded = !root.chosen-folded;
+                    root.fold-chosen(root.chosen-folded);
                 }
             }
         }

@@ -17,7 +17,9 @@ mod dates;
 mod elevation;
 mod receipt;
 mod results;
+mod saving;
 mod shown;
+mod sidebar;
 
 use cleaner::{CleanerEvent, CleanerScreen, Seams};
 use dashboard::{DashboardScreen, DashboardSeams};
@@ -190,9 +192,11 @@ fn main() -> ExitCode {
         }
     };
     tracing::info!("window created");
+    let fold = sidebar::KeptFold::attach(&window, okapi_platform::state_directory());
     let ran = window.run();
     screen.shut_down();
     home.shut_down();
+    fold.shut_down();
     match ran {
         Ok(()) => {
             tracing::info!("app closed");

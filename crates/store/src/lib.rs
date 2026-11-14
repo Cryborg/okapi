@@ -2,13 +2,15 @@
 //! `$XDG_CONFIG_HOME/okapi/settings.json`, the layout of the dashboard
 //! beside it (`dashboard.json`), one line per cleaning in
 //! `$XDG_STATE_HOME/okapi/history.jsonl`, the summary of the last analysis
-//! beside it (`last-analysis.json`), and every trace in the journal. A
+//! beside it (`last-analysis.json`), how the user last left the interface
+//! (`interface.json`, there too), and every trace in the journal. A
 //! cleaning's receipt becomes its history line here, the one form both
 //! interfaces write; nothing here depends on an interface.
 
 mod dashboard;
 mod file;
 mod history;
+mod interface_state;
 pub mod journal;
 mod last_analysis;
 mod settings;
@@ -22,11 +24,11 @@ pub use dashboard::{DashboardLayout, DashboardWidget, LoadedLayout, WidgetSize};
 pub use history::{
     AdminRecord, History, HistoryEntry, HistoryOutcome, HistoryUnavailable, Opened, seconds,
 };
+pub use interface_state::InterfaceState;
 pub use last_analysis::LastAnalysis;
 pub use settings::Settings;
 
-/// A file Okapi keeps (settings, layout, history, last analysis) could not
-/// be used.
+/// A file Okapi keeps could not be used.
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("`{}` cannot be read: {error}", path.display())]

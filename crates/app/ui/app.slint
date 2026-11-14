@@ -56,6 +56,8 @@ export component AppWindow inherits Window {
         root.page-shown(self.page);
     }
     callback sidebar-shown(chosen-folded: bool, narrow: bool);
+    // The user's choice, for Rust to keep.
+    callback sidebar-fold-chosen(folded: bool);
     // Before the first width, `Screen.narrow` is not known yet: that width
     // says it.
     changed sidebar-chosen-folded => {
@@ -77,6 +79,9 @@ export component AppWindow inherits Window {
             narrow: Screen.narrow;
             navigate(page) => {
                 root.page = page;
+            }
+            fold-chosen(folded) => {
+                root.sidebar-fold-chosen(folded);
             }
         }
 

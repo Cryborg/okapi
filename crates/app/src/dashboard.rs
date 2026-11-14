@@ -5,7 +5,6 @@
 mod catalog;
 mod editing;
 mod layout;
-mod saving;
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, VecDeque};
@@ -24,13 +23,18 @@ use okapi_tools::monitor::{
 use slint::{ComponentHandle as _, Model as _, ModelRc, VecModel};
 
 use crate::dates::{self, Day};
+use crate::saving::{LastWrite, Saver};
 use crate::shown::{show, shown, size};
 use crate::ui;
 use catalog::WidgetKind;
 use editing::{Removed, Widgets};
 use layout::{MAX_COLUMNS, place, shown as widgets_shown};
-pub use saving::Write;
-use saving::{LastWrite, Saver};
+
+/// The thread that writes the layout.
+const SAVER_NAME: &str = "okapi-dashboard-save";
+
+/// Writes a layout; whether it is kept (the store traces why not).
+pub type Write = crate::saving::Write<DashboardLayout>;
 
 /// How long the note of a widget removed stays, unless it is held.
 const TOAST_SHOWN_FOR: Duration = Duration::from_secs(8);
@@ -133,7 +137,7 @@ struct State {
     /// In the Personnaliser mode.
     editing: bool,
     /// None when the layout cannot be kept.
-    saver: Option<Saver>,
+    saver: Option<Saver<DashboardLayout>>,
     banners: LayoutBanners,
     /// The generation of the last focus asked for.
     focus_asked: i32,
@@ -209,7 +213,7 @@ impl DashboardScreen {
         (seams.commands)(Command::Watch(watched.clone()));
         let mut seams = seams;
         let saver = seams.save.take().and_then(|write| {
-            Saver::start(write)
+            Saver::start(SAVER_NAME, write)
                 .inspect_err(|error| {
                     tracing::error!(%error, "dashboard layout writer not started: changes not kept");
                 })

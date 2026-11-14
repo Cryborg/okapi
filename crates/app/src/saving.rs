@@ -1,64 +1,66 @@
-//! Keeps the dashboard's layout, off the interface's thread: a write syncs
-//! the disk, which the window must never wait for. One thread writes them
-//! in order, only the latest of those waiting (the others are passed by
-//! it), and says whether each write kept it.
+//! Keeps what the window keeps (the dashboard's layout, the interface's
+//! state), off the interface's thread: a write syncs the disk, which the
+//! window must never wait for. One thread per kind of value writes them in
+//! order, only the latest of those waiting (the others are passed by it),
+//! and says whether each write kept it.
 
 use std::io;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use okapi_store::DashboardLayout;
-
-const THREAD_NAME: &str = "okapi-dashboard-save";
-/// How long the window waits, as it closes, for the last write.
+/// How long each writer is waited for, as the window closes, to finish its
+/// last write.
 const LAST_WRITE_WAIT: Duration = Duration::from_secs(2);
 /// How often it looks whether that write is done.
 const LAST_WRITE_POLL: Duration = Duration::from_millis(10);
 
-/// Writes a layout; whether it is kept (the store traces why not).
-pub type Write = Box<dyn Fn(&DashboardLayout) -> bool + Send>;
+/// Writes a value; whether it is kept (the write traces why not).
+pub type Write<T> = Box<dyn Fn(&T) -> bool + Send>;
 
 /// What the writes done since the last look said.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LastWrite {
     /// None was done.
     Nothing,
-    /// The last one kept the layout, or not.
+    /// The last one kept its value, or not.
     Kept(bool),
     /// The thread is gone: no write will be done any more.
     Gone,
 }
 
-/// The thread that writes the layouts.
-pub(crate) struct Saver {
-    layouts: Option<Sender<DashboardLayout>>,
+/// The thread that writes the values.
+pub(crate) struct Saver<T> {
+    values: Option<Sender<T>>,
     kept: Receiver<bool>,
     thread: Option<JoinHandle<()>>,
+    /// The thread's name, which its traces carry.
+    name: &'static str,
 }
 
-impl Saver {
-    /// Starts the thread, writing through `write`, in the span it is
+impl<T: Send + 'static> Saver<T> {
+    /// Starts the thread `name`, writing through `write`, in the span it is
     /// started in.
-    pub(crate) fn start(write: Write) -> io::Result<Self> {
-        let (layouts, waiting) = mpsc::channel();
+    pub(crate) fn start(name: &'static str, write: Write<T>) -> io::Result<Self> {
+        let (values, waiting) = mpsc::channel();
         let (said, kept) = mpsc::channel();
         let span = tracing::Span::current();
         let thread = thread::Builder::new()
-            .name(THREAD_NAME.to_owned())
-            .spawn(move || span.in_scope(|| run(&waiting, &said, &write)))?;
+            .name(name.to_owned())
+            .spawn(move || span.in_scope(|| run(name, &waiting, &said, &write)))?;
         Ok(Self {
-            layouts: Some(layouts),
+            values: Some(values),
             kept,
             thread: Some(thread),
+            name,
         })
     }
 
-    /// Hands `layout` to the thread; false when the thread is gone.
-    pub(crate) fn save(&self, layout: DashboardLayout) -> bool {
-        self.layouts
+    /// Hands `value` to the thread; false when the thread is gone.
+    pub(crate) fn save(&self, value: T) -> bool {
+        self.values
             .as_ref()
-            .is_some_and(|layouts| layouts.send(layout).is_ok())
+            .is_some_and(|values| values.send(value).is_ok())
     }
 
     /// What the writes done since the last look said.
@@ -75,10 +77,10 @@ impl Saver {
         }
     }
 
-    /// Lets the thread write the last layout handed to it, and waits for it
+    /// Lets the thread write the last value handed to it, and waits for it
     /// a little.
     pub(crate) fn shut_down(&mut self) {
-        self.layouts = None;
+        self.values = None;
         let Some(thread) = self.thread.take() else {
             return;
         };
@@ -88,30 +90,28 @@ impl Saver {
         }
         if thread.is_finished() {
             if thread.join().is_err() {
-                tracing::error!("dashboard layout writer panicked");
+                tracing::error!(writer = self.name, "writer panicked");
             }
         } else {
-            tracing::warn!(waited = ?LAST_WRITE_WAIT, "dashboard layout writer still busy: left to finish");
+            tracing::warn!(writer = self.name, waited = ?LAST_WRITE_WAIT, "writer still busy: abandoned, its last value may not be kept");
         }
     }
 }
 
-/// Writes the latest of the layouts waiting, until no one can hand one
-/// any more; the last one handed is written even then.
-fn run(waiting: &Receiver<DashboardLayout>, said: &Sender<bool>, write: &Write) {
-    while let Ok(mut layout) = waiting.recv() {
+/// Writes the latest of the values waiting, until no one can hand one any
+/// more; the last one handed is written even then.
+fn run<T>(name: &'static str, waiting: &Receiver<T>, said: &Sender<bool>, write: &Write<T>) {
+    while let Ok(mut value) = waiting.recv() {
         let mut passed = 0_usize;
         while let Ok(newer) = waiting.try_recv() {
-            layout = newer;
+            value = newer;
             passed += 1;
         }
         if passed > 0 {
-            tracing::debug!(passed, "dashboard layouts passed by a newer one");
+            tracing::debug!(writer = name, passed, "values passed by a newer one");
         }
-        let kept = write(&layout);
-        if kept {
-            tracing::info!(widgets = layout.widgets.len(), "dashboard layout kept");
-        }
+        let kept = write(&value);
+        tracing::debug!(writer = name, kept, "write done");
         // The window gone, there is no one to tell.
         let _ = said.send(kept);
     }
@@ -121,9 +121,11 @@ fn run(waiting: &Receiver<DashboardLayout>, said: &Sender<bool>, write: &Write) 
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use okapi_store::{DashboardWidget, WidgetSize};
+    use okapi_store::{DashboardLayout, DashboardWidget, WidgetSize};
 
     use super::*;
+
+    const NAME: &str = "okapi-test-save";
 
     fn layout(widgets: usize) -> DashboardLayout {
         DashboardLayout {
@@ -138,12 +140,15 @@ mod tests {
 
     /// A write that notes each layout by its length, says it started, and
     /// waits for `go` before each one.
-    fn noting(go: Receiver<()>, started: Sender<()>) -> (Write, Arc<Mutex<Vec<usize>>>) {
+    fn noting(
+        go: Receiver<()>,
+        started: Sender<()>,
+    ) -> (Write<DashboardLayout>, Arc<Mutex<Vec<usize>>>) {
         let written = Arc::new(Mutex::new(Vec::new()));
         let noted = Arc::clone(&written);
         let go = Mutex::new(go);
         let started = Mutex::new(started);
-        let write: Write = Box::new(move |layout| {
+        let write: Write<DashboardLayout> = Box::new(move |layout| {
             started.lock().unwrap().send(()).unwrap();
             go.lock().unwrap().recv().unwrap();
             noted.lock().unwrap().push(layout.widgets.len());
@@ -157,7 +162,7 @@ mod tests {
         let (go, gone) = mpsc::channel();
         let (start, started) = mpsc::channel();
         let (write, written) = noting(gone, start);
-        let mut saver = Saver::start(write).unwrap();
+        let mut saver = Saver::start(NAME, write).unwrap();
         assert!(saver.save(layout(1)));
         // The first is being written while two more wait.
         started.recv().unwrap();
@@ -174,7 +179,11 @@ mod tests {
     fn the_last_layout_handed_is_written_as_the_window_closes() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().to_path_buf();
-        let mut saver = Saver::start(Box::new(move |layout| layout.save(&path).is_ok())).unwrap();
+        let mut saver = Saver::start(
+            NAME,
+            Box::new(move |layout: &DashboardLayout| layout.save(&path).is_ok()),
+        )
+        .unwrap();
         assert!(saver.save(layout(2)));
         saver.shut_down();
         let kept = DashboardLayout::load(directory.path()).unwrap().unwrap();
@@ -188,12 +197,15 @@ mod tests {
         std::fs::write(&not_a_directory, "").unwrap();
         let target = Arc::new(Mutex::new(not_a_directory));
         let written_to = Arc::clone(&target);
-        let saver = Saver::start(Box::new(move |layout| {
-            layout.save(&written_to.lock().unwrap()).is_ok()
-        }))
+        let saver = Saver::start(
+            NAME,
+            Box::new(move |layout: &DashboardLayout| {
+                layout.save(&written_to.lock().unwrap()).is_ok()
+            }),
+        )
         .unwrap();
         assert!(saver.save(layout(1)));
-        let said = |saver: &Saver| {
+        let said = |saver: &Saver<DashboardLayout>| {
             for _ in 0..1000 {
                 if let LastWrite::Kept(kept) = saver.last_write() {
                     return kept;
@@ -204,13 +216,51 @@ mod tests {
         };
         assert!(!said(&saver));
         *target.lock().unwrap() = directory.path().to_path_buf();
-        assert!(saver.save(layout(1)));
+        assert!(saver.save(layout(2)));
         assert!(said(&saver));
     }
 
     #[test]
+    fn a_write_said_before_the_thread_died_is_said_first() {
+        use std::sync::atomic::{AtomicU8, Ordering};
+
+        let calls = Arc::new(AtomicU8::new(0));
+        let counted = Arc::clone(&calls);
+        let saver = Saver::start(
+            NAME,
+            Box::new(move |_: &DashboardLayout| {
+                assert_eq!(
+                    counted.fetch_add(1, Ordering::SeqCst),
+                    0,
+                    "the writer dies at its second write"
+                );
+                false
+            }),
+        )
+        .unwrap();
+        assert!(saver.save(layout(1)));
+        let first_done = (0..1000).any(|_| {
+            thread::sleep(LAST_WRITE_POLL);
+            calls.load(Ordering::SeqCst) == 1
+        });
+        assert!(first_done);
+        assert!(saver.save(layout(2)));
+        let died = (0..1000).any(|_| {
+            thread::sleep(LAST_WRITE_POLL);
+            saver.thread.as_ref().is_some_and(JoinHandle::is_finished)
+        });
+        assert!(died);
+        assert_eq!(saver.last_write(), LastWrite::Kept(false));
+        assert_eq!(saver.last_write(), LastWrite::Gone);
+    }
+
+    #[test]
     fn a_thread_gone_is_said() {
-        let saver = Saver::start(Box::new(|_| panic!("the writer dies"))).unwrap();
+        let saver = Saver::start(
+            NAME,
+            Box::new(|_: &DashboardLayout| panic!("the writer dies")),
+        )
+        .unwrap();
         assert!(saver.save(layout(1)));
         let gone = (0..1000).any(|_| {
             thread::sleep(LAST_WRITE_POLL);

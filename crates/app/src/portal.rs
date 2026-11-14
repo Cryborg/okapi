@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use futures_lite::StreamExt as _;
-use zbus::address::Transport;
+use okapi_tools::packages::bus::socket_only;
 use zbus::proxy::SignalStream;
 use zbus::zvariant::{Fd, OwnedObjectPath, OwnedValue, Value};
 
@@ -108,15 +108,6 @@ pub(crate) const fn answered(code: u32) -> Result<(), Refusal> {
     }
 }
 
-/// The session bus, if it is reached by a socket only.
-pub(crate) fn socket_only(address: zbus::Address) -> Result<zbus::Address, Refusal> {
-    if matches!(address.transport(), Transport::Unix(_)) {
-        Ok(address)
-    } else {
-        Err(Refusal::Transport(address.to_string()))
-    }
-}
-
 /// The method of the portal that shows as `shown`.
 pub(crate) const fn method_of(shown: Shown) -> &'static str {
     match shown {
@@ -127,7 +118,7 @@ pub(crate) const fn method_of(shown: Shown) -> &'static str {
 
 /// The session bus, joined by a socket only.
 async fn connect() -> Result<zbus::Connection, Refusal> {
-    let address = socket_only(zbus::Address::session()?)?;
+    let address = socket_only(zbus::Address::session()?).map_err(Refusal::Transport)?;
     Ok(zbus::connection::Builder::address(address)?
         .method_timeout(CALL_WAIT)
         .build()
@@ -306,48 +297,7 @@ pub(crate) fn path_of_uri(uri: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
-
     use super::*;
-
-    #[test]
-    fn the_bus_is_joined_by_a_socket_only() {
-        let address = |text| zbus::Address::from_str(text).unwrap();
-        assert!(socket_only(address("unix:path=/run/user/1000/bus")).is_ok());
-        assert!(socket_only(address("unix:abstract=/tmp/dbus-x")).is_ok());
-        for runs_something in ["unixexec:path=/bin/true", "tcp:host=localhost,port=4000"] {
-            assert!(
-                matches!(
-                    socket_only(address(runs_something)),
-                    Err(Refusal::Transport(_))
-                ),
-                "{runs_something}"
-            );
-        }
-        // Not understood, or refused: never joined.
-        for elsewhere in [
-            "autolaunch:",
-            "launchd:env=DBUS_LAUNCHD_SESSION_BUS_SOCKET",
-            "nonce-tcp:host=localhost,port=4000,noncefile=/tmp/n",
-            "vsock:cid=2,port=4000",
-            "systemd:",
-            "unixexec:path=/bin/true;unix:path=/run/user/1000/bus",
-        ] {
-            assert!(
-                !matches!(
-                    zbus::Address::from_str(elsewhere).map(socket_only),
-                    Ok(Ok(_))
-                ),
-                "{elsewhere}"
-            );
-        }
-        // Several addresses: the first alone is taken, never a fallback.
-        if let Ok(first) =
-            zbus::Address::from_str("unix:path=/run/user/1000/bus;unixexec:path=/bin/true")
-        {
-            assert!(matches!(first.transport(), Transport::Unix(_)), "{first}");
-        }
-    }
 
     #[test]
     fn a_folder_is_opened_and_a_file_chosen_in_its_folder() {

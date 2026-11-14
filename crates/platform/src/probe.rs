@@ -22,6 +22,7 @@ mod system;
 mod units;
 
 pub use block::{device_labels, removable, rotational};
+pub use capped::read_regular_capped;
 pub use desktop::{DesktopEntry, application_name, desktop_entry};
 pub use memory::{MemoryStatus, memory};
 pub use mounts::{Device, Mount, MountClass, MountList, mounts};
@@ -59,7 +60,8 @@ fn decode_hex_escapes(name: &str) -> String {
 }
 
 /// Whether `identifier` names a file in a folder, never a path elsewhere.
-fn names_a_file(identifier: &str) -> bool {
+#[must_use]
+pub fn names_a_file(identifier: &str) -> bool {
     !identifier.is_empty()
         && !identifier.contains(['/', '\0'])
         && identifier != "."

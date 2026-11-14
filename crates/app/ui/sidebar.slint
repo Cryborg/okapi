@@ -6,8 +6,8 @@ export enum Page { home, cleaner, about }
 
 // One entry of the sidebar: its icon and words carry it, never colour alone.
 // Reached with Tab, chosen with Enter or Space, its focus ring visible.
-// Folded, its words go to a tooltip, and the current one shows by its
-// background alone, as in the mockup: the screen reader still says it.
+// Folded, its words go to a tooltip, and the current one keeps a mark on
+// its edge: its background alone would be colour only.
 component NavItem inherits Rectangle {
     in property <image> icon;
     in property <string> label;
@@ -54,6 +54,15 @@ component NavItem inherits Rectangle {
         border-radius: root.border-radius;
         border-width: keys.has-focus ? Theme.focus-width : 0;
         border-color: Theme.focus;
+    }
+
+    if root.folded && root.active: current := Rectangle {
+        x: 0;
+        y: (parent.height - self.height) / 2;
+        width: Theme.sidebar-mark-width;
+        height: Theme.icon;
+        border-radius: self.width / 2;
+        background: Theme.accent;
     }
 
     HorizontalLayout {

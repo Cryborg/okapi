@@ -358,12 +358,27 @@ mod tests {
                 .next()
                 .is_some()
         };
+        // The entry with the mark of the current one on its edge, if any.
+        let current = || {
+            let marks: Vec<_> =
+                ElementHandle::find_by_element_id(&window, "NavItem::current").collect();
+            assert!(marks.len() <= 1, "one current entry");
+            let middle = marks.first()?.absolute_position().y + marks[0].size().height / 2.0;
+            ["Accueil", "Nettoyeur", "À propos"]
+                .into_iter()
+                .find(|label| {
+                    let entry = button(&window, label);
+                    let top = entry.absolute_position().y;
+                    (top..top + entry.size().height).contains(&middle)
+                })
+        };
 
         // Unfolded at the window's first width: the mark, the name, the
-        // entries' words.
+        // entries' words, which set the current one apart.
         assert!(entry_width() > 200.0, "{}", entry_width());
         assert!(named());
         assert!(marked());
+        assert_eq!(current(), None);
         let fold = button(&window, "Replier la barre latérale");
         assert_eq!(fold.accessible_expanded(), Some(true));
 
@@ -373,14 +388,18 @@ mod tests {
         assert!(entry_width() < 50.0, "{}", entry_width());
         assert!(!named());
         assert!(!marked(), "the unfold button in its place");
+        // The current entry marked on its edge, not by colour alone.
+        assert_eq!(current(), Some("Accueil"));
         let unfold = button(&window, "Déplier la barre latérale");
         assert_eq!(unfold.accessible_expanded(), Some(false));
         button(&window, "À propos").invoke_accessible_default_action();
         assert_eq!(window.get_page(), Page::About);
+        assert_eq!(current(), Some("À propos"));
         button(&window, "Accueil").invoke_accessible_default_action();
         unfold.invoke_accessible_default_action();
         assert!(!window.get_sidebar_chosen_folded());
         assert!(entry_width() > 200.0);
+        assert_eq!(current(), None);
 
         // A narrow window folds it, with no button to unfold it; widened
         // again, it unfolds, as chosen.
@@ -388,6 +407,7 @@ mod tests {
         assert!(entry_width() < 50.0, "{}", entry_width());
         assert!(!named());
         assert!(marked(), "the mark, with no button in its place");
+        assert_eq!(current(), Some("Accueil"));
         assert_eq!(buttons("Déplier la barre latérale"), 0);
         assert_eq!(buttons("Replier la barre latérale"), 0);
         assert!(!window.get_sidebar_chosen_folded(), "the choice kept");

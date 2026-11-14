@@ -1,6 +1,6 @@
 // The cleaner: the categories to look at, the analysis under way, and how
 // it ended. Rust keeps the state (src/cleaner.rs): this file draws it.
-import { Theme } from "theme.slint";
+import { Theme, Screen } from "theme.slint";
 import {
     ActionButton, ButtonKind, Card, CheckMark, Detail, Footer, FocusRing, Icon, IconNote,
     Line, ProgressBar, Title,
@@ -134,7 +134,7 @@ component Spared inherits Rectangle {
 component Choosing inherits VerticalLayout {
     VerticalLayout {
         vertical-stretch: 1;
-        padding: Theme.spacing-xxl;
+        padding: Screen.page-margin;
         spacing: Theme.spacing-xl;
         VerticalLayout {
             spacing: Theme.spacing-xs;
@@ -289,7 +289,7 @@ component Scanning inherits VerticalLayout {
 
     VerticalLayout {
         vertical-stretch: 1;
-        padding: Theme.spacing-xxl;
+        padding: Screen.page-margin;
         spacing: Theme.spacing-xl;
         VerticalLayout {
             vertical-stretch: 0;
@@ -383,7 +383,7 @@ component Ended inherits VerticalLayout {
     // Looked at everything it could: no note to read.
     property <bool> good: Cleaner.outcome == OutcomeKind.nothing-to-clean && Cleaner.issues == 0;
 
-    padding: Theme.spacing-xxl;
+    padding: Screen.page-margin;
     spacing: Theme.spacing-xl;
     Title {
         text: @tr("Nettoyeur");

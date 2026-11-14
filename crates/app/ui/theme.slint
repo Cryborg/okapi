@@ -75,8 +75,8 @@ export global Theme {
     out property <length> sidebar-width: 248px;
     // Folded, the sidebar shows its icons only.
     out property <length> sidebar-folded-width: 64px;
-    // Below it, the window is narrow: the sidebar folds, the dashboard's
-    // margins narrow.
+    // Below it, the window is narrow: the sidebar folds, the pages' margins
+    // narrow (`Screen`).
     out property <length> narrow-below: 1100px;
     out property <length> brand-height: 44px;
     out property <length> control-height: 36px;
@@ -191,6 +191,15 @@ export global Theme {
     out property <length> skeleton-figure: 28px;
     out property <percent> skeleton-figure-part: 46%;
     out property <percent> skeleton-line-part: 68%;
+}
+
+// What the window's width decides for every page. Set by `AppWindow` alone.
+export global Screen {
+    // Narrower than `Theme.narrow-below`. Set, never bound to the width: a
+    // binding would loop (`AppWindow`).
+    in property <bool> narrow;
+    // The margin around a page.
+    out property <length> page-margin: narrow ? Theme.spacing-xl : Theme.spacing-xxl;
 }
 
 // What the product is called: a name, never translated.

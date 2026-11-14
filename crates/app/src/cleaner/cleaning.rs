@@ -1065,8 +1065,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::super::tests::{
-        SIDEBAR_STOPS, Sandbox, button, checkbox, let_the_screen_settle, on_cleaner, press,
-        settle_files, shows, shows_a_text_starting, step, watch_until,
+        SIDEBAR_STOPS, Sandbox, button, checkbox, let_the_screen_settle, on_cleaner, press, resize,
+        settle_files, shows, shows_a_text_starting, start_of, step, watch_until,
     };
     use super::super::{Inputs, Seams};
     use crate::ui;
@@ -1825,6 +1825,30 @@ mod tests {
         // "Nettoyer" in place of "Annuler l'analyse", clicked twice.
         button(&window, "Nettoyer").invoke_accessible_default_action();
         assert!(!window.global::<ui::Cleaner>().get_confirming());
+    }
+
+    #[test]
+    fn the_results_the_cleaning_and_the_receipt_narrow_their_margins_in_a_narrow_window() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let (seams, go) = held_back(sandbox.read(&sandbox.root.join("state")));
+        let (window, _screen) = on_results(seams);
+        assert!((start_of(&window, "Résultats") - (248.0 + 32.0)).abs() < 1.0);
+        resize(&window, 1000);
+        // The sidebar folded, the narrow margin: the title and the footer
+        // on the left, the footer's button on the right.
+        assert!((start_of(&window, "Résultats") - (64.0 + 24.0)).abs() < 1.0);
+        assert!((start_of(&window, "Sélectionné") - (64.0 + 24.0)).abs() < 1.0);
+        let clean = button(&window, "Nettoyer");
+        let right = clean.absolute_position().x + clean.size().width;
+        assert!((right - (1000.0 - 24.0)).abs() < 1.0, "{right}");
+        confirm(&window);
+        let_the_screen_settle();
+        assert!((start_of(&window, "Nettoyage en cours") - (64.0 + 24.0)).abs() < 1.0);
+        go.send(()).unwrap();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!((start_of(&window, "Nettoyage terminé") - (64.0 + 24.0)).abs() < 1.0);
     }
 
     #[test]

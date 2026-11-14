@@ -1,7 +1,7 @@
 // What an analysis found: the groups by category, which are checked, the
 // notes of the analysis, and what a cleaning would take.
 import { ScrollView } from "std-widgets.slint";
-import { Theme } from "theme.slint";
+import { Theme, Screen } from "theme.slint";
 import {
     ActionButton, ButtonKind, Badge, Card, CheckMark, Detail, Footer, FocusRing, Icon, IconButton,
     IconNote, Line, ModalFrame, Title,
@@ -505,7 +505,7 @@ export component ResultsPage inherits VerticalLayout {
 
     VerticalLayout {
         vertical-stretch: 1;
-        padding: Theme.spacing-xxl;
+        padding: Screen.page-margin;
         padding-bottom: Theme.spacing-l;
         spacing: Theme.spacing-l;
         HorizontalLayout {

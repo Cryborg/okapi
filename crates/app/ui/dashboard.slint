@@ -1,6 +1,6 @@
 // The Home page: a header, then the widgets of the layout in a grid whose
 // columns follow the width (docs/design/tableau-de-bord/project/Dashboard.dc.html).
-import { Theme } from "theme.slint";
+import { Theme, Screen } from "theme.slint";
 import { Title, Detail, Icon, ScrolledList, ActionButton, ButtonKind, Banner, FocusRing, ModalFrame } from "widgets.slint";
 import { AddableWidget, CellPlace, Dashboard, FocusPart, MoveCancel, ReadingState, ReclaimableState, WidgetKind, WidgetSize } from "dashboard-model.slint";
 import { DashboardWords, DisksWidget, MemoryWidget, ProcessorWidget, ReclaimableWidget, SystemWidget } from "dashboard-widgets.slint";
@@ -257,13 +257,10 @@ component DropSlot inherits Rectangle {
 }
 
 export component DashboardPage inherits Rectangle {
-    // The window is narrow: the page's margin narrows.
-    in property <bool> narrow;
     // "Voir les derniers résultats": the cleaner's page.
     callback open-cleaner();
 
-    property <length> margin: narrow ? Theme.spacing-xl : Theme.spacing-xxl;
-    property <length> grid-width: view.visible-width - 2 * margin;
+    property <length> grid-width: view.visible-width - 2 * Screen.page-margin;
     property <int> columns: max(1, min(Dashboard.rows.length,
         floor((grid-width + Theme.dash-gap) / (Theme.dash-column-min + Theme.dash-gap))));
     property <int> rows: Dashboard.rows[columns - 1];
@@ -320,7 +317,7 @@ export component DashboardPage inherits Rectangle {
 
             page := VerticalLayout {
                 width: view.visible-width;
-                padding: root.margin;
+                padding: Screen.page-margin;
                 spacing: Theme.spacing-xl;
 
                 HorizontalLayout {

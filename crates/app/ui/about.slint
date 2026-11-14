@@ -1,5 +1,5 @@
 import { AboutSlint } from "std-widgets.slint";
-import { Theme, Brand } from "theme.slint";
+import { Theme, Brand, Screen } from "theme.slint";
 import { Card, Line, Detail, Title, ScrolledList } from "widgets.slint";
 
 // What Okapi is, under which licenses, and what it embeds. Slint's
@@ -12,7 +12,7 @@ export component AboutPage inherits Rectangle {
     in property <string> license-texts;
 
     VerticalLayout {
-        padding: Theme.spacing-xxl;
+        padding: Screen.page-margin;
         spacing: Theme.spacing-xl;
 
         Title {

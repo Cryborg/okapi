@@ -232,7 +232,7 @@ mod tests {
 
     use super::*;
     use crate::cleaner::tests::{
-        SIDEBAR_ENTRIES, SIDEBAR_STOPS, button, press, shows, unnamed_images,
+        SIDEBAR_ENTRIES, SIDEBAR_STOPS, button, press, resize, shows, start_of, unnamed_images,
     };
 
     /// The window, its cleaner reading defaults and never scanning.
@@ -344,13 +344,6 @@ mod tests {
     #[test]
     fn the_sidebar_folds_to_its_icons_by_choice_or_in_a_narrow_window() {
         let window = test_window();
-        let resize = |width| {
-            window
-                .window()
-                .set_size(slint::PhysicalSize::new(width, 800));
-            // `changed` handlers run on the next turn of the event loop.
-            slint::platform::update_timers_and_animations();
-        };
         let entry_width = || button(&window, "Accueil").size().width;
         let buttons = |label| {
             ElementHandle::find_by_accessible_label(&window, label)
@@ -391,20 +384,20 @@ mod tests {
 
         // A narrow window folds it, with no button to unfold it; widened
         // again, it unfolds, as chosen.
-        resize(1000);
+        resize(&window, 1000);
         assert!(entry_width() < 50.0, "{}", entry_width());
         assert!(!named());
         assert!(marked(), "the mark, with no button in its place");
         assert_eq!(buttons("Déplier la barre latérale"), 0);
         assert_eq!(buttons("Replier la barre latérale"), 0);
         assert!(!window.get_sidebar_chosen_folded(), "the choice kept");
-        resize(1100);
+        resize(&window, 1100);
         assert!(entry_width() > 200.0, "{}", entry_width());
 
         // Folded by choice, it stays folded when the window widens.
         button(&window, "Replier la barre latérale").invoke_accessible_default_action();
-        resize(1000);
-        resize(1280);
+        resize(&window, 1000);
+        resize(&window, 1280);
         assert!(entry_width() < 50.0, "{}", entry_width());
         assert_eq!(buttons("Déplier la barre latérale"), 1);
     }
@@ -423,15 +416,28 @@ mod tests {
 
         // Narrow, the button gone with the focus: from the start, the
         // entries alone, the last of them About.
-        window
-            .window()
-            .set_size(slint::PhysicalSize::new(1000, 800));
-        slint::platform::update_timers_and_animations();
+        resize(&window, 1000);
         for _ in 0..SIDEBAR_ENTRIES {
             press(&window, Key::Tab);
         }
         press(&window, Key::Return);
         assert_eq!(window.get_page(), Page::About);
+    }
+
+    #[test]
+    fn every_page_narrows_its_margin_in_a_narrow_window() {
+        let window = test_window();
+        // Each page's title, after the sidebar and the margin. The other
+        // pages are measured with their state, next to it.
+        for (page, title) in [("Nettoyeur", "Nettoyeur"), ("À propos", "À propos")] {
+            button(&window, page).invoke_accessible_default_action();
+            resize(&window, 1280);
+            let wide = start_of(&window, title);
+            assert!((wide - (248.0 + 32.0)).abs() < 1.0, "{page}: {wide}");
+            resize(&window, 1000);
+            let narrow = start_of(&window, title);
+            assert!((narrow - (64.0 + 24.0)).abs() < 1.0, "{page}: {narrow}");
+        }
     }
 
     #[test]
@@ -449,21 +455,15 @@ mod tests {
         window.on_sidebar_shown(move |chosen_folded, narrow| {
             recorded.borrow_mut().push((chosen_folded, narrow));
         });
-        let resize = |width| {
-            window
-                .window()
-                .set_size(slint::PhysicalSize::new(width, 800));
-            slint::platform::update_timers_and_animations();
-        };
         // A choice before the first width is said with it, narrow still.
         window.set_sidebar_chosen_folded(true);
         slint::platform::update_timers_and_animations();
-        resize(900);
+        resize(&window, 900);
         window.set_sidebar_chosen_folded(false);
         slint::platform::update_timers_and_animations();
-        resize(1280);
-        resize(1300);
-        resize(1000);
+        resize(&window, 1280);
+        resize(&window, 1300);
+        resize(&window, 1000);
         assert_eq!(
             *shown.borrow(),
             [(true, true), (false, true), (false, false), (false, true)]

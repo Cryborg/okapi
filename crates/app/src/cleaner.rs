@@ -1796,6 +1796,26 @@ pub mod tests {
             .count()
     }
 
+    /// Where `text` starts: on a page, after the sidebar and the page's
+    /// margin.
+    pub fn start_of(window: &ui::AppWindow, text: &str) -> f32 {
+        ElementHandle::find_by_accessible_label(window, text)
+            .find(|element| element.accessible_role() == Some(AccessibleRole::Text))
+            .unwrap_or_else(|| panic!("no text {text}"))
+            .absolute_position()
+            .x
+    }
+
+    /// Sets the window's width, its height kept, and lets its `changed`
+    /// handlers run.
+    pub fn resize(window: &ui::AppWindow, width: u32) {
+        let height = window.window().size().height;
+        window
+            .window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        slint::platform::update_timers_and_animations();
+    }
+
     pub fn shows(window: &ui::AppWindow, text: &str) -> bool {
         ElementHandle::find_by_accessible_label(window, text)
             .next()
@@ -2488,6 +2508,24 @@ pub mod tests {
         scan.sent.recv().unwrap();
         watch_until(&window, |window| step(window) == ui::CleanerStep::Outcome);
         assert!(shows(&window, "Rien n'a été regardé"));
+    }
+
+    #[test]
+    fn the_analysis_and_its_end_narrow_their_margins_in_a_narrow_window() {
+        let (seams, scan) = scripted(Vec::new());
+        let (window, _screen) = on_cleaner(seams);
+        button(&window, "Analyser").invoke_accessible_default_action();
+        scan.started.recv().unwrap();
+        let_the_screen_settle();
+        let wide = start_of(&window, "Analyse en cours");
+        assert!((wide - (248.0 + 32.0)).abs() < 1.0, "{wide}");
+        // Narrowed while it is shown: the sidebar folded, the narrow margin.
+        resize(&window, 1000);
+        let narrow = start_of(&window, "Analyse en cours");
+        assert!((narrow - (64.0 + 24.0)).abs() < 1.0, "{narrow}");
+        scan.go.send(()).unwrap();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Outcome);
+        assert!((start_of(&window, "Nettoyeur") - (64.0 + 24.0)).abs() < 1.0);
     }
 
     #[test]

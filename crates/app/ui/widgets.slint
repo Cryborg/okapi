@@ -1,7 +1,7 @@
 // The controls every screen shares, drawn from the mockup's components
 // (docs/design/maquette/project/Components.dc.html).
 import { ScrollView } from "std-widgets.slint";
-import { Theme } from "theme.slint";
+import { Theme, Screen } from "theme.slint";
 
 export component Card inherits Rectangle {
     // Picked up: outlined in the accent, floating over the page.
@@ -305,8 +305,8 @@ export component Footer inherits Rectangle {
         background: Theme.border;
     }
     HorizontalLayout {
-        padding-left: Theme.spacing-xxl;
-        padding-right: Theme.spacing-xxl;
+        padding-left: Screen.page-margin;
+        padding-right: Screen.page-margin;
         spacing: Theme.spacing-m;
         @children
     }

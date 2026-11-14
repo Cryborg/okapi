@@ -1,6 +1,6 @@
 // The cleaning under way, and its receipt.
 import { ScrollView } from "std-widgets.slint";
-import { Theme } from "theme.slint";
+import { Theme, Screen } from "theme.slint";
 import {
     ActionButton, ButtonKind, Card, Detail, Footer, FocusRing, Icon, Line, ProgressBar, Title,
 } from "widgets.slint";
@@ -118,7 +118,7 @@ export component CleaningPage inherits VerticalLayout {
 
     VerticalLayout {
         vertical-stretch: 1;
-        padding: Theme.spacing-xxl;
+        padding: Screen.page-margin;
         spacing: Theme.spacing-xl;
         VerticalLayout {
             vertical-stretch: 0;
@@ -308,7 +308,7 @@ export component ReceiptPage inherits VerticalLayout {
 
     VerticalLayout {
         vertical-stretch: 1;
-        padding: Theme.spacing-xxl;
+        padding: Screen.page-margin;
         padding-bottom: Theme.spacing-l;
         spacing: Theme.spacing-l;
         VerticalLayout {

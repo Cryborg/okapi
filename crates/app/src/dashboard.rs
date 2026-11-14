@@ -166,12 +166,13 @@ struct Moving {
 }
 
 /// What the page says of the layout kept.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Default)]
 struct LayoutBanners {
-    /// The layout kept could not be read at launch, the default one shown:
-    /// no change is kept this session, as it would replace that file with
-    /// the layout shown (D-10); the next launch reads it again.
-    unreadable: bool,
+    /// The file of the layout kept, when it could not be read at launch,
+    /// named for the user to repair it. The default one is shown and no
+    /// change is kept this session, as it would replace that file with the
+    /// layout shown (D-10); the next launch reads it again.
+    unreadable: Option<PathBuf>,
     /// The last change could not be kept.
     save_failed: bool,
 }
@@ -770,7 +771,7 @@ impl DashboardScreen {
                 state.watched = watched;
             }
             let layout = layout_of(&state.widgets);
-            if state.banners.unreadable {
+            if state.banners.unreadable.is_some() {
                 tracing::warn!(
                     "dashboard layout not kept: the one there, unreadable, would be replaced"
                 );
@@ -876,7 +877,7 @@ impl DashboardScreen {
         let mut changed = false;
         {
             let mut state = self.0.borrow_mut();
-            let before = state.banners;
+            let before = state.banners.save_failed;
             match state.saver.as_ref().map(Saver::last_write) {
                 None | Some(LastWrite::Nothing) => {}
                 Some(LastWrite::Kept(kept)) => {
@@ -891,7 +892,7 @@ impl DashboardScreen {
                     state.banners.save_failed = true;
                 }
             }
-            changed |= state.banners != before;
+            changed |= state.banners.save_failed != before;
             // Cut off, nothing comes any more; the clock still turns.
             while !state.lost {
                 match state.seams.samples.try_recv() {
@@ -982,7 +983,14 @@ impl DashboardScreen {
                 }),
         );
         dashboard.set_save_failed(state.banners.save_failed);
-        dashboard.set_layout_unreadable(state.banners.unreadable);
+        dashboard.set_unreadable_layout(
+            state
+                .banners
+                .unreadable
+                .as_deref()
+                .map(|path| path.display().to_string().into())
+                .unwrap_or_default(),
+        );
         dashboard.set_toast(ui::Toast {
             shown: state.removed.is_some(),
             kind: state
@@ -1051,18 +1059,19 @@ pub fn system_zone() -> TimeZone {
     })
 }
 
-/// The widgets of the layout kept in `directory`, and whether it could not
-/// be read (the default one then shown).
-fn read_layout(directory: Option<&Path>) -> (Vec<(WidgetKind, WidgetSize)>, bool) {
+/// The widgets of the layout kept in `directory`, and its file when it could
+/// not be read (the default one then shown).
+fn read_layout(directory: Option<&Path>) -> (Vec<(WidgetKind, WidgetSize)>, Option<PathBuf>) {
     let Some(directory) = directory else {
         tracing::warn!("no configuration directory: the default dashboard is shown");
-        return (widgets_shown(None), false);
+        return (widgets_shown(None), None);
     };
     match DashboardLayout::load(directory) {
-        Ok(loaded) => (widgets_shown(loaded.as_ref()), false),
+        Ok(loaded) => (widgets_shown(loaded.as_ref()), None),
         Err(error) => {
-            tracing::warn!(%error, "dashboard layout unreadable: the default one is shown, no change kept");
-            (widgets_shown(None), true)
+            let path = DashboardLayout::path(directory);
+            tracing::warn!(%error, path = %path.display(), "dashboard layout unreadable: the default one is shown, no change kept");
+            (widgets_shown(None), Some(path))
         }
     }
 }
@@ -1802,7 +1811,7 @@ pub mod tests {
         for title in ["Récupérable", "Disques", "Mémoire", "Processeur", "Système"] {
             widget(&window, title);
         }
-        assert!(!shows(&window, UNREADABLE));
+        assert!(!shows(&window, &unreadable(&directories.config)));
         assert_eq!(
             sampler.commands.borrow()[0],
             Command::Watch(BTreeSet::from([
@@ -1891,8 +1900,13 @@ pub mod tests {
         );
     }
 
-    /// The banner of a layout kept that cannot be read.
-    const UNREADABLE: &str = "Votre disposition n'a pas pu être lue : la disposition par défaut est affichée, et vos changements ne sont pas enregistrés pour ne pas écraser le fichier.";
+    /// The banner of a layout kept in `directory` that cannot be read.
+    fn unreadable(directory: &Path) -> String {
+        format!(
+            "Votre disposition n'a pas pu être lue dans {} : la disposition par défaut est affichée, et vos changements ne sont pas enregistrés pour ne pas écraser ce fichier.",
+            DashboardLayout::path(directory).display()
+        )
+    }
 
     #[test]
     fn an_unreadable_layout_says_so_and_shows_the_default_one() {
@@ -1900,7 +1914,7 @@ pub mod tests {
         fs::write(DashboardLayout::path(&directories.config), "{").unwrap();
         let (seams, _sampler) = directories.seams();
         let window = on_home(seams);
-        assert!(shows(&window, UNREADABLE));
+        assert!(shows(&window, &unreadable(&directories.config)));
         widget(&window, "Disques");
     }
 
@@ -3645,7 +3659,7 @@ pub mod tests {
         fs::write(&path, "{").unwrap();
         let (seams, _sampler) = directories.seams();
         let (window, home) = home_screen(seams);
-        assert!(shows(&window, UNREADABLE));
+        assert!(shows(&window, &unreadable(&directories.config)));
         // Repaired by the user while the page shows the default one: a
         // change of that default must not replace it.
         let repaired = r#"{"version": 1, "widgets": [{"kind": "memory", "size": "small"}]}"#;
@@ -3656,7 +3670,7 @@ pub mod tests {
         button(&window, "Large").invoke_accessible_default_action();
         home.shut_down();
         assert_eq!(fs::read_to_string(&path).unwrap(), repaired);
-        assert!(shows(&window, UNREADABLE));
+        assert!(shows(&window, &unreadable(&directories.config)));
         assert!(!shows(&window, NOT_KEPT), "the one banner says it");
     }
 

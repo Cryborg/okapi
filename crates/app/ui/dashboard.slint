@@ -380,9 +380,9 @@ export component DashboardPage inherits Rectangle {
                     text: @tr("Mode Personnaliser. Glissez un widget par sa poignée, ou placez le focus sur sa poignée et appuyez sur Entrée pour le saisir.");
                 }
 
-                if Dashboard.layout-unreadable: Banner {
+                if Dashboard.unreadable-layout != "": Banner {
                     warning: true;
-                    text: @tr("Votre disposition n'a pas pu être lue : la disposition par défaut est affichée, et vos changements ne sont pas enregistrés pour ne pas écraser le fichier.");
+                    text: @tr("Votre disposition n'a pas pu être lue dans {} : la disposition par défaut est affichée, et vos changements ne sont pas enregistrés pour ne pas écraser ce fichier.", Dashboard.unreadable-layout);
                 }
 
                 if Dashboard.save-failed: Banner {

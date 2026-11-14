@@ -194,9 +194,9 @@ export global Dashboard {
     // The widgets that can be added, in the catalog's order.
     in property <[AddableWidget]> addable;
     in property <Toast> toast;
-    // The layout kept could not be read: the default one is shown, and no
-    // change is kept.
-    in property <bool> layout-unreadable;
+    // The file of the layout kept, when it could not be read (empty
+    // otherwise): the default one is shown, and no change is kept.
+    in property <string> unreadable-layout;
     in property <Reclaimable> reclaimable;
     in property <SystemShown> system;
     in property <DisksShown> disks;

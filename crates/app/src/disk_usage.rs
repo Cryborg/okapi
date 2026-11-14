@@ -810,7 +810,7 @@ impl DiskUsageScreen {
             (state.ended_at, (state.seams.now)())
         };
         if let Some(ended_at) = ended_at {
-            let minutes = shown(rows::minutes_since(ended_at, now));
+            let minutes = shown(crate::dates::minutes_since(ended_at, now));
             self.with_window(|window| window.global::<ui::DiskUsage>().set_minutes(minutes));
         }
     }

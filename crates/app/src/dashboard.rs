@@ -1295,7 +1295,7 @@ const fn widget_size(size: WidgetSize) -> ui::WidgetSize {
 
 /// The instant `seconds` as the window says it at `now`; none, traced, for
 /// seconds no date holds.
-fn moment(seconds: i64, now: Timestamp, zone: &TimeZone) -> Option<ui::Moment> {
+pub(crate) fn moment(seconds: i64, now: Timestamp, zone: &TimeZone) -> Option<ui::Moment> {
     let Some(moment) = dates::moment(seconds, now, zone) else {
         tracing::warn!(seconds, "an instant no date holds");
         return None;

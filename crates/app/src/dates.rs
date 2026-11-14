@@ -55,9 +55,25 @@ fn day_of(date: Date, today: Date) -> Day {
     }
 }
 
+const SECONDS_PER_MINUTE: i64 = 60;
+
+/// Whole minutes from `end` to `now`; 0 for a clock set back.
+pub(crate) fn minutes_since(end: Timestamp, now: Timestamp) -> i64 {
+    (now.as_second() - end.as_second()).max(0) / SECONDS_PER_MINUTE
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minutes_are_whole() {
+        let end = Timestamp::from_second(1_000_000).unwrap();
+        let after = |seconds: i64| Timestamp::from_second(1_000_000 + seconds).unwrap();
+        assert_eq!(minutes_since(end, after(59)), 0);
+        assert_eq!(minutes_since(end, after(250)), 4);
+        assert_eq!(minutes_since(after(5), end), 0);
+    }
 
     /// Paris's rule written out: the test never depends on the zones the
     /// machine has.

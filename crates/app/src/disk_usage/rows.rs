@@ -7,7 +7,6 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::Path;
 
-use jiff::Timestamp;
 use okapi_platform::{Device, Mount, MountClass, MountList};
 use okapi_tools::disk_usage::{Entry, FileEntry, FileKind, NodeId, NodeState};
 
@@ -19,7 +18,6 @@ const SMALL_SHARE: u64 = 1;
 /// How many small lines at least make « Autres »: one stays in its place.
 const SMALLEST_GROUP: usize = 2;
 const PERCENT: u64 = 100;
-const SECONDS_PER_MINUTE: i64 = 60;
 /// A file is said sparse when it announces this much more than it takes,
 /// and more than twice as much: compression alone never makes one.
 const SPARSE_GAP: u64 = 1_000_000;
@@ -426,11 +424,6 @@ pub(crate) fn disk_of(path: &Path, mounts: &[Mount]) -> Option<Device> {
         .filter(|mount| path.starts_with(&mount.mount_point))
         .max_by_key(|mount| mount.mount_point.components().count())
         .map(|mount| mount.device)
-}
-
-/// Whole minutes from `end` to `now`; 0 for a clock set back.
-pub(crate) fn minutes_since(end: Timestamp, now: Timestamp) -> i64 {
-    (now.as_second() - end.as_second()).max(0) / SECONDS_PER_MINUTE
 }
 
 /// The folders from the root down to the one shown.
@@ -1062,15 +1055,6 @@ mod tests {
             "by components"
         );
         assert_eq!(disk_of(Path::new("/srv"), &[]), None);
-    }
-
-    #[test]
-    fn minutes_are_whole() {
-        let end = Timestamp::from_second(1_000_000).unwrap();
-        let after = |seconds: i64| Timestamp::from_second(1_000_000 + seconds).unwrap();
-        assert_eq!(minutes_since(end, after(59)), 0);
-        assert_eq!(minutes_since(end, after(250)), 4);
-        assert_eq!(minutes_since(after(5), end), 0);
     }
 
     #[test]

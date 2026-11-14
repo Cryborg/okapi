@@ -1,17 +1,23 @@
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use okapi_engine::{CleanOutcome, CleanReceipt, CleanResult, KeepReason};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::StoreError;
+use crate::{StoreError, file};
 
 const HISTORY_FILE: &str = "history.jsonl";
 /// The format of each history line.
 const HISTORY_VERSION: u32 = 1;
+/// A bound on what is read, on the caller's thread, to find the last line:
+/// a longer one (a link to another file, or a deletion log beyond any seen)
+/// is not read, which is traced.
+const MAX_LINE: u64 = 256 * 1024 * 1024;
+/// The blocks the history is read by from its end, none of them kept.
+const BLOCK: u64 = 64 * 1024;
 
 /// One cleaning, as kept in the history.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -38,7 +44,7 @@ pub struct HistoryEntry {
 }
 
 /// What became of the part of a cleaning that needed the administrator.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminRecord {
     /// It ran to its end over all it was asked for and said what became of
@@ -307,6 +313,62 @@ impl History {
         directory.join(HISTORY_FILE)
     }
 
+    /// The last cleaning the history of `directory` keeps, read from its
+    /// last line alone: `None` when there is none, or when that line does
+    /// not say one (a write cut short, another version, too long), traced at
+    /// each reading. The line before is never taken for it: a cleaning came
+    /// after.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Unreadable`] (the file failing to be read, the line
+    /// included), [`StoreError::BrokenLink`] or [`StoreError::NotAFile`].
+    pub fn last_cleaning(directory: &Path) -> Result<Option<LastCleaning>, StoreError> {
+        let path = Self::path(directory);
+        let _span = tracing::info_span!("last_cleaning", path = %path.display()).entered();
+        let Some(history) = file::open_regular(&path)? else {
+            tracing::info!("no history: no last cleaning");
+            return Ok(None);
+        };
+        let started = Instant::now();
+        let (tail, scanned) =
+            last_line(&history, BLOCK, MAX_LINE).map_err(|error| StoreError::Unreadable {
+                path: path.clone(),
+                error,
+            })?;
+        let (start, end) = match tail {
+            Tail::Empty => {
+                tracing::info!(scanned, "history without a line: no last cleaning");
+                return Ok(None);
+            }
+            Tail::TooLong => {
+                tracing::warn!(scanned, max = MAX_LINE, elapsed = ?started.elapsed(), "last history line too long: not read");
+                return Ok(None);
+            }
+            Tail::Line { start, end } => (start, end),
+        };
+        let read = parse(&history, start, end, &path);
+        let elapsed = started.elapsed();
+        match read {
+            Ok(last) => {
+                tracing::info!(
+                    offset = start,
+                    length = end - start,
+                    scanned,
+                    ?elapsed,
+                    ?last,
+                    "last cleaning read"
+                );
+                Ok(Some(last))
+            }
+            Err(error @ (StoreError::Invalid { .. } | StoreError::UnsupportedVersion { .. })) => {
+                tracing::warn!(offset = start, length = end - start, scanned, ?elapsed, %error, "last history line unreadable: no last cleaning");
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Adds `entry` as one line, written at once and synced to the disk: `Ok`
     /// means the line is kept (but for a history file created by this very
     /// run, whose name a power cut may still lose). A last line an interrupted run left unfinished
@@ -354,6 +416,111 @@ impl History {
         tracing::info!(path = %self.path.display(), bytes = bytes.len(), "history recorded");
         Ok(())
     }
+}
+
+/// The last cleaning a history keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LastCleaning {
+    /// Seconds since the clock's origin, negative before it.
+    pub time: i64,
+    /// What it freed; unknown when root's part did not end, as what it
+    /// removed may then be missing.
+    pub freed: Option<u64>,
+}
+
+/// What the last cleaning is read from in a line: the rest is skipped.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LastLine {
+    time: i64,
+    removed_bytes: u64,
+    admin: Option<AdminRecord>,
+}
+
+/// Where the last line of a history file lies.
+#[derive(Debug, PartialEq, Eq)]
+enum Tail {
+    /// Not one line that is not empty.
+    Empty,
+    /// The last line is longer than allowed, or more than that was read
+    /// without reaching its start.
+    TooLong,
+    /// From `start` to `end` (excluded), in bytes from the file's start.
+    Line { start: u64, end: u64 },
+}
+
+/// Where the last line of `file` that is not empty lies, if at most
+/// `max_line` bytes long, and how many bytes were read to find it: read
+/// from the end by blocks of `block` bytes, none of them kept, so at most
+/// `max_line` of the line, as much of line breaks after it, and a block.
+/// Its length is taken once: a line added meanwhile is not seen.
+fn last_line(mut file: &File, block: u64, max_line: u64) -> io::Result<(Tail, u64)> {
+    let in_bytes = |index: usize| u64::try_from(index).map_err(io::Error::other);
+    let length = file.metadata()?.len();
+    let block = block.max(1);
+    let mut buffer = vec![0; usize::try_from(block).map_err(io::Error::other)?];
+    // The file is read from `position` to its end; `end` is where its last
+    // line ends, once met.
+    let mut position = length;
+    let mut end = None;
+    let within = |start: u64, end: u64| {
+        if end - start > max_line {
+            Tail::TooLong
+        } else {
+            Tail::Line { start, end }
+        }
+    };
+    while position > 0 {
+        if end.unwrap_or(length) - position > max_line {
+            return Ok((Tail::TooLong, length - position));
+        }
+        let size = block.min(position);
+        position -= size;
+        let read = &mut buffer[..usize::try_from(size).map_err(io::Error::other)?];
+        file.seek(SeekFrom::Start(position))?;
+        file.read_exact(read)?;
+        let mut searched = &read[..];
+        if end.is_none() {
+            let Some(last) = read.iter().rposition(|byte| *byte != b'\n') else {
+                continue;
+            };
+            end = Some(position + in_bytes(last + 1)?);
+            searched = &read[..last];
+        }
+        if let (Some(end), Some(line_break)) =
+            (end, searched.iter().rposition(|byte| *byte == b'\n'))
+        {
+            let start = position + in_bytes(line_break + 1)?;
+            return Ok((within(start, end), length - position));
+        }
+    }
+    Ok((end.map_or(Tail::Empty, |end| within(0, end)), length))
+}
+
+/// The cleaning the line of `history` from `start` to `end` says, read as it
+/// streams by (a deletion log is skipped, never kept), its version checked
+/// first: a line of another version is never read as this one's.
+fn parse(history: &File, start: u64, end: u64, path: &Path) -> Result<LastCleaning, StoreError> {
+    let line = || {
+        let mut reader = history;
+        reader.seek(SeekFrom::Start(start))?;
+        // Never past the line found: one added since is not read with it.
+        Ok(BufReader::new(reader.take(end - start)))
+    };
+    let unreadable = |error| StoreError::Unreadable {
+        path: path.to_owned(),
+        error,
+    };
+    file::check_version(line().map_err(unreadable)?, path, HISTORY_VERSION)?;
+    let read: LastLine = serde_json::from_reader(line().map_err(unreadable)?)
+        .map_err(|error| file::json_error(path, error))?;
+    Ok(LastCleaning {
+        time: read.time,
+        freed: read
+            .admin
+            .is_none_or(|admin| admin.done)
+            .then_some(read.removed_bytes),
+    })
 }
 
 /// Whether `file` is empty or ends with a line break. Its offset moves, which
@@ -676,5 +843,218 @@ mod tests {
             Some(CleanResult::Removed { bytes: 4 })
         );
         assert_eq!(outcome("kept", None, Some("odd")).clean_result(), None);
+    }
+
+    /// The history of `directory`, one line per `(time, removed bytes,
+    /// root's part done)` of `cleanings`, written as a cleaning writes it.
+    fn recorded(directory: &Path, cleanings: &[(i64, u64, Option<bool>)]) {
+        let mut history = History::open(directory).unwrap();
+        for &(time, removed_bytes, admin_done) in cleanings {
+            history
+                .record(&HistoryEntry {
+                    time,
+                    removed_bytes,
+                    admin: admin_done.map(|done| AdminRecord { done, reason: None }),
+                    ..entry(1, Some(vec![outcome("removed", Some(4), None)]))
+                })
+                .unwrap();
+        }
+    }
+
+    fn append(directory: &Path, bytes: &[u8]) {
+        use std::io::Write as _;
+        std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(directory.join(HISTORY_FILE))
+            .unwrap()
+            .write_all(bytes)
+            .unwrap();
+    }
+
+    fn last(directory: &Path) -> Option<LastCleaning> {
+        History::last_cleaning(directory).unwrap()
+    }
+
+    #[test]
+    fn the_last_cleaning_is_the_last_line() {
+        let directory = tempfile::tempdir().unwrap();
+        recorded(directory.path(), &[(100, 7, None), (200, 9, Some(true))]);
+        assert_eq!(
+            last(directory.path()),
+            Some(LastCleaning {
+                time: 200,
+                freed: Some(9)
+            })
+        );
+    }
+
+    #[test]
+    fn what_root_s_part_unfinished_freed_is_unknown() {
+        let directory = tempfile::tempdir().unwrap();
+        recorded(directory.path(), &[(100, 7, Some(false))]);
+        assert_eq!(
+            last(directory.path()),
+            Some(LastCleaning {
+                time: 100,
+                freed: None
+            })
+        );
+    }
+
+    #[test]
+    fn a_last_line_cut_short_says_no_last_cleaning_until_the_next() {
+        let directory = tempfile::tempdir().unwrap();
+        recorded(directory.path(), &[(100, 7, None)]);
+        append(directory.path(), b"{\"version\":1,\"tim");
+        assert_eq!(last(directory.path()), None, "never the line before it");
+        recorded(directory.path(), &[(300, 5, None)]);
+        assert_eq!(last(directory.path()).map(|last| last.time), Some(300));
+    }
+
+    #[test]
+    fn a_last_line_of_another_version_is_not_read() {
+        let directory = tempfile::tempdir().unwrap();
+        recorded(directory.path(), &[(100, 7, None), (200, 9, None)]);
+        let text = std::fs::read_to_string(directory.path().join(HISTORY_FILE)).unwrap();
+        let other = text.replacen(
+            "{\"version\":1,\"time\":200",
+            "{\"version\":2,\"time\":200",
+            1,
+        );
+        assert_ne!(other, text);
+        std::fs::write(directory.path().join(HISTORY_FILE), other).unwrap();
+        assert_eq!(last(directory.path()), None);
+    }
+
+    #[test]
+    fn without_a_line_there_is_no_last_cleaning() {
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(last(directory.path()), None, "no file");
+        for content in [&b""[..], b"\n", b"\n\n"] {
+            std::fs::write(directory.path().join(HISTORY_FILE), content).unwrap();
+            assert_eq!(last(directory.path()), None, "{content:?}");
+        }
+    }
+
+    #[test]
+    fn a_history_that_is_not_a_file_is_an_error() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join(HISTORY_FILE)).unwrap();
+        assert!(matches!(
+            History::last_cleaning(directory.path()),
+            Err(StoreError::NotAFile { .. })
+        ));
+    }
+
+    /// Every block size finds the same line: none is cut or joined wrong
+    /// where blocks meet.
+    #[test]
+    fn the_last_line_is_the_same_whatever_the_blocks() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(HISTORY_FILE);
+        for (content, start, end) in [
+            (
+                &b"first\nthe last line, longer than the one before\n\n"[..],
+                6,
+                47,
+            ),
+            (b"first\nlast", 6, 10),
+            (b"\n\nlast\n", 2, 6),
+            (b"alone\n", 0, 5),
+            (b"solo", 0, 4),
+        ] {
+            std::fs::write(&path, content).unwrap();
+            let file = File::open(&path).unwrap();
+            for block in 1..=content.len() as u64 + 1 {
+                assert_eq!(
+                    last_line(&file, block, MAX_LINE).unwrap().0,
+                    Tail::Line { start, end },
+                    "{content:?} by {block}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_line_too_long_is_not_read_whole() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(HISTORY_FILE);
+        std::fs::write(&path, b"first\n0123456789\n\n\n").unwrap();
+        let file = File::open(&path).unwrap();
+        for block in [2, 64] {
+            assert_eq!(last_line(&file, block, 9).unwrap().0, Tail::TooLong);
+            assert_eq!(
+                last_line(&file, block, 10).unwrap().0,
+                Tail::Line { start: 6, end: 16 },
+                "the line breaks after it never count"
+            );
+        }
+        // Never read whole: given up once more than allowed and a block is read.
+        let (tail, read) = last_line(&file, 1, 4).unwrap();
+        assert_eq!(tail, Tail::TooLong);
+        assert!(read <= 3 + 4 + 1, "{read} bytes read");
+    }
+
+    /// A line added between finding the last one and reading it is not
+    /// read with it.
+    #[test]
+    fn a_line_added_meanwhile_is_not_read() {
+        let directory = tempfile::tempdir().unwrap();
+        recorded(directory.path(), &[(100, 7, None)]);
+        let path = directory.path().join(HISTORY_FILE);
+        let file = File::open(&path).unwrap();
+        let Tail::Line { start, end } = last_line(&file, BLOCK, MAX_LINE).unwrap().0 else {
+            panic!("a line");
+        };
+        recorded(directory.path(), &[(200, 9, None)]);
+        assert_eq!(parse(&file, start, end, &path).unwrap().time, 100);
+    }
+
+    #[test]
+    fn a_cleaning_without_root_s_part_says_what_it_freed() {
+        let directory = tempfile::tempdir().unwrap();
+        recorded(directory.path(), &[(100, 7, Some(true)), (300, 5, None)]);
+        assert_eq!(
+            last(directory.path()),
+            Some(LastCleaning {
+                time: 300,
+                freed: Some(5)
+            })
+        );
+    }
+
+    #[test]
+    fn a_last_line_without_its_facts_is_not_read() {
+        let directory = tempfile::tempdir().unwrap();
+        recorded(directory.path(), &[(100, 7, None)]);
+        append(directory.path(), b"{\"version\":1}\n");
+        assert_eq!(last(directory.path()), None);
+    }
+
+    /// A deletion log over several blocks is skipped as it streams by.
+    #[test]
+    fn a_last_line_over_several_blocks_is_read() {
+        let directory = tempfile::tempdir().unwrap();
+        recorded(directory.path(), &[(100, 7, None)]);
+        History::open(directory.path())
+            .unwrap()
+            .record(&HistoryEntry {
+                time: 200,
+                removed_bytes: 9,
+                ..entry(1, Some(vec![outcome("removed", Some(4), None); 4000]))
+            })
+            .unwrap();
+        let length = std::fs::metadata(directory.path().join(HISTORY_FILE))
+            .unwrap()
+            .len();
+        assert!(length > 2 * BLOCK, "{length}");
+        assert_eq!(
+            last(directory.path()),
+            Some(LastCleaning {
+                time: 200,
+                freed: Some(9)
+            })
+        );
     }
 }

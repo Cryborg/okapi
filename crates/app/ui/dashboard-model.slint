@@ -90,6 +90,12 @@ export struct Reclaimable {
     freed: Size,
     cleaned-at-known: bool,
     cleaned-at: Moment,
+    // The last cleaning the history keeps, unless one of this session says
+    // it already: when, and what it freed when that is said.
+    last-cleaning-known: bool,
+    last-cleaning-at: Moment,
+    last-cleaning-freed-known: bool,
+    last-cleaning-freed: Size,
 }
 
 export enum ReadingState { reading, read, unavailable }

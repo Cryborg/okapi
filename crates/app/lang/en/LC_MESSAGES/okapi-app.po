@@ -976,6 +976,14 @@ msgid "L'estimation date d'avant un nettoyage. Analysez à nouveau pour une esti
 msgstr "The estimate predates a cleaning. Analyze again for an up-to-date estimate."
 
 msgctxt "ReclaimableWidget"
+msgid "Dernier nettoyage {} : {} libérés"
+msgstr "Last cleaning {}, {} freed"
+
+msgctxt "ReclaimableWidget"
+msgid "Dernier nettoyage {}."
+msgstr "Last cleaning {}."
+
+msgctxt "ReclaimableWidget"
 msgid "Estimation"
 msgstr "Estimate"
 

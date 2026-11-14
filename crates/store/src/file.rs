@@ -104,7 +104,7 @@ pub(crate) fn read_versioned<T: DeserializeOwned>(
     let Some(bytes) = read_small(path)? else {
         return Ok(None);
     };
-    if let Err(error) = check_version(&bytes, path, supported) {
+    if let Err(error) = check_version(bytes.as_slice(), path, supported) {
         if let StoreError::Invalid { .. } = error
             && let Err(strict) = serde_json::from_slice::<T>(&bytes)
         {
@@ -170,20 +170,22 @@ pub(crate) fn replaceable<T>(read: Result<T, StoreError>) -> Result<(), StoreErr
     })
 }
 
-/// Checks the version of the JSON `bytes` read from `path` before their
-/// content: a later Okapi may add fields, which must be told as a later
+/// Checks the version of the JSON `reader` gives, read from `path`, before
+/// its content: a later Okapi may add fields, which must be told as a later
 /// version, not as a mistake.
 ///
 /// # Errors
 ///
-/// [`StoreError::Invalid`] (no version, or not JSON) or
-/// [`StoreError::UnsupportedVersion`].
-fn check_version(bytes: &[u8], path: &Path, supported: u32) -> Result<(), StoreError> {
+/// [`StoreError::Invalid`] (no version, or not JSON),
+/// [`StoreError::UnsupportedVersion`], or [`StoreError::Unreadable`] when
+/// `reader` fails.
+pub(crate) fn check_version(
+    reader: impl io::Read,
+    path: &Path,
+    supported: u32,
+) -> Result<(), StoreError> {
     let Versioned { version } =
-        serde_json::from_slice(bytes).map_err(|error| StoreError::Invalid {
-            path: path.to_owned(),
-            error,
-        })?;
+        serde_json::from_reader(reader).map_err(|error| json_error(path, error))?;
     if version == supported {
         Ok(())
     } else {
@@ -192,6 +194,20 @@ fn check_version(bytes: &[u8], path: &Path, supported: u32) -> Result<(), StoreE
             version,
             supported,
         })
+    }
+}
+
+/// What a failure to read JSON from `path` is: the reading's, or the
+/// content's.
+pub(crate) fn json_error(path: &Path, error: serde_json::Error) -> StoreError {
+    let path = path.to_owned();
+    if error.is_io() {
+        StoreError::Unreadable {
+            path,
+            error: error.into(),
+        }
+    } else {
+        StoreError::Invalid { path, error }
     }
 }
 
@@ -296,6 +312,25 @@ fn dangling(path: &Path) -> Option<&Path> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A reading that fails, as a failing disk does (EIO).
+    struct Failing;
+
+    impl io::Read for Failing {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::from_raw_os_error(5))
+        }
+    }
+
+    #[test]
+    fn a_reading_that_fails_is_unreadable_never_invalid() {
+        let Err(StoreError::Unreadable { error, .. }) =
+            check_version(Failing, Path::new("/okapi/x.json"), 1)
+        else {
+            panic!("unreadable");
+        };
+        assert_eq!(error.raw_os_error(), Some(5), "the system's code kept");
+    }
 
     const NAME: &str = "kept.json";
 
@@ -486,9 +521,9 @@ mod tests {
     #[test]
     fn the_version_is_judged_before_the_content() {
         let path = Path::new("/okapi/kept.json");
-        check_version(br#"{"version": 3, "anything": [1]}"#, path, 3).unwrap();
+        check_version(br#"{"version": 3, "anything": [1]}"#.as_slice(), path, 3).unwrap();
         assert!(matches!(
-            check_version(br#"{"version": 2}"#, path, 3),
+            check_version(br#"{"version": 2}"#.as_slice(), path, 3),
             Err(StoreError::UnsupportedVersion {
                 version: 2,
                 supported: 3,
@@ -496,7 +531,11 @@ mod tests {
             })
         ));
         assert!(matches!(
-            check_version(br#"{"version": 4, "fieldOfLater": true}"#, path, 3),
+            check_version(
+                br#"{"version": 4, "fieldOfLater": true}"#.as_slice(),
+                path,
+                3
+            ),
             Err(StoreError::UnsupportedVersion {
                 version: 4,
                 supported: 3,
@@ -504,11 +543,11 @@ mod tests {
             })
         ));
         assert!(matches!(
-            check_version(br#"{"widgets": []}"#, path, 3),
+            check_version(br#"{"widgets": []}"#.as_slice(), path, 3),
             Err(StoreError::Invalid { .. })
         ));
         assert!(matches!(
-            check_version(b"not json", path, 3),
+            check_version(b"not json".as_slice(), path, 3),
             Err(StoreError::Invalid { .. })
         ));
     }

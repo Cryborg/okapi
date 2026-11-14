@@ -41,10 +41,9 @@ export component Icon inherits Image {
     accessible-role: none;
 }
 
-// A small note led by an icon, both in its tone: the icon only marks it,
-// the words say it all. Never read: the control it explains reads it.
-export component IconNote inherits HorizontalLayout {
-    in property <string> text;
+// A small line led by an icon in its tone: the icon only marks it, the
+// words that follow say it all.
+component IconLine inherits HorizontalLayout {
     in property <image> icon;
     in property <color> tone: Theme.text-2;
     spacing: Theme.spacing-s;
@@ -54,11 +53,27 @@ export component IconNote inherits HorizontalLayout {
         width: Theme.icon-small;
         height: Theme.icon-small;
     }
+    @children
+}
+
+// A note led by an icon, never read: the control it explains reads it.
+export component IconNote inherits IconLine {
+    in property <string> text;
     Detail {
         horizontal-stretch: 1;
         text: root.text;
         color: root.tone;
         accessible-role: none;
+    }
+}
+
+// A note led by an icon, read: nothing else says it.
+export component ReadIconNote inherits IconLine {
+    in property <string> text;
+    Detail {
+        horizontal-stretch: 1;
+        text: root.text;
+        color: root.tone;
     }
 }
 

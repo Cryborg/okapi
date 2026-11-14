@@ -15,7 +15,9 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-use okapi_store::{DashboardLayout, DashboardWidget, LastAnalysis, WidgetSize};
+use okapi_store::{
+    DashboardLayout, DashboardWidget, History, LastAnalysis, LastCleaning, WidgetSize,
+};
 use okapi_tools::monitor::{
     ApplicationName, Applications, Command, MemoryStatus, ProcessorReading, Sample, Source,
     SystemReading, Unavailable, Volume, VolumeKind, VolumeName, VolumeSpace, nearly_full,
@@ -122,6 +124,10 @@ struct State {
     seams: DashboardSeams,
     summary: Summary,
     cleaned: Option<Cleaned>,
+    /// The last cleaning the history keeps, read as the page is shown and
+    /// after a cleaning of this session; none when there is none, or it
+    /// cannot be read or said.
+    last_cleaning: Option<LastCleaning>,
     system: Option<SystemReading>,
     volumes: Option<Result<Vec<Volume>, Unavailable>>,
     memory: Option<Result<MemoryStatus, Unavailable>>,
@@ -229,6 +235,7 @@ impl DashboardScreen {
             seams,
             summary,
             cleaned: None,
+            last_cleaning: None,
             system: None,
             volumes: None,
             memory: None,
@@ -809,6 +816,7 @@ impl DashboardScreen {
             self.0.borrow_mut().uses.clear();
             (self.0.borrow().seams.commands)(Command::Resume);
             self.judge_outdated();
+            self.read_last_cleaning();
             self.show();
         } else {
             tracing::info!(?page, "dashboard hidden: readings paused");
@@ -844,7 +852,22 @@ impl DashboardScreen {
             state.cleaned = Some(Cleaned { freed, at });
             (state.seams.commands)(Command::RefreshVolumes);
         }
+        // Its line is in the history by now: the next analysis must not
+        // bring back the one before as the last.
+        self.read_last_cleaning();
         self.show();
+    }
+
+    /// Reads the last cleaning the history keeps, whoever made it (this
+    /// app or the CLI): one made while the page stays shown is seen the
+    /// next time it is shown.
+    fn read_last_cleaning(&self) {
+        let mut state = self.0.borrow_mut();
+        state.last_cleaning = state
+            .seams
+            .state_directory
+            .as_deref()
+            .and_then(last_cleaning);
     }
 
     /// Whether a cleaning came after a summary of an earlier launch, as the
@@ -959,6 +982,7 @@ impl DashboardScreen {
         dashboard.set_reclaimable(reclaimable(
             state.summary,
             state.cleaned,
+            state.last_cleaning,
             now,
             &state.seams.zone,
         ));
@@ -1072,6 +1096,24 @@ fn read_layout(directory: Option<&Path>) -> (Vec<(WidgetKind, WidgetSize)>, Opti
             let path = DashboardLayout::path(directory);
             tracing::warn!(%error, path = %path.display(), "dashboard layout unreadable: the default one is shown, no change kept");
             (widgets_shown(None), Some(path))
+        }
+    }
+}
+
+/// The last cleaning the history of `directory` keeps; none, traced, when
+/// it cannot be read or is dated out of any date.
+fn last_cleaning(directory: &Path) -> Option<LastCleaning> {
+    match History::last_cleaning(directory) {
+        // Dropped here, said once: kept, `moment` would say it at every
+        // reading shown.
+        Ok(Some(last)) if Timestamp::from_second(last.time).is_err() => {
+            tracing::warn!(?last, "last cleaning dated out of any date");
+            None
+        }
+        Ok(last) => last,
+        Err(error) => {
+            tracing::warn!(%error, "last cleaning unknown");
+            None
         }
     }
 }
@@ -1238,25 +1280,36 @@ fn moment(seconds: i64, now: Timestamp, zone: &TimeZone) -> Option<ui::Moment> {
 
 /// What Récupérable says of `summary` at `now` in `zone`: a cleaning of
 /// this session first, then the summary, outdated when the history says a
-/// cleaning came since.
+/// cleaning came since, with the last cleaning the history keeps unless one
+/// of this session says it.
 fn reclaimable(
     summary: Summary,
     cleaned: Option<Cleaned>,
+    last_cleaning: Option<LastCleaning>,
     now: Timestamp,
     zone: &TimeZone,
 ) -> ui::Reclaimable {
     let mut shown_state = ui::Reclaimable::default();
     if let Some(cleaned) = cleaned {
         shown_state.state = ui::ReclaimableState::Cleaned;
-        // Nothing it knows of freed: no amount said.
-        let freed = cleaned.freed.filter(|bytes| *bytes > 0);
+        let freed = said_freed(cleaned.freed);
         shown_state.freed_known = freed.is_some();
         shown_state.freed = size(freed.unwrap_or_default());
         if let Some(at) = cleaned.at.and_then(|at| moment(at, now, zone)) {
             shown_state.cleaned_at_known = true;
             shown_state.cleaned_at = at;
         }
+        // The last cleaning is said already.
         return shown_state;
+    }
+    if let Some(last) = last_cleaning
+        && let Some(at) = moment(last.time, now, zone)
+    {
+        let freed = said_freed(last.freed);
+        shown_state.last_cleaning_known = true;
+        shown_state.last_cleaning_at = at;
+        shown_state.last_cleaning_freed_known = freed.is_some();
+        shown_state.last_cleaning_freed = size(freed.unwrap_or_default());
     }
     let Summary::Kept { summary, made } = summary else {
         shown_state.state = if matches!(summary, Summary::Missing) {
@@ -1279,6 +1332,12 @@ fn reclaimable(
         Made::Earlier { outdated: false } => ui::ReclaimableState::Estimate,
     };
     shown_state
+}
+
+/// What a cleaning that freed `freed` is said to have freed: no amount when
+/// nothing it knows of was freed.
+fn said_freed(freed: Option<u64>) -> Option<u64> {
+    freed.filter(|bytes| *bytes > 0)
 }
 
 /// What the cleanings since the summary freed, `freed` by the last one
@@ -1610,7 +1669,7 @@ pub mod tests {
 
     use i_slint_backend_testing::{AccessibleRole, ElementHandle};
     use okapi_rules::Language;
-    use okapi_store::{DashboardWidget, History};
+    use okapi_store::{AdminRecord, DashboardWidget, HistoryEntry};
     use okapi_tools::monitor::Space;
 
     use super::*;
@@ -1714,16 +1773,8 @@ pub mod tests {
 
         /// A history last written at `utc`.
         fn history_at(&self, utc: &str) {
-            let path = History::path(&self.state);
-            fs::write(&path, "").unwrap();
-            let written =
-                SystemTime::UNIX_EPOCH + Duration::from_secs(u64::try_from(at(utc)).unwrap());
-            fs::File::options()
-                .write(true)
-                .open(&path)
-                .unwrap()
-                .set_modified(written)
-                .unwrap();
+            fs::write(History::path(&self.state), "").unwrap();
+            written_at(&self.state, utc);
         }
     }
 
@@ -2222,6 +2273,7 @@ pub mod tests {
             let shown = reclaimable(
                 Summary::Missing,
                 cleaned(freed),
+                None,
                 fixed_now(),
                 &TimeZone::UTC,
             );
@@ -2330,6 +2382,7 @@ pub mod tests {
         summary_at("2026-03-10T11:18:00Z")
             .save(&directories.state)
             .unwrap();
+        cleaned_at(&directories.state, "2026-03-10T08:05:00Z", 7, None);
         let (cleaner, scan) = scripted(Vec::new());
         let (seams, _sampler) = directories.seams();
         let window = on_home_with(cleaner, seams);
@@ -2340,6 +2393,10 @@ pub mod tests {
         assert!(shows(
             &window,
             "Le résultat remplacera l'estimation précédente (2,4 Go)."
+        ));
+        assert!(shows(
+            &window,
+            "Dernier nettoyage aujourd'hui à 9 h 05 : 7 o libérés"
         ));
         assert_eq!(
             button(&window, "Analyser").accessible_enabled(),
@@ -2443,6 +2500,7 @@ pub mod tests {
             "the report is gone"
         );
         assert!(shows_a_text_starting(&window, "Nettoyage d'aujourd'hui à "));
+        assert!(!says_a_last_cleaning(&window), "said already");
         // From the receipt, a new analysis: nothing left, its summary at 0.
         let_the_screen_settle();
         button(&window, "Analyser").invoke_accessible_default_action();
@@ -2453,6 +2511,202 @@ pub mod tests {
         assert!(shows_a_text_starting(
             &window,
             "Estimation d'aujourd'hui à "
+        ));
+        // Read back from the history this cleaning wrote.
+        assert!(shows_a_text_starting(
+            &window,
+            "Dernier nettoyage aujourd'hui à "
+        ));
+    }
+
+    /// The history of `state` said last written at `utc`.
+    fn written_at(state: &Path, utc: &str) {
+        let written = SystemTime::UNIX_EPOCH + Duration::from_secs(u64::try_from(at(utc)).unwrap());
+        fs::File::options()
+            .write(true)
+            .open(History::path(state))
+            .unwrap()
+            .set_modified(written)
+            .unwrap();
+    }
+
+    /// A cleaning added at `utc` to the history of `state`, then said last
+    /// written then, which freed `bytes`, root's part done or not when it
+    /// had one.
+    fn cleaned_at(state: &Path, utc: &str, bytes: u64, root_done: Option<bool>) {
+        recorded_at(state, at(utc), bytes, root_done);
+        written_at(state, utc);
+    }
+
+    /// A cleaning added to the history of `state`, made `time` seconds after
+    /// the clock's origin.
+    fn recorded_at(state: &Path, time: i64, bytes: u64, root_done: Option<bool>) {
+        History::open(state)
+            .unwrap()
+            .record(&HistoryEntry {
+                time,
+                stops: Vec::new(),
+                removed_bytes: bytes,
+                removed: 1,
+                partial: 0,
+                gone: 0,
+                kept: 0,
+                complete: true,
+                admin: root_done.map(|done| AdminRecord { done, reason: None }),
+                entries: None,
+            })
+            .unwrap();
+    }
+
+    fn says_a_last_cleaning(window: &ui::AppWindow) -> bool {
+        shows_a_text_starting(window, "Dernier nettoyage")
+    }
+
+    #[test]
+    fn reclaimable_over_every_column_says_the_last_cleaning_of_the_history() {
+        let directories = Directories::new();
+        cleaned_at(
+            &directories.state,
+            "2026-03-08T10:00:00Z",
+            2_500_000_000,
+            None,
+        );
+        cleaned_at(
+            &directories.state,
+            "2026-03-10T08:05:00Z",
+            1_800_000_000,
+            Some(true),
+        );
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        assert!(shows(
+            &window,
+            "Dernier nettoyage aujourd'hui à 9 h 05 : 1,8 Go libérés"
+        ));
+    }
+
+    /// Whether a last cleaning that freed `bytes`, root's part done or not,
+    /// is said without an amount.
+    fn says_no_amount(bytes: u64, root_done: Option<bool>) -> bool {
+        let directories = Directories::new();
+        cleaned_at(&directories.state, "2026-03-08T10:00:00Z", bytes, root_done);
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        shows(&window, "Dernier nettoyage le 8 mars à 11 h.")
+    }
+
+    #[test]
+    fn a_last_cleaning_that_freed_nothing_says_no_amount() {
+        assert!(says_no_amount(0, None));
+    }
+
+    #[test]
+    fn a_last_cleaning_whose_root_part_did_not_end_says_no_amount() {
+        assert!(says_no_amount(5_000_000_000, Some(false)));
+    }
+
+    #[test]
+    fn reclaimable_on_part_of_the_columns_has_no_room_for_the_last_cleaning() {
+        let directories = Directories::new();
+        kept(&directories.config, &[("reclaimable", WidgetSize::Wide)]);
+        cleaned_at(&directories.state, "2026-03-10T08:05:00Z", 7, None);
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        widget(&window, "Récupérable");
+        assert!(last_cleaning(&directories.state).is_some(), "one to say");
+        assert!(!says_a_last_cleaning(&window));
+    }
+
+    #[test]
+    fn a_last_cleaning_dated_out_of_any_date_is_dropped_as_read() {
+        let directories = Directories::new();
+        recorded_at(&directories.state, i64::MAX, 7, None);
+        assert_eq!(last_cleaning(&directories.state), None);
+    }
+
+    #[test]
+    fn an_unavailable_reclaimable_says_no_last_cleaning() {
+        let directories = Directories::new();
+        cleaned_at(&directories.state, "2026-03-10T08:05:00Z", 7, None);
+        fs::write(LastAnalysis::path(&directories.state), "{").unwrap();
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        assert_eq!(
+            said(&window, "Récupérable").as_deref(),
+            Some("Indisponible")
+        );
+        assert!(!says_a_last_cleaning(&window));
+    }
+
+    #[test]
+    fn a_last_line_spoiled_since_takes_the_last_cleaning_away() {
+        use std::io::Write as _;
+        let directories = Directories::new();
+        cleaned_at(&directories.state, "2026-03-10T08:05:00Z", 7, None);
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        assert!(says_a_last_cleaning(&window));
+        // A cleaning of the CLI cut short while writing its line.
+        fs::OpenOptions::new()
+            .append(true)
+            .open(History::path(&directories.state))
+            .unwrap()
+            .write_all(b"{\"version\":1,\"tim")
+            .unwrap();
+        go_to(&window, "Nettoyeur");
+        go_to(&window, "Accueil");
+        assert!(!says_a_last_cleaning(&window), "never the one before");
+    }
+
+    #[test]
+    fn a_cleaning_of_the_session_takes_the_last_cleaning_s_place() {
+        let directories = Directories::new();
+        cleaned_at(&directories.state, "2026-03-08T10:00:00Z", 7, None);
+        let (seams, _sampler) = directories.seams();
+        let (window, home) = home_screen(seams);
+        assert!(says_a_last_cleaning(&window));
+        // Its line written first, as the cleaner does.
+        cleaned_at(&directories.state, "2026-03-10T13:00:00Z", 9, None);
+        home.cleaning_done(Some(9), at("2026-03-10T13:00:00Z"));
+        assert!(shows(&window, "9 o libérés"));
+        assert!(!says_a_last_cleaning(&window));
+        // An analysis while the page stays shown: this cleaning is the last.
+        home.analysis_done(summary_at("2026-03-10T13:10:00Z"));
+        assert!(shows(
+            &window,
+            "Dernier nettoyage aujourd'hui à 14 h : 9 o libérés"
+        ));
+    }
+
+    #[test]
+    fn an_estimate_a_later_cleaning_outdated_says_that_cleaning() {
+        let directories = Directories::new();
+        summary_at("2026-03-08T09:00:00Z")
+            .save(&directories.state)
+            .unwrap();
+        cleaned_at(&directories.state, "2026-03-09T10:00:00Z", 7, None);
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        assert!(shows(&window, "Estimation à refaire"));
+        assert!(shows(
+            &window,
+            "Dernier nettoyage hier à 11 h : 7 o libérés"
+        ));
+    }
+
+    #[test]
+    fn the_history_is_read_again_each_time_home_is_shown() {
+        let directories = Directories::new();
+        let (seams, _sampler) = directories.seams();
+        let window = on_home(seams);
+        assert!(!says_a_last_cleaning(&window), "no history");
+        // Cleaned by the CLI meanwhile.
+        cleaned_at(&directories.state, "2026-03-10T08:05:00Z", 7, None);
+        go_to(&window, "Nettoyeur");
+        go_to(&window, "Accueil");
+        assert!(shows(
+            &window,
+            "Dernier nettoyage aujourd'hui à 9 h 05 : 7 o libérés"
         ));
     }
 

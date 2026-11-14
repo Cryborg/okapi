@@ -1,7 +1,7 @@
 // The widgets of the Home page, drawn from the mockup's
 // (docs/design/tableau-de-bord/project/Widget.dc.html).
 import { Theme } from "theme.slint";
-import { Card, Detail, Icon, Badge, ProgressBar, ActionButton, ButtonKind, ScrolledList, FocusRing } from "widgets.slint";
+import { Card, Detail, Icon, ReadIconNote, Badge, ProgressBar, ActionButton, ButtonKind, ScrolledList, FocusRing } from "widgets.slint";
 import { Cleaner, CleanerStep, RightsStep, Words } from "cleaner-model.slint";
 import {
     Dashboard, DayKind, DisksShown, FocusPart, MemoryShown, Moment, MoveCancel, ProcessorShown, ReadingState, Reclaimable,
@@ -710,6 +710,12 @@ export component ReclaimableWidget inherits WidgetCard {
             }
             if root.detail != "": Detail {
                 text: root.detail;
+            }
+            if root.full && root.shown.last-cleaning-known: ReadIconNote {
+                icon: @image-url("../assets/icons/history.svg");
+                text: root.shown.last-cleaning-freed-known
+                    ? @tr("Dernier nettoyage {} : {} libérés", DashboardWords.moment(root.shown.last-cleaning-at), Words.size(root.shown.last-cleaning-freed))
+                    : @tr("Dernier nettoyage {}.", DashboardWords.moment(root.shown.last-cleaning-at));
             }
         }
         VerticalLayout {

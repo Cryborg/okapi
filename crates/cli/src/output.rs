@@ -6,7 +6,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use okapi_engine::{Category, CleanReceipt, CleanResult, ItemId, Origin, ScanGroup, ScanReport};
-use okapi_rules::{ChromiumBrowserKind, Language};
+use okapi_rules::{BrowserKind, Language};
 use okapi_store::HistoryOutcome;
 use serde::Serialize;
 
@@ -19,7 +19,7 @@ use crate::text::{Message, text};
 pub struct GroupSummary {
     /// The browser whose cache it is, by its key.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub browser: Option<ChromiumBrowserKind>,
+    pub browser: Option<BrowserKind>,
     pub label: String,
     pub rules: Vec<String>,
     pub entries: Vec<EntrySummary>,

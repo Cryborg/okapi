@@ -6,10 +6,10 @@ use crate::rule_set::{RuleFileKind, browsers_kind};
 use crate::template::{BoundedPath, TemplatePath};
 use crate::values::{Label, NonEmpty, first_duplicate};
 
-/// A cache directory of a Chromium-based browser.
+/// A cache directory of a browser, the same in each one of its family.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ChromiumCacheDirectory {
+pub struct BrowserCacheDirectory {
     #[serde(rename = "dir")]
     directory: RelativePath,
     label: Label,
@@ -20,8 +20,9 @@ pub struct ChromiumCacheDirectory {
     description: Option<String>,
 }
 
-impl ChromiumCacheDirectory {
-    /// Relative to a profile (profile caches) or to the user-data base (shared caches).
+impl BrowserCacheDirectory {
+    /// Relative to a profile (profile caches) or, for Chromium, to the
+    /// user-data base (shared caches).
     #[must_use]
     pub const fn directory(&self) -> &RelativePath {
         &self.directory
@@ -54,20 +55,20 @@ impl ChromiumCacheDirectory {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "RawChromiumCacheDirectories")]
 pub struct ChromiumCacheDirectories {
-    profile: NonEmpty<ChromiumCacheDirectory>,
-    shared: Vec<ChromiumCacheDirectory>,
+    profile: NonEmpty<BrowserCacheDirectory>,
+    shared: Vec<BrowserCacheDirectory>,
 }
 
 impl ChromiumCacheDirectories {
     /// Directories inside each profile (`Default`, `Profile 1`...).
     #[must_use]
-    pub fn profile(&self) -> &[ChromiumCacheDirectory] {
+    pub fn profile(&self) -> &[BrowserCacheDirectory] {
         &self.profile
     }
 
     /// Directories shared by every profile, directly under the user-data base.
     #[must_use]
-    pub fn shared(&self) -> &[ChromiumCacheDirectory] {
+    pub fn shared(&self) -> &[BrowserCacheDirectory] {
         &self.shared
     }
 }
@@ -75,9 +76,9 @@ impl ChromiumCacheDirectories {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawChromiumCacheDirectories {
-    profile: NonEmpty<ChromiumCacheDirectory>,
+    profile: NonEmpty<BrowserCacheDirectory>,
     #[serde(default)]
-    shared: Vec<ChromiumCacheDirectory>,
+    shared: Vec<BrowserCacheDirectory>,
 }
 
 impl TryFrom<RawChromiumCacheDirectories> for ChromiumCacheDirectories {
@@ -90,7 +91,7 @@ impl TryFrom<RawChromiumCacheDirectories> for ChromiumCacheDirectories {
             raw.profile
                 .iter()
                 .chain(&raw.shared)
-                .map(ChromiumCacheDirectory::directory),
+                .map(BrowserCacheDirectory::directory),
         ) {
             return Err(ValidationError::DuplicateEntry {
                 field: "chromiumCacheDirs",
@@ -211,19 +212,73 @@ impl ChromiumBrowser {
     }
 }
 
-/// Where Firefox keeps its profiles and their caches.
+/// Firefox, or a browser built on it, that rules know about; written by
+/// its key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FirefoxKind {
+    Firefox,
+    Librewolf,
+    Waterfox,
+    Floorp,
+    Zen,
+}
+
+impl FirefoxKind {
+    pub const ALL: [Self; 5] = [
+        Self::Firefox,
+        Self::Librewolf,
+        Self::Waterfox,
+        Self::Floorp,
+        Self::Zen,
+    ];
+
+    /// Its name as shown: a product's name, never translated.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Firefox => "Firefox",
+            Self::Librewolf => "LibreWolf",
+            Self::Waterfox => "Waterfox",
+            Self::Floorp => "Floorp",
+            Self::Zen => "Zen",
+        }
+    }
+
+    /// Its stable key, as the rules write it.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Firefox => "firefox",
+            Self::Librewolf => "librewolf",
+            Self::Waterfox => "waterfox",
+            Self::Floorp => "floorp",
+            Self::Zen => "zen",
+        }
+    }
+}
+
+/// Where Firefox, or a browser built on it, keeps its profiles and their
+/// caches.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct FirefoxPaths {
-    base: TemplatePath,
+pub struct FirefoxBrowser {
+    key: FirefoxKind,
+    bases: NonEmpty<TemplatePath>,
     cache: BoundedPath,
 }
 
-impl FirefoxPaths {
-    /// The directory that holds the profiles.
+impl FirefoxBrowser {
     #[must_use]
-    pub const fn base(&self) -> &TemplatePath {
-        &self.base
+    pub const fn kind(&self) -> FirefoxKind {
+        self.key
+    }
+
+    /// The directories that may hold its profiles, each a place it has used
+    /// (`~/.mozilla/firefox`, then `~/.config/mozilla/firefox`).
+    #[must_use]
+    pub fn bases(&self) -> &[TemplatePath] {
+        &self.bases
     }
 
     /// The root that holds each profile's disk cache, apart from the profiles
@@ -234,42 +289,32 @@ impl FirefoxPaths {
     }
 }
 
-/// A Firefox fork that rules know about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum FirefoxForkKind {
-    Librewolf,
-    Waterfox,
-    Floorp,
-    Zen,
+/// A browser whose caches rules know, of either family; written by its key,
+/// which no two browsers share.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(untagged)]
+pub enum BrowserKind {
+    Chromium(ChromiumBrowserKind),
+    Firefox(FirefoxKind),
 }
 
-/// Where one Firefox fork keeps its data.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FirefoxFork {
-    key: FirefoxForkKind,
-    base: TemplatePath,
-    cache: BoundedPath,
-}
-
-impl FirefoxFork {
+impl BrowserKind {
+    /// Its name as shown: a product's name, never translated.
     #[must_use]
-    pub const fn kind(&self) -> FirefoxForkKind {
-        self.key
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Chromium(browser) => browser.name(),
+            Self::Firefox(browser) => browser.name(),
+        }
     }
 
-    /// The directory that holds the profiles.
+    /// Its stable key, as the rules write it.
     #[must_use]
-    pub const fn base(&self) -> &TemplatePath {
-        &self.base
-    }
-
-    /// The root that holds each profile's disk cache; never a variable alone
-    /// other than `${TMPDIR}`.
-    #[must_use]
-    pub fn cache(&self) -> &TemplatePath {
-        &self.cache
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Chromium(browser) => browser.key(),
+            Self::Firefox(browser) => browser.key(),
+        }
     }
 }
 
@@ -289,18 +334,57 @@ impl SafariPaths {
     }
 }
 
+/// The items of a list of `field`, each once: two of the same `key` are
+/// refused.
+fn listed_once<T>(
+    items: Vec<T>,
+    field: &'static str,
+    key: impl Fn(&T) -> String,
+) -> Result<Vec<T>, ValidationError> {
+    match first_duplicate(items.iter().map(key)) {
+        Some(duplicate) => Err(ValidationError::DuplicateEntry {
+            field,
+            value: duplicate,
+        }),
+        None => Ok(items),
+    }
+}
+
 /// The browsers of `chromium`, each listed once: one key names one browser.
-fn browsers_once<'de, D: serde::Deserializer<'de>>(
+fn chromium_once<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<ChromiumBrowser>, D::Error> {
-    let browsers = Vec::<ChromiumBrowser>::deserialize(deserializer)?;
-    match first_duplicate(browsers.iter().map(ChromiumBrowser::kind)) {
-        Some(duplicate) => Err(serde::de::Error::custom(ValidationError::DuplicateEntry {
-            field: "chromium",
-            value: duplicate.key().to_owned(),
-        })),
-        None => Ok(browsers),
-    }
+    let browsers = Vec::deserialize(deserializer)?;
+    listed_once(browsers, "chromium", |browser: &ChromiumBrowser| {
+        browser.kind().key().to_owned()
+    })
+    .map_err(serde::de::Error::custom)
+}
+
+/// The browsers of `firefox`, each listed once.
+fn firefox_once<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<FirefoxBrowser>, D::Error> {
+    let browsers = Vec::deserialize(deserializer)?;
+    listed_once(browsers, "firefox", |browser: &FirefoxBrowser| {
+        browser.kind().key().to_owned()
+    })
+    .map_err(serde::de::Error::custom)
+}
+
+/// The directories of `firefoxCacheDirs`, at least one, each listed once: a
+/// directory names a group of every browser.
+fn firefox_directories_once<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<NonEmpty<BrowserCacheDirectory>, D::Error> {
+    let directories = Vec::deserialize(deserializer)?;
+    listed_once(
+        directories,
+        "firefoxCacheDirs",
+        |directory: &BrowserCacheDirectory| directory.directory().to_string(),
+    )
+    .and_then(NonEmpty::new)
+    .map_err(serde::de::Error::custom)
 }
 
 /// The content of `browsers.json`.
@@ -311,11 +395,15 @@ pub struct BrowserRules {
     pub(crate) kind: RuleFileKind,
     #[serde(rename = "chromiumCacheDirs")]
     chromium_cache_directories: ChromiumCacheDirectories,
-    #[serde(deserialize_with = "browsers_once")]
+    #[serde(deserialize_with = "chromium_once")]
     chromium: Vec<ChromiumBrowser>,
-    firefox: FirefoxPaths,
-    #[serde(default)]
-    firefox_forks: Vec<FirefoxFork>,
+    #[serde(
+        rename = "firefoxCacheDirs",
+        deserialize_with = "firefox_directories_once"
+    )]
+    firefox_cache_directories: NonEmpty<BrowserCacheDirectory>,
+    #[serde(deserialize_with = "firefox_once")]
+    firefox: Vec<FirefoxBrowser>,
     safari: Option<SafariPaths>,
 }
 
@@ -330,14 +418,16 @@ impl BrowserRules {
         &self.chromium
     }
 
+    /// The cache directories of every Firefox-based browser, inside each
+    /// profile's cache.
     #[must_use]
-    pub const fn firefox(&self) -> &FirefoxPaths {
-        &self.firefox
+    pub fn firefox_cache_directories(&self) -> &[BrowserCacheDirectory] {
+        &self.firefox_cache_directories
     }
 
     #[must_use]
-    pub fn firefox_forks(&self) -> &[FirefoxFork] {
-        &self.firefox_forks
+    pub fn firefox(&self) -> &[FirefoxBrowser] {
+        &self.firefox
     }
 
     #[must_use]
@@ -350,13 +440,12 @@ impl BrowserRules {
             .chromium
             .iter()
             .flat_map(|browser| std::iter::once(browser.base()).chain(browser.cache()));
-        let forks = self
-            .firefox_forks
+        let firefox = self
+            .firefox
             .iter()
-            .flat_map(|fork| [fork.base(), fork.cache()]);
+            .flat_map(|browser| browser.bases().iter().chain([browser.cache()]));
         chromium
-            .chain([self.firefox.base(), self.firefox.cache()])
-            .chain(forks)
+            .chain(firefox)
             .chain(self.safari.iter().map(SafariPaths::cache))
     }
 }
@@ -385,18 +474,18 @@ mod tests {
         .unwrap();
         assert_eq!(chromium.base().to_string(), "${CONFIG}/c");
         assert_eq!(chromium.cache().unwrap().to_string(), "${CACHE}/c");
-        let firefox: FirefoxPaths = serde_json::from_str(
-            r#"{"base": "${HOME}/.mozilla/firefox", "cache": "${CACHE}/mozilla"}"#,
+        let firefox: FirefoxBrowser = serde_json::from_str(
+            r#"{"key": "firefox", "bases": ["${HOME}/.mozilla/firefox", "${CONFIG}/mozilla/firefox"],
+                "cache": "${CACHE}/mozilla/firefox"}"#,
         )
         .unwrap();
-        assert_eq!(firefox.base().to_string(), "${HOME}/.mozilla/firefox");
-        assert_eq!(firefox.cache().to_string(), "${CACHE}/mozilla");
-        let fork: FirefoxFork = serde_json::from_str(
-            r#"{"key": "zen", "base": "${HOME}/.zen", "cache": "${CACHE}/zen"}"#,
-        )
-        .unwrap();
-        assert_eq!(fork.base().to_string(), "${HOME}/.zen");
-        assert_eq!(fork.cache().to_string(), "${CACHE}/zen");
+        assert_eq!(firefox.kind(), FirefoxKind::Firefox);
+        let bases: Vec<String> = firefox.bases().iter().map(ToString::to_string).collect();
+        assert_eq!(
+            bases,
+            ["${HOME}/.mozilla/firefox", "${CONFIG}/mozilla/firefox"]
+        );
+        assert_eq!(firefox.cache().to_string(), "${CACHE}/mozilla/firefox");
         let safari: SafariPaths =
             serde_json::from_str(r#"{"cache": "${CACHES}/com.apple.Safari"}"#).unwrap();
         assert_eq!(safari.cache().to_string(), "${CACHES}/com.apple.Safari");
@@ -414,27 +503,95 @@ mod tests {
             assert_eq!(read, browser);
             assert_eq!(serde_json::to_value(browser).unwrap(), browser.key());
         }
+        for browser in FirefoxKind::ALL {
+            let read: FirefoxKind =
+                serde_json::from_value(serde_json::Value::from(browser.key())).unwrap();
+            assert_eq!(read, browser);
+        }
+        let every: Vec<BrowserKind> = ChromiumBrowserKind::ALL
+            .map(BrowserKind::Chromium)
+            .into_iter()
+            .chain(FirefoxKind::ALL.map(BrowserKind::Firefox))
+            .collect();
+        let keys: std::collections::BTreeSet<&str> =
+            every.iter().map(|browser| browser.key()).collect();
+        let names: std::collections::BTreeSet<&str> =
+            every.iter().map(|browser| browser.name()).collect();
+        assert_eq!(
+            keys.len(),
+            every.len(),
+            "a key names one browser of either family"
+        );
+        assert_eq!(names.len(), every.len());
+        for browser in every {
+            assert_eq!(serde_json::to_value(browser).unwrap(), browser.key());
+        }
+    }
+
+    /// `browsers.json` with these lists of browsers and Firefox directories.
+    fn browsers(chromium: &str, firefox: &str, firefox_directories: &str) -> String {
+        format!(
+            r#"{{"type": "browsers",
+                "chromiumCacheDirs": {{"profile": [{{"dir": "Cache", "label": "Cache"}}]}},
+                "firefoxCacheDirs": [{firefox_directories}],
+                "chromium": [{chromium}], "firefox": [{firefox}], "safari": null}}"#
+        )
     }
 
     #[test]
     fn a_browser_is_listed_once() {
-        let error = error_of::<BrowserRules>(
-            r#"{"type": "browsers",
-                "chromiumCacheDirs": {"profile": [{"dir": "Cache", "label": "Cache"}]},
-                "chromium": [{"key": "chrome", "base": "${CONFIG}/a"}, {"key": "chrome", "base": "${CONFIG}/b"}],
-                "firefox": {"base": "${HOME}/f", "cache": "${CACHE}/f"},
-                "safari": null}"#,
-        );
-        assert!(error.contains("duplicate value"), "{error}");
-        assert!(error.contains("chrome"), "{error}");
+        let cache2 = r#"{"dir": "cache2", "label": "Cache"}"#;
+        serde_json::from_str::<BrowserRules>(&browsers("", "", cache2)).unwrap();
+        for (json, field, key) in [
+            (
+                browsers(
+                    r#"{"key": "chrome", "base": "${CONFIG}/a"}, {"key": "chrome", "base": "${CONFIG}/b"}"#,
+                    "",
+                    cache2,
+                ),
+                "chromium",
+                "chrome",
+            ),
+            (
+                browsers(
+                    "",
+                    r#"{"key": "zen", "bases": ["${HOME}/a"], "cache": "${CACHE}/a"},
+                       {"key": "zen", "bases": ["${HOME}/b"], "cache": "${CACHE}/b"}"#,
+                    cache2,
+                ),
+                "firefox",
+                "zen",
+            ),
+        ] {
+            let error = error_of::<BrowserRules>(&json);
+            assert!(error.contains("duplicate value"), "{error}");
+            assert!(error.contains(&format!("`{field}`")), "{error}");
+            assert!(error.contains(key), "{error}");
+        }
+    }
+
+    #[test]
+    fn the_firefox_directories_are_some_and_each_once() {
+        let empty = error_of::<BrowserRules>(&browsers("", "", ""));
+        assert!(empty.starts_with("empty list"), "{empty}");
+        let twice = error_of::<BrowserRules>(&browsers(
+            "",
+            "",
+            r#"{"dir": "cache2", "label": "A"}, {"dir": "cache2", "label": "B"}"#,
+        ));
+        assert!(twice.starts_with("duplicate value"), "{twice}");
+        assert!(twice.contains("in `firefoxCacheDirs`"), "{twice}");
+        let escape =
+            error_of::<BrowserRules>(&browsers("", "", r#"{"dir": "../x", "label": "X"}"#));
+        assert!(escape.contains("not a relative path"), "{escape}");
     }
 
     #[test]
     fn a_cache_directory_is_a_cache_reset_only_when_said() {
-        let plain: ChromiumCacheDirectory =
+        let plain: BrowserCacheDirectory =
             serde_json::from_str(r#"{"dir": "Cache", "label": "Cache"}"#).unwrap();
         assert!(!plain.is_cache_reset());
-        let reset: ChromiumCacheDirectory = serde_json::from_str(
+        let reset: BrowserCacheDirectory = serde_json::from_str(
             r#"{"dir": "Code Cache", "label": "Code Cache", "cacheReset": true}"#,
         )
         .unwrap();
@@ -448,14 +605,16 @@ mod tests {
     }
 
     #[test]
-    fn a_fork_needs_both_paths() {
-        let fork: FirefoxFork = serde_json::from_str(
+    fn a_firefox_browser_needs_a_base_and_its_cache() {
+        let no_base =
+            error_of::<FirefoxBrowser>(r#"{"key": "zen", "bases": [], "cache": "${CACHE}/zen"}"#);
+        assert!(no_base.starts_with("empty list"), "{no_base}");
+        let no_cache = error_of::<FirefoxBrowser>(r#"{"key": "zen", "bases": ["${HOME}/.zen"]}"#);
+        assert!(no_cache.starts_with("missing field `cache`"), "{no_cache}");
+        let old_form = error_of::<FirefoxBrowser>(
             r#"{"key": "zen", "base": "${HOME}/.zen", "cache": "${CACHE}/zen"}"#,
-        )
-        .unwrap();
-        assert_eq!(fork.kind(), FirefoxForkKind::Zen);
-        let error = error_of::<FirefoxFork>(r#"{"key": "zen", "base": "${HOME}/.zen"}"#);
-        assert!(error.starts_with("missing field `cache`"), "{error}");
+        );
+        assert!(old_form.starts_with("unknown field `base`"), "{old_form}");
     }
 
     #[test]
@@ -481,11 +640,8 @@ mod tests {
     #[test]
     fn a_cache_root_is_never_a_variable_alone() {
         for error in [
-            error_of::<FirefoxPaths>(
-                r#"{"base": "${HOME}/.mozilla/firefox", "cache": "${CACHE}"}"#,
-            ),
-            error_of::<FirefoxFork>(
-                r#"{"key": "zen", "base": "${HOME}/.zen", "cache": "${HOME}"}"#,
+            error_of::<FirefoxBrowser>(
+                r#"{"key": "firefox", "bases": ["${HOME}/.mozilla/firefox"], "cache": "${CACHE}"}"#,
             ),
             error_of::<SafariPaths>(r#"{"cache": "${CACHES}"}"#),
         ] {
@@ -496,18 +652,15 @@ mod tests {
     #[test]
     fn rejects_unknown_fields_in_every_browser_type() {
         for error in [
-            error_of::<ChromiumCacheDirectory>(r#"{"dir": "Cache", "label": "C", "command": "x"}"#),
+            error_of::<BrowserCacheDirectory>(r#"{"dir": "Cache", "label": "C", "command": "x"}"#),
             error_of::<ChromiumCacheDirectories>(
                 r#"{"profile": [{"dir": "C", "label": "C"}], "command": "x"}"#,
             ),
             error_of::<ChromiumBrowser>(
                 r#"{"key": "chrome", "base": "${CONFIG}/c", "command": "x"}"#,
             ),
-            error_of::<FirefoxPaths>(
-                r#"{"base": "${HOME}/f", "cache": "${CACHE}/f", "command": "x"}"#,
-            ),
-            error_of::<FirefoxFork>(
-                r#"{"key": "zen", "base": "${HOME}/z", "cache": "${CACHE}/z", "command": "x"}"#,
+            error_of::<FirefoxBrowser>(
+                r#"{"key": "zen", "bases": ["${HOME}/z"], "cache": "${CACHE}/z", "command": "x"}"#,
             ),
             error_of::<SafariPaths>(r#"{"cache": "${CACHES}/s", "command": "x"}"#),
         ] {

@@ -36,8 +36,8 @@ pub use app::{
     PathMatcher, RecursivePathMatch,
 };
 pub use browser::{
-    BrowserRules, ChromiumBrowser, ChromiumBrowserKind, ChromiumCacheDirectories,
-    ChromiumCacheDirectory, FirefoxFork, FirefoxForkKind, FirefoxPaths, SafariPaths,
+    BrowserCacheDirectory, BrowserKind, BrowserRules, ChromiumBrowser, ChromiumBrowserKind,
+    ChromiumCacheDirectories, FirefoxBrowser, FirefoxKind, SafariPaths,
 };
 pub use database::{DatabaseRules, DatabaseTarget, ProfileLayout};
 pub use effect::{CleanupAction, Effect};

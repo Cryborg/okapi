@@ -10,7 +10,7 @@ mod session;
 #[cfg(target_os = "linux")]
 mod variables;
 
-pub use browser::{CHROMIUM_LOCK, lock_is_live};
+pub use browser::{CHROMIUM_LOCK, FIREFOX_LOCK, LockKind, lock_is_live};
 #[cfg(target_os = "linux")]
 pub use browser::{Holder, RunningBrowser, UnknownHolder, holder};
 pub use directory::{

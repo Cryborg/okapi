@@ -9,7 +9,7 @@ use okapi_engine::{
     UnsafeReason,
 };
 use okapi_platform::VariablesError;
-use okapi_rules::{ChromiumBrowserKind, Language, TemplateError, Variable};
+use okapi_rules::{BrowserKind, Language, TemplateError, Variable};
 use okapi_store::StoreError;
 
 use crate::args::ArgumentError;
@@ -66,7 +66,7 @@ pub enum Message<'a> {
     JournalRotationFailed(&'a io::Error),
     Issue(&'a ScanIssue),
     Group {
-        browser: Option<ChromiumBrowserKind>,
+        browser: Option<BrowserKind>,
         label: &'a str,
         entries: usize,
         bytes: u64,
@@ -420,7 +420,7 @@ fn failure(
 
 fn group_text(
     language: Language,
-    browser: Option<ChromiumBrowserKind>,
+    browser: Option<BrowserKind>,
     label: &str,
     entries: usize,
     bytes: u64,
@@ -1060,7 +1060,7 @@ mod tests {
         assert_eq!(shown_rule(Language::French, &app), "pip", "its identifier");
         assert_eq!(shown_rule(Language::English, &target), "APT Logs");
         let browser = Origin::Browser {
-            browser: ChromiumBrowserKind::OperaGx,
+            browser: BrowserKind::Chromium(okapi_rules::ChromiumBrowserKind::OperaGx),
             directory: okapi_rules::RelativePath::try_from("GPUCache".to_owned()).unwrap(),
         };
         assert_eq!(
@@ -1175,7 +1175,9 @@ mod tests {
             Message::JournalRotationFailed(&error),
             Message::Issue(&issue),
             Message::Group {
-                browser: Some(ChromiumBrowserKind::Chrome),
+                browser: Some(BrowserKind::Chromium(
+                    okapi_rules::ChromiumBrowserKind::Chrome,
+                )),
                 label: "pip Cache",
                 entries: 1,
                 bytes: 10,

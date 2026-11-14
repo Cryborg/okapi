@@ -45,7 +45,7 @@ pub type HolderSeam = Rc<dyn Fn(&BrowserLock) -> Asked>;
 )]
 pub fn system_holder() -> HolderSeam {
     Rc::new(
-        |lock| match okapi_platform::holder(lock.lock(), lock.user_data()) {
+        |lock| match okapi_platform::holder(lock.lock(), lock.lock_kind(), lock.user_data()) {
             okapi_platform::Holder::Absent => Asked::Closed,
             okapi_platform::Holder::Process(running) => Asked::Closable {
                 pid: running.pid(),
@@ -55,6 +55,7 @@ pub fn system_holder() -> HolderSeam {
                 tracing::info!(
                     ?why,
                     browser = lock.browser().key(),
+                    lock = %lock.lock().display(),
                     "open browser not vouched for"
                 );
                 Asked::Unverified
@@ -110,9 +111,16 @@ impl CleanerScreen {
                 asking.closing = None;
                 asking.timer.stop();
                 match asking.open.front() {
+                    // A lock no group left waits for (another profile of a
+                    // browser left out): nothing to ask about.
+                    Some(lock) if !asking.confirmed.carries(lock) => {
+                        tracing::info!(browser = lock.browser().key(), lock = %lock.lock().display(), "browser left out already");
+                        asking.open.pop_front();
+                        continue;
+                    }
                     Some(lock) if lock.is_held() => Some(lock.clone()),
                     Some(lock) => {
-                        tracing::info!(browser = lock.browser().key(), "browser closed meanwhile");
+                        tracing::info!(browser = lock.browser().key(), lock = %lock.lock().display(), "browser closed meanwhile");
                         asking.open.pop_front();
                         continue;
                     }
@@ -214,6 +222,7 @@ impl CleanerScreen {
             let left = asking.confirmed.leave_out(&lock);
             tracing::info!(
                 browser = lock.browser().key(),
+                lock = %lock.lock().display(),
                 entries_left = left,
                 "browser ignored"
             );
@@ -252,6 +261,7 @@ impl CleanerScreen {
             Asked::Closed => {
                 tracing::info!(
                     browser = lock.browser().key(),
+                    lock = %lock.lock().display(),
                     "browser closed before the click"
                 );
                 if let Some(asking) = self.0.borrow_mut().asking.as_mut() {
@@ -264,6 +274,7 @@ impl CleanerScreen {
                 if !self.0.borrow_mut().asked_to_close.insert(pid) {
                     tracing::warn!(
                         browser = lock.browser().key(),
+                        lock = %lock.lock().display(),
                         pid,
                         "browser already asked to close: not asked again"
                     );
@@ -271,11 +282,11 @@ impl CleanerScreen {
                     return;
                 }
                 if let Err(error) = close() {
-                    tracing::warn!(browser = lock.browser().key(), %error, code = error.raw_os_error(), "browser not asked to close");
+                    tracing::warn!(browser = lock.browser().key(), lock = %lock.lock().display(), %error, code = error.raw_os_error(), "browser not asked to close");
                     self.set_browser_step(ui::BrowserStep::Refused);
                     return;
                 }
-                tracing::info!(browser = lock.browser().key(), "browser asked to close");
+                tracing::info!(browser = lock.browser().key(), lock = %lock.lock().display(), "browser asked to close");
                 self.set_browser_step(ui::BrowserStep::Closing);
                 self.wait_for_closing();
             }
@@ -302,7 +313,7 @@ impl CleanerScreen {
     }
 
     fn look_at_closing(&self) {
-        let (browser, closed, looked) = {
+        let (browser, lock, closed, looked) = {
             let mut state = self.0.borrow_mut();
             let Some(asking) = state.asking.as_mut() else {
                 return;
@@ -312,21 +323,22 @@ impl CleanerScreen {
             };
             let browser = lock.browser().key();
             let closed = !lock.is_held();
+            let lock = lock.lock().to_path_buf();
             let Some(looks) = asking.closing.as_mut() else {
                 return;
             };
             *looks = looks.saturating_sub(1);
-            (browser, closed, CLOSE_LOOKS - *looks)
+            (browser, lock, closed, CLOSE_LOOKS - *looks)
         };
         let waited = CLOSE_LOOK_EVERY * looked;
         if closed {
-            tracing::info!(browser, ?waited, "browser closed");
+            tracing::info!(browser, lock = %lock.display(), ?waited, "browser closed");
             if let Some(asking) = self.0.borrow_mut().asking.as_mut() {
                 asking.open.pop_front();
             }
             self.ask_next_browser();
         } else if looked == CLOSE_LOOKS {
-            tracing::warn!(browser, ?waited, "browser did not close");
+            tracing::warn!(browser, lock = %lock.display(), ?waited, "browser did not close");
             if let Some(asking) = self.0.borrow_mut().asking.as_mut() {
                 asking.closing = None;
                 asking.timer.stop();

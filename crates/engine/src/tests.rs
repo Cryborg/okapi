@@ -25,6 +25,8 @@ mod watch;
 // The browsers' locks are read on Linux only, and so are their cleanings.
 #[cfg(target_os = "linux")]
 mod browsers;
+#[cfg(target_os = "linux")]
+mod firefox;
 
 const HOUR: Duration = Duration::from_hours(1);
 

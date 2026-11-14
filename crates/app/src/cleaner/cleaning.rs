@@ -329,6 +329,16 @@ impl Confirming {
             .collect()
     }
 
+    /// Whether a group confirmed still waits for `lock`.
+    pub(super) fn carries(&self, lock: &BrowserLock) -> bool {
+        let groups = self.report.groups();
+        self.groups.iter().any(|index| {
+            groups
+                .get(*index)
+                .is_some_and(|group| group.locks().contains(lock))
+        })
+    }
+
     /// Leaves out of this cleaning the groups that empty a cache of the
     /// browser of `lock`: what is confirmed is then what is left. The entries
     /// left, root's part included (a browser's cache is never one of its).
@@ -2223,6 +2233,44 @@ mod tests {
     }
 
     #[test]
+    fn firefox_with_two_profiles_open_is_asked_about_once() {
+        let sandbox = Sandbox::new();
+        let mut held = Vec::new();
+        let mut caches = Vec::new();
+        for profile in ["a.default-release", "b.default"] {
+            let lock = sandbox.file(&format!(
+                "home/.config/mozilla/firefox/{profile}/.parentlock"
+            ));
+            let file = fs::File::open(&lock).unwrap();
+            file.lock().unwrap();
+            held.push(file);
+            caches.push(sandbox.file(&format!(
+                "home/.cache/mozilla/firefox/{profile}/cache2/entry"
+            )));
+        }
+        let pip = sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let (window, _screen) = on_results(sandbox.read(&sandbox.root.join("state")));
+        confirm_and_ask(&window);
+        assert!(shows(&window, "Firefox est ouvert"));
+        assert!(shows(&window, "Firefox : Cache"));
+        assert!(
+            no_button(&window, "Fermer Firefox et continuer"),
+            "a lock Okapi holds is never Okapi to close"
+        );
+        let_the_screen_settle();
+        button(&window, "Ignorer Firefox").invoke_accessible_default_action();
+        assert!(
+            !asking(&window),
+            "its other profile's caches are left out already"
+        );
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(!pip.exists());
+        assert!(caches.iter().all(|cache| cache.exists()));
+        assert_eq!(sandbox.history()[0]["removed"], 1, "pip alone");
+    }
+
+    #[test]
     fn a_browser_closed_meanwhile_is_not_asked_about() {
         let sandbox = Sandbox::new();
         open_browser(&sandbox, "google-chrome", 3);
@@ -2449,11 +2497,14 @@ mod tests {
         assert!(chrome.exists());
     }
 
+    const CHROME: okapi_rules::BrowserKind =
+        okapi_rules::BrowserKind::Chromium(okapi_rules::ChromiumBrowserKind::Chrome);
+
     /// Chrome and Edge open, the second shown after the first; a seam whose
     /// answer for each browser `answer` gives, from how many times it was
     /// asked about it, and that counts the requests to close.
     fn two_browsers(
-        answer: fn(okapi_rules::ChromiumBrowserKind, u32) -> bool,
+        answer: fn(okapi_rules::BrowserKind, u32) -> bool,
     ) -> (Sandbox, Seams, Rc<std::cell::Cell<u32>>) {
         let sandbox = Sandbox::new();
         open_browser(&sandbox, "google-chrome", 1);
@@ -2474,11 +2525,7 @@ mod tests {
                 if answer(lock.browser(), times) {
                     let counted = Rc::clone(&counted);
                     super::super::browsers::Asked::Closable {
-                        pid: if lock.browser() == okapi_rules::ChromiumBrowserKind::Chrome {
-                            1
-                        } else {
-                            2
-                        },
+                        pid: if lock.browser() == CHROME { 1 } else { 2 },
                         close: Box::new(move || {
                             counted.set(counted.get() + 1);
                             Ok(())
@@ -2495,12 +2542,11 @@ mod tests {
 
     #[test]
     fn a_browser_closed_between_the_question_and_the_click_is_skipped() {
-        use okapi_rules::ChromiumBrowserKind::Chrome;
         use slint::platform::Key;
 
         // Chrome open when shown, closed at the click; Edge open.
         let (sandbox, seams, signalled) =
-            two_browsers(|browser, times| browser != Chrome || times == 1);
+            two_browsers(|browser, times| browser != CHROME || times == 1);
         let (window, _screen) = on_results(seams);
         confirm_and_ask(&window);
         assert!(shows(&window, "Chrome est ouvert"));

@@ -752,8 +752,8 @@ msgid "Navigateurs"
 msgstr "Browsers"
 
 msgctxt "Words"
-msgid "Caches de Chrome, Edge, Brave et des autres navigateurs Chromium."
-msgstr "Caches of Chrome, Edge, Brave and the other Chromium browsers."
+msgid "Caches de Chrome, Firefox, Edge et des autres navigateurs."
+msgstr "Caches of Chrome, Firefox, Edge and the other browsers."
 
 msgctxt "ReceiptLine"
 msgid "Gardées : leur navigateur est ouvert"

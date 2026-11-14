@@ -469,7 +469,7 @@ mod tests {
     const MINIMAL: RuleSources<'static> = RuleSources {
         system: r#"{"type": "system", "cleanTargets": []}"#,
         browsers: r#"{"type": "browsers", "chromiumCacheDirs": {"profile": [{"dir": "Cache", "label": "Cache"}]},
-                      "chromium": [], "firefox": {"base": "${HOME}/.mozilla/firefox", "cache": "${CACHE}/mozilla"}}"#,
+                      "firefoxCacheDirs": [{"dir": "cache2", "label": "Cache"}], "chromium": [], "firefox": []}"#,
         apps: r#"{"type": "apps", "apps": []}"#,
         gaming: r#"{"type": "gaming", "apps": []}"#,
         gpu_cache: r#"{"type": "gpu-cache", "apps": []}"#,
@@ -502,6 +502,7 @@ mod tests {
             assert!(!rules.steam().libraries().is_empty(), "{os}");
             assert!(!rules.steam().redistributable_patterns().is_empty(), "{os}");
             assert!(!rules.browsers().chromium().is_empty(), "{os}");
+            assert!(!rules.browsers().firefox().is_empty(), "{os}");
             assert_eq!(
                 rules.misc().trash_path().is_some(),
                 os != Os::Windows,
@@ -626,17 +627,114 @@ mod tests {
             "GraphiteDawnCache",
             "GPUPersistentCache",
             "PnaclTranslationCache",
+            "startupCache",
         ];
         for os in Os::ALL {
             let rules = RuleSet::embedded(os).unwrap();
-            let directories = rules.browsers().chromium_cache_directories();
-            for directory in directories.profile().iter().chain(directories.shared()) {
+            let browsers = rules.browsers();
+            let directories = browsers.chromium_cache_directories();
+            for directory in directories
+                .profile()
+                .iter()
+                .chain(directories.shared())
+                .chain(browsers.firefox_cache_directories())
+            {
                 let name = directory.directory().to_string();
                 assert_eq!(
                     directory.is_cache_reset(),
                     resets.contains(&name.as_str()),
                     "{os}: {name}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn firefox_and_its_forks_are_looked_for_where_they_keep_their_profiles() {
+        let rules = RuleSet::embedded(Os::Linux).unwrap();
+        let browsers: Vec<(&str, Vec<String>, String)> = rules
+            .browsers()
+            .firefox()
+            .iter()
+            .map(|browser| {
+                (
+                    browser.kind().key(),
+                    browser.bases().iter().map(ToString::to_string).collect(),
+                    browser.cache().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            browsers[0],
+            (
+                "firefox",
+                vec![
+                    "${HOME}/.mozilla/firefox".to_owned(),
+                    "${CONFIG}/mozilla/firefox".to_owned()
+                ],
+                "${CACHE}/mozilla/firefox".to_owned()
+            ),
+            "its old base, and the one of the XDG layout"
+        );
+        let keys: Vec<&str> = browsers.iter().map(|(key, _, _)| *key).collect();
+        assert_eq!(keys, ["firefox", "librewolf", "waterfox", "floorp", "zen"]);
+    }
+
+    #[test]
+    fn firefox_keeps_its_protection_and_downloaded_settings() {
+        for os in Os::ALL {
+            let rules = RuleSet::embedded(os).unwrap();
+            let names: Vec<String> = rules
+                .browsers()
+                .firefox_cache_directories()
+                .iter()
+                .map(|directory| directory.directory().to_string())
+                .collect();
+            // Never `safebrowsing` (the phishing lists), `remote-settings`
+            // nor `settings`.
+            assert_eq!(names, ["cache2", "thumbnails", "startupCache"], "{os}");
+        }
+    }
+
+    #[test]
+    fn no_application_rule_empties_a_browser_cache_without_its_lock() {
+        for os in Os::ALL {
+            let rules = RuleSet::embedded(os).unwrap();
+            let browsers = rules.browsers();
+            let homes: Vec<String> = browsers
+                .chromium()
+                .iter()
+                .flat_map(|browser| std::iter::once(browser.base()).chain(browser.cache()))
+                .chain(
+                    browsers
+                        .firefox()
+                        .iter()
+                        .flat_map(|browser| browser.bases().iter().chain([browser.cache()])),
+                )
+                .map(ToString::to_string)
+                .collect();
+            for rule in rules
+                .apps()
+                .iter()
+                .chain(rules.gaming())
+                .chain(rules.gpu_cache())
+            {
+                let Effect::Delete(deletion) = rule.effect() else {
+                    continue;
+                };
+                // A whole directory empties all below it; a child
+                // subdirectory only `<path>/*/<subdirectory>`.
+                let whole = matches!(deletion.matcher(), crate::PathMatcher::WholeDirectory);
+                for path in deletion.paths() {
+                    let path = path.to_string();
+                    assert!(
+                        !homes.iter().any(|home| path == *home
+                            || path.starts_with(&format!("{home}/"))
+                            || (whole && home.starts_with(&format!("{path}/")))),
+                        "{os}: {} takes {path}, a browser's",
+                        rule.id()
+                    );
+                }
             }
         }
     }
@@ -778,29 +876,28 @@ mod tests {
 
     #[test]
     fn rejects_a_variable_of_another_os_in_every_browser_path() {
-        let browsers = |chromium: &str, firefox: &str, forks: &str, safari: &str| {
+        let browsers = |chromium: &str, firefox: &str, safari: &str| {
             format!(
                 r#"{{"type": "browsers", "chromiumCacheDirs": {{"profile": [{{"dir": "Cache", "label": "Cache"}}]}},
-                     "chromium": [{chromium}], "firefox": {firefox}, "firefoxForks": [{forks}], "safari": {safari}}}"#
+                     "firefoxCacheDirs": [{{"dir": "cache2", "label": "Cache"}}],
+                     "chromium": [{chromium}], "firefox": [{firefox}], "safari": {safari}}}"#
             )
         };
-        let firefox = format!(r#"{{"base": "{VALID}", "cache": "{VALID}/cache"}}"#);
         let chrome_base = format!(r#"{{"key": "chrome", "base": "{FOREIGN}"}}"#);
         let chrome_cache =
             format!(r#"{{"key": "chrome", "base": "{VALID}", "cache": "{FOREIGN}"}}"#);
-        let firefox_base = format!(r#"{{"base": "{FOREIGN}", "cache": "{VALID}"}}"#);
-        let firefox_cache = format!(r#"{{"base": "{VALID}", "cache": "{FOREIGN}"}}"#);
-        let fork_base = format!(r#"{{"key": "zen", "base": "{FOREIGN}", "cache": "{VALID}"}}"#);
-        let fork_cache = format!(r#"{{"key": "zen", "base": "{VALID}", "cache": "{FOREIGN}"}}"#);
+        let firefox_base = format!(
+            r#"{{"key": "firefox", "bases": ["{VALID}", "{FOREIGN}"], "cache": "{VALID}/cache"}}"#
+        );
+        let firefox_cache =
+            format!(r#"{{"key": "zen", "bases": ["{VALID}"], "cache": "{FOREIGN}"}}"#);
         let safari = format!(r#"{{"cache": "{FOREIGN}"}}"#);
         for text in [
-            browsers(&chrome_base, &firefox, "", "null"),
-            browsers(&chrome_cache, &firefox, "", "null"),
-            browsers("", &firefox_base, "", "null"),
-            browsers("", &firefox_cache, "", "null"),
-            browsers("", &firefox, &fork_base, "null"),
-            browsers("", &firefox, &fork_cache, "null"),
-            browsers("", &firefox, "", &safari),
+            browsers(&chrome_base, "", "null"),
+            browsers(&chrome_cache, "", "null"),
+            browsers("", &firefox_base, "null"),
+            browsers("", &firefox_cache, "null"),
+            browsers("", "", &safari),
         ] {
             assert_foreign_path_rejected(RuleFileKind::Browsers, &text);
         }

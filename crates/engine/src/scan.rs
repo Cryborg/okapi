@@ -13,7 +13,7 @@ use crate::report::{
     AppFile, Category, FoundItem, GroupAttributes, Origin, ReportBuilder, ScanIssue, ScanReport,
     ScanStats, UnsafeReason,
 };
-use crate::roots::{PlannedKind, PlannedRoot, Planner, RuleEntry};
+use crate::roots::{BrowserRule, PlannedKind, PlannedRoot, Planner, RuleEntry};
 use crate::walk::{Found, Limits, Readers, RootProblem, ScanProgress, WalkContext, walk};
 use crate::watch::{Progress, Watch};
 
@@ -128,13 +128,14 @@ fn entries_of(rules: &RuleSet) -> Vec<RuleEntry<'_>> {
 }
 
 /// The cache directories of each browser, browser by browser: those of its
-/// profiles, then those it shares among them.
+/// profiles, then those a Chromium browser shares among them.
 fn browser_entries(rules: &RuleSet) -> impl Iterator<Item = RuleEntry<'_>> {
-    let directories = rules.browsers().chromium_cache_directories();
-    rules.browsers().chromium().iter().flat_map(move |browser| {
+    let browsers = rules.browsers();
+    let directories = browsers.chromium_cache_directories();
+    let chromium = browsers.chromium().iter().flat_map(move |browser| {
         let entry = move |shared| {
             move |directory| RuleEntry::Browser {
-                browser,
+                browser: BrowserRule::Chromium(browser),
                 directory,
                 shared,
             }
@@ -144,7 +145,18 @@ fn browser_entries(rules: &RuleSet) -> impl Iterator<Item = RuleEntry<'_>> {
             .iter()
             .map(entry(false))
             .chain(directories.shared().iter().map(entry(true)))
-    })
+    });
+    let firefox = browsers.firefox().iter().flat_map(move |browser| {
+        browsers
+            .firefox_cache_directories()
+            .iter()
+            .map(move |directory| RuleEntry::Browser {
+                browser: BrowserRule::Firefox(browser),
+                directory,
+                shared: false,
+            })
+    });
+    chromium.chain(firefox)
 }
 
 /// [`scan_watched`] over an explicit list of rules, with the metadata
@@ -505,6 +517,7 @@ mod tests {
             + system.single_file_targets().len()
             + browsers.chromium().len()
                 * (directories.profile().len() + directories.shared().len())
+            + browsers.firefox().len() * browsers.firefox_cache_directories().len()
             + rules.apps().len()
             + rules.gaming().len()
             + rules.gpu_cache().len();
@@ -533,11 +546,22 @@ mod tests {
                 _ => None,
             })
             .collect();
+        assert!(
+            entries.iter().all(|entry| !matches!(
+                entry,
+                RuleEntry::Browser {
+                    browser: BrowserRule::Firefox(_),
+                    shared: true,
+                    ..
+                }
+            )),
+            "Firefox shares no cache among its profiles"
+        );
         let mut by_browser = browser_entries.clone();
         by_browser.dedup_by_key(|(browser, _)| *browser);
         assert_eq!(
             by_browser.len(),
-            browsers.chromium().len(),
+            browsers.chromium().len() + browsers.firefox().len(),
             "each browser once, in a row"
         );
         assert_eq!(

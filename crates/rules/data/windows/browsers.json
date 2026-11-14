@@ -20,6 +20,11 @@
       { "dir": "PnaclTranslationCache", "label": "PNaCl Translation Cache", "cacheReset": true, "description": "Translated PNaCl modules: regenerated on demand" }
     ]
   },
+  "firefoxCacheDirs": [
+    { "dir": "cache2", "label": "Cache" },
+    { "dir": "thumbnails", "label": "Thumbnails", "description": "Page thumbnails of the new tab page: rebuilt on demand" },
+    { "dir": "startupCache", "label": "Startup Cache", "cacheReset": true, "description": "Compiled scripts of Firefox's own interface: rebuilt at the next launch, which is slower" }
+  ],
   "chromium": [
     { "key": "chrome", "base": "${LOCALAPPDATA}/Google/Chrome/User Data" },
     { "key": "edge", "base": "${LOCALAPPDATA}/Microsoft/Edge/User Data" },
@@ -35,15 +40,12 @@
     { "key": "cromite", "base": "${LOCALAPPDATA}/Cromite/User Data" },
     { "key": "catsxp", "base": "${LOCALAPPDATA}/ArcSoft/CatsXP/User Data" }
   ],
-  "firefox": {
-    "base": "${APPDATA}/Mozilla/Firefox/Profiles",
-    "cache": "${LOCALAPPDATA}/Mozilla/Firefox/Profiles"
-  },
-  "firefoxForks": [
-    { "key": "librewolf", "base": "${APPDATA}/LibreWolf/Profiles", "cache": "${LOCALAPPDATA}/LibreWolf/Profiles" },
-    { "key": "waterfox", "base": "${APPDATA}/Waterfox/Profiles", "cache": "${LOCALAPPDATA}/Waterfox/Profiles" },
-    { "key": "floorp", "base": "${APPDATA}/Floorp/Profiles", "cache": "${LOCALAPPDATA}/Floorp/Profiles" },
-    { "key": "zen", "base": "${APPDATA}/Zen/Profiles", "cache": "${LOCALAPPDATA}/Zen/Profiles" }
+  "firefox": [
+    { "key": "firefox", "bases": ["${APPDATA}/Mozilla/Firefox/Profiles"], "cache": "${LOCALAPPDATA}/Mozilla/Firefox/Profiles" },
+    { "key": "librewolf", "bases": ["${APPDATA}/LibreWolf/Profiles"], "cache": "${LOCALAPPDATA}/LibreWolf/Profiles" },
+    { "key": "waterfox", "bases": ["${APPDATA}/Waterfox/Profiles"], "cache": "${LOCALAPPDATA}/Waterfox/Profiles" },
+    { "key": "floorp", "bases": ["${APPDATA}/Floorp/Profiles"], "cache": "${LOCALAPPDATA}/Floorp/Profiles" },
+    { "key": "zen", "bases": ["${APPDATA}/Zen/Profiles"], "cache": "${LOCALAPPDATA}/Zen/Profiles" }
   ],
   "safari": null
 }

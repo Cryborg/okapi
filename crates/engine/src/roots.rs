@@ -7,10 +7,10 @@ use std::time::{Duration, SystemTime};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 
-use okapi_platform::{CHROMIUM_LOCK, FileIdentity};
+use okapi_platform::{CHROMIUM_LOCK, FIREFOX_LOCK, FileIdentity};
 use okapi_rules::{
-    AgeDays, AppCacheRule, ChromiumBrowser, ChromiumBrowserKind, ChromiumCacheDirectory,
-    CleanTarget, Effect, MiscRules, Name, PathMatcher, RelativePath, SingleFileTarget,
+    AgeDays, AppCacheRule, BrowserCacheDirectory, BrowserKind, ChromiumBrowser, CleanTarget,
+    Effect, FirefoxBrowser, MiscRules, Name, PathMatcher, RelativePath, SingleFileTarget,
     TemplatePath, TemplateVariables,
 };
 
@@ -33,12 +33,28 @@ pub(crate) enum RuleEntry<'a> {
         rule: &'a AppCacheRule,
     },
     /// A cache directory of a browser, in each profile or, `shared`, once
-    /// for all of them.
+    /// for all of them (Chromium only).
     Browser {
-        browser: &'a ChromiumBrowser,
-        directory: &'a ChromiumCacheDirectory,
+        browser: BrowserRule<'a>,
+        directory: &'a BrowserCacheDirectory,
         shared: bool,
     },
+}
+
+/// Where the rules say a browser keeps its data, by its family.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum BrowserRule<'a> {
+    Chromium(&'a ChromiumBrowser),
+    Firefox(&'a FirefoxBrowser),
+}
+
+impl BrowserRule<'_> {
+    pub(crate) const fn kind(self) -> BrowserKind {
+        match self {
+            Self::Chromium(browser) => BrowserKind::Chromium(browser.kind()),
+            Self::Firefox(browser) => BrowserKind::Firefox(browser.kind()),
+        }
+    }
 }
 
 impl RuleEntry<'_> {
@@ -67,17 +83,34 @@ const DEFAULT_PROFILE: &str = "Default";
 /// `Guest Profile` are no user's.
 const OTHER_PROFILES: &str = "Profile ";
 
+/// A canonical directory and its device, `None` when it is not known.
+type Home = (PathBuf, Option<u64>);
+
 /// Where a browser keeps what its caches are found under, read once for all
 /// its directories.
 #[derive(Debug, Clone)]
 pub(crate) struct BrowserBases {
-    /// The user-data directory, canonical, and its device.
-    base: PathBuf,
-    base_device: Option<u64>,
+    /// Chromium's user-data directory, which holds its profiles and its
+    /// shared caches; Firefox keeps no cache with its profiles.
+    base: Option<Home>,
     /// Where the OS keeps its disk caches apart, if it does.
-    cache: Option<(PathBuf, Option<u64>)>,
-    /// The profiles' names; none when the browser keeps all at its base.
+    cache: Option<Home>,
+    /// The profiles' names; none when a Chromium browser keeps all at its
+    /// base. A Firefox browser without any has no bases.
     profiles: Vec<OsString>,
+    /// The locks that say the browser runs: one per profile for Firefox. The
+    /// caches of every profile wait for all of them.
+    locks: BTreeSet<BrowserLock>,
+}
+
+/// What a Firefox base holds.
+#[derive(Default)]
+struct FirefoxProfiles {
+    /// Its profiles, by name and path.
+    judged: Vec<(OsString, PathBuf)>,
+    /// The names of directories that may be profiles but cannot be judged:
+    /// links, on another filesystem, or with a lock that cannot be read.
+    doubtful: Vec<OsString>,
 }
 
 /// What a planned root is.
@@ -118,8 +151,10 @@ enum Segment {
     Plain,
     /// A link, another device or a mount: never entered.
     Refused,
-    /// Absent, not a directory, or unreadable (reported).
+    /// Absent, or not a directory.
     Missing,
+    /// Unreadable (reported).
+    Unreadable,
 }
 
 /// A canonical root, checked, with the group it fills.
@@ -142,7 +177,7 @@ pub(crate) struct Planner<'a> {
     pub(crate) issues: Vec<ScanIssue>,
     pub(crate) stats: ScanStats,
     /// The bases of each browser met, `None` when it has none to scan.
-    pub(crate) browsers: BTreeMap<ChromiumBrowserKind, Option<BrowserBases>>,
+    pub(crate) browsers: BTreeMap<BrowserKind, Option<BrowserBases>>,
 }
 
 impl Planner<'_> {
@@ -161,8 +196,8 @@ impl Planner<'_> {
 
     fn plan_browser(
         &mut self,
-        browser: &ChromiumBrowser,
-        directory: &ChromiumCacheDirectory,
+        browser: BrowserRule<'_>,
+        directory: &BrowserCacheDirectory,
         shared: bool,
     ) -> Vec<PlannedRoot> {
         let origin = Origin::Browser {
@@ -182,29 +217,22 @@ impl Planner<'_> {
             cache_reset: directory.is_cache_reset(),
             selected_by_default: directory.is_selected_by_default(),
             needs_admin: false,
-            locks: BTreeSet::from([BrowserLock::new(
-                browser.kind(),
-                bases.base.join(CHROMIUM_LOCK),
-                bases.base.clone(),
-            )]),
+            locks: bases.locks.clone(),
         };
         // A shared directory is under the base only; a profile's, under the
         // base and the cache, in each profile (or at their roots without any).
-        let homes = std::iter::once((&bases.base, bases.base_device)).chain(
-            bases
-                .cache
-                .as_ref()
-                .filter(|_| !shared)
-                .map(|(cache, device)| (cache, *device)),
-        );
+        let homes = bases
+            .base
+            .iter()
+            .chain(bases.cache.iter().filter(|_| !shared));
         let mut roots = Vec::new();
         for (home, device) in homes {
             if shared || bases.profiles.is_empty() {
-                roots.extend(self.reach(&origin, home.join(first.as_str()), rest, device));
+                roots.extend(self.reach(&origin, home.join(first.as_str()), rest, *device));
             } else {
                 for profile in &bases.profiles {
                     let segments = directory.directory().segments();
-                    roots.extend(self.reach(&origin, home.join(profile), segments, device));
+                    roots.extend(self.reach(&origin, home.join(profile), segments, *device));
                 }
             }
         }
@@ -213,20 +241,19 @@ impl Planner<'_> {
 
     /// The bases of `browser`, read the first time one of its directories is
     /// planned: a base that cannot be used is reported once.
-    fn browser_bases(
-        &mut self,
-        origin: &Origin,
-        browser: &ChromiumBrowser,
-    ) -> Option<BrowserBases> {
+    fn browser_bases(&mut self, origin: &Origin, browser: BrowserRule<'_>) -> Option<BrowserBases> {
         if let Some(known) = self.browsers.get(&browser.kind()) {
             return known.clone();
         }
-        let bases = self.read_browser_bases(origin, browser);
+        let bases = match browser {
+            BrowserRule::Chromium(chromium) => self.chromium_bases(origin, chromium),
+            BrowserRule::Firefox(firefox) => self.firefox_bases(origin, firefox),
+        };
         self.browsers.insert(browser.kind(), bases.clone());
         bases
     }
 
-    fn read_browser_bases(
+    fn chromium_bases(
         &mut self,
         origin: &Origin,
         browser: &ChromiumBrowser,
@@ -269,12 +296,122 @@ impl Planner<'_> {
             profiles = profiles.len(),
             "browser bases"
         );
+        let lock = BrowserLock::new(
+            BrowserKind::Chromium(browser.kind()),
+            base.join(CHROMIUM_LOCK),
+            base.clone(),
+        );
         Some(BrowserBases {
-            base,
-            base_device,
+            base: Some((base, base_device)),
             cache,
             profiles,
+            locks: BTreeSet::from([lock]),
         })
+    }
+
+    /// A Firefox browser's profiles: the directories of its cache that are,
+    /// under one of its bases, a plain directory holding the lock a running
+    /// browser takes (a profile never launched has neither the lock nor a
+    /// cache), and under none a directory that cannot be judged. A base
+    /// absent is passed over; one refused or unreadable leaves the browser
+    /// without bases, a profile there being unknown.
+    fn firefox_bases(&mut self, origin: &Origin, browser: &FirefoxBrowser) -> Option<BrowserBases> {
+        let kind = BrowserKind::Firefox(browser.kind());
+        let Some(cache) = self.open_base(origin, browser.cache()) else {
+            tracing::debug!(browser = kind.key(), cache = %browser.cache(), "browser cache absent or refused: nothing to clean");
+            return None;
+        };
+        let Ok(cache_device) = self.device(origin, &cache) else {
+            tracing::debug!(browser = kind.key(), cache = %cache.display(), "browser cache gone or unreadable: nothing to clean");
+            return None;
+        };
+        let mut profiles = BTreeSet::new();
+        let mut doubtful = BTreeSet::new();
+        let mut locks = BTreeSet::new();
+        for template in browser.bases() {
+            let Ok(found) = self.read_base(origin, template) else {
+                tracing::info!(browser = kind.key(), base = %template, "browser base refused: its caches are left");
+                return None;
+            };
+            let Some(base) = found else {
+                continue;
+            };
+            let Some(base_profiles) = self.firefox_profiles(origin, &base) else {
+                tracing::info!(browser = kind.key(), base = %base.display(), "browser base unreadable or gone while read: its caches are left");
+                return None;
+            };
+            for (name, profile) in base_profiles.judged {
+                locks.insert(BrowserLock::new(kind, profile.join(FIREFOX_LOCK), profile));
+                profiles.insert(name);
+            }
+            doubtful.extend(base_profiles.doubtful);
+        }
+        // A profile of the same name elsewhere could be the one open.
+        for name in &doubtful {
+            if profiles.remove(name) {
+                tracing::debug!(browser = kind.key(), profile = ?name, "profile not judged under every base: its caches are left");
+            }
+        }
+        tracing::info!(
+            browser = kind.key(),
+            profiles = profiles.len(),
+            not_judged = doubtful.len(),
+            "browser profiles"
+        );
+        if profiles.is_empty() {
+            return None;
+        }
+        Some(BrowserBases {
+            base: None,
+            cache: Some((cache, cache_device)),
+            profiles: profiles.into_iter().collect(),
+            locks,
+        })
+    }
+
+    /// The profiles under the Firefox base `base`; `None` when it, or one of
+    /// its entries, cannot be read (reported): a profile there is unknown.
+    fn firefox_profiles(&mut self, origin: &Origin, base: &Path) -> Option<FirefoxProfiles> {
+        let entries = match fs::read_dir(base) {
+            // Gone since it was opened: as a base absent.
+            Err(error) if is_absent(&error) => return Some(FirefoxProfiles::default()),
+            Err(error) => return self.unreadable(origin, base.to_path_buf(), error.kind()),
+            Ok(entries) => entries,
+        };
+        let device = self.device(origin, base).ok()?;
+        let mut found = FirefoxProfiles::default();
+        for entry in entries {
+            let name = match entry {
+                Ok(entry) => entry.file_name(),
+                Err(error) => return self.unreadable(origin, base.to_path_buf(), error.kind()),
+            };
+            let profile = base.join(&name);
+            match self.segment(origin, &profile, device) {
+                Segment::Plain => {}
+                // A file, or gone (`profiles.ini`): no profile.
+                Segment::Missing => continue,
+                Segment::Refused | Segment::Unreadable => {
+                    tracing::debug!(profile = %profile.display(), "profile a link, on another filesystem or unreadable: not judged");
+                    found.doubtful.push(name);
+                    continue;
+                }
+            }
+            match fs::symlink_metadata(profile.join(FIREFOX_LOCK)) {
+                Ok(_) => {
+                    tracing::debug!(profile = %profile.display(), "profile");
+                    found.judged.push((name, profile));
+                }
+                Err(error) if is_absent(&error) => {
+                    tracing::debug!(profile = %profile.display(), "no lock: not a profile launched");
+                }
+                Err(error) => {
+                    tracing::debug!(profile = %profile.display(), %error, "profile lock unreadable: not judged");
+                    self.unreadable::<()>(origin, profile, error.kind());
+                    found.doubtful.push(name);
+                }
+            }
+        }
+        Some(found)
     }
 
     /// The device of the directory `base`, `None` when it is not known; an
@@ -477,31 +614,41 @@ impl Planner<'_> {
     /// directory: the last component is never a link (an ancestor may be). It
     /// may be a mount (`/tmp`), so that is not read here.
     fn open_base(&mut self, origin: &Origin, path: &TemplatePath) -> Option<PathBuf> {
-        let resolved = self.resolve(origin, path)?;
+        self.read_base(origin, path).ok().flatten()
+    }
+
+    /// [`Self::open_base`], telling an absent directory (`Ok(None)`) from one
+    /// refused or unreadable (an error, reported).
+    fn read_base(&mut self, origin: &Origin, path: &TemplatePath) -> Result<Option<PathBuf>, ()> {
+        let resolved = self.resolve(origin, path).ok_or(())?;
         let metadata = match fs::symlink_metadata(&resolved) {
             Ok(metadata) => metadata,
-            Err(error) if is_absent(&error) => return None,
-            Err(error) => return self.unreadable(origin, resolved, error.kind()),
+            Err(error) if is_absent(&error) => return Ok(None),
+            Err(error) => return self.unreadable(origin, resolved, error.kind()).ok_or(()),
         };
         if !metadata.is_dir() {
-            return self.unsafe_root(origin, resolved, &metadata, UnsafeReason::NotADirectory);
+            return self
+                .unsafe_root(origin, resolved, &metadata, UnsafeReason::NotADirectory)
+                .ok_or(());
         }
         let canonical = match fs::canonicalize(&resolved) {
             Ok(canonical) => canonical,
-            Err(error) if is_absent(&error) => return None,
-            Err(error) => return self.unreadable(origin, resolved, error.kind()),
+            Err(error) if is_absent(&error) => return Ok(None),
+            Err(error) => return self.unreadable(origin, resolved, error.kind()).ok_or(()),
         };
         // Read again under its canonical name: it must still be the directory
         // read first, not a link swapped in since.
         match fs::symlink_metadata(&canonical) {
             Ok(again) if again.is_dir() => match self.same_object(&metadata, &again) {
-                Some(true) => Some(canonical),
-                Some(false) => self.replaced(origin, canonical),
-                None => self.unreadable(origin, canonical, io::ErrorKind::Unsupported),
+                Some(true) => Ok(Some(canonical)),
+                Some(false) => self.replaced(origin, canonical).ok_or(()),
+                None => self
+                    .unreadable(origin, canonical, io::ErrorKind::Unsupported)
+                    .ok_or(()),
             },
-            Ok(_) => self.replaced(origin, canonical),
-            Err(error) if is_absent(&error) => None,
-            Err(error) => self.unreadable(origin, canonical, error.kind()),
+            Ok(_) => self.replaced(origin, canonical).ok_or(()),
+            Err(error) if is_absent(&error) => Ok(None),
+            Err(error) => self.unreadable(origin, canonical, error.kind()).ok_or(()),
         }
     }
 
@@ -578,7 +725,7 @@ impl Planner<'_> {
                 match self.segment(origin, &path, device) {
                     Segment::Plain => {}
                     Segment::Refused => withheld = true,
-                    Segment::Missing => return None,
+                    Segment::Missing | Segment::Unreadable => return None,
                 }
             }
         }
@@ -593,7 +740,7 @@ impl Planner<'_> {
             Err(error) if is_absent(&error) => return Segment::Missing,
             Err(error) => {
                 self.unreadable::<()>(origin, path.to_path_buf(), error.kind());
-                return Segment::Missing;
+                return Segment::Unreadable;
             }
         };
         if metadata.file_type().is_symlink() {
@@ -613,7 +760,7 @@ impl Planner<'_> {
                 Err(error) if is_absent(&error) => return Segment::Missing,
                 Err(error) => {
                     self.unreadable::<()>(origin, path.to_path_buf(), error.kind());
-                    return Segment::Missing;
+                    return Segment::Unreadable;
                 }
             };
         }

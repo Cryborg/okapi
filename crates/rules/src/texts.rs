@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::sync::OnceLock;
 
-use crate::ChromiumBrowserKind;
+use crate::BrowserKind;
 
 /// The French of the labels, as written by hand from the data.
 const FRENCH: &str = include_str!("../lang/fr.po");
@@ -190,11 +190,7 @@ pub fn label(language: Language, english: &str) -> &str {
 /// and the directory's label (`Chrome : Cache du code`), any other by its
 /// label alone, in `language`.
 #[must_use]
-pub fn group_label(
-    language: Language,
-    browser: Option<ChromiumBrowserKind>,
-    english: &str,
-) -> String {
+pub fn group_label(language: Language, browser: Option<BrowserKind>, english: &str) -> String {
     let label = label(language, english);
     match (browser, language) {
         (None, _) => label.to_owned(),
@@ -235,11 +231,13 @@ mod tests {
                     .map(|rule| rule.name().to_string()),
             )
             .chain({
-                let directories = rules.browsers().chromium_cache_directories();
+                let browsers = rules.browsers();
+                let directories = browsers.chromium_cache_directories();
                 directories
                     .profile()
                     .iter()
                     .chain(directories.shared())
+                    .chain(browsers.firefox_cache_directories())
                     .map(|directory| directory.label().to_string())
             })
             .collect()
@@ -301,7 +299,7 @@ mod tests {
 
     #[test]
     fn a_browser_cache_is_named_by_its_browser() {
-        let opera = Some(ChromiumBrowserKind::OperaGx);
+        let opera = Some(BrowserKind::Chromium(crate::ChromiumBrowserKind::OperaGx));
         assert_eq!(
             group_label(Language::French, opera, "Code Cache"),
             "Opera GX : Cache du code"
@@ -309,6 +307,14 @@ mod tests {
         assert_eq!(
             group_label(Language::English, opera, "Code Cache"),
             "Opera GX: Code Cache"
+        );
+        assert_eq!(
+            group_label(
+                Language::French,
+                Some(BrowserKind::Firefox(crate::FirefoxKind::Librewolf)),
+                "Startup Cache"
+            ),
+            "LibreWolf : Cache de démarrage"
         );
         assert_eq!(
             group_label(Language::French, None, "pip Cache"),

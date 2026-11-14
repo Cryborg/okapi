@@ -20,6 +20,11 @@
       { "dir": "PnaclTranslationCache", "label": "PNaCl Translation Cache", "cacheReset": true, "description": "Translated PNaCl modules: regenerated on demand" }
     ]
   },
+  "firefoxCacheDirs": [
+    { "dir": "cache2", "label": "Cache" },
+    { "dir": "thumbnails", "label": "Thumbnails", "description": "Page thumbnails of the new tab page: rebuilt on demand" },
+    { "dir": "startupCache", "label": "Startup Cache", "cacheReset": true, "description": "Compiled scripts of Firefox's own interface: rebuilt at the next launch, which is slower" }
+  ],
   "chromium": [
     { "key": "chrome", "base": "${APP_SUPPORT}/Google/Chrome", "cache": "${CACHES}/Google/Chrome" },
     { "key": "edge", "base": "${APP_SUPPORT}/Microsoft Edge", "cache": "${CACHES}/Microsoft Edge" },
@@ -35,15 +40,12 @@
     { "key": "cromite", "base": "${APP_SUPPORT}/Cromite", "cache": "${CACHES}/Cromite" },
     { "key": "catsxp", "base": "${APP_SUPPORT}/ArcSoft/CatsXP", "cache": "${CACHES}/ArcSoft/CatsXP" }
   ],
-  "firefox": {
-    "base": "${APP_SUPPORT}/Firefox/Profiles",
-    "cache": "${CACHES}/Firefox/Profiles"
-  },
-  "firefoxForks": [
-    { "key": "librewolf", "base": "${APP_SUPPORT}/LibreWolf/Profiles", "cache": "${CACHES}/LibreWolf/Profiles" },
-    { "key": "waterfox", "base": "${APP_SUPPORT}/Waterfox/Profiles", "cache": "${CACHES}/Waterfox/Profiles" },
-    { "key": "floorp", "base": "${APP_SUPPORT}/Floorp/Profiles", "cache": "${CACHES}/Floorp/Profiles" },
-    { "key": "zen", "base": "${APP_SUPPORT}/Zen/Profiles", "cache": "${CACHES}/Zen/Profiles" }
+  "firefox": [
+    { "key": "firefox", "bases": ["${APP_SUPPORT}/Firefox/Profiles"], "cache": "${CACHES}/Firefox/Profiles" },
+    { "key": "librewolf", "bases": ["${APP_SUPPORT}/LibreWolf/Profiles"], "cache": "${CACHES}/LibreWolf/Profiles" },
+    { "key": "waterfox", "bases": ["${APP_SUPPORT}/Waterfox/Profiles"], "cache": "${CACHES}/Waterfox/Profiles" },
+    { "key": "floorp", "bases": ["${APP_SUPPORT}/Floorp/Profiles"], "cache": "${CACHES}/Floorp/Profiles" },
+    { "key": "zen", "bases": ["${APP_SUPPORT}/Zen/Profiles"], "cache": "${CACHES}/Zen/Profiles" }
   ],
   "safari": { "cache": "${CACHES}/com.apple.Safari" }
 }

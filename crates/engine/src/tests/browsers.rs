@@ -1,15 +1,16 @@
 //! The caches of Chromium-based browsers: their profiles, their roots, their
-//! groups, and the lock of a browser that runs.
+//! groups, and the lock of a browser that runs. Firefox's are in `firefox`.
 
 use std::os::unix::fs::symlink;
 
 use okapi_platform::CHROMIUM_LOCK;
-use okapi_rules::{ChromiumBrowser, ChromiumBrowserKind, ChromiumCacheDirectories};
+use okapi_rules::{BrowserKind, ChromiumBrowser, ChromiumBrowserKind, ChromiumCacheDirectories};
 
 use super::clean::{clean, ids, run_later};
 use super::*;
 use crate::clean::{CleanResult, KeepReason};
 use crate::report::{ItemId, Origin};
+use crate::roots::BrowserRule;
 
 /// A browser whose user data is under `config/<name>` and its disk caches
 /// under `cache/<name>`.
@@ -45,7 +46,7 @@ fn entries<'a>(
         .flat_map(|browser| {
             let entry = move |shared| {
                 move |directory| RuleEntry::Browser {
-                    browser,
+                    browser: BrowserRule::Chromium(browser),
                     directory,
                     shared,
                 }
@@ -59,8 +60,11 @@ fn entries<'a>(
         .collect()
 }
 
-/// Each group by its label: whether it is checked, and what it offers.
-fn groups(report: &ScanReport) -> Vec<(String, Option<ChromiumBrowserKind>, bool, Vec<PathBuf>)> {
+/// Each group by its label: its browser, whether it is checked, and what it
+/// offers.
+pub(super) fn groups(
+    report: &ScanReport,
+) -> Vec<(String, Option<BrowserKind>, bool, Vec<PathBuf>)> {
     report
         .groups()
         .iter()
@@ -106,7 +110,7 @@ fn each_cache_is_one_group_across_profiles_and_both_roots() {
     let browsers = [browser(&fixture, "chrome", "chrome")];
     let directories = directories();
     let report = Run::new(&fixture, entries(&browsers, &directories)).scan();
-    let chrome = Some(ChromiumBrowserKind::Chrome);
+    let chrome = Some(BrowserKind::Chromium(ChromiumBrowserKind::Chrome));
     assert_eq!(
         groups(&report),
         [
@@ -145,7 +149,7 @@ fn each_cache_is_one_group_across_profiles_and_both_roots() {
     assert!(matches!(
         report.groups()[2].origins(),
         [Origin::Browser {
-            browser: ChromiumBrowserKind::Chrome,
+            browser: BrowserKind::Chromium(ChromiumBrowserKind::Chrome),
             directory,
         }] if directory.to_string() == "Shared Dictionary/cache"
     ));
@@ -250,14 +254,17 @@ fn the_open_browsers_are_those_whose_lock_is_live() {
     let lock = lock_chrome(&fixture);
     let open = report.open_browsers(&all);
     assert_eq!(open.len(), 1, "one per browser");
-    assert_eq!(open[0].browser(), ChromiumBrowserKind::Chrome);
+    assert_eq!(
+        open[0].browser(),
+        BrowserKind::Chromium(ChromiumBrowserKind::Chrome)
+    );
     assert_eq!(open[0].lock(), lock);
     assert_eq!(open[0].user_data(), fixture.path("config/chrome"));
 
     let edge: Vec<ItemId> = report
         .groups()
         .iter()
-        .filter(|group| group.browser() == Some(ChromiumBrowserKind::Edge))
+        .filter(|group| group.browser() == Some(BrowserKind::Chromium(ChromiumBrowserKind::Edge)))
         .flat_map(|group| group.items().iter().map(crate::ScanItem::id))
         .collect();
     assert_eq!(

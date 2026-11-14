@@ -82,7 +82,6 @@
     { "id": "ffmpeg-static", "name": "ffmpeg-static Cache", "paths": ["${LOCALAPPDATA}/ffmpeg-static-nodejs/Cache"], "description": "Downloaded ffmpeg-static binaries and response metadata; re-downloaded on demand" },
     { "id": "curseforge", "name": "CurseForge", "paths": ["${APPDATA}/CurseForge/Cache/Cache_Data", "${APPDATA}/CurseForge/Code Cache", "${APPDATA}/CurseForge/GPUCache", "${APPDATA}/CurseForge/logs"], "description": "CurseForge mod manager Electron app cache, GPU cache, and log files" },
     { "id": "logitech-ghub", "name": "Logitech G HUB", "paths": ["${APPDATA}/G HUB/Cache/Cache_Data", "${APPDATA}/G HUB/Code Cache", "${APPDATA}/G HUB/GPUCache", "${PROGRAMDATA}/LGHUB/cache"], "minAgeDays": 7, "description": "Logitech G HUB Electron caches and downloaded content-addressed packages; files used in the last week are preserved" },
-    { "id": "zen-browser", "name": "Zen Browser", "paths": ["${LOCALAPPDATA}/Zen/Profiles"], "childSubdir": "cache2", "description": "Zen Browser per-profile web content cache" },
     { "id": "kodi", "name": "Kodi", "paths": ["${APPDATA}/Kodi/cache", "${APPDATA}/Kodi/userdata/Thumbnails"], "description": "Kodi media center cache and thumbnail images (can be several GB; rebuilt on demand)" },
     { "id": "qbittorrent", "name": "qBittorrent", "paths": ["${LOCALAPPDATA}/qBittorrent/logs"], "description": "qBittorrent log files" },
     { "id": "handbrake", "name": "HandBrake", "paths": ["${APPDATA}/HandBrake/logs"], "description": "HandBrake video encoder log files from past encoding jobs" },

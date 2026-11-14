@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use okapi_engine::{Category, Origin, OriginKey, ScanGroup};
-use okapi_rules::{ChromiumBrowserKind, Language};
+use okapi_rules::{BrowserKind, Language};
 
 /// What the results need of one group of the report.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,7 +16,7 @@ pub struct GroupFacts {
     /// Its label anywhere else: a browser's cache by its browser's name too.
     pub label_alone: String,
     /// The browser whose cache it is.
-    pub browser: Option<ChromiumBrowserKind>,
+    pub browser: Option<BrowserKind>,
     pub categories: BTreeSet<Category>,
     /// Never a cache reset nor a maintenance (invariant 5).
     pub preselected: bool,
@@ -134,7 +134,7 @@ pub enum Line {
     },
     /// A browser under the browsers' category, over the groups of its caches.
     Browser {
-        browser: ChromiumBrowserKind,
+        browser: BrowserKind,
         state: CheckState,
         enabled: bool,
         folded: bool,
@@ -158,7 +158,7 @@ pub struct Results {
     chosen: BTreeSet<Category>,
     checked: BTreeSet<usize>,
     folded: BTreeSet<Category>,
-    folded_browsers: BTreeSet<ChromiumBrowserKind>,
+    folded_browsers: BTreeSet<BrowserKind>,
 }
 
 impl Results {
@@ -266,7 +266,7 @@ impl Results {
 
     /// The browser line a group is shown under: a browser's cache shown
     /// under the browsers' category.
-    fn browser_of(&self, index: usize) -> Option<ChromiumBrowserKind> {
+    fn browser_of(&self, index: usize) -> Option<BrowserKind> {
         self.groups[index]
             .browser
             .filter(|_| self.shown_under(index) == Some(Category::Browsers))
@@ -899,7 +899,7 @@ mod tests {
         assert!(results.checked().is_empty());
     }
 
-    fn cache(browser: ChromiumBrowserKind, preselected: bool) -> GroupFacts {
+    fn cache(browser: BrowserKind, preselected: bool) -> GroupFacts {
         GroupFacts {
             browser: Some(browser),
             ..group(&[Category::Browsers], preselected, false)
@@ -911,9 +911,18 @@ mod tests {
     fn browsers() -> Results {
         Results::new(
             vec![
-                cache(ChromiumBrowserKind::Chrome, true),
-                cache(ChromiumBrowserKind::Chrome, false),
-                cache(ChromiumBrowserKind::Edge, true),
+                cache(
+                    BrowserKind::Chromium(okapi_rules::ChromiumBrowserKind::Chrome),
+                    true,
+                ),
+                cache(
+                    BrowserKind::Chromium(okapi_rules::ChromiumBrowserKind::Chrome),
+                    false,
+                ),
+                cache(
+                    BrowserKind::Chromium(okapi_rules::ChromiumBrowserKind::Edge),
+                    true,
+                ),
                 group(&[Category::Apps], true, false),
             ],
             BTreeSet::from([Category::Browsers, Category::Apps]),
@@ -943,7 +952,7 @@ mod tests {
         assert!(matches!(
             results.rows()[1],
             Line::Browser {
-                browser: ChromiumBrowserKind::Chrome,
+                browser: BrowserKind::Chromium(okapi_rules::ChromiumBrowserKind::Chrome),
                 state: CheckState::Partial,
                 entries: 4,
                 bytes: 20,
@@ -981,7 +990,10 @@ mod tests {
     fn a_browser_s_cache_shown_elsewhere_is_a_plain_group() {
         let shared = GroupFacts {
             categories: BTreeSet::from([Category::Apps, Category::Browsers]),
-            ..cache(ChromiumBrowserKind::Chrome, true)
+            ..cache(
+                BrowserKind::Chromium(okapi_rules::ChromiumBrowserKind::Chrome),
+                true,
+            )
         };
         let results = Results::new(vec![shared], BTreeSet::from([Category::Apps]));
         assert_eq!(shape(&results), "CG", "under Applications, no browser line");

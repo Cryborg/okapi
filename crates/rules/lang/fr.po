@@ -487,10 +487,6 @@ msgid "Zed Editor"
 msgstr "Zed"
 
 msgctxt "label"
-msgid "Zen Browser"
-msgstr "Zen Browser"
-
-msgctxt "label"
 msgid "Zoom"
 msgstr "Zoom"
 
@@ -505,6 +501,14 @@ msgstr "Cache"
 msgctxt "label"
 msgid "Code Cache"
 msgstr "Cache du code"
+
+msgctxt "label"
+msgid "Startup Cache"
+msgstr "Cache de démarrage"
+
+msgctxt "label"
+msgid "Thumbnails"
+msgstr "Vignettes"
 
 msgctxt "label"
 msgid "GPU Cache"

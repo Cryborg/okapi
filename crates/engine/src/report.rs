@@ -5,8 +5,8 @@ use std::time::SystemTime;
 
 use okapi_platform::FileIdentity;
 use okapi_rules::{
-    ChromiumBrowserKind, CleanTarget, Effect, Label, RelativePath, RuleId, TemplateError,
-    TemplatePath, Variable,
+    BrowserKind, CleanTarget, Effect, Label, RelativePath, RuleId, TemplateError, TemplatePath,
+    Variable,
 };
 
 use crate::preconditions::Stop;
@@ -56,10 +56,10 @@ pub enum Origin {
     },
     /// A rule of `apps.json`, `gaming.json` or `gpu-cache.json`.
     App { file: AppFile, id: RuleId },
-    /// A cache directory of a Chromium-based browser, in every profile:
-    /// never the profile, which is no stable key.
+    /// A cache directory of a browser, in every profile: never the profile,
+    /// which is no stable key.
     Browser {
-        browser: ChromiumBrowserKind,
+        browser: BrowserKind,
         directory: RelativePath,
     },
 }
@@ -503,7 +503,7 @@ impl ScanGroup {
     /// The browser whose cache the group is, when its label is a browser
     /// cache's: that of its first rule, which gives the label.
     #[must_use]
-    pub fn browser(&self) -> Option<ChromiumBrowserKind> {
+    pub fn browser(&self) -> Option<BrowserKind> {
         match self.attributes.origins.first() {
             Some(Origin::Browser { browser, .. }) => Some(*browser),
             _ => None,
@@ -619,7 +619,8 @@ impl ScanReport {
     }
 
     /// The locks held of the browsers whose caches these identifiers are in,
-    /// one per browser: what to ask the user about before cleaning them.
+    /// one per lock file (a profile of Firefox has its own): what to ask the
+    /// user about before cleaning them.
     #[must_use]
     pub fn open_browsers(&self, ids: &[ItemId]) -> Vec<BrowserLock> {
         let locks: BTreeSet<&BrowserLock> = ids
@@ -627,10 +628,9 @@ impl ScanReport {
             .filter_map(|id| self.find(*id))
             .flat_map(|(group, _)| group.locks())
             .collect();
-        let mut seen = BTreeSet::new();
         locks
             .into_iter()
-            .filter(|lock| lock.is_held() && seen.insert(lock.browser))
+            .filter(|lock| lock.is_held())
             .inspect(|lock| {
                 tracing::info!(browser = lock.browser.key(), lock = %lock.lock.display(), "browser open");
             })
@@ -649,23 +649,21 @@ impl ScanItem {
     }
 }
 
-/// The lock a running browser holds in its user-data directory: while it is
-/// there, the browser's caches are not to be emptied.
+/// The lock a running browser holds in its user-data directory (Chromium)
+/// or in a profile (Firefox): while it is held, the browser's caches are not
+/// to be emptied.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BrowserLock {
-    browser: ChromiumBrowserKind,
-    /// The lock itself, a link that may point nowhere.
+    browser: BrowserKind,
+    /// The lock itself: a link that may point nowhere (Chromium), or a file
+    /// that stays, locked while the browser runs (Firefox).
     lock: PathBuf,
-    /// The browser's user-data directory, which holds the lock.
+    /// The directory that holds the lock: what the browser keeps open.
     user_data: PathBuf,
 }
 
 impl BrowserLock {
-    pub(crate) const fn new(
-        browser: ChromiumBrowserKind,
-        lock: PathBuf,
-        user_data: PathBuf,
-    ) -> Self {
+    pub(crate) const fn new(browser: BrowserKind, lock: PathBuf, user_data: PathBuf) -> Self {
         Self {
             browser,
             lock,
@@ -674,8 +672,17 @@ impl BrowserLock {
     }
 
     #[must_use]
-    pub const fn browser(&self) -> ChromiumBrowserKind {
+    pub const fn browser(&self) -> BrowserKind {
         self.browser
+    }
+
+    /// How the browser tells that it runs: by its family.
+    #[must_use]
+    pub const fn lock_kind(&self) -> okapi_platform::LockKind {
+        match self.browser {
+            BrowserKind::Chromium(_) => okapi_platform::LockKind::Link,
+            BrowserKind::Firefox(_) => okapi_platform::LockKind::FileLock,
+        }
     }
 
     #[must_use]
@@ -693,7 +700,7 @@ impl BrowserLock {
     /// is held (a browser not known closed is not emptied).
     #[must_use]
     pub fn is_held(&self) -> bool {
-        okapi_platform::lock_is_live(&self.lock)
+        okapi_platform::lock_is_live(&self.lock, self.lock_kind())
     }
 }
 
@@ -856,7 +863,7 @@ mod tests {
             assert_eq!(app.key(), ["app", "pip"], "the same in any file");
         }
         let browser = Origin::Browser {
-            browser: ChromiumBrowserKind::OperaGx,
+            browser: BrowserKind::Chromium(okapi_rules::ChromiumBrowserKind::OperaGx),
             directory: RelativePath::try_from("Cache/Cache_Data".to_owned()).unwrap(),
         };
         assert_eq!(browser.key(), ["browser", "operaGX", "Cache/Cache_Data"]);

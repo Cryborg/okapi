@@ -12,5 +12,8 @@ disallowed-methods = [
     { path = "rustix::process::kill_process_group", reason = "invariant 4: no signal sent" },
     { path = "rustix::process::kill_current_process_group", reason = "invariant 4: no signal sent" },
     { path = "rustix::process::pidfd_send_signal", reason = "invariant 4: no signal sent" },
+    { path = "signal_hook::low_level::raise", reason = "invariant 4: no signal sent" },
+    { path = "signal_hook::low_level::emulate_default_handler", reason = "invariant 4: no signal sent" },
+    { path = "signal_hook::flag::register_conditional_default", reason = "invariant 4: it raises the signal again" },
     { path = "okapi_platform::RunningBrowser::terminate", reason = "invariant 4: closes a browser, for the interface alone" },
 ]

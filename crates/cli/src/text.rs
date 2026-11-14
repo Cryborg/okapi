@@ -511,7 +511,10 @@ Réglages : {settings}
 Historique des nettoyages : {history}
 
 Codes de sortie : 0 succès, 1 échec, 2 arguments ou réglages invalides,
-3 permission refusée, 4 nettoyage partiel, 5 rien trouvé."
+3 permission refusée, 4 nettoyage partiel, 5 rien trouvé,
+130 analyse ou nettoyage interrompu par Ctrl-C (un second Ctrl-C
+quitte aussitôt, sauf pendant un nettoyage et l'écriture de sa ligne
+d'historique)."
         ),
         Language::English => format!(
             "okapi {VERSION}: finds and cleans what applications leave behind.
@@ -539,7 +542,9 @@ Settings: {settings}
 Cleaning history: {history}
 
 Exit codes: 0 success, 1 failure, 2 invalid arguments or settings,
-3 permission denied, 4 partial cleaning, 5 nothing found."
+3 permission denied, 4 partial cleaning, 5 nothing found,
+130 scan or cleaning interrupted by Ctrl-C (a second Ctrl-C quits at
+once, except while a cleaning runs and writes its history line)."
         ),
     }
 }
@@ -1063,6 +1068,27 @@ mod tests {
             "Opera GX/GPUCache",
             "its directory, not its label"
         );
+    }
+
+    #[test]
+    fn the_help_says_an_interruption_s_code() {
+        for language in [Language::French, Language::English] {
+            let help = text(
+                language,
+                &Message::Help {
+                    settings: None,
+                    history: None,
+                },
+            );
+            let said = match language {
+                Language::French => "analyse ou nettoyage interrompu par Ctrl-C",
+                Language::English => "scan or cleaning interrupted by Ctrl-C",
+            };
+            assert!(
+                help.contains(&format!("{} {said}", crate::exit::INTERRUPTED)),
+                "{help}"
+            );
+        }
     }
 
     #[test]

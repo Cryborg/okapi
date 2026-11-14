@@ -19,6 +19,13 @@ pub const PERMISSION_DENIED: u8 = 3;
 pub const PARTIAL: u8 = 4;
 /// The scan found nothing in the categories asked for.
 pub const NOTHING_FOUND: u8 = 5;
+/// The user interrupted the run (Ctrl-C) and the scan or the cleaning was
+/// cut short: 128 and SIGINT, as a shell says of a process the signal ended
+/// (D-11). An invalid input, an unknown identifier (an internal defect) and
+/// a deletion log asked for and lost weigh more; a second Ctrl-C, once the
+/// cleaning's history line is written, ends the process with it whatever
+/// the run did.
+pub const INTERRUPTED: u8 = 130;
 
 /// The exit code of a run that got as far as scanning: `stops` what kept the
 /// scan or the cleaning from looking at or offering anything, `found` the
@@ -30,12 +37,17 @@ pub fn exit_code<'a>(
     results: impl IntoIterator<Item = CleanResult>,
 ) -> u8 {
     let mut stopped = false;
+    let mut interrupted = false;
     for stop in stops {
         // An age beyond the clock comes from the command line or the settings.
         if *stop == Stop::MinAgeBeyondClock {
             return INVALID_ARGUMENTS;
         }
         stopped = true;
+        interrupted |= *stop == Stop::Cancelled;
+    }
+    if interrupted {
+        return INTERRUPTED;
     }
     if stopped {
         return FAILURE;
@@ -59,8 +71,11 @@ pub fn exit_code<'a>(
             | KeepReason::Changed
             | KeepReason::Excluded
             | KeepReason::Protected
-            | KeepReason::Cancelled
             | KeepReason::BrowserOpen => PARTIAL,
+            KeepReason::Cancelled => {
+                interrupted = true;
+                PARTIAL
+            }
         };
         code = if code == PERMISSION_DENIED || this == PERMISSION_DENIED {
             PERMISSION_DENIED
@@ -68,7 +83,7 @@ pub fn exit_code<'a>(
             this
         };
     }
-    code
+    if interrupted { INTERRUPTED } else { code }
 }
 
 /// `code` once the cleaning's history line is known lost (`lost_log`) while
@@ -91,6 +106,34 @@ mod tests {
             kind: io::ErrorKind::PermissionDenied,
             code: Some(13),
         }
+    }
+
+    #[test]
+    fn a_run_the_user_interrupted_says_so() {
+        assert_eq!(INTERRUPTED, 130, "128 and SIGINT, as a shell says it");
+        assert_eq!(exit_code(&[Stop::Cancelled], 2, []), INTERRUPTED);
+        assert_eq!(
+            exit_code(&[Stop::Cancelled, Stop::MinAgeBeyondClock], 2, []),
+            INVALID_ARGUMENTS,
+            "the input to fix first"
+        );
+        let removed = CleanResult::Removed { bytes: 1 };
+        let left = CleanResult::Kept(KeepReason::Cancelled);
+        assert_eq!(
+            exit_code(&[], 3, [removed, left, CleanResult::Kept(refused())]),
+            INTERRUPTED,
+            "whatever else became of the others"
+        );
+        assert_eq!(
+            exit_code(&[], 2, [left, CleanResult::Kept(KeepReason::UnknownItem)]),
+            FAILURE,
+            "an internal defect, said after"
+        );
+        assert_eq!(
+            with_deletion_log(exit_code(&[], 2, [left]), true),
+            FAILURE,
+            "a deletion log asked for and lost weighs more"
+        );
     }
 
     #[test]
@@ -137,16 +180,10 @@ mod tests {
         };
         assert_eq!(exit_code(&[], 2, [CleanResult::Kept(failed)]), PARTIAL);
         assert_eq!(
-            exit_code(&[], 2, [CleanResult::Kept(KeepReason::Cancelled)]),
-            PARTIAL,
-            "an entry left by a cancellation is not removed"
-        );
-        assert_eq!(
             exit_code(&[], 2, [CleanResult::Kept(KeepReason::BrowserOpen)]),
             PARTIAL,
             "an open browser's cache is not removed"
         );
-        assert_eq!(exit_code(&[Stop::Cancelled], 2, []), FAILURE);
         assert_eq!(
             exit_code(
                 &[],

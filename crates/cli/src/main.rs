@@ -4,6 +4,7 @@
 
 mod args;
 mod exit;
+mod interrupt;
 mod output;
 mod selection;
 mod text;
@@ -15,8 +16,8 @@ use std::process::ExitCode;
 use std::time::{Instant, SystemTime};
 
 use okapi_engine::{
-    CleanOutcome, CleanReceipt, DEFAULT_MIN_AGE, Exclusions, ItemId, ScanIssue, ScanOptions, Stop,
-    clean, scan, settings_min_age,
+    CleanOutcome, CleanReceipt, DEFAULT_MIN_AGE, Exclusions, ItemId, ScanIssue, ScanOptions,
+    ScanReport, Stop, clean_watched, scan_watched, settings_min_age,
 };
 use okapi_rules::{
     Language, Os, RuleSet, SESSION_VARIABLES, THIRD_PARTY_NOTICES, TemplateVariables,
@@ -24,6 +25,7 @@ use okapi_rules::{
 use okapi_store::{History, HistoryUnavailable, Opened, Settings, StoreError, journal};
 
 use crate::args::{Command, Run, Verbosity};
+use crate::interrupt::Interrupt;
 use crate::output::{Output, Shown, error_line, summaries};
 use crate::selection::Decision;
 use crate::text::{Message, text};
@@ -110,8 +112,9 @@ fn main() -> ExitCode {
     let code = match output.failure() {
         Some(error) => {
             error_line(&say(&Message::OutputFailed(error)));
-            // An invalid command line stays the first thing to fix.
-            let failed = if code == exit::INVALID_ARGUMENTS {
+            // An invalid command line stays the first thing to fix, and an
+            // interruption is said (Ctrl-C, then an output that fails).
+            let failed = if code == exit::INVALID_ARGUMENTS || code == exit::INTERRUPTED {
                 code
             } else {
                 exit::FAILURE
@@ -304,9 +307,24 @@ fn open_history(deletion_log: bool, language: Language) -> Result<Option<History
     }
 }
 
+/// What kept the scan from looking at or offering anything.
+fn stops_of(report: &ScanReport) -> Vec<&Stop> {
+    report
+        .issues()
+        .iter()
+        .filter_map(|issue| match issue {
+            ScanIssue::Stopped(stop) => Some(stop),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Scans, cleans with `--clean`, writes what happened; gives the exit code.
+/// Ctrl-C cancels what runs, which still ends cleanly ([`interrupt`]).
 fn run_scan(run: &Run, language: Language, journal: Option<&Path>, output: &mut Output) -> u8 {
     tracing::info!(options = ?run, "run options");
+    let mut interrupt = Interrupt::set();
+    let watch = interrupt::watch(interrupt.as_ref());
     let Prepared {
         variables,
         rules,
@@ -324,24 +342,20 @@ fn run_scan(run: &Run, language: Language, journal: Option<&Path>, output: &mut 
     } else {
         None
     };
-    let report = scan(&rules, &variables, &options);
+    let report = scan_watched(&rules, &variables, &options, &watch);
     let groups = summaries(&report, &run.categories);
     trace_groups(&groups);
-    let scan_stops: Vec<&Stop> = report
-        .issues()
-        .iter()
-        .filter_map(|issue| match issue {
-            ScanIssue::Stopped(stop) => Some(stop),
-            _ => None,
-        })
-        .collect();
+    let scan_stops = stops_of(&report);
     let receipt: Option<CleanReceipt> = (run.clean && scan_stops.is_empty()).then(|| {
         let ids: Vec<ItemId> = groups
             .iter()
             .filter(|group| group.decision == Decision::Selected)
             .flat_map(|group| group.ids.iter().copied())
             .collect();
-        clean(&report, &ids, &rules, &variables, &options)
+        if let Some(interrupt) = &mut interrupt {
+            interrupt.cancels_only();
+        }
+        clean_watched(&report, &ids, &rules, &variables, &options, &watch)
     });
     // Recorded before anything is shown: an output that blocks (a pipe, a
     // pager) and an interruption there must not leave a cleaning without
@@ -350,6 +364,18 @@ fn run_scan(run: &Run, language: Language, journal: Option<&Path>, output: &mut 
         (Some(history), Some(receipt)) => !record_history(history, receipt, deletion_log, language),
         _ => false,
     };
+    // Said before a second Ctrl-C may end the run again.
+    if receipt
+        .iter()
+        .flat_map(CleanReceipt::outcomes)
+        .any(|outcome| outcome.path().is_none())
+    {
+        tracing::error!("an unknown identifier reached the cleaning");
+        error_line(&text(language, &Message::InternalDefect));
+    }
+    if let Some(interrupt) = &mut interrupt {
+        interrupt.ends_again();
+    }
     let clean_stops: &[Stop] = receipt.as_ref().map_or(&[], CleanReceipt::stops);
     // Said on standard error whatever the verbosity: nothing was looked at or
     // offered, or nothing was cleaned.
@@ -384,18 +410,13 @@ fn run_scan(run: &Run, language: Language, journal: Option<&Path>, output: &mut 
         issues = report.issues().len(),
         "run summary"
     );
-    if receipt
-        .iter()
-        .flat_map(CleanReceipt::outcomes)
-        .any(|outcome| outcome.path().is_none())
-    {
-        tracing::error!("an unknown identifier reached the cleaning");
-        error_line(&text(language, &Message::InternalDefect));
-    }
     let results = receipt
         .iter()
         .flat_map(|receipt| receipt.outcomes().iter().map(CleanOutcome::result));
     let code = exit::exit_code(stops, found_entries, results);
+    if code == exit::INTERRUPTED {
+        tracing::warn!("interrupted by the user (Ctrl-C)");
+    }
     let lost_log = history_failed && deletion_log;
     if lost_log {
         tracing::error!(computed = code, "the deletion log asked for is missing");

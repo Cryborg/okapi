@@ -25,6 +25,14 @@ impl Cancel {
         Self::default()
     }
 
+    /// A token raised by whoever holds `flag`: a signal handler, which can
+    /// only store to an atomic. Whoever keeps `flag` must never lower it:
+    /// cancelling stays final.
+    #[must_use]
+    pub const fn raised_by(flag: Arc<AtomicBool>) -> Self {
+        Self(flag)
+    }
+
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Relaxed);
     }
@@ -137,5 +145,19 @@ impl Watch {
         {
             tracing::debug!("progress receiver gone, progress no longer sent");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_token_raised_by_its_flag_is_cancelled() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let cancel = Cancel::raised_by(Arc::clone(&flag));
+        assert!(!cancel.is_cancelled());
+        flag.store(true, Ordering::SeqCst);
+        assert!(cancel.is_cancelled());
     }
 }

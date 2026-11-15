@@ -22,6 +22,7 @@ use okapi_tools::updates::{
 };
 use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 
+use crate::dates::MINUTES_EVERY;
 use crate::disk_usage::READ_EVERY;
 use crate::shown::{show, shown, size};
 use crate::ui;
@@ -33,8 +34,6 @@ const LISTS_OLD_AFTER: Duration = Duration::from_hours(7 * 24);
 /// How many packages the unfolded list shows before « Afficher les N
 /// autres ».
 const SYSTEM_LINES_FIRST: usize = 6;
-/// How often « recherché il y a N min » is said again.
-const MINUTES_EVERY: Duration = Duration::from_secs(30);
 
 /// What the screen reads, and its clock.
 #[derive(Clone)]

@@ -118,6 +118,8 @@ pub struct Seams {
     pub elevate: Elevate,
     /// What the disk usage screen reads and asks of the machine.
     pub disk: crate::disk_usage::DiskSeams,
+    /// What the duplicates screen reads and asks of the machine.
+    pub duplicates: crate::duplicates::DuplicateSeams,
     /// What the settings screen reads and asks of the machine.
     pub settings: crate::settings::SettingsSeams,
     /// Where the updates screen reads what waits.
@@ -164,6 +166,7 @@ impl Seams {
                 })
             },
             settings: crate::settings::SettingsSeams::system(disk.home.clone()),
+            duplicates: crate::duplicates::DuplicateSeams::system(disk.home.clone()),
             disk,
             updates: crate::updates::UpdatesSeams::system(),
             apps: crate::apps::AppsSeams::system(),
@@ -1640,6 +1643,8 @@ pub mod tests {
             },
             // No settings read nor written.
             settings: crate::settings::tests::nowhere(),
+            // No folder read, no trash opened.
+            duplicates: crate::duplicates::inert(),
             // No daemon asked: nothing on this system.
             updates: crate::updates::tests::nothing(),
             // Nothing read, nothing uninstalled.
@@ -2216,7 +2221,7 @@ pub mod tests {
 
     /// The window on the cleaner, in `language`.
     pub fn on_cleaner_in(seams: Seams, language: Language) -> (ui::AppWindow, CleanerScreen) {
-        let (window, screen, _home, _settings, _apps) =
+        let (window, screen, _home, _settings, _apps, _duplicates) =
             crate::wide_window(seams, crate::dashboard::tests::inert(), language);
         let cleaner = match language {
             Language::French => "Nettoyeur",
@@ -2790,7 +2795,7 @@ pub mod tests {
     }
 
     /// The entries of the sidebar, each a stop of Tab.
-    pub const SIDEBAR_ENTRIES: usize = 7;
+    pub const SIDEBAR_ENTRIES: usize = 8;
     /// The stops of Tab in the sidebar of a wide window: its fold button,
     /// then its entries.
     pub const SIDEBAR_STOPS: usize = SIDEBAR_ENTRIES + 1;

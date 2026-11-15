@@ -236,7 +236,7 @@ fn on_apps_recording(uninstaller: Arc<dyn Uninstaller>, writable: bool) -> OnApp
         },
         ..seams_never_scanning()
     };
-    let (window, _, _, _, screen) =
+    let (window, _, _, _, screen, _) =
         crate::wide_window(seams, crate::dashboard::tests::inert(), Language::French);
     button(&window, "Applications").invoke_accessible_default_action();
     slint::platform::update_timers_and_animations();

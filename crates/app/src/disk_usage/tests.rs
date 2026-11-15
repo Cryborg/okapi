@@ -113,7 +113,7 @@ fn seams(home: &tempfile::TempDir, manager: &Rc<FileManager>) -> Seams {
 /// The window on the disk usage screen.
 fn on_disk(seams: Seams) -> (ui::AppWindow, Sampler) {
     let (home, sampler) = noting(None);
-    let (window, _cleaner, _dashboard, _settings, _apps) =
+    let (window, _cleaner, _dashboard, _settings, _apps, _duplicates) =
         crate::wide_window(seams, home, Language::French);
     button(&window, "Espace disque").invoke_accessible_default_action();
     slint::platform::update_timers_and_animations();
@@ -587,7 +587,7 @@ fn the_line_chosen_opens_in_the_file_manager_never_twice_at_once() {
     assert_eq!(request.expected, Some(identity(&root(&home))));
     // A file manager that never answers frees the button, saying nothing
     // it does not know.
-    i_slint_backend_testing::mock_elapsed_time(OPEN_WAIT);
+    i_slint_backend_testing::mock_elapsed_time(crate::file_manager::OPEN_WAIT);
     slint::platform::update_timers_and_animations();
     assert!(!disk(&window).get_opening());
     assert!(!disk(&window).get_open_refused());
@@ -600,6 +600,20 @@ fn the_line_chosen_opens_in_the_file_manager_never_twice_at_once() {
     );
     manager.answer(true);
     assert!(!disk(&window).get_opening());
+}
+
+#[test]
+fn a_file_manager_refusing_at_once_is_said() {
+    let home = home();
+    let mut seams = seams(&home, &Rc::default());
+    // Refused before any call: a folder replaced, a portal not reached.
+    seams.disk.open = Rc::new(|_, done| done(false));
+    let (window, _sampler) = on_disk(seams);
+    analyzed(&window);
+    disk(&window).invoke_choose(index_of(&window, "large"));
+    disk(&window).invoke_open_chosen();
+    assert!(!disk(&window).get_opening());
+    assert!(disk(&window).get_open_refused());
 }
 
 #[test]
@@ -725,22 +739,6 @@ fn escape_stops_the_analysis_its_stop_button_focused() {
     button(&window, "Arrêter");
     press(&window, slint::platform::Key::Escape);
     assert_eq!(step(&window), ui::DiskStep::Start);
-}
-
-#[test]
-fn a_folder_replaced_since_the_analysis_is_never_shown() {
-    let home = home();
-    let folder = home.path().join("small");
-    let identity = |opened: std::io::Result<_>| {
-        let (_, status): (std::os::fd::OwnedFd, okapi_platform::EntryStatus) = opened.unwrap();
-        status.identity
-    };
-    let read = identity(okapi_platform::open_path(&folder, true));
-    assert!(still_analyzed(okapi_platform::open_path(&folder, true), Some(read)).is_ok());
-    assert!(still_analyzed(okapi_platform::open_path(&folder, true), None).is_ok());
-    fs::rename(&folder, home.path().join("moved")).unwrap();
-    fs::create_dir(&folder).unwrap();
-    assert!(still_analyzed(okapi_platform::open_path(&folder, true), Some(read)).is_err());
 }
 
 #[test]

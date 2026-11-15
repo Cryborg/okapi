@@ -26,6 +26,7 @@ use okapi_tools::apps::{AppKey, Arrival, Part, Rest, Source, SourceReading};
 use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 
 use crate::dashboard::TOAST_SHOWN_FOR;
+use crate::dates::MINUTES_EVERY;
 use crate::shown::{shown, size};
 use crate::ui;
 use rows::Entry;
@@ -35,8 +36,6 @@ const READ_EVERY: Duration = Duration::from_millis(500);
 /// How long sizes that come in wait before they move the lines again (a
 /// search, a filter, a new source sort at once).
 const SORT_EVERY: Duration = Duration::from_secs(2);
-/// How often « lues il y a N min » is said again.
-const MINUTES_EVERY: Duration = Duration::from_secs(30);
 /// A list older than this is read again when the page is shown.
 const READ_AGAIN_AFTER: jiff::SignedDuration = jiff::SignedDuration::from_mins(5);
 

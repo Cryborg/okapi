@@ -2714,3 +2714,511 @@ msgstr "{} and a package that depends on it will go. Space freed: unknown."
 msgctxt "Uninstall"
 msgid "Place libérée : inconnue."
 msgstr "Space freed: unknown."
+
+msgctxt "Sidebar"
+msgid "Doublons"
+msgstr "Duplicates"
+
+msgctxt "DuplicateWords"
+msgid "Gardée : a d'autres noms"
+msgstr "Kept: has other names"
+
+msgctxt "DuplicateWords"
+msgid "Gardée : pas de corbeille sur ce disque"
+msgstr "Kept: no trash on this disk"
+
+msgctxt "DuplicateWords"
+msgid "Gardée : hors {} et {}"
+msgstr "Kept: outside {} and {}"
+
+msgctxt "DuplicateWords"
+msgid "Gardée : hors {}"
+msgstr "Kept: outside {}"
+
+msgctxt "DuplicateWords"
+msgid "Gardée : la plus ancienne"
+msgstr "Kept: the oldest"
+
+msgctxt "DuplicateWords"
+msgid "Gardée : la plus récente"
+msgstr "Kept: the newest"
+
+msgctxt "DuplicateWords"
+msgid "Gardée : le chemin le plus court"
+msgstr "Kept: the shortest path"
+
+msgctxt "DuplicateWords"
+msgid "Gardée : dans {}"
+msgstr "Kept: in {}"
+
+msgctxt "DuplicateWords"
+msgid "Gardée : hors de vos dossiers personnels"
+msgstr "Kept: outside your personal folders"
+
+msgctxt "DuplicateWords"
+msgid "Gardée"
+msgstr "Kept"
+
+msgctxt "DuplicateWords"
+msgid "Vers la corbeille"
+msgstr "To the trash"
+
+msgctxt "DuplicateWords"
+msgid "{} copies de {}"
+msgstr "{} copies of {}"
+
+msgctxt "DuplicateWords"
+msgid "{}, {}, {} à gagner, déplié"
+msgstr "{}, {}, {} to gain, expanded"
+
+msgctxt "DuplicateWords"
+msgid "{}, {}, {} à gagner, replié"
+msgstr "{}, {}, {} to gain, collapsed"
+
+msgctxt "DuplicateWords"
+msgid "{}, {}, {}"
+msgstr "{}, {}, {}"
+
+msgctxt "DuplicateWords"
+msgid "Pas de corbeille sur ce disque : Okapi ne supprime jamais sans corbeille"
+msgstr "No trash on this disk: Okapi never deletes without a trash"
+
+msgctxt "DuplicateWords"
+msgid "A d'autres noms : la retirer ne libérerait rien"
+msgstr "Has other names: removing it would free nothing"
+
+msgctxt "DuplicateWords"
+msgid "Une copie reste toujours"
+msgstr "One copy always stays"
+
+msgctxt "DuplicateWords"
+msgid "A changé depuis la recherche"
+msgstr "Changed since the search"
+
+msgctxt "DuplicateWords"
+msgid "Introuvable"
+msgstr "Not found"
+
+msgctxt "DuplicateWords"
+msgid "La copie gardée a changé"
+msgstr "The kept copy changed"
+
+msgctxt "DuplicateWords"
+msgid "Pas d'autre copie sûre"
+msgstr "No other safe copy"
+
+msgctxt "DuplicateWords"
+msgid "Pas de corbeille sur ce disque"
+msgstr "No trash on this disk"
+
+msgctxt "DuplicateWords"
+msgid "Refusé par le système"
+msgstr "Refused by the system"
+
+msgctxt "DuplicateWords"
+msgid "Exclu dans les Réglages"
+msgstr "Excluded in the Settings"
+
+msgctxt "DuplicateWords"
+msgid "Parti à la corbeille sans vérification"
+msgstr "Went to the trash unverified"
+
+msgctxt "DuplicateWords"
+msgid "Système non pris en charge"
+msgstr "System not supported"
+
+msgctxt "DuplicateWords"
+msgid "Refusé par Okapi"
+msgstr "Refused by Okapi"
+
+msgctxt "DuplicateWords"
+msgid "Son contenu n'est plus celui de la recherche."
+msgstr "Its content is no longer what the search found."
+
+msgctxt "DuplicateWords"
+msgid "Déplacé ou supprimé entre-temps."
+msgstr "Moved or deleted meanwhile."
+
+msgctxt "DuplicateWords"
+msgid "Sans copie identique à sa place, celle-ci reste."
+msgstr "With no identical copy in its place, this one stays."
+
+msgctxt "DuplicateWords"
+msgid "Les autres copies sont peut-être ce même fichier vu ailleurs : celle-ci reste."
+msgstr "The other copies may be this very file seen elsewhere: this one stays."
+
+msgctxt "DuplicateWords"
+msgid "Okapi ne supprime jamais sans corbeille."
+msgstr "Okapi never deletes without a trash."
+
+msgctxt "DuplicateWords"
+msgid "Le système n'a pas permis de le déplacer."
+msgstr "The system did not allow moving it."
+
+msgctxt "DuplicateWords"
+msgid "Exclu depuis la recherche, il reste à sa place."
+msgstr "Excluded since the search, it stays where it is."
+
+msgctxt "DuplicateWords"
+msgid "Un autre programme l'a changé pendant le déplacement : il reste restaurable depuis la corbeille."
+msgstr "Another program changed it during the move: it can still be restored from the trash."
+
+msgctxt "DuplicateWords"
+msgid "Ce système ne dit pas où sont ses montages : rien n'est déplacé sans le savoir."
+msgstr "This system does not tell where its mounts are: nothing is moved without knowing."
+
+msgctxt "DuplicateWords"
+msgid "Okapi garde toujours une copie de chaque fichier."
+msgstr "Okapi always keeps one copy of each file."
+
+msgctxt "DuplicateWords"
+msgid "Dans tout le dossier personnel"
+msgstr "In the whole home folder"
+
+msgctxt "DuplicateWords"
+msgid "Dans {}"
+msgstr "In {}"
+
+msgctxt "RefusalBanner"
+msgid "Votre dernier changement de réglages est en cours d'enregistrement : rien n'a été fait, réessayez dans un instant."
+msgstr "Your last change of the settings is being saved: nothing was done, try again in a moment."
+
+msgctxt "RefusalBanner"
+msgid "Votre dernier changement de réglages n'a pas pu être enregistré : rien n'a été fait, pour ne pas manquer une exclusion."
+msgstr "Your last change of the settings could not be saved: nothing was done, so as not to miss an exclusion."
+
+msgctxt "RefusalBanner"
+msgid "Une exclusion de vos réglages est refusée : rien n'a été fait. Corrigez-la dans les Réglages."
+msgstr "An exclusion of your settings is refused: nothing was done. Correct it in the Settings."
+
+msgctxt "RefusalBanner"
+msgid "Vos réglages n'ont pas pu être lus : rien n'a été fait, pour ne pas manquer une exclusion."
+msgstr "Your settings could not be read: nothing was done, so as not to miss an exclusion."
+
+msgctxt "RefusalBanner"
+msgid "Ces dossiers n'ont pas pu être ouverts : rien n'a été recherché."
+msgstr "These folders could not be opened: nothing was searched."
+
+msgctxt "RefusalBanner"
+msgid "La corbeille n'a pas pu être ouverte : rien n'a bougé. Le détail est dans le journal."
+msgstr "The trash could not be opened: nothing moved. The details are in the log."
+
+msgctxt "RefusalBanner"
+msgid "Le système n'a pas donné de quoi travailler : rien n'a été fait. Le détail est dans le journal."
+msgstr "The system gave nothing to work with: nothing was done. The details are in the log."
+
+msgctxt "PickLine"
+msgid "{}, {}"
+msgstr "{}, {}"
+
+msgctxt "DuplicateStart"
+msgid "Doublons"
+msgstr "Duplicates"
+
+msgctxt "DuplicateStart"
+msgid "Trouvez les fichiers identiques, contenu compris, et gardez-en une seule copie. Rien ne part sans votre accord, et tout passe par la corbeille."
+msgstr "Find identical files, content included, and keep a single copy. Nothing goes without your consent, and everything goes through the trash."
+
+msgctxt "DuplicateStart"
+msgid "Où chercher ?"
+msgstr "Where to search?"
+
+msgctxt "DuplicateStart"
+msgid "Lecture de vos dossiers personnels…"
+msgstr "Reading your personal folders…"
+
+msgctxt "DuplicateStart"
+msgid "Tout le dossier personnel"
+msgstr "The whole home folder"
+
+msgctxt "DuplicateStart"
+msgid "Remplace les dossiers ci-dessus"
+msgstr "Replaces the folders above"
+
+msgctxt "DuplicateStart"
+msgid "Rechercher"
+msgstr "Search"
+
+msgctxt "DuplicateStart"
+msgid "Dossiers choisis : {}"
+msgstr "Folders chosen: {}"
+
+msgctxt "DuplicateSearching"
+msgid "Doublons"
+msgstr "Duplicates"
+
+msgctxt "DuplicateSearching"
+msgid "Arrêter"
+msgstr "Stop"
+
+msgctxt "DuplicateSearching"
+msgid "Changer les dossiers"
+msgstr "Change the folders"
+
+msgctxt "DuplicateSearching"
+msgid "Ouverture des dossiers…"
+msgstr "Opening the folders…"
+
+msgctxt "DuplicateSearching"
+msgid "Liste des fichiers… Fichiers : {}"
+msgstr "Listing the files… Files: {}"
+
+msgctxt "DuplicateSearching"
+msgid "Liste des fichiers : terminée. Fichiers : {}"
+msgstr "Listing the files: done. Files: {}"
+
+msgctxt "DuplicateSearching"
+msgid "Comparaison du contenu… Fichiers lus : {} sur {}"
+msgstr "Comparing the content… Files read: {} of {}"
+
+msgctxt "DuplicateSearching"
+msgid "Comparaison du contenu… {} sur {}"
+msgstr "Comparing the content… {} of {}"
+
+msgctxt "DuplicateSearching"
+msgid "Comparaison du contenu"
+msgstr "Comparing the content"
+
+msgctxt "DuplicateSearching"
+msgid "Les groupes s'affichent à la fin de la comparaison. Rien n'est mis à la corbeille pendant la recherche. Échap arrête la recherche."
+msgstr "The groups show at the end of the comparison. Nothing is moved to the trash during the search. Escape stops the search."
+
+msgctxt "DuplicateSearching"
+msgid "Recherche arrêtée. Rien n'a été gardé : une nouvelle recherche repart du début."
+msgstr "Search stopped. Nothing was kept: a new search starts from the beginning."
+
+msgctxt "DuplicateSearching"
+msgid "Rechercher à nouveau"
+msgstr "Search again"
+
+msgctxt "DuplicateSearching"
+msgid "La recherche a échoué : rien n'a été gardé. Le détail est dans le journal."
+msgstr "The search failed: nothing was kept. The details are in the log."
+
+msgctxt "TreeLine"
+msgid "A d'autres noms : la retirer ne libérerait rien"
+msgstr "Has other names: removing it would free nothing"
+
+msgctxt "Tree"
+msgid "Groupes de doublons, triés par place à gagner"
+msgstr "Groups of duplicates, sorted by space to gain"
+
+msgctxt "Tree"
+msgid "↑ ↓ se déplacer. Espace : cocher. Entrée ou → : déplier. ← : replier."
+msgstr "↑ ↓ move. Space: check. Enter or →: expand. ←: collapse."
+
+msgctxt "DuplicatePanel"
+msgid "Détails de la ligne qui a le focus"
+msgstr "Details of the line with the focus"
+
+msgctxt "DuplicatePanel"
+msgid "Dossier : {}"
+msgstr "Folder: {}"
+
+msgctxt "DuplicatePanel"
+msgid "Taille : {}"
+msgstr "Size: {}"
+
+msgctxt "DuplicatePanel"
+msgid "Modifié : {}"
+msgstr "Modified: {}"
+
+msgctxt "DuplicatePanel"
+msgid "C'est la seule copie gardée de ce groupe : une copie reste toujours. Pour garder une autre copie à sa place, décochez-la d'abord."
+msgstr "This is the only copy kept in this group: one copy always stays. To keep another copy instead, uncheck it first."
+
+msgctxt "DuplicatePanel"
+msgid "Ce fichier a d'autres noms : le retirer ne libérerait rien, son contenu reste sous ses autres noms."
+msgstr "This file has other names: removing it would free nothing, its content stays under its other names."
+
+msgctxt "DuplicatePanel"
+msgid "Copies : {}, de {} chacune"
+msgstr "Copies: {}, of {} each"
+
+msgctxt "DuplicatePanel"
+msgid "À gagner : {}"
+msgstr "To gain: {}"
+
+msgctxt "DuplicatePanel"
+msgid "Vers la corbeille : {}. Gardées : {}."
+msgstr "To the trash: {}. Kept: {}."
+
+msgctxt "DuplicatePanel"
+msgid "Descendez sur une copie pour voir son dossier, sa taille et sa date."
+msgstr "Move down to a copy to see its folder, size and date."
+
+msgctxt "DuplicatePanel"
+msgid "Montrer dans le dossier"
+msgstr "Show in its folder"
+
+msgctxt "DuplicatePanel"
+msgid "Le gestionnaire de fichiers n'a pas pu montrer ce fichier : il a peut-être changé depuis la recherche."
+msgstr "The file manager could not show this file: it may have changed since the search."
+
+msgctxt "QuickMenu"
+msgid "Garder la plus ancienne"
+msgstr "Keep the oldest"
+
+msgctxt "QuickMenu"
+msgid "Garder la plus récente"
+msgstr "Keep the newest"
+
+msgctxt "QuickMenu"
+msgid "Garder le chemin le plus court"
+msgstr "Keep the shortest path"
+
+msgctxt "QuickMenu"
+msgid "Garder celles d'un dossier…"
+msgstr "Keep the ones in a folder…"
+
+msgctxt "QuickMenu"
+msgid "Garder celles de {}"
+msgstr "Keep the ones in {}"
+
+msgctxt "DuplicateConfirmation"
+msgid "Mettre à la corbeille ?"
+msgstr "Move to the trash?"
+
+msgctxt "DuplicateConfirmation"
+msgid "Dans chaque groupe, au moins une copie reste à sa place (groupes : {}). Juste avant, Okapi vérifie que chaque fichier n'a pas changé depuis la recherche."
+msgstr "In each group, at least one copy stays where it is (groups: {}). Just before, Okapi checks that each file has not changed since the search."
+
+msgctxt "DuplicateConfirmation"
+msgid "Annuler"
+msgstr "Cancel"
+
+msgctxt "DuplicateConfirmation"
+msgid "Mettre à la corbeille"
+msgstr "Move to the trash"
+
+msgctxt "DuplicateResult"
+msgid "Doublons"
+msgstr "Duplicates"
+
+msgctxt "DuplicateResult"
+msgid "Groupes : {}, {} en double. {}, à l'instant."
+msgstr "Groups: {}, {} duplicated. {}, just now."
+
+msgctxt "DuplicateResult"
+msgid "Groupes : {}, {} en double. {}, il y a {} min."
+msgstr "Groups: {}, {} duplicated. {}, {} min ago."
+
+msgctxt "DuplicateResult"
+msgid "Changer les dossiers"
+msgstr "Change the folders"
+
+msgctxt "DuplicateResult"
+msgid "Rechercher à nouveau"
+msgstr "Search again"
+
+msgctxt "DuplicateResult"
+msgid "Sélection rapide"
+msgstr "Quick selection"
+
+msgctxt "DuplicateResult"
+msgid "Déjà coché : dans chaque groupe, on garde la copie qui a d'autres noms, sinon celle hors des Téléchargements et du Bureau, sinon la plus ancienne, sinon le chemin le plus court. Hors de vos dossiers personnels, rien n'est coché."
+msgstr "Already checked: in each group, the copy with other names is kept, else the one outside Downloads and the Desktop, else the oldest, else the shortest path. Outside your personal folders, nothing is checked."
+
+msgctxt "DuplicateResult"
+msgid "Aucun dossier personnel connu : rien n'est coché d'avance."
+msgstr "No personal folder known: nothing is checked beforehand."
+
+msgctxt "DuplicateResult"
+msgid "Tout désélectionner"
+msgstr "Deselect all"
+
+msgctxt "DuplicateResult"
+msgid "Aucun doublon dans ces dossiers"
+msgstr "No duplicates in these folders"
+
+msgctxt "DuplicateResult"
+msgid "Chercher dans d'autres dossiers"
+msgstr "Search other folders"
+
+msgctxt "DuplicateResult"
+msgid "Choisi"
+msgstr "Chosen"
+
+msgctxt "DuplicateResult"
+msgid "Fichiers : {}. Groupes : {}."
+msgstr "Files: {}. Groups: {}."
+
+msgctxt "DuplicateResult"
+msgid "Mise à la corbeille…"
+msgstr "Moving to the trash…"
+
+msgctxt "DuplicateResult"
+msgid "Tout va à la corbeille. La place n'est libérée qu'en vidant la corbeille."
+msgstr "Everything goes to the trash. The space is freed only when the trash is emptied."
+
+msgctxt "DuplicateResult"
+msgid "Mettre à la corbeille"
+msgstr "Move to the trash"
+
+msgctxt "KeptLine"
+msgid "{}, {}, {}"
+msgstr "{}, {}, {}"
+
+msgctxt "DuplicateReceipt"
+msgid "Rien n'a été mis à la corbeille"
+msgstr "Nothing was moved to the trash"
+
+msgctxt "DuplicateReceipt"
+msgid "{} mis à la corbeille"
+msgstr "{} moved to the trash"
+
+msgctxt "DuplicateReceipt"
+msgid "Fichiers : {}. {}."
+msgstr "Files: {}. {}."
+
+msgctxt "DuplicateReceipt"
+msgid "La place sera libérée quand vous viderez la corbeille. D'ici là, vous pouvez y reprendre n'importe quel fichier."
+msgstr "The space will be freed when you empty the trash. Until then, you can take back any file from it."
+
+msgctxt "DuplicateReceipt"
+msgid "Fichiers à revoir : {}"
+msgstr "Files to review: {}"
+
+msgctxt "DuplicateReceipt"
+msgid "Chacun dit ce qu'il est devenu, et pourquoi."
+msgstr "Each says what became of it, and why."
+
+msgctxt "DuplicateReceipt"
+msgid "Rechercher à nouveau"
+msgstr "Search again"
+
+msgctxt "RefusalBanner"
+msgid "Votre dossier personnel n'a pas pu être lu : rien n'a été recherché. Le détail est dans le journal."
+msgstr "Your home folder could not be read: nothing was searched. The details are in the log."
+
+msgctxt "RefusalBanner"
+msgid "La mise à la corbeille s'est interrompue : certains fichiers y sont peut-être déjà. Recherchez à nouveau pour voir où en sont les doublons."
+msgstr "Moving to the trash was cut short: some files may be there already. Search again to see where the duplicates stand."
+
+msgctxt "DuplicateStart"
+msgid "Vos dossiers personnels n'ont pas pu être lus : seul tout le dossier personnel peut être parcouru, et rien n'y est coché d'avance."
+msgstr "Your personal folders could not be read: only the whole home folder can be searched, and nothing is checked beforehand."
+
+msgctxt "DuplicateStart"
+msgid "Les dossiers cachés (réglages, caches des applications), les dossiers de projet, ~/snap et vos exclusions ne sont jamais parcourus. Seuls les fichiers d'au moins {} sont comparés."
+msgstr "Hidden folders (settings, application caches), project folders, ~/snap and your exclusions are never searched. Only files of at least {} are compared."
+
+msgctxt "DuplicateConfirmation"
+msgid "Fichiers : {} ({}). La place ne sera libérée qu'en vidant la corbeille."
+msgstr "Files: {} ({}). The space will be freed only when the trash is emptied."
+
+msgctxt "DuplicateResult"
+msgid "Fichiers d'au moins {} examinés : {}. Chacun n'existe qu'une fois : il n'y a rien à faire ici."
+msgstr "Files of at least {} examined: {}. Each exists only once: there is nothing to do here."
+
+msgctxt "DuplicateStart"
+msgid "Aucun dossier personnel trouvé : cochez « Tout le dossier personnel » pour chercher. Rien n'y sera coché d'avance."
+msgstr "No personal folder found: check “The whole home folder” to search. Nothing will be checked beforehand."
+
+msgctxt "DuplicateReceipt"
+msgid "Mis à la corbeille sans vérification : voyez ci-dessous"
+msgstr "Moved to the trash unverified: see below"
+
+msgctxt "DuplicateStart"
+msgid "Votre dossier personnel n'a pas pu être lu : rien ne peut être recherché. Le détail est dans le journal."
+msgstr "Your home folder could not be read: nothing can be searched. The details are in the log."

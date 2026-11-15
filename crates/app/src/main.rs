@@ -16,7 +16,9 @@ mod cleaner;
 mod dashboard;
 mod dates;
 mod disk_usage;
+mod duplicates;
 mod elevation;
+mod file_manager;
 mod kept_selections;
 #[cfg(target_os = "linux")]
 mod portal;
@@ -32,6 +34,7 @@ use apps::AppsScreen;
 use cleaner::{CleanerEvent, CleanerScreen, Seams};
 use dashboard::{DashboardScreen, DashboardSeams};
 use disk_usage::DiskUsageScreen;
+use duplicates::DuplicatesScreen;
 use settings::SettingsScreen;
 use updates::UpdatesScreen;
 
@@ -87,6 +90,7 @@ type Screens = (
     DashboardScreen,
     SettingsScreen,
     AppsScreen,
+    DuplicatesScreen,
 );
 
 /// The window in `language`, filled with what it shows of Okapi itself, its
@@ -132,6 +136,15 @@ fn window(
         read()
     });
     let disk = DiskUsageScreen::attach(&window, seams.disk.clone(), language);
+    // The settings as the cleaner reads them, its writes waited for: an
+    // exclusion just added is never missed by a search nor a move.
+    let settled_read = Rc::clone(&seams.read);
+    let duplicates = DuplicatesScreen::attach(
+        &window,
+        seams.duplicates.clone(),
+        Rc::new(move || settled_read().map(|inputs| inputs.exclusions)),
+        language,
+    );
     let updates = UpdatesScreen::attach(&window, seams.updates.clone());
     let apps = AppsScreen::attach(&window, seams.apps.clone(), language);
     let screen = CleanerScreen::attach(&window, seams, language);
@@ -156,8 +169,8 @@ fn window(
         let scale = window.as_ref().map(|window| window.window().scale_factor());
         tracing::debug!(chosen_folded, narrow, ?size, ?scale, "sidebar shown");
     });
-    let dashboard = attach_home(&window, &screen, &disk, &updates, &apps, home);
-    Ok((window, screen, dashboard, settings, apps))
+    let dashboard = attach_home(&window, &screen, &disk, &duplicates, &updates, &apps, home);
+    Ok((window, screen, dashboard, settings, apps, duplicates))
 }
 
 /// Binds the Home page to `window`: it follows the page shown, its
@@ -167,6 +180,7 @@ fn attach_home(
     window: &AppWindow,
     screen: &CleanerScreen,
     disk: &DiskUsageScreen,
+    duplicates: &DuplicatesScreen,
     updates: &UpdatesScreen,
     apps: &AppsScreen,
     home: DashboardSeams,
@@ -176,6 +190,7 @@ fn attach_home(
     disk.read_volumes_from(Rc::new(move || volumes.volumes()));
     // Held here, by the page's callback, as long as the window is.
     let disk = disk.clone();
+    let duplicates = duplicates.clone();
     let updates = updates.clone();
     let apps = apps.clone();
     let heard = dashboard.clone();
@@ -189,6 +204,7 @@ fn attach_home(
         }
         shown_home.page_shown(page);
         disk.page_shown(page);
+        duplicates.page_shown(page);
         updates.page_shown(page);
         apps.page_shown(page);
     });
@@ -269,7 +285,7 @@ fn main() -> ExitCode {
         session = ?SESSION_VARIABLES.map(|name| (name, std::env::var_os(name))),
         "app started"
     );
-    let (window, screen, home, settings, apps) =
+    let (window, screen, home, settings, apps, duplicates) =
         match window(Seams::system(), home_seams(language), language) {
             Ok(window) => window,
             Err(error) => {
@@ -285,6 +301,7 @@ fn main() -> ExitCode {
     ));
     let ran = window.run();
     screen.shut_down();
+    duplicates.shut_down();
     apps.shut_down();
     home.shut_down();
     fold.shut_down();
@@ -846,6 +863,19 @@ mod tests {
             "Rest",
             "Uninstall",
             "AppsPage",
+            "DuplicateWords",
+            "RefusalBanner",
+            "PickLine",
+            "DuplicateStart",
+            "DuplicateSearching",
+            "TreeLine",
+            "Tree",
+            "DuplicatePanel",
+            "QuickMenu",
+            "DuplicateConfirmation",
+            "DuplicateResult",
+            "KeptLine",
+            "DuplicateReceipt",
         ] {
             assert!(
                 texts.iter().any(|(component, _)| component == context),

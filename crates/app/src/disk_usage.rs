@@ -16,7 +16,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
 use jiff::Timestamp;
-use okapi_platform::{FileIdentity, MountList};
+use okapi_platform::MountList;
 use okapi_rules::Language;
 use okapi_tools::disk_usage::{
     FileEntry, FilesError, NodeId, Outcome, ScanError, UsageScan, View, default_threads,
@@ -24,16 +24,14 @@ use okapi_tools::disk_usage::{
 use okapi_tools::monitor::{Unavailable, Volume, VolumeKind, VolumeSpace};
 use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 
-use crate::shown::{shown, size};
+use crate::dates::MINUTES_EVERY;
+use crate::file_manager::{Calls, Open, OpenRequest, open_in_file_manager};
+use crate::shown::{grouped, shown, size};
 use crate::ui;
 use rows::{Arranged, Held, Key, Line, LineKind, LineState, Navigation, Order};
 
 /// How often the screen reads the analysis.
 pub(crate) const READ_EVERY: Duration = Duration::from_millis(500);
-/// How often « analysé il y a N min » is said again.
-const MINUTES_EVERY: Duration = Duration::from_secs(30);
-/// How long a call to the file manager may take before another is allowed.
-const OPEN_WAIT: Duration = Duration::from_secs(20);
 /// How often the screen reads an analysis whose threads are held by a
 /// filesystem that stopped answering: what they still write shows.
 const SLOW_READ_EVERY: Duration = Duration::from_secs(5);
@@ -48,19 +46,6 @@ const SETTLE_READINGS: u32 = 40;
 /// are said unreadable: the Home page's sampler reads them at once.
 const VOLUMES_READINGS: u32 = 20;
 
-/// The file manager asked to show `path`: a folder opened, or a file chosen
-/// in its folder.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpenRequest {
-    pub path: PathBuf,
-    pub folder: bool,
-    /// What a folder must still be (as the analysis read it).
-    pub expected: Option<FileIdentity>,
-}
-
-/// Asks the file manager, then calls back with whether it opened (or the
-/// user closed what it asked: nothing to say then).
-pub type Open = Rc<dyn Fn(&OpenRequest, Box<dyn FnOnce(bool)>)>;
 /// The volumes the system has, as last read; `None` before a first reading.
 pub type Volumes = Rc<dyn Fn() -> Option<Result<Vec<Volume>, Unavailable>>>;
 
@@ -115,60 +100,6 @@ impl DiskSeams {
             threads: default_threads(),
         }
     }
-}
-
-/// The system's way to the file manager: the desktop portal.
-#[cfg(target_os = "linux")]
-fn open_in_file_manager(request: &OpenRequest, done: Box<dyn FnOnce(bool)>) {
-    use crate::portal;
-
-    let opened = still_analyzed(
-        okapi_platform::open_path(&request.path, request.folder),
-        request.expected,
-    );
-    let fd = match opened {
-        Ok(fd) => fd,
-        Err(error) => {
-            tracing::warn!(path = %request.path.display(), %error, "not shown in the file manager");
-            done(false);
-            return;
-        }
-    };
-    let shown = if request.folder {
-        portal::Shown::Folder
-    } else {
-        portal::Shown::Item
-    };
-    let path = request.path.clone();
-    // Answered once: by the portal, or at once when it cannot be asked.
-    let done = Rc::new(std::cell::Cell::new(Some(done)));
-    let answer_to = Rc::clone(&done);
-    let spawned = slint::spawn_local(async move {
-        let answer = portal::show(fd, shown).await;
-        match &answer {
-            Ok(()) => tracing::info!(path = %path.display(), "shown in the file manager"),
-            Err(portal::Refusal::Cancelled) => {
-                tracing::info!(path = %path.display(), "the file manager closed by the user");
-            }
-            Err(refusal) => {
-                tracing::warn!(path = %path.display(), %refusal, "the file manager did not open");
-            }
-        }
-        if let Some(done) = answer_to.take() {
-            done(matches!(answer, Ok(()) | Err(portal::Refusal::Cancelled)));
-        }
-    });
-    if let Err(error) = spawned {
-        tracing::warn!(%error, "the file manager could not be asked");
-        if let Some(done) = done.take() {
-            done(false);
-        }
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn open_in_file_manager(_request: &OpenRequest, done: Box<dyn FnOnce(bool)>) {
-    done(false);
 }
 
 /// What is analyzed.
@@ -256,12 +187,10 @@ struct State {
     shown: Vec<Shown>,
     files: Option<(NodeId, Files)>,
     files_reading: Option<FilesReading>,
-    /// The calls to the file manager made, and the one awaited.
-    open_calls: u64,
-    open_awaited: Option<u64>,
+    /// The call to the file manager awaited.
+    calls: Calls,
     timer: slint::Timer,
     minutes_timer: slint::Timer,
-    open_timer: slint::Timer,
 }
 
 /// What a line of the list is.
@@ -333,11 +262,9 @@ impl DiskUsageScreen {
             shown: Vec::new(),
             files: None,
             files_reading: None,
-            open_calls: 0,
-            open_awaited: None,
+            calls: Calls::default(),
             timer: slint::Timer::default(),
             minutes_timer: slint::Timer::default(),
-            open_timer: slint::Timer::default(),
         };
         let disk = window.global::<ui::DiskUsage>();
         disk.set_volumes(ModelRc::from(Rc::clone(&state.volume_model)));
@@ -831,14 +758,7 @@ impl DiskUsageScreen {
     /// The call to the file manager is no longer awaited: its answer would
     /// speak of another line.
     fn forget_open_call(&self) {
-        {
-            let mut state = self.0.borrow_mut();
-            if let Some(call) = state.open_awaited {
-                tracing::debug!(call, "call to the file manager no longer awaited");
-            }
-            state.open_awaited = None;
-            state.open_timer.stop();
-        }
+        self.0.borrow().calls.forget();
         self.with_window(|window| {
             let disk = window.global::<ui::DiskUsage>();
             disk.set_opening(false);
@@ -1540,7 +1460,7 @@ impl DiskUsageScreen {
     /// Opens the line chosen in the file manager: a folder itself, a file in
     /// its folder, a link's folder (a link is never followed).
     fn open_chosen(&self) {
-        if self.0.borrow().open_awaited.is_some() {
+        if self.0.borrow().calls.awaiting() {
             return;
         }
         let request = {
@@ -1583,53 +1503,26 @@ impl DiskUsageScreen {
                 },
             }
         };
-        let call = {
-            let mut state = self.0.borrow_mut();
-            state.open_calls += 1;
-            state.open_awaited = Some(state.open_calls);
-            state.open_calls
+        let (calls, open) = {
+            let state = self.0.borrow();
+            (state.calls.clone(), Rc::clone(&state.seams.open))
         };
-        tracing::info!(call, path = %request.path.display(), folder = request.folder, "file manager asked");
+        // Said first: the answer may come at once, and say a refusal.
         self.with_window(|window| {
             let disk = window.global::<ui::DiskUsage>();
             disk.set_opening(true);
             disk.set_open_refused(false);
         });
-        // A file manager that never answers frees the button after a while;
-        // its answer, if it comes, is no longer awaited. Set first: an
-        // answer may come at once.
         let weak = Rc::downgrade(&self.0);
-        self.0
-            .borrow()
-            .open_timer
-            .start(slint::TimerMode::SingleShot, OPEN_WAIT, move || {
-                if let Some(state) = weak.upgrade() {
-                    Self(state).opened(call, None);
-                }
-            });
-        let weak = Rc::downgrade(&self.0);
-        let open = Rc::clone(&self.0.borrow().seams.open);
-        open(
-            &request,
-            Box::new(move |opened| {
-                if let Some(state) = weak.upgrade() {
-                    Self(state).opened(call, Some(opened));
-                }
-            }),
-        );
+        calls.ask(&open, &request, move |opened| {
+            if let Some(state) = weak.upgrade() {
+                Self(state).opened(opened);
+            }
+        });
     }
 
-    /// The answer to the call `call`: opened or not; none in time.
-    fn opened(&self, call: u64, opened: Option<bool>) {
-        if self.0.borrow().open_awaited != Some(call) {
-            tracing::debug!(call, ?opened, "answer of a call no longer awaited");
-            return;
-        }
-        self.0.borrow_mut().open_awaited = None;
-        self.0.borrow().open_timer.stop();
-        if opened.is_none() {
-            tracing::warn!(call, "the file manager did not answer in time");
-        }
+    /// The answer to the call awaited: opened or not; none in time.
+    fn opened(&self, opened: Option<bool>) {
         self.with_window(|window| {
             let disk = window.global::<ui::DiskUsage>();
             disk.set_opening(false);
@@ -1674,22 +1567,6 @@ fn files_state(files: Option<&(NodeId, Files)>, folder: NodeId) -> ui::DiskFiles
 /// did not reach yet is no unexplained space).
 fn tells_unexplained(told: bool, phase: Phase) -> bool {
     told && phase == Phase::Ended(Outcome::Complete)
-}
-
-/// The descriptor of what the analysis read, if it still is: `expected`, a
-/// folder's identity then.
-#[cfg(target_os = "linux")]
-fn still_analyzed(
-    opened: std::io::Result<(std::os::fd::OwnedFd, okapi_platform::EntryStatus)>,
-    expected: Option<FileIdentity>,
-) -> std::io::Result<std::os::fd::OwnedFd> {
-    let (fd, status) = opened?;
-    match expected {
-        Some(expected) if status.identity != expected => {
-            Err(std::io::Error::other("no longer the folder analyzed"))
-        }
-        _ => Ok(fd),
-    }
 }
 
 /// Whether `volume` is offered to be analyzed: on this machine, its space
@@ -1771,23 +1648,6 @@ fn unexplained_detail() -> ui::DiskDetail {
     }
 }
 
-/// `count` with its thousands apart, as each language writes them.
-fn grouped(count: u64, language: Language) -> String {
-    let separator = match language {
-        Language::French => '\u{202F}',
-        Language::English => ',',
-    };
-    let digits = count.to_string();
-    let mut text = String::new();
-    for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            text.push(separator);
-        }
-        text.push(digit);
-    }
-    text
-}
-
 // Windows on real folders: Linux only, as the scan's descriptors.
 #[cfg(test)]
 #[cfg(target_os = "linux")]
@@ -1830,13 +1690,5 @@ mod unit {
         ] {
             assert!(!tells_unexplained(true, phase), "{phase:?}");
         }
-    }
-
-    #[test]
-    fn counts_have_their_thousands_apart() {
-        assert_eq!(grouped(128_400, Language::French), "128\u{202F}400");
-        assert_eq!(grouped(1_234_567, Language::English), "1,234,567");
-        assert_eq!(grouped(999, Language::French), "999");
-        assert_eq!(grouped(0, Language::English), "0");
     }
 }

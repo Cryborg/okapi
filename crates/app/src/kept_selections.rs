@@ -161,7 +161,7 @@ mod tests {
     /// testing platform is set up once per test.
     fn launched(sandbox: &Sandbox) -> (ui::AppWindow, CleanerScreen) {
         let state = sandbox.root.join("state");
-        let (window, screen, _home, _settings, _apps) = crate::window(
+        let (window, screen, _home, _settings, _apps, _duplicates) = crate::window(
             sandbox.read(&state),
             crate::dashboard::tests::inert(),
             Language::French,

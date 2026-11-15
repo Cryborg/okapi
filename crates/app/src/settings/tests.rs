@@ -1005,12 +1005,8 @@ fn the_settings_entry_leads_to_the_screen() {
 }
 
 #[test]
-fn a_path_is_shown_from_home_by_whole_components() {
+fn a_path_typed_from_home_is_expanded() {
     let home = Path::new("/home/ana");
-    assert_eq!(shown(Path::new("/home/ana/x/y"), Some(home)), "~/x/y");
-    assert_eq!(shown(Path::new("/home/ana"), Some(home)), "~");
-    assert_eq!(shown(Path::new("/home/ana2/x"), Some(home)), "/home/ana2/x");
-    assert_eq!(shown(Path::new("/data"), None), "/data");
     assert_eq!(expanded("~/x", Some(home)), "/home/ana/x");
     assert_eq!(expanded("~", Some(home)), "/home/ana");
     assert_eq!(expanded("~x", Some(home)), "~x");

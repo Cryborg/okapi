@@ -19,14 +19,13 @@ use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 
 use crate::saving::{LastWrite, Saver, WRITE_CHECK};
 use crate::shown::shown as count;
+use crate::shown::{HOME_MARK, from_home};
 use crate::ui;
 
 /// The thread that writes the settings.
 const SAVER_NAME: &str = "okapi-settings-save";
 /// The minimum ages offered, in minutes.
 const MIN_AGE_CHOICES: [u64; 4] = [30, 60, 120, 1440];
-/// What stands for the home folder in a path shown.
-const HOME_MARK: &str = "~";
 
 /// Why what reads the settings would miss the user's last change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,7 +240,7 @@ impl SettingsScreen {
         let home = seams.home.as_deref();
         let path_shown = |path: Option<PathBuf>| {
             path.as_deref()
-                .map(|path| shown(path, home))
+                .map(|path| from_home(path, home))
                 .unwrap_or_default()
                 .into()
         };
@@ -682,7 +681,7 @@ impl State {
             .exclusions
             .iter()
             .map(|entry| ui::ExclusionRow {
-                text: shown(Path::new(entry), home).into(),
+                text: from_home(Path::new(entry), home).into(),
                 kind: kind_of(entry),
             })
             .collect();
@@ -759,15 +758,6 @@ fn expanded(typed: &str, home: Option<&Path>) -> String {
 /// and extensions ignoring case: `/data/` is `/data`, `*.LOG` is `*.log`.
 fn same(one: &str, other: &str) -> bool {
     Path::new(&one.to_lowercase()) == Path::new(&other.to_lowercase())
-}
-
-/// `path` as shown: below `home` (by whole components), from `~`.
-fn shown(path: &Path, home: Option<&Path>) -> String {
-    match home.and_then(|home| path.strip_prefix(home).ok()) {
-        Some(below) if below.as_os_str().is_empty() => HOME_MARK.to_owned(),
-        Some(below) => format!("{HOME_MARK}/{}", below.display()),
-        None => path.display().to_string(),
-    }
 }
 
 /// What an exclusion written in the settings is: refused by the engine

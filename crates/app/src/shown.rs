@@ -1,7 +1,9 @@
 //! What the screens show the same way: counts within what the window
-//! holds, sizes as Slint words them (`Words.size`), models filled row by row.
+//! holds, with their thousands apart, paths from the home folder, sizes as
+//! Slint words them (`Words.size`), models filled row by row.
 
 use okapi_engine::{ByteSize, SizeUnit};
+use okapi_rules::Language;
 use slint::{Model as _, VecModel};
 
 use crate::ui;
@@ -28,6 +30,35 @@ pub(crate) fn size(bytes: u64) -> ui::Size {
             SizeUnit::Gigabyte => ui::SizeUnit::Gigabyte,
             SizeUnit::Terabyte => ui::SizeUnit::Terabyte,
         },
+    }
+}
+
+/// `count` with its thousands apart, as each language writes them.
+pub(crate) fn grouped(count: u64, language: Language) -> String {
+    let separator = match language {
+        Language::French => '\u{202F}',
+        Language::English => ',',
+    };
+    let digits = count.to_string();
+    let mut text = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            text.push(separator);
+        }
+        text.push(digit);
+    }
+    text
+}
+
+/// What stands for the home folder in a path shown.
+pub(crate) const HOME_MARK: &str = "~";
+
+/// `path` as shown: below `home` (by whole components), from `~`.
+pub(crate) fn from_home(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
+    match home.and_then(|home| path.strip_prefix(home).ok()) {
+        Some(below) if below.as_os_str().is_empty() => HOME_MARK.to_owned(),
+        Some(below) => format!("{HOME_MARK}/{}", below.display()),
+        None => path.display().to_string(),
     }
 }
 
@@ -73,5 +104,27 @@ mod tests {
         assert!(!size(999).has_tenths);
         assert_eq!(shown(usize::MAX), i32::MAX);
         assert_eq!(shown(7_usize), 7);
+    }
+
+    #[test]
+    fn counts_have_their_thousands_apart() {
+        assert_eq!(grouped(128_400, Language::French), "128\u{202F}400");
+        assert_eq!(grouped(1_234_567, Language::English), "1,234,567");
+        assert_eq!(grouped(999, Language::French), "999");
+        assert_eq!(grouped(0, Language::English), "0");
+    }
+
+    #[test]
+    fn a_path_is_shown_from_home_by_whole_components() {
+        use std::path::Path;
+
+        let home = Path::new("/home/ana");
+        assert_eq!(from_home(Path::new("/home/ana/x/y"), Some(home)), "~/x/y");
+        assert_eq!(from_home(Path::new("/home/ana"), Some(home)), "~");
+        assert_eq!(
+            from_home(Path::new("/home/ana2/x"), Some(home)),
+            "/home/ana2/x"
+        );
+        assert_eq!(from_home(Path::new("/data"), None), "/data");
     }
 }

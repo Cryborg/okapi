@@ -2,6 +2,8 @@
 //! yesterday or a date, with the hour and minute. The numbers come from
 //! here, the words from Slint (`DashboardWords`).
 
+use std::time::Duration;
+
 use jiff::Timestamp;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
@@ -56,6 +58,9 @@ fn day_of(date: Date, today: Date) -> Day {
 }
 
 const SECONDS_PER_MINUTE: i64 = 60;
+
+/// How often a screen says again « il y a N min ».
+pub(crate) const MINUTES_EVERY: Duration = Duration::from_secs(30);
 
 /// Whole minutes from `end` to `now`; 0 for a clock set back.
 pub(crate) fn minutes_since(end: Timestamp, now: Timestamp) -> i64 {

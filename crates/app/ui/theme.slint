@@ -224,6 +224,17 @@ export global Theme {
     out property <length> duplicate-panel-width: 300px;
     out property <length> duplicate-panel-width-narrow: 248px;
     out property <length> duplicate-step-dot: 24px;
+    // The width a character of a path is taken to have, generously: the
+    // column holds as many characters as fit at this width, and Rust cuts a
+    // path to them by whole folders. The column of why a file stayed, in
+    // the receipt (`whyw` of the mockup). The skeletons of the groups while
+    // the search runs: their bars' height, and how much of the line each
+    // takes.
+    out property <length> duplicate-path-character: 8px;
+    out property <length> duplicate-why-width: 340px;
+    out property <length> duplicate-why-width-narrow: 260px;
+    out property <length> duplicate-skeleton-height: 12px;
+    out property <[float]> duplicate-skeleton-widths: [0.38, 0.24, 0.31, 0.19, 0.27, 0.34];
     // The settings screen (okapi.css `.tgl`, `.seg`, and Settings.dc.html):
     // a switch, its knob and how far the knob sits from its edge; a
     // segmented choice, its segments and the room around them; a row of

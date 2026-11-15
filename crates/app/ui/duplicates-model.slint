@@ -1,0 +1,157 @@
+import { Size } from "cleaner-model.slint";
+import { Moment } from "dashboard-model.slint";
+
+// Where the screen stands.
+export enum DuplicatesStep { start, searching, result, receipt }
+
+// How the search shown runs, or why it ended without a result.
+export enum SearchPhase { opening, running, stopped, failed }
+
+// What the search is at: its folders listed, then the files of one size
+// read at their ends, then the files still alike read whole.
+export enum SearchStage { listing, ends, contents }
+
+// Why nothing started, or nothing moved: the settings unreadable, their
+// last change still being written or not written, an exclusion refused, the
+// home folder unread, no folder that opens, the system gave no thread, the
+// trash cannot be opened, a move to the trash cut short.
+export enum DuplicatesRefusal { none, settings, saving, unsaved, exclusion, home, folder, thread, trash, interrupted }
+
+// Why a copy is kept, said on its badge.
+export enum KeptWhy { none, other-names, other-device, outside, oldest, newest, shortest, in-folder, outside-personal }
+
+// Why a copy asked for stayed where it was, or went unchecked.
+export enum ReceiptWhy { changed, gone, keeper-changed, no-sure-keeper, other-device, refused, excluded, unsupported, okapi, unchecked }
+
+// A rule the user applies to every group at once.
+export enum QuickRule { oldest, newest, shortest, folder }
+
+// What the start knows of the personal folders: being read, read, none
+// named, or they could not be read; or the home folder itself is unknown.
+export enum FoldersState { reading, read, none, unread, homeless }
+
+// A personal folder offered at the start.
+export struct PersonalShown {
+    name: string,
+    path: string,
+    checked: bool,
+}
+
+// One line of the tree: a group's header, or one of its copies, all of one
+// height. A copy names its header's line (`head`).
+export struct DuplicateRow {
+    is-head: bool,
+    head: int,
+    // The file's name; of a copy, its folder as shown, its path cut at its
+    // start and whole.
+    name: string,
+    folder: string,
+    path: string,
+    full-path: string,
+    size: Size,
+    // A header: its copies, what it frees at most, unfolded, how many of
+    // its copies are checked.
+    copies: int,
+    gain: Size,
+    open: bool,
+    checked-count: int,
+    // A copy: when it last changed, whether it goes, may be checked, is
+    // the last one left unchecked of its group, frees nothing.
+    modified: Moment,
+    checked: bool,
+    checkable: bool,
+    last: bool,
+    other-names: bool,
+    why: KeptWhy,
+    // The folders a reason names: one or two.
+    why-first: string,
+    why-second: string,
+}
+
+// A file that stayed where it was, or went to the trash unchecked.
+export struct KeptShown {
+    name: string,
+    folder: string,
+    size: Size,
+    why: ReceiptWhy,
+}
+
+// The duplicates screen: Rust fills it, the page shows it and calls back.
+// What goes to the trash is named by the rows checked, never by a path.
+export global Duplicates {
+    in property <DuplicatesStep> step;
+    in property <DuplicatesRefusal> refused: DuplicatesRefusal.none;
+
+    // The start: the personal folders, being read or read; the whole home
+    // folder instead.
+    in property <FoldersState> folders-state;
+    in property <[PersonalShown]> folders;
+    in-out property <bool> whole-home;
+    in property <string> home-path;
+    // The smallest file compared.
+    in property <Size> min-size;
+    in property <int> chosen-folders;
+
+    // The search: what it looks in (the names of its folders, or the home
+    // folder), where it stands.
+    in property <bool> searched-home;
+    in property <string> searched-names;
+    in property <SearchPhase> phase;
+    in property <SearchStage> stage;
+    in property <string> files-listed;
+    in property <string> ends-read;
+    in property <string> ends-to-read;
+    in property <Size> bytes-read;
+    in property <Size> bytes-to-read;
+    in property <float> done;
+
+    // The result.
+    in property <int> groups;
+    // The rule is said: personal folders are known.
+    in property <bool> rule-said;
+    in property <Size> duplicated;
+    in property <string> compared;
+    in property <int> minutes;
+    in property <[DuplicateRow]> rows;
+    in-out property <int> current: 0;
+    // The personal folders holding a copy, for « Garder celles d'un
+    // dossier ».
+    in property <[string]> quick-folders;
+    in property <Size> chosen-size;
+    in property <int> chosen-files;
+    in property <int> chosen-groups;
+    // Opened and closed by Rust, which keeps what it confirms.
+    in property <bool> confirming;
+    in property <bool> trashing;
+    in property <bool> opening;
+    // Of the copy with the focus, asked for: another line chosen, it is no
+    // more.
+    in-out property <bool> open-refused;
+
+    // The receipt.
+    in property <int> trashed-files;
+    // Gone to the trash, checked or not (another program changed it), and
+    // their size.
+    in property <int> moved-files;
+    in property <Size> moved;
+    in property <Moment> trashed-at;
+    in property <[KeptShown]> kept;
+
+    callback toggle-folder(int);
+    callback search();
+    callback stop();
+    callback change();
+    callback again();
+    // The row at an index: checked or unchecked, folded or unfolded,
+    // shown in the file manager.
+    callback toggle(int);
+    callback fold(int, bool);
+    callback open(int);
+    callback quick(QuickRule, int);
+    callback deselect-all();
+    callback trash();
+    callback cancel-confirmation();
+    callback confirm();
+    // How many characters a path may take, as the list is wide.
+    callback path-room(int);
+}

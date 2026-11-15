@@ -1,0 +1,1418 @@
+// The duplicates screen (docs/design/maquette/project/Duplicates*.dc.html):
+// where to search, the search, its groups of copies and which go to the
+// trash, the confirmation, the receipt.
+import { ListView } from "std-widgets.slint";
+import { Theme, Screen } from "theme.slint";
+import { Words } from "cleaner-model.slint";
+import { DashboardWords } from "dashboard-widgets.slint";
+import {
+    ActionButton, Badge, Banner, ButtonKind, Card, CheckMark, Detail, Footer, FocusRing, Icon,
+    ModalFrame, ProgressBar, ScrolledList, Title,
+} from "widgets.slint";
+import {
+    DuplicateRow, Duplicates, DuplicatesRefusal, DuplicatesStep, FoldersState, KeptShown, KeptWhy,
+    QuickRule, ReceiptWhy, SearchPhase, SearchStage,
+} from "duplicates-model.slint";
+
+// What the screen says, the same for the eye and the ear.
+global DuplicateWords {
+    // Why a copy is kept, on its badge.
+    pure public function kept(row: DuplicateRow) -> string {
+        if row.why == KeptWhy.other-names {
+            return @tr("Gardée : a d'autres noms");
+        }
+        if row.why == KeptWhy.other-device {
+            return @tr("Gardée : pas de corbeille sur ce disque");
+        }
+        if row.why == KeptWhy.outside && row.why-second != "" {
+            return @tr("Gardée : hors {} et {}", row.why-first, row.why-second);
+        }
+        if row.why == KeptWhy.outside {
+            return @tr("Gardée : hors {}", row.why-first);
+        }
+        if row.why == KeptWhy.oldest {
+            return @tr("Gardée : la plus ancienne");
+        }
+        if row.why == KeptWhy.newest {
+            return @tr("Gardée : la plus récente");
+        }
+        if row.why == KeptWhy.shortest {
+            return @tr("Gardée : le chemin le plus court");
+        }
+        if row.why == KeptWhy.in-folder {
+            return @tr("Gardée : dans {}", row.why-first);
+        }
+        if row.why == KeptWhy.outside-personal {
+            return @tr("Gardée : hors de vos dossiers personnels");
+        }
+        return @tr("Gardée");
+    }
+
+    pure public function fate(row: DuplicateRow) -> string {
+        return row.checked ? @tr("Vers la corbeille") : kept(row);
+    }
+
+    // "3 copies de 4,2 Mo": a group has two copies at least.
+    pure public function copies(row: DuplicateRow) -> string {
+        return @tr("{} copies de {}", row.copies, Words.size(row.size));
+    }
+
+    // What a line is, as a screen reader says it.
+    pure public function spoken(row: DuplicateRow) -> string {
+        if row.is-head {
+            return row.open ? @tr("{}, {}, {} à gagner, déplié", row.name, copies(row), Words.size(row.gain))
+                : @tr("{}, {}, {} à gagner, replié", row.name, copies(row), Words.size(row.gain));
+        }
+        return @tr("{}, {}, {}", row.full-path, DashboardWords.moment-first(row.modified), fate(row));
+    }
+
+    // Why a copy's box cannot be checked, if it cannot.
+    pure public function locked(row: DuplicateRow) -> string {
+        if row.checked || row.checkable {
+            return "";
+        }
+        return row.why == KeptWhy.other-device ? @tr("Pas de corbeille sur ce disque : Okapi ne supprime jamais sans corbeille")
+            : row.other-names ? @tr("A d'autres noms : la retirer ne libérerait rien")
+            : @tr("Une copie reste toujours");
+    }
+
+    // Why a file asked for stayed, and what that means.
+    pure public function why(kept: KeptShown) -> string {
+        if kept.why == ReceiptWhy.changed {
+            return @tr("A changé depuis la recherche");
+        }
+        if kept.why == ReceiptWhy.gone {
+            return @tr("Introuvable");
+        }
+        if kept.why == ReceiptWhy.keeper-changed {
+            return @tr("La copie gardée a changé");
+        }
+        if kept.why == ReceiptWhy.no-sure-keeper {
+            return @tr("Pas d'autre copie sûre");
+        }
+        if kept.why == ReceiptWhy.other-device {
+            return @tr("Pas de corbeille sur ce disque");
+        }
+        if kept.why == ReceiptWhy.refused {
+            return @tr("Refusé par le système");
+        }
+        if kept.why == ReceiptWhy.excluded {
+            return @tr("Exclu dans les Réglages");
+        }
+        if kept.why == ReceiptWhy.unchecked {
+            return @tr("Parti à la corbeille sans vérification");
+        }
+        if kept.why == ReceiptWhy.unsupported {
+            return @tr("Système non pris en charge");
+        }
+        return @tr("Refusé par Okapi");
+    }
+
+    pure public function why-more(kept: KeptShown) -> string {
+        if kept.why == ReceiptWhy.changed {
+            return @tr("Son contenu n'est plus celui de la recherche.");
+        }
+        if kept.why == ReceiptWhy.gone {
+            return @tr("Déplacé ou supprimé entre-temps.");
+        }
+        if kept.why == ReceiptWhy.keeper-changed {
+            return @tr("Sans copie identique à sa place, celle-ci reste.");
+        }
+        if kept.why == ReceiptWhy.no-sure-keeper {
+            return @tr("Les autres copies sont peut-être ce même fichier vu ailleurs : celle-ci reste.");
+        }
+        if kept.why == ReceiptWhy.other-device {
+            return @tr("Okapi ne supprime jamais sans corbeille.");
+        }
+        if kept.why == ReceiptWhy.refused {
+            return @tr("Le système n'a pas permis de le déplacer.");
+        }
+        if kept.why == ReceiptWhy.excluded {
+            return @tr("Exclu depuis la recherche, il reste à sa place.");
+        }
+        if kept.why == ReceiptWhy.unchecked {
+            return @tr("Un autre programme l'a changé pendant le déplacement : il reste restaurable depuis la corbeille.");
+        }
+        if kept.why == ReceiptWhy.unsupported {
+            return @tr("Ce système ne dit pas où sont ses montages : rien n'est déplacé sans le savoir.");
+        }
+        return @tr("Okapi garde toujours une copie de chaque fichier.");
+    }
+
+    // Where the search looks.
+    pure public function searched() -> string {
+        return Duplicates.searched-home ? @tr("Dans tout le dossier personnel") : @tr("Dans {}", Duplicates.searched-names);
+    }
+}
+
+// Why nothing started, or nothing moved, as it concerns the settings and
+// the start.
+component RefusalBanner inherits Banner {
+    warning: true;
+    text: Duplicates.refused == DuplicatesRefusal.saving ? @tr("Votre dernier changement de réglages est en cours d'enregistrement : rien n'a été fait, réessayez dans un instant.")
+        : Duplicates.refused == DuplicatesRefusal.unsaved ? @tr("Votre dernier changement de réglages n'a pas pu être enregistré : rien n'a été fait, pour ne pas manquer une exclusion.")
+        : Duplicates.refused == DuplicatesRefusal.exclusion ? @tr("Une exclusion de vos réglages est refusée : rien n'a été fait. Corrigez-la dans les Réglages.")
+        : Duplicates.refused == DuplicatesRefusal.settings ? @tr("Vos réglages n'ont pas pu être lus : rien n'a été fait, pour ne pas manquer une exclusion.")
+        : Duplicates.refused == DuplicatesRefusal.folder ? @tr("Ces dossiers n'ont pas pu être ouverts : rien n'a été recherché.")
+        : Duplicates.refused == DuplicatesRefusal.trash ? @tr("La corbeille n'a pas pu être ouverte : rien n'a bougé. Le détail est dans le journal.")
+        : Duplicates.refused == DuplicatesRefusal.home ? @tr("Votre dossier personnel n'a pas pu être lu : rien n'a été recherché. Le détail est dans le journal.")
+        : Duplicates.refused == DuplicatesRefusal.interrupted ? @tr("La mise à la corbeille s'est interrompue : certains fichiers y sont peut-être déjà. Recherchez à nouveau pour voir où en sont les doublons.")
+        : @tr("Le système n'a pas donné de quoi travailler : rien n'a été fait. Le détail est dans le journal.");
+}
+
+// A step of the search: its dot (its number, or a check once done), what
+// it says, and its bar while it runs.
+component SearchStep inherits HorizontalLayout {
+    in property <int> number;
+    in property <bool> done;
+    in property <bool> running;
+    in property <string> text;
+    in property <bool> indeterminate;
+    in property <float> progress;
+    spacing: Theme.spacing-m;
+    Rectangle {
+        width: Theme.duplicate-step-dot;
+        height: Theme.duplicate-step-dot;
+        y: 0;
+        border-radius: Theme.radius-pill;
+        background: root.done ? Theme.success-soft : root.running ? Theme.accent : Theme.surface-2;
+        if root.done: Icon {
+            source: @image-url("../assets/icons/check.svg");
+            colorize: Theme.success;
+            width: Theme.icon-small;
+            height: Theme.icon-small;
+        }
+        if !root.done: Text {
+            text: root.number;
+            accessible-role: none;
+            color: root.running ? Theme.on-accent : Theme.text-2;
+            font-size: Theme.font-caption;
+            font-weight: Theme.weight-semibold;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    VerticalLayout {
+        horizontal-stretch: 1;
+        spacing: Theme.spacing-s;
+        Text {
+            text: root.text;
+            color: root.done || root.running ? Theme.text : Theme.text-2;
+            font-weight: Theme.weight-medium;
+        }
+        if root.running: ProgressBar {
+            indeterminate: root.indeterminate;
+            progress: root.progress;
+            label: root.text;
+        }
+    }
+}
+
+// One folder to search in, checked or not.
+component PickLine inherits Rectangle {
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    in property <string> name;
+    in property <string> note;
+    in property <string> path;
+    in property <image> icon;
+    callback toggled;
+
+    min-height: Theme.results-row-height;
+    background: touch.has-hover && root.enabled ? Theme.surface-hover : transparent;
+    accessible-role: checkbox;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-enabled: root.enabled;
+    accessible-label: root.name;
+    accessible-description: root.note != "" ? @tr("{}, {}", root.path, root.note) : root.path;
+    accessible-action-default => {
+        if root.enabled {
+            root.toggled();
+        }
+    }
+    forward-focus: keys;
+    keys := FocusScope {
+        focus-on-tab-navigation: root.enabled;
+        key-pressed(event) => {
+            if root.enabled && !event.repeat && event.text == Key.Space {
+                root.toggled();
+                return accept;
+            }
+            reject
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.toggled();
+        }
+    }
+    FocusRing {
+        shown: keys.has-focus;
+        border-radius: Theme.radius-medium;
+    }
+    Rectangle {
+        y: parent.height - self.height;
+        height: Theme.border-width;
+        background: Theme.border;
+    }
+    HorizontalLayout {
+        padding-left: Theme.spacing-l;
+        padding-right: Theme.spacing-l;
+        padding-top: Theme.spacing-s;
+        padding-bottom: Theme.spacing-s;
+        spacing: Theme.spacing-m;
+        CheckMark {
+            checked: root.checked;
+            enabled: root.enabled;
+            y: (parent.height - self.height) / 2;
+        }
+        Icon {
+            source: root.icon;
+            colorize: Theme.text-2;
+            y: (parent.height - self.height) / 2;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: Theme.spacing-xxs;
+            Text {
+                text: root.name;
+                accessible-role: none;
+                color: root.enabled ? Theme.text : Theme.text-3;
+                font-weight: Theme.weight-medium;
+                overflow: elide;
+            }
+            if root.note != "": Detail {
+                text: root.note;
+                accessible-role: none;
+            }
+        }
+        Detail {
+            vertical-alignment: center;
+            text: root.path;
+            accessible-role: none;
+            overflow: elide;
+        }
+    }
+}
+
+// Where to search: the personal folders, or the whole home folder.
+component DuplicateStart inherits VerticalLayout {
+    padding: Screen.page-margin;
+    spacing: Theme.spacing-xl;
+    VerticalLayout {
+        spacing: Theme.spacing-xs;
+        Title {
+            text: @tr("Doublons");
+        }
+        Detail {
+            text: @tr("Trouvez les fichiers identiques, contenu compris, et gardez-en une seule copie. Rien ne part sans votre accord, et tout passe par la corbeille.");
+        }
+    }
+    if Duplicates.refused != DuplicatesRefusal.none: RefusalBanner { }
+    Text {
+        text: @tr("Où chercher ?");
+        color: Theme.text;
+        font-size: Theme.font-heading;
+        font-weight: Theme.weight-semibold;
+    }
+    if Duplicates.folders-state == FoldersState.reading: Detail {
+        text: @tr("Lecture de vos dossiers personnels…");
+    }
+    if Duplicates.folders-state == FoldersState.none: Banner {
+        text: @tr("Aucun dossier personnel trouvé : cochez « Tout le dossier personnel » pour chercher. Rien n'y sera coché d'avance.");
+    }
+    if Duplicates.folders-state == FoldersState.homeless: Banner {
+        text: @tr("Votre dossier personnel n'a pas pu être lu : rien ne peut être recherché. Le détail est dans le journal.");
+        warning: true;
+    }
+    if Duplicates.folders-state == FoldersState.unread: Banner {
+        text: @tr("Vos dossiers personnels n'ont pas pu être lus : seul tout le dossier personnel peut être parcouru, et rien n'y est coché d'avance.");
+        warning: true;
+    }
+    Card {
+        VerticalLayout {
+            for folder[index] in Duplicates.folders: PickLine {
+                checked: folder.checked && !Duplicates.whole-home;
+                enabled: !Duplicates.whole-home;
+                name: folder.name;
+                path: folder.path;
+                icon: @image-url("../assets/icons/folder.svg");
+                toggled => {
+                    Duplicates.toggle-folder(index);
+                }
+            }
+            PickLine {
+                checked: Duplicates.whole-home;
+                name: @tr("Tout le dossier personnel");
+                note: Duplicates.folders.length > 0 ? @tr("Remplace les dossiers ci-dessus") : "";
+                path: Duplicates.home-path;
+                icon: @image-url("../assets/icons/home.svg");
+                toggled => {
+                    Duplicates.whole-home = !Duplicates.whole-home;
+                }
+            }
+        }
+    }
+    HorizontalLayout {
+        spacing: Theme.spacing-s;
+        Icon {
+            source: @image-url("../assets/icons/info.svg");
+            colorize: Theme.info;
+            width: Theme.icon-small;
+            height: Theme.icon-small;
+        }
+        Detail {
+            horizontal-stretch: 1;
+            text: @tr("Les dossiers cachés (réglages, caches des applications), les dossiers de projet, ~/snap et vos exclusions ne sont jamais parcourus. Seuls les fichiers d'au moins {} sont comparés.", Words.size(Duplicates.min-size));
+            wrap: word-wrap;
+        }
+    }
+    Rectangle {
+        vertical-stretch: 1;
+    }
+    HorizontalLayout {
+        spacing: Theme.spacing-m;
+        alignment: start;
+        ActionButton {
+            text: @tr("Rechercher");
+            icon: @image-url("../assets/icons/search.svg");
+            kind: ButtonKind.primary;
+            large: true;
+            enabled: (Duplicates.whole-home && Duplicates.folders-state != FoldersState.homeless) || Duplicates.chosen-folders > 0;
+            clicked => {
+                Duplicates.search();
+            }
+        }
+        Detail {
+            vertical-alignment: center;
+            text: Duplicates.whole-home ? @tr("Tout le dossier personnel") : @tr("Dossiers choisis : {}", Duplicates.chosen-folders);
+        }
+    }
+}
+
+// The search running, or how it ended without a result.
+component DuplicateSearching inherits FocusScope {
+    property <bool> running: Duplicates.phase == SearchPhase.opening || Duplicates.phase == SearchPhase.running;
+    key-pressed(event) => {
+        if event.text == Key.Escape && root.running {
+            Duplicates.stop();
+            return accept;
+        }
+        reject
+    }
+    VerticalLayout {
+        padding: Screen.page-margin;
+        spacing: Theme.spacing-l;
+        HorizontalLayout {
+            spacing: Theme.spacing-m;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Theme.spacing-xs;
+                Title {
+                    text: @tr("Doublons");
+                }
+                Detail {
+                    text: DuplicateWords.searched();
+                    overflow: elide;
+                }
+            }
+            // The focus on it, for Escape to reach the page.
+            if root.running: ActionButton {
+                init => {
+                    self.focus();
+                }
+                text: @tr("Arrêter");
+                clicked => {
+                    Duplicates.stop();
+                }
+            }
+            ActionButton {
+                text: @tr("Changer les dossiers");
+                kind: ButtonKind.ghost;
+                clicked => {
+                    Duplicates.change();
+                }
+            }
+        }
+        if root.running: Card {
+            VerticalLayout {
+                padding: Theme.spacing-l;
+                spacing: Theme.spacing-l;
+                SearchStep {
+                    number: 1;
+                    done: Duplicates.stage != SearchStage.listing;
+                    running: Duplicates.stage == SearchStage.listing;
+                    indeterminate: true;
+                    text: Duplicates.phase == SearchPhase.opening ? @tr("Ouverture des dossiers…")
+                        : Duplicates.stage == SearchStage.listing ? @tr("Liste des fichiers… Fichiers : {}", Duplicates.files-listed)
+                        : @tr("Liste des fichiers : terminée. Fichiers : {}", Duplicates.files-listed);
+                }
+                SearchStep {
+                    number: 2;
+                    running: Duplicates.stage != SearchStage.listing;
+                    progress: Duplicates.done;
+                    text: Duplicates.stage == SearchStage.ends ? @tr("Comparaison du contenu… Fichiers lus : {} sur {}", Duplicates.ends-read, Duplicates.ends-to-read)
+                        : Duplicates.stage == SearchStage.contents ? @tr("Comparaison du contenu… {} sur {}", Words.size(Duplicates.bytes-read), Words.size(Duplicates.bytes-to-read))
+                        : @tr("Comparaison du contenu");
+                }
+            }
+        }
+        if root.running: Detail {
+            text: @tr("Les groupes s'affichent à la fin de la comparaison. Rien n'est mis à la corbeille pendant la recherche. Échap arrête la recherche.");
+            wrap: word-wrap;
+        }
+        // Where the groups will show: shapes, never read.
+        if root.running: Card {
+            vertical-stretch: 1;
+            clip: true;
+            accessible-role: none;
+            VerticalLayout {
+                alignment: start;
+                for share in Theme.duplicate-skeleton-widths: HorizontalLayout {
+                    height: Theme.duplicate-head-height;
+                    padding-left: Theme.spacing-l;
+                    padding-right: Theme.spacing-l;
+                    spacing: Theme.spacing-m;
+                    Rectangle {
+                        width: Theme.icon-small;
+                        height: Theme.icon-small;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: Theme.radius-small;
+                        background: Theme.surface-2;
+                    }
+                    // Out of the layout: its width follows the line's.
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        Rectangle {
+                            x: 0;
+                            width: share * parent.width;
+                            height: Theme.duplicate-skeleton-height;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: Theme.radius-small;
+                            background: Theme.surface-2;
+                        }
+                    }
+                }
+            }
+        }
+        if Duplicates.phase == SearchPhase.stopped: Banner {
+            text: @tr("Recherche arrêtée. Rien n'a été gardé : une nouvelle recherche repart du début.");
+            ActionButton {
+                text: @tr("Rechercher à nouveau");
+                icon: @image-url("../assets/icons/rotate-ccw.svg");
+                y: (parent.height - self.height) / 2;
+                clicked => {
+                    Duplicates.again();
+                }
+            }
+        }
+        if Duplicates.phase == SearchPhase.failed: Banner {
+            text: @tr("La recherche a échoué : rien n'a été gardé. Le détail est dans le journal.");
+            warning: true;
+            ActionButton {
+                text: @tr("Rechercher à nouveau");
+                icon: @image-url("../assets/icons/rotate-ccw.svg");
+                y: (parent.height - self.height) / 2;
+                clicked => {
+                    Duplicates.again();
+                }
+            }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+}
+
+// One line of the tree: a group's header, or one of its copies.
+component TreeLine inherits Rectangle {
+    in property <DuplicateRow> line;
+    in property <int> index;
+    in property <bool> focused;
+    // Chosen with the pointer: the list takes the keyboard's focus.
+    callback chosen;
+
+    height: Theme.duplicate-copy-height;
+    background: Duplicates.current == root.index ? Theme.accent-soft
+        : touch.has-hover ? Theme.surface-hover : transparent;
+
+    touch := TouchArea {
+        clicked => {
+            Duplicates.current = root.index;
+            root.chosen();
+            if line.is-head {
+                Duplicates.fold(root.index, !line.open);
+            }
+        }
+    }
+    Rectangle {
+        y: parent.height - self.height;
+        height: Theme.border-width;
+        background: Theme.border;
+    }
+    FocusRing {
+        shown: root.focused;
+        border-radius: Theme.radius-small;
+    }
+    // Read as a group that unfolds.
+    if line.is-head: Rectangle {
+        accessible-role: list-item;
+        accessible-label: DuplicateWords.spoken(line);
+        accessible-expandable: true;
+        accessible-expanded: line.open;
+        accessible-item-selectable: true;
+        accessible-item-selected: Duplicates.current == root.index;
+        accessible-action-default => {
+            Duplicates.current = root.index;
+            Duplicates.fold(root.index, !line.open);
+        }
+    }
+    // Read as a box to check.
+    if !line.is-head: Rectangle {
+        accessible-role: checkbox;
+        accessible-label: DuplicateWords.spoken(line);
+        accessible-description: DuplicateWords.locked(line);
+        accessible-checkable: true;
+        accessible-checked: line.checked;
+        accessible-enabled: (line.checked || line.checkable) && !Duplicates.trashing;
+        accessible-item-selectable: true;
+        accessible-item-selected: Duplicates.current == root.index;
+        accessible-action-default => {
+            Duplicates.current = root.index;
+            Duplicates.toggle(root.index);
+        }
+    }
+    if line.is-head: HorizontalLayout {
+        padding-left: Theme.spacing-l;
+        padding-right: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        Icon {
+            source: line.open ? @image-url("../assets/icons/chevron-down.svg") : @image-url("../assets/icons/chevron-right.svg");
+            colorize: Theme.text-2;
+            y: (parent.height - self.height) / 2;
+        }
+        Icon {
+            source: @image-url("../assets/icons/file.svg");
+            colorize: Theme.text-2;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: line.name;
+            accessible-role: none;
+            color: Theme.text;
+            font-weight: Theme.weight-semibold;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Detail {
+            text: DuplicateWords.copies(line);
+            accessible-role: none;
+            vertical-alignment: center;
+        }
+        Text {
+            width: Theme.disk-size-width;
+            text: Words.size(line.gain);
+            accessible-role: none;
+            color: Theme.text;
+            font-weight: Theme.weight-semibold;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+    if !line.is-head: HorizontalLayout {
+        padding-left: Theme.duplicate-indent;
+        padding-right: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        Rectangle {
+            width: Theme.icon-box;
+            CheckMark {
+                checked: line.checked;
+                enabled: (line.checked || line.checkable) && !Duplicates.trashing;
+            }
+            check-touch := TouchArea {
+                clicked => {
+                    Duplicates.current = root.index;
+                    root.chosen();
+                    Duplicates.toggle(root.index);
+                }
+            }
+            if DuplicateWords.locked(line) != "" && check-touch.has-hover: Tooltip {
+                text: @markdown("\{DuplicateWords.locked(line)}");
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: Theme.spacing-xxs;
+            Text {
+                text: line.path;
+                accessible-role: none;
+                color: Theme.text;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                spacing: Theme.spacing-s;
+                Detail {
+                    text: DashboardWords.moment-first(line.modified);
+                    accessible-role: none;
+                    wrap: no-wrap;
+                }
+                if line.other-names: Icon {
+                    source: @image-url("../assets/icons/link.svg");
+                    colorize: Theme.text-2;
+                    width: Theme.icon-small;
+                    height: Theme.icon-small;
+                }
+                if line.other-names: Detail {
+                    horizontal-stretch: 1;
+                    text: @tr("A d'autres noms : la retirer ne libérerait rien");
+                    accessible-role: none;
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+            }
+        }
+        // A badge too long for its column is cut at its end: the panel says
+        // it whole.
+        Rectangle {
+            width: Theme.duplicate-fate-width;
+            Badge {
+                elide: true;
+                width: min(self.preferred-width, parent.width);
+                x: parent.width - self.width;
+                text: DuplicateWords.fate(line);
+                icon: line.checked ? @image-url("../assets/icons/trash-2.svg") : @image-url("../assets/icons/shield.svg");
+                tone: line.checked ? Theme.info : Theme.text-2;
+                tone-soft: line.checked ? Theme.info-soft : Theme.surface-2;
+            }
+        }
+    }
+    if !line.is-head && line.path != line.full-path && touch.has-hover: Tooltip {
+        text: @markdown("\{line.full-path}");
+    }
+}
+
+// The groups, by the keyboard too: the arrows move, Space checks a copy,
+// Enter or Right unfolds a group, Left folds it (on a copy: back to its
+// group).
+component Tree inherits FocusScope {
+    accessible-role: list;
+    accessible-label: @tr("Groupes de doublons, triés par place à gagner");
+    // The characters a copy's path may take, as the list is wide: its
+    // indent, box, fate and their gaps aside.
+    property <int> room: max(1, floor((self.width - Theme.duplicate-indent - Theme.icon-box - Theme.duplicate-fate-width
+        - Theme.spacing-l - 2 * Theme.spacing-m) / Theme.duplicate-path-character));
+    // Said once the list has its width: none before.
+    init => {
+        if self.width > 0 {
+            Duplicates.path-room(self.room);
+        }
+    }
+    changed room => {
+        if self.width > 0 {
+            Duplicates.path-room(self.room);
+        }
+    }
+
+    // Where line `index` sits in the list: every line is one height, which
+    // the list lays out only in view (thousands of copies).
+    function top(index: int) -> length {
+        index * Theme.duplicate-copy-height
+    }
+
+    function move(index: int) {
+        if Duplicates.rows.length == 0 {
+            return;
+        }
+        Duplicates.current = clamp(index, 0, Duplicates.rows.length - 1);
+        let place = root.top(Duplicates.current);
+        let height = Theme.duplicate-copy-height;
+        if place < -view.content-y {
+            view.content-y = -place;
+        } else if place + height > -view.content-y + view.visible-height {
+            // Its top first, when it is higher than the list.
+            view.content-y = max(-place, view.visible-height - place - height);
+        }
+    }
+
+    key-pressed(event) => {
+        if Duplicates.rows.length == 0 {
+            return reject;
+        }
+        let row = Duplicates.rows[Duplicates.current];
+        if event.text == Key.DownArrow {
+            root.move(Duplicates.current + 1);
+            return accept;
+        }
+        if event.text == Key.UpArrow {
+            root.move(Duplicates.current - 1);
+            return accept;
+        }
+        if event.text == Key.Home {
+            root.move(0);
+            return accept;
+        }
+        if event.text == Key.End {
+            root.move(Duplicates.rows.length - 1);
+            return accept;
+        }
+        if event.text == Key.Space && !event.repeat && !row.is-head && !Duplicates.trashing {
+            Duplicates.toggle(Duplicates.current);
+            return accept;
+        }
+        if (event.text == Key.Return || event.text == Key.RightArrow) && row.is-head {
+            Duplicates.fold(Duplicates.current, true);
+            return accept;
+        }
+        if event.text == Key.LeftArrow && row.is-head {
+            Duplicates.fold(Duplicates.current, false);
+            return accept;
+        }
+        if event.text == Key.LeftArrow {
+            root.move(row.head);
+            return accept;
+        }
+        reject
+    }
+
+    VerticalLayout {
+        view := ListView {
+            vertical-stretch: 1;
+            for row[index] in Duplicates.rows: TreeLine {
+                line: row;
+                index: index;
+                focused: root.has-focus && Duplicates.current == index;
+                chosen => {
+                    root.focus();
+                }
+            }
+        }
+        Rectangle {
+            height: Theme.border-width;
+            background: Theme.border;
+        }
+        HorizontalLayout {
+            padding: Theme.spacing-s;
+            padding-left: Theme.spacing-l;
+            Detail {
+                text: @tr("↑ ↓ se déplacer. Espace : cocher. Entrée ou → : déplier. ← : replier.");
+                overflow: elide;
+            }
+        }
+    }
+}
+
+// What the panel says of the line with the focus: a copy, or its group.
+component DuplicatePanel inherits Card {
+    // The line shown: the one with the focus, within the lines.
+    property <int> at: clamp(Duplicates.current, 0, max(0, Duplicates.rows.length - 1));
+    property <DuplicateRow> line: Duplicates.rows[root.at];
+    // A refusal speaks of the line it was asked for.
+    changed at => {
+        Duplicates.open-refused = false;
+    }
+    width: Screen.narrow ? Theme.duplicate-panel-width-narrow : Theme.duplicate-panel-width;
+    accessible-role: groupbox;
+    accessible-label: @tr("Détails de la ligne qui a le focus");
+    VerticalLayout {
+        padding: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        Text {
+            text: root.line.name;
+            color: Theme.text;
+            font-size: Theme.font-heading;
+            font-weight: Theme.weight-semibold;
+            wrap: word-wrap;
+        }
+        if !root.line.is-head: HorizontalLayout {
+            alignment: start;
+            Badge {
+                text: DuplicateWords.fate(root.line);
+                icon: root.line.checked ? @image-url("../assets/icons/trash-2.svg") : @image-url("../assets/icons/shield.svg");
+                tone: root.line.checked ? Theme.info : Theme.text-2;
+                tone-soft: root.line.checked ? Theme.info-soft : Theme.surface-2;
+            }
+        }
+        if !root.line.is-head: VerticalLayout {
+            spacing: Theme.spacing-s;
+            Detail {
+                text: @tr("Dossier : {}", root.line.folder);
+                wrap: word-wrap;
+            }
+            Detail {
+                text: @tr("Taille : {}", Words.size(root.line.size));
+            }
+            Detail {
+                text: @tr("Modifié : {}", DashboardWords.moment-first(root.line.modified));
+                wrap: word-wrap;
+            }
+        }
+        if !root.line.is-head && root.line.last && root.line.why != KeptWhy.other-device && !root.line.other-names: Detail {
+            text: @tr("C'est la seule copie gardée de ce groupe : une copie reste toujours. Pour garder une autre copie à sa place, décochez-la d'abord.");
+            wrap: word-wrap;
+        }
+        if !root.line.is-head && root.line.other-names: Detail {
+            text: @tr("Ce fichier a d'autres noms : le retirer ne libérerait rien, son contenu reste sous ses autres noms.");
+            wrap: word-wrap;
+        }
+        if root.line.is-head: VerticalLayout {
+            spacing: Theme.spacing-s;
+            Detail {
+                text: @tr("Copies : {}, de {} chacune", root.line.copies, Words.size(root.line.size));
+            }
+            Detail {
+                text: @tr("À gagner : {}", Words.size(root.line.gain));
+            }
+            Detail {
+                text: @tr("Vers la corbeille : {}. Gardées : {}.", root.line.checked-count, root.line.copies - root.line.checked-count);
+                wrap: word-wrap;
+            }
+            Detail {
+                text: @tr("Descendez sur une copie pour voir son dossier, sa taille et sa date.");
+                wrap: word-wrap;
+            }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+        }
+        if !root.line.is-head: ActionButton {
+            text: @tr("Montrer dans le dossier");
+            icon: @image-url("../assets/icons/folder-open.svg");
+            wrapped: true;
+            enabled: !Duplicates.opening;
+            clicked => {
+                Duplicates.open(root.at);
+            }
+        }
+        if Duplicates.open-refused: Detail {
+            text: @tr("Le gestionnaire de fichiers n'a pas pu montrer ce fichier : il a peut-être changé depuis la recherche.");
+            color: Theme.warning;
+            wrap: word-wrap;
+        }
+    }
+}
+
+// The quick selections: a rule for every group, or the folder whose copies
+// are kept. A menu, closed by a choice, Escape or a click outside.
+component QuickMenu inherits PopupWindow {
+    property <bool> by-folder;
+    // A click within it chooses, or opens the folders: it stays open then.
+    close-policy: close-on-click-outside;
+    Rectangle {
+        background: Theme.surface;
+        border-radius: Theme.radius-medium;
+        border-color: Theme.border;
+        border-width: Theme.border-width;
+        drop-shadow-color: Theme.shadow-1;
+        drop-shadow-blur: Theme.shadow-1-blur;
+        drop-shadow-offset-y: Theme.shadow-1-offset;
+        VerticalLayout {
+            padding: Theme.spacing-xs;
+            if !root.by-folder: ActionButton {
+                init => {
+                    self.focus();
+                }
+                text: @tr("Garder la plus ancienne");
+                kind: ButtonKind.ghost;
+                clicked => {
+                    Duplicates.quick(QuickRule.oldest, -1);
+                    root.close();
+                }
+            }
+            if !root.by-folder: ActionButton {
+                text: @tr("Garder la plus récente");
+                kind: ButtonKind.ghost;
+                clicked => {
+                    Duplicates.quick(QuickRule.newest, -1);
+                    root.close();
+                }
+            }
+            if !root.by-folder: ActionButton {
+                text: @tr("Garder le chemin le plus court");
+                kind: ButtonKind.ghost;
+                clicked => {
+                    Duplicates.quick(QuickRule.shortest, -1);
+                    root.close();
+                }
+            }
+            if !root.by-folder && Duplicates.quick-folders.length > 0: ActionButton {
+                text: @tr("Garder celles d'un dossier…");
+                icon: @image-url("../assets/icons/folder.svg");
+                kind: ButtonKind.ghost;
+                clicked => {
+                    root.by-folder = true;
+                }
+            }
+            for name[index] in root.by-folder ? Duplicates.quick-folders : []: ActionButton {
+                init => {
+                    if index == 0 {
+                        self.focus();
+                    }
+                }
+                text: @tr("Garder celles de {}", name);
+                icon: @image-url("../assets/icons/folder.svg");
+                kind: ButtonKind.ghost;
+                clicked => {
+                    Duplicates.quick(QuickRule.folder, index);
+                    root.close();
+                }
+            }
+        }
+    }
+}
+
+// The confirmation: what goes, that a copy of each group stays, that each
+// file is checked again. The focus on « Annuler »: two Enter in a row never
+// move hundreds of files. Closed by its buttons or Escape, never by a click
+// outside.
+component DuplicateConfirmation inherits ModalFrame {
+    label: title.text;
+    init => {
+        back.focus();
+    }
+    escaped => {
+        Duplicates.cancel-confirmation();
+    }
+    HorizontalLayout {
+        alignment: start;
+        Rectangle {
+            width: Theme.icon-box;
+            height: Theme.icon-box;
+            border-radius: Theme.radius-medium;
+            background: Theme.info-soft;
+            Icon {
+                source: @image-url("../assets/icons/trash-2.svg");
+                colorize: Theme.info;
+            }
+        }
+    }
+    title := Text {
+        text: @tr("Mettre à la corbeille ?");
+        accessible-role: none;
+        color: Theme.text;
+        font-size: Theme.font-title;
+        font-weight: Theme.weight-semibold;
+    }
+    Detail {
+        text: @tr("Fichiers : {} ({}). La place ne sera libérée qu'en vidant la corbeille.", Duplicates.chosen-files, Words.size(Duplicates.chosen-size));
+        color: Theme.text;
+    }
+    Detail {
+        text: @tr("Dans chaque groupe, au moins une copie reste à sa place (groupes : {}). Juste avant, Okapi vérifie que chaque fichier n'a pas changé depuis la recherche.", Duplicates.chosen-groups);
+    }
+    HorizontalLayout {
+        alignment: end;
+        spacing: Theme.spacing-s;
+        back := ActionButton {
+            text: @tr("Annuler");
+            kind: ButtonKind.secondary;
+            clicked => {
+                Duplicates.cancel-confirmation();
+            }
+        }
+        ActionButton {
+            text: @tr("Mettre à la corbeille");
+            icon: @image-url("../assets/icons/trash-2.svg");
+            kind: ButtonKind.primary;
+            clicked => {
+                Duplicates.confirm();
+            }
+        }
+    }
+}
+
+// What the search found, and which copies go to the trash.
+component DuplicateResult inherits VerticalLayout {
+    // Opened and closed by Rust; a page built again shows it still open.
+    property <bool> confirming: Duplicates.confirming;
+    init => {
+        if self.confirming {
+            confirmation.show();
+        }
+    }
+    changed confirming => {
+        if self.confirming {
+            confirmation.show();
+        } else {
+            confirmation.close();
+        }
+    }
+    confirmation := DuplicateConfirmation {
+        x: (root.width - Theme.modal-width) / 2;
+        y: root.height / 4;
+        width: Theme.modal-width;
+    }
+    // Under « Sélection rapide », where it was when pressed.
+    property <length> menu-x;
+    property <length> menu-y;
+    menu := QuickMenu {
+        x: root.menu-x;
+        y: root.menu-y;
+    }
+
+    VerticalLayout {
+        vertical-stretch: 1;
+        padding: Screen.page-margin;
+        padding-bottom: Theme.spacing-l;
+        spacing: Theme.spacing-l;
+        HorizontalLayout {
+            spacing: Theme.spacing-s;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Theme.spacing-xs;
+                Title {
+                    text: @tr("Doublons");
+                }
+                Detail {
+                    text: Duplicates.groups == 0 ? DuplicateWords.searched()
+                        : Duplicates.minutes == 0 ? @tr("Groupes : {}, {} en double. {}, à l'instant.", Duplicates.groups, Words.size(Duplicates.duplicated), DuplicateWords.searched())
+                        : @tr("Groupes : {}, {} en double. {}, il y a {} min.", Duplicates.groups, Words.size(Duplicates.duplicated), DuplicateWords.searched(), Duplicates.minutes);
+                    overflow: elide;
+                }
+            }
+            ActionButton {
+                text: @tr("Changer les dossiers");
+                icon: @image-url("../assets/icons/folder.svg");
+                kind: ButtonKind.ghost;
+                enabled: !Duplicates.trashing;
+                y: (parent.height - self.height) / 2;
+                clicked => {
+                    Duplicates.change();
+                }
+            }
+            ActionButton {
+                text: @tr("Rechercher à nouveau");
+                icon: @image-url("../assets/icons/rotate-ccw.svg");
+                enabled: !Duplicates.trashing;
+                y: (parent.height - self.height) / 2;
+                clicked => {
+                    Duplicates.again();
+                }
+            }
+        }
+        if Duplicates.refused != DuplicatesRefusal.none: RefusalBanner { }
+        if Duplicates.groups > 0: HorizontalLayout {
+            spacing: Theme.spacing-m;
+            ActionButton {
+                text: @tr("Sélection rapide");
+                icon: @image-url("../assets/icons/chevron-down.svg");
+                enabled: !Duplicates.trashing;
+                y: (parent.height - self.height) / 2;
+                clicked => {
+                    root.menu-x = self.absolute-position.x - root.absolute-position.x;
+                    root.menu-y = self.absolute-position.y - root.absolute-position.y + self.height + Theme.spacing-xs;
+                    menu.show();
+                }
+            }
+            Detail {
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                text: Duplicates.rule-said ? @tr("Déjà coché : dans chaque groupe, on garde la copie qui a d'autres noms, sinon celle hors des Téléchargements et du Bureau, sinon la plus ancienne, sinon le chemin le plus court. Hors de vos dossiers personnels, rien n'est coché.")
+                    : @tr("Aucun dossier personnel connu : rien n'est coché d'avance.");
+                wrap: word-wrap;
+            }
+            ActionButton {
+                text: @tr("Tout désélectionner");
+                kind: ButtonKind.ghost;
+                enabled: Duplicates.chosen-files > 0 && !Duplicates.trashing;
+                y: (parent.height - self.height) / 2;
+                clicked => {
+                    Duplicates.deselect-all();
+                }
+            }
+        }
+        if Duplicates.groups > 0: HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: Theme.spacing-l;
+            Card {
+                horizontal-stretch: 1;
+                Tree {
+                    init => {
+                        self.focus();
+                    }
+                }
+            }
+            DuplicatePanel { }
+        }
+        if Duplicates.groups == 0: Card {
+            vertical-stretch: 1;
+            VerticalLayout {
+                alignment: center;
+                padding: Theme.spacing-xxl;
+                spacing: Theme.spacing-m;
+                Icon {
+                    source: @image-url("../assets/icons/circle-check.svg");
+                    colorize: Theme.success;
+                    width: Theme.icon-large;
+                    height: Theme.icon-large;
+                    x: (parent.width - self.width) / 2;
+                }
+                Text {
+                    text: @tr("Aucun doublon dans ces dossiers");
+                    color: Theme.text;
+                    font-size: Theme.font-title;
+                    font-weight: Theme.weight-semibold;
+                    horizontal-alignment: center;
+                }
+                Detail {
+                    text: @tr("Fichiers d'au moins {} examinés : {}. Chacun n'existe qu'une fois : il n'y a rien à faire ici.", Words.size(Duplicates.min-size), Duplicates.compared);
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    ActionButton {
+                        text: @tr("Chercher dans d'autres dossiers");
+                        icon: @image-url("../assets/icons/folder.svg");
+                        clicked => {
+                            Duplicates.change();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if Duplicates.groups > 0: Footer {
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            spacing: Theme.spacing-s;
+            alignment: start;
+            VerticalLayout {
+                alignment: center;
+                spacing: Theme.spacing-xxs;
+                HorizontalLayout {
+                    spacing: Theme.spacing-s;
+                    Detail {
+                        text: @tr("Choisi");
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: Words.size(Duplicates.chosen-size);
+                        color: Theme.text;
+                        font-size: Theme.font-title;
+                        font-weight: Theme.weight-semibold;
+                        vertical-alignment: center;
+                    }
+                    Detail {
+                        text: @tr("Fichiers : {}. Groupes : {}.", Duplicates.chosen-files, Duplicates.chosen-groups);
+                        vertical-alignment: center;
+                    }
+                }
+                Detail {
+                    text: Duplicates.trashing ? @tr("Mise à la corbeille…")
+                        : @tr("Tout va à la corbeille. La place n'est libérée qu'en vidant la corbeille.");
+                    accessible-live-region: polite;
+                    overflow: elide;
+                }
+            }
+        }
+        ActionButton {
+            text: @tr("Mettre à la corbeille");
+            icon: @image-url("../assets/icons/trash-2.svg");
+            kind: ButtonKind.primary;
+            large: true;
+            enabled: Duplicates.chosen-files > 0 && !Duplicates.trashing;
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                Duplicates.trash();
+            }
+        }
+    }
+}
+
+// One file that stayed, and why.
+component KeptLine inherits Rectangle {
+    in property <KeptShown> kept;
+    min-height: Theme.duplicate-copy-height;
+    accessible-role: list-item;
+    accessible-label: @tr("{}, {}, {}", root.kept.name, DuplicateWords.why(root.kept), DuplicateWords.why-more(root.kept));
+    Rectangle {
+        y: parent.height - self.height;
+        height: Theme.border-width;
+        background: Theme.border;
+    }
+    HorizontalLayout {
+        padding-left: Theme.spacing-l;
+        padding-right: Theme.spacing-l;
+        padding-top: Theme.spacing-s;
+        padding-bottom: Theme.spacing-s;
+        spacing: Theme.spacing-m;
+        Icon {
+            source: root.kept.why == ReceiptWhy.unchecked ? @image-url("../assets/icons/triangle-alert.svg")
+                : root.kept.why == ReceiptWhy.gone ? @image-url("../assets/icons/search.svg")
+                : root.kept.why == ReceiptWhy.changed ? @image-url("../assets/icons/rotate-ccw.svg")
+                : root.kept.why == ReceiptWhy.other-device ? @image-url("../assets/icons/hard-drive.svg")
+                : root.kept.why == ReceiptWhy.refused ? @image-url("../assets/icons/lock.svg")
+                : @image-url("../assets/icons/shield.svg");
+            colorize: root.kept.why == ReceiptWhy.unchecked ? Theme.warning : Theme.text-2;
+            y: (parent.height - self.height) / 2;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: Theme.spacing-xxs;
+            Text {
+                text: root.kept.name;
+                accessible-role: none;
+                color: Theme.text;
+                font-weight: Theme.weight-medium;
+                overflow: elide;
+            }
+            Detail {
+                text: root.kept.folder;
+                accessible-role: none;
+                overflow: elide;
+            }
+        }
+        VerticalLayout {
+            width: Screen.narrow ? Theme.duplicate-why-width-narrow : Theme.duplicate-why-width;
+            alignment: center;
+            spacing: Theme.spacing-xxs;
+            Text {
+                text: DuplicateWords.why(root.kept);
+                accessible-role: none;
+                color: root.kept.why == ReceiptWhy.unchecked ? Theme.warning : Theme.text;
+                font-weight: Theme.weight-semibold;
+                wrap: word-wrap;
+            }
+            Detail {
+                text: DuplicateWords.why-more(root.kept);
+                accessible-role: none;
+                wrap: word-wrap;
+            }
+        }
+        Text {
+            width: Theme.disk-size-width;
+            text: Words.size(root.kept.size);
+            accessible-role: none;
+            color: Theme.text;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// What the trash took, and what stayed.
+component DuplicateReceipt inherits VerticalLayout {
+    VerticalLayout {
+        vertical-stretch: 1;
+        padding: Screen.page-margin;
+        padding-bottom: Theme.spacing-l;
+        spacing: Theme.spacing-l;
+        HorizontalLayout {
+            spacing: Theme.spacing-l;
+            Rectangle {
+                width: Theme.icon-box;
+                height: Theme.icon-box;
+                y: (parent.height - self.height) / 2;
+                border-radius: Theme.radius-medium;
+                background: Duplicates.moved-files > 0 ? Theme.success-soft : Theme.surface-2;
+                Icon {
+                    source: Duplicates.moved-files > 0 ? @image-url("../assets/icons/circle-check.svg") : @image-url("../assets/icons/info.svg");
+                    colorize: Duplicates.moved-files > 0 ? Theme.success : Theme.text-2;
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Theme.spacing-xs;
+                // A file moved unchecked is in the trash too.
+                Title {
+                    text: Duplicates.moved-files == 0 ? @tr("Rien n'a été mis à la corbeille")
+                        : Duplicates.trashed-files == 0 ? @tr("Mis à la corbeille sans vérification : voyez ci-dessous")
+                        : @tr("{} mis à la corbeille", Words.size(Duplicates.moved));
+                    accessible-live-region: polite;
+                }
+                Detail {
+                    text: @tr("Fichiers : {}. {}.", Duplicates.moved-files, DashboardWords.moment-first(Duplicates.trashed-at));
+                }
+            }
+        }
+        if Duplicates.moved-files > 0: Banner {
+            text: @tr("La place sera libérée quand vous viderez la corbeille. D'ici là, vous pouvez y reprendre n'importe quel fichier.");
+        }
+        if Duplicates.kept.length > 0: Card {
+            vertical-stretch: 1;
+            VerticalLayout {
+                HorizontalLayout {
+                    padding: Theme.spacing-l;
+                    spacing: Theme.spacing-m;
+                    Icon {
+                        source: @image-url("../assets/icons/shield.svg");
+                        colorize: Theme.text-2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                    Text {
+                        horizontal-stretch: 1;
+                        text: @tr("Fichiers à revoir : {}", Duplicates.kept.length);
+                        accessible-role: none;
+                        color: Theme.text;
+                        font-size: Theme.font-heading;
+                        font-weight: Theme.weight-semibold;
+                        vertical-alignment: center;
+                    }
+                    Detail {
+                        text: @tr("Chacun dit ce qu'il est devenu, et pourquoi.");
+                        accessible-role: none;
+                        vertical-alignment: center;
+                    }
+                }
+                Rectangle {
+                    height: Theme.border-width;
+                    background: Theme.border;
+                }
+                // Each line at its own height, scrolled by the keyboard too.
+                ScrolledList {
+                    vertical-stretch: 1;
+                    label: @tr("Fichiers à revoir : {}", Duplicates.kept.length);
+                    content-height: kept-lines.preferred-height;
+                    kept-lines := VerticalLayout {
+                        alignment: start;
+                        for kept in Duplicates.kept: KeptLine {
+                            kept: kept;
+                        }
+                    }
+                }
+            }
+        }
+        if Duplicates.kept.length == 0: Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+    Footer {
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+        ActionButton {
+            init => {
+                self.focus();
+            }
+            text: @tr("Rechercher à nouveau");
+            icon: @image-url("../assets/icons/rotate-ccw.svg");
+            kind: ButtonKind.primary;
+            large: true;
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                Duplicates.again();
+            }
+        }
+    }
+}
+
+export component DuplicatesPage inherits VerticalLayout {
+    if Duplicates.step == DuplicatesStep.start: DuplicateStart {
+        vertical-stretch: 1;
+    }
+    if Duplicates.step == DuplicatesStep.searching: DuplicateSearching {
+        vertical-stretch: 1;
+    }
+    if Duplicates.step == DuplicatesStep.result: DuplicateResult {
+        vertical-stretch: 1;
+    }
+    if Duplicates.step == DuplicatesStep.receipt: DuplicateReceipt {
+        vertical-stretch: 1;
+    }
+}

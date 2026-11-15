@@ -260,6 +260,9 @@ export component Badge inherits Rectangle {
     in property <image> icon;
     in property <color> tone: Theme.warning;
     in property <color> tone-soft: Theme.warning-soft;
+    // Given less than its width, it cuts its words' end (else it keeps them
+    // whole, its neighbours give way).
+    in property <bool> elide;
     height: Theme.badge-height;
     border-radius: Theme.radius-pill;
     background: tone-soft;
@@ -282,6 +285,7 @@ export component Badge inherits Rectangle {
             font-size: Theme.font-caption;
             font-weight: Theme.weight-medium;
             vertical-alignment: center;
+            overflow: root.elide ? TextOverflow.elide : TextOverflow.clip;
         }
     }
 }

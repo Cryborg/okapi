@@ -2,7 +2,7 @@ import { Theme, Brand } from "theme.slint";
 import { IconButton } from "widgets.slint";
 
 // The screens the sidebar leads to: only those that exist.
-export enum Page { home, cleaner, disk-usage, apps, updates, settings, about }
+export enum Page { home, cleaner, disk-usage, duplicates, apps, updates, settings, about }
 
 // One entry of the sidebar: its icon and words carry it, never colour alone.
 // Reached with Tab, chosen with Enter or Space, its focus ring visible.
@@ -173,6 +173,16 @@ export component Sidebar inherits Rectangle {
             active: root.page == Page.disk-usage;
             clicked => {
                 root.navigate(Page.disk-usage);
+            }
+        }
+
+        NavItem {
+            icon: @image-url("../assets/icons/copy.svg");
+            label: @tr("Doublons");
+            folded: root.folded;
+            active: root.page == Page.duplicates;
+            clicked => {
+                root.navigate(Page.duplicates);
             }
         }
 

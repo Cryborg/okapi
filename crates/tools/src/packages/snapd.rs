@@ -2,8 +2,9 @@
 //! One request per connection, HTTP/1.1 with `Connection: close`; the
 //! answer's body is read whole, by its length or its chunks, within a
 //! deadline and a cap, then its envelope (`type`, `status-code`, `result`)
-//! is told apart: an error of snapd is a [`SnapdError::Refused`]. Reads,
-//! and a snap's removal, polkit asking the user for the rights.
+//! is told apart: an error of snapd is a [`SnapdError::Refused`]. Reads, a
+//! snap's removal and snaps' refresh, polkit asking the user for the rights;
+//! the change they start followed to its end.
 
 use std::io::{self, Read as _, Write as _};
 use std::os::unix::net::UnixStream;
@@ -54,7 +55,7 @@ pub enum SnapdError {
     /// Nothing listens on its socket: snapd is not installed or not running.
     #[error("snapd is not listening on {}: {source}", socket.display())]
     Absent { socket: PathBuf, source: io::Error },
-    /// A name that is no snap's: nothing was asked.
+    /// A name that is no snap's, or none at all: nothing was asked.
     #[error("not a snap's name: {0:?}")]
     InvalidName(String),
     /// The socket was reached, then failed or fell silent.
@@ -131,7 +132,35 @@ pub struct Change {
     /// Why it failed, in snapd's words.
     #[serde(default)]
     pub err: Option<String>,
+    /// Its tasks, each with its progress.
+    #[serde(default)]
+    pub tasks: Vec<Task>,
 }
+
+/// A task of a change: `download-snap`, `link-snap`...
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Task {
+    pub kind: String,
+    /// `Do`, `Doing`, `Done`...
+    pub status: String,
+    #[serde(default)]
+    pub progress: TaskProgress,
+}
+
+/// How far a task is: bytes for a download, steps otherwise.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+pub struct TaskProgress {
+    #[serde(default)]
+    pub done: u64,
+    #[serde(default)]
+    pub total: u64,
+}
+
+/// The kind of the task that downloads a snap.
+pub const TASK_DOWNLOAD: &str = "download-snap";
+/// The statuses of a task still to do or under way: no other is a download
+/// going on.
+pub const TASK_UNDERWAY: [&str; 2] = ["Do", "Doing"];
 
 /// The change status of a change that did all it was asked.
 pub const CHANGE_DONE: &str = "Done";
@@ -302,6 +331,33 @@ impl Snapd {
         ))
     }
 
+    /// Refreshes the snaps `names` to their newer revision, polkit asking
+    /// the user for the rights: the change it started. An empty list is
+    /// refused without asking: snapd would take it for every snap.
+    ///
+    /// # Errors
+    /// No name, or one that is no snap's (nothing asked), whatever kept
+    /// snapd from answering, or its refusal.
+    pub fn refresh(&self, names: &[String]) -> Result<String, SnapdError> {
+        if names.is_empty() {
+            tracing::error!("a refresh of no snap: nothing asked");
+            return Err(SnapdError::InvalidName(String::new()));
+        }
+        for name in names {
+            checked(name)?;
+        }
+        let envelope = self.request(&Request {
+            method: "POST",
+            path: "/v2/snaps",
+            body: Some(serde_json::json!({ "action": "refresh", "snaps": names }).to_string()),
+            interactive: true,
+            wait: ASKING_WAIT,
+        })?;
+        envelope.change.ok_or(SnapdError::Malformed(
+            "an asynchronous answer without its change",
+        ))
+    }
+
     /// Whether the snap `name` (a name checked by the caller) is installed.
     ///
     /// # Errors
@@ -326,9 +382,9 @@ impl Snapd {
     }
 
     /// Follows the change `id` until it is ready, telling `heard` where it
-    /// stands at each look; for `wait` at most, and until `unanswered_after`
-    /// looks in a row could not read it (snapd restarting answers nothing a
-    /// moment).
+    /// stands at each look; no look once `wait` has passed, and it gives up
+    /// after `unanswered_after` unreadable looks in a row (snapd restarting
+    /// answers nothing a moment).
     pub fn follow(
         &self,
         id: &str,
@@ -354,7 +410,7 @@ impl Snapd {
                 Err(error) => {
                     failed_looks += 1;
                     tracing::warn!(change = id, %error, failed_looks, "snapd's change unreadable");
-                    if failed_looks == unanswered_after {
+                    if failed_looks >= unanswered_after {
                         return Followed::Unanswered;
                     }
                 }

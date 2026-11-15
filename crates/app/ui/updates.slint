@@ -1,12 +1,13 @@
-// The updates screen (docs/design/mises-a-jour/project/Updates.dc.html):
-// what waits, source by source; nothing is installed from here.
+// The updates screen (docs/design/mises-a-jour/project/Updates.dc.html,
+// UpdatesSliceB.dc.html): what waits, source by source, and its
+// installation by PackageKit and snapd.
 import { ScrollView } from "std-widgets.slint";
 import { Theme, Screen } from "theme.slint";
 import { Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
 import { DayKind } from "dashboard-model.slint";
-import { ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, Line, ProgressBar, ReadIconNote, Title } from "widgets.slint";
-import { Updates, UpdatesStep, SourceState, SourceFailure, UpdateKind, SystemLine, SnapLine } from "updates-model.slint";
+import { ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, Line, ModalFrame, ProgressBar, ReadIconNote, Title } from "widgets.slint";
+import { Updates, UpdatesStep, SourceState, SourceFailure, UpdateKind, SystemLine, SnapLine, InstallStep, InstallTarget, InstallPhase, InstallEnd, InstallWhy } from "updates-model.slint";
 
 // What the screen says, the same for the eye and the ear.
 global UpdatesWords {
@@ -89,6 +90,109 @@ global UpdatesWords {
     pure public function system-name() -> string {
         Updates.distribution == "" ? @tr("Système") : @tr("Système {}", Updates.distribution)
     }
+
+    // Nothing else runs: an installation may start.
+    pure public function can-install() -> bool {
+        Updates.step != UpdatesStep.searching && Updates.install-step == InstallStep.idle
+    }
+
+    // What an installation under way does, after whom it updates.
+    pure public function phase() -> string {
+        let known = Updates.install-has-percentage;
+        if Updates.install-phase == InstallPhase.waiting {
+            return @tr("en attente d'une autre installation, qui doit finir d'abord");
+        }
+        if Updates.install-phase == InstallPhase.authorizing {
+            return @tr("en attente de l'autorisation, demandée par le système dans sa propre fenêtre");
+        }
+        if Updates.install-phase == InstallPhase.downloading {
+            return known ? @tr("téléchargement… {} %", Updates.install-percentage) : @tr("téléchargement…");
+        }
+        if Updates.install-phase == InstallPhase.installing {
+            return known ? @tr("installation… {} %", Updates.install-percentage) : @tr("installation…");
+        }
+        if Updates.install-phase == InstallPhase.cancelling {
+            return @tr("annulation…");
+        }
+        @tr("préparation…")
+    }
+
+    // Whom an installation updates.
+    pure public function installed-name() -> string {
+        Updates.install-target == InstallTarget.system ? UpdatesWords.system-name()
+            : Updates.install-name != "" ? Updates.install-name : @tr("Applis")
+    }
+
+    // Why the updates were not installed.
+    pure public function install-why(why: InstallWhy) -> string {
+        if why == InstallWhy.busy {
+            return @tr("Une autre installation est en cours. Réessayez quand elle aura fini.");
+        }
+        if why == InstallWhy.interrupted {
+            return @tr("Une installation précédente a été interrompue. Elle doit être terminée avant toute autre : lancez « sudo dpkg --configure -a » dans un terminal.");
+        }
+        if why == InstallWhy.offline {
+            return @tr("Des paquets n'ont pas pu être téléchargés : vérifiez la connexion à Internet.");
+        }
+        if why == InstallWhy.no-space {
+            return @tr("Il n'y a plus assez de place sur le disque.");
+        }
+        if why == InstallWhy.refused {
+            return @tr("L'autorisation n'a pas été donnée.");
+        }
+        if why == InstallWhy.changed {
+            return @tr("Les mises à jour ont changé depuis la recherche. La liste vient d'être relue : réessayez.");
+        }
+        if why == InstallWhy.unsigned {
+            return @tr("Des paquets ne sont pas signés par une source de confiance.");
+        }
+        if why == InstallWhy.unanswered {
+            return @tr("Le gestionnaire de mises à jour ne répond plus. La mise à jour se termine peut-être sans Okapi.");
+        }
+        @tr("La mise à jour n'a pas abouti. Le détail est dans le journal.")
+    }
+
+    // What the last installation came to.
+    pure public function result-title() -> string {
+        if Updates.result-end == InstallEnd.cancelled {
+            return @tr("Mise à jour annulée");
+        }
+        if Updates.result-why == InstallWhy.unanswered {
+            return @tr("La mise à jour n'a pas abouti");
+        }
+        if Updates.result-end == InstallEnd.stopped {
+            return @tr("L'installation s'est arrêtée en cours de route");
+        }
+        let installed = Updates.result-installed;
+        if !Updates.result-counted {
+            return Updates.result-end == InstallEnd.done ? @tr("Mises à jour installées")
+                : Updates.result-target == InstallTarget.snaps ? @tr("La mise à jour n'a pas abouti")
+                : @tr("Aucune mise à jour installée");
+        }
+        if installed == 0 {
+            return @tr("Aucune mise à jour installée");
+        }
+        if Updates.result-end == InstallEnd.failed {
+            return installed == 1 ? @tr("1 installée, {} en échec", Updates.result-left)
+                : @tr("{} installées, {} en échec", installed, Updates.result-left);
+        }
+        installed == 1 ? @tr("1 mise à jour installée") : @tr("{} mises à jour installées", installed)
+    }
+
+    // The names still waiting, the first ones, then how many more.
+    pure public function left-names() -> string {
+        Updates.result-left-more == 1 ? @tr("{} et 1 autre", Updates.result-left-names)
+            : Updates.result-left-more > 1 ? @tr("{} et {} autres", Updates.result-left-names, Updates.result-left-more)
+            : Updates.result-left-names
+    }
+
+    // The result was all it was asked.
+    pure public function result-whole() -> bool {
+        Updates.result-end == InstallEnd.done && Updates.result-left == 0 && Updates.result-unshown == ""
+            && !Updates.result-unchecked
+    }
+
+
 }
 
 // What failed in a block, with « Réessayer ».
@@ -235,6 +339,8 @@ component SystemRow inherits Row {
 
 component SnapRow inherits Row {
     in property <SnapLine> line;
+    // Its place in `snap-lines`, what its button asks.
+    in property <int> index;
     row-height: Theme.updates-app-row-height;
     accessible-role: list-item;
     accessible-label: UpdatesWords.spoken-snap(root.line);
@@ -308,6 +414,15 @@ component SnapRow inherits Row {
         font-weight: Theme.weight-semibold;
         horizontal-alignment: right;
         vertical-alignment: center;
+    }
+    ActionButton {
+        text: @tr("Mettre à jour");
+        accessible-label: @tr("Mettre à jour {}", root.line.title);
+        enabled: UpdatesWords.can-install();
+        y: (parent.height - self.height) / 2;
+        clicked => {
+            Updates.update-snap(root.index);
+        }
     }
 }
 
@@ -419,7 +534,238 @@ component Settled inherits Card {
     }
 }
 
+// What the system's update would take away, asked once. Closed by its
+// buttons or Escape, never by a click outside; « Annuler » is the default.
+component Removals inherits ModalFrame {
+    label: title.text;
+    escaped => {
+        Updates.cancel-update();
+    }
+    title := Text {
+        text: Updates.removed-count == 1 ? @tr("Cette mise à jour retire 1 paquet")
+            : @tr("Cette mise à jour retire {} paquets", Updates.removed-count);
+        accessible-role: none;
+        color: Theme.text;
+        font-size: Theme.font-title;
+        font-weight: Theme.weight-semibold;
+        wrap: word-wrap;
+    }
+    if Updates.removals-changed: Detail {
+        text: @tr("Ce qu'elle retire a changé depuis : voici la liste à jour.");
+        color: Theme.text;
+    }
+    Detail {
+        text: @tr("Pour installer les nouvelles versions, le système doit retirer ces paquets :");
+    }
+    Rectangle {
+        background: Theme.surface-2;
+        border-radius: Theme.radius-medium;
+        border-width: Theme.border-width;
+        border-color: Theme.border;
+        VerticalLayout {
+            padding: Theme.spacing-xs;
+            accessible-role: list;
+            accessible-label: @tr("Paquets retirés");
+            for line in Updates.removed: HorizontalLayout {
+                padding: Theme.spacing-xs;
+                spacing: Theme.spacing-m;
+                accessible-role: list-item;
+                accessible-label: line.summary == "" ? line.name : @tr("{}, {}", line.name, line.summary);
+                Text {
+                    width: Theme.updates-name-width-narrow;
+                    text: line.name;
+                    accessible-role: none;
+                    color: Theme.text;
+                    font-size: Theme.font-label;
+                    font-weight: Theme.weight-medium;
+                    overflow: elide;
+                }
+                Text {
+                    horizontal-stretch: 1;
+                    text: line.summary;
+                    accessible-role: none;
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+    if Updates.removed-more > 0: Detail {
+        text: Updates.removed-more == 1 ? @tr("Et 1 autre.") : @tr("Et {} autres.", Updates.removed-more);
+    }
+    if Updates.added > 0: Detail {
+        text: Updates.added == 1 ? @tr("Elle installe aussi 1 nouveau paquet.")
+            : @tr("Elle installe aussi {} nouveaux paquets.", Updates.added);
+    }
+    Detail {
+        text: @tr("Ensuite, le système vous demandera peut-être votre mot de passe dans sa propre fenêtre.");
+    }
+    HorizontalLayout {
+        alignment: end;
+        spacing: Theme.spacing-s;
+        ActionButton {
+            text: @tr("Mettre à jour quand même");
+            clicked => {
+                Updates.confirm-update();
+            }
+        }
+        cancel := ActionButton {
+            text: @tr("Annuler");
+            kind: ButtonKind.primary;
+            clicked => {
+                Updates.cancel-update();
+            }
+        }
+    }
+    init => {
+        cancel.focus();
+    }
+}
+
+// An installation under way: who, what it does, how far, and its cancel.
+component Installing inherits Card {
+    property <bool> cancellable: Updates.install-target == InstallTarget.system;
+    VerticalLayout {
+        padding: Theme.spacing-l;
+        spacing: Theme.spacing-s;
+        HorizontalLayout {
+            spacing: Theme.spacing-s;
+            Line {
+                horizontal-stretch: 1;
+                text: @tr("{} : {}", UpdatesWords.installed-name(), UpdatesWords.phase());
+                vertical-alignment: center;
+                accessible-role: text;
+            }
+            if root.cancellable: ActionButton {
+                text: @tr("Annuler");
+                // polkit's window has its own: cancelling here would leave it
+                // asking for a transaction gone.
+                enabled: Updates.install-cancellable && !Updates.install-cancel-asked
+                    && Updates.install-phase != InstallPhase.authorizing;
+                clicked => {
+                    Updates.cancel-update();
+                }
+            }
+        }
+        ProgressBar {
+            indeterminate: !Updates.install-has-percentage;
+            progress: Updates.install-percentage / 100;
+            label: @tr("Installation des mises à jour");
+        }
+        if Updates.install-package != "": Detail {
+            text: Updates.install-total > 0 && Updates.install-phase == InstallPhase.installing
+                ? @tr("Paquet en cours : {}, {} sur {}", Updates.install-package, Updates.install-done, Updates.install-total)
+                : @tr("Paquet en cours : {}", Updates.install-package);
+        }
+        if Updates.install-has-bytes: Detail {
+            text: @tr("{} sur {}", Words.size(Updates.install-bytes-done), Words.size(Updates.install-bytes-total));
+        }
+        if Updates.install-too-late: ReadIconNote {
+            icon: @image-url("../assets/icons/info.svg");
+            tone: Theme.info;
+            text: @tr("Trop tard pour annuler : le système finit d'installer.");
+        }
+        Detail {
+            text: @tr("Une fois l'autorisation donnée, fermer Okapi n'arrête pas la mise à jour.");
+            color: Theme.text-3;
+        }
+    }
+}
+
+// What the last installation came to, until closed.
+component Outcome inherits Card {
+    VerticalLayout {
+        padding: Theme.spacing-l;
+        spacing: Theme.spacing-s;
+        HorizontalLayout {
+            spacing: Theme.spacing-s;
+            Icon {
+                source: UpdatesWords.result-whole() ? @image-url("../assets/icons/circle-check.svg") : @image-url("../assets/icons/triangle-alert.svg");
+                colorize: UpdatesWords.result-whole() ? Theme.success : Theme.warning;
+                y: (parent.height - self.height) / 2;
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: UpdatesWords.result-title();
+                color: Theme.text;
+                font-size: Theme.font-heading;
+                font-weight: Theme.weight-semibold;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                accessible-role: text;
+                accessible-live-region: polite;
+            }
+        }
+        if Updates.result-end == InstallEnd.cancelled: Detail {
+            text: @tr("Rien n'a été installé.");
+        }
+        if Updates.result-why != InstallWhy.none: Detail {
+            text: UpdatesWords.install-why(Updates.result-why);
+            color: Theme.text;
+        }
+        // Not when it may still be finishing, nor said already.
+        if Updates.result-end == InstallEnd.stopped && Updates.result-why != InstallWhy.interrupted
+            && Updates.result-why != InstallWhy.unanswered: Detail {
+            text: @tr("Avant toute autre installation, lancez « sudo dpkg --configure -a » dans un terminal pour la terminer.");
+        }
+        if Updates.result-counted && Updates.result-left > 0: Detail {
+            text: Updates.result-end == InstallEnd.done ? @tr("Encore en attente : {}", UpdatesWords.left-names())
+                : @tr("En échec : {}", UpdatesWords.left-names());
+        }
+        if Updates.result-unshown != "": Detail {
+            text: @tr("Le système a aussi retiré : {}", Updates.result-unshown);
+            color: Theme.text;
+        }
+        if Updates.result-unchecked: Detail {
+            text: @tr("Une partie de ce que le système a dit n'a pas pu être lue : ce qu'il a retiré n'a pas tout été vérifié. Le détail est dans le journal.");
+        }
+        if Updates.result-restart: Banner {
+            text: @tr("Redémarrage nécessaire. Le système en a besoin pour finir ; redémarrez quand cela vous arrange.");
+        }
+        HorizontalLayout {
+            alignment: end;
+            spacing: Theme.spacing-s;
+            if Updates.result-retriable: ActionButton {
+                text: @tr("Réessayer");
+                enabled: UpdatesWords.can-install();
+                clicked => {
+                    Updates.retry-update();
+                }
+            }
+            ActionButton {
+                text: @tr("Fermer");
+                kind: ButtonKind.ghost;
+                clicked => {
+                    Updates.close-result();
+                }
+            }
+        }
+    }
+}
+
 export component UpdatesPage inherits VerticalLayout {
+    // Opened and closed by Rust; a page built again shows it still open.
+    property <bool> asking: Updates.install-step == InstallStep.confirm;
+    init => {
+        if self.asking {
+            confirmation.show();
+        }
+    }
+    changed asking => {
+        if self.asking {
+            confirmation.show();
+        } else {
+            confirmation.close();
+        }
+    }
+    confirmation := Removals {
+        x: (root.width - Theme.modal-width) / 2;
+        y: root.height / 4;
+        width: Theme.modal-width;
+    }
+
     property <bool> searching: Updates.step == UpdatesStep.searching;
     property <bool> read: Updates.step == UpdatesStep.read;
     property <bool> no-source: Updates.system-state == SourceState.absent && Updates.snaps-state == SourceState.absent;
@@ -472,14 +818,14 @@ export component UpdatesPage inherits VerticalLayout {
                         }
                     }
                     if !root.read: Detail {
-                        text: @tr("Ce qui attend une mise à jour sur cet ordinateur. Cet écran n'installe rien.");
+                        text: @tr("Ce qui attend une mise à jour sur cet ordinateur.");
                     }
                 }
                 ActionButton {
                     text: root.searching ? @tr("Recherche…") : @tr("Rechercher maintenant");
                     icon: @image-url("../assets/icons/rotate-ccw.svg");
                     kind: ButtonKind.secondary;
-                    enabled: !root.searching;
+                    enabled: !root.searching && Updates.install-step == InstallStep.idle;
                     y: 0;
                     clicked => {
                         Updates.search-now();
@@ -542,7 +888,25 @@ export component UpdatesPage inherits VerticalLayout {
                 }
             }
 
-            if root.searching: Card {
+            if Updates.install-step == InstallStep.running: Installing { }
+            if Updates.install-step == InstallStep.verifying: Card {
+                VerticalLayout {
+                    padding: Theme.spacing-l;
+                    spacing: Theme.spacing-s;
+                    Line {
+                        text: @tr("Vérification de ce qui a été installé…");
+                        accessible-role: text;
+                        accessible-live-region: polite;
+                    }
+                    ProgressBar {
+                        indeterminate: true;
+                        label: @tr("Vérification en cours, durée inconnue");
+                    }
+                }
+            }
+            if Updates.result-shown: Outcome { }
+
+            if root.searching && Updates.install-step != InstallStep.verifying: Card {
                 VerticalLayout {
                     padding: Theme.spacing-l;
                     spacing: Theme.spacing-s;
@@ -614,9 +978,14 @@ export component UpdatesPage inherits VerticalLayout {
                                 text: Updates.lists-old ? @tr("Aucune mise à jour dans cette liste, qui n'est peut-être plus à jour : « Rechercher maintenant » la télécharge à nouveau.")
                                     : @tr("Aucune mise à jour");
                             }
-                            if Updates.system-state == SourceState.read && Updates.system-count + Updates.system-held > 0: FoldHead {
-                                property <string> what: Updates.system-count > 0 ? UpdatesWords.count(Updates.system-count, Updates.system-security)
-                                    : @tr("Retenues par le système : {}", Updates.system-held);
+                            if Updates.system-state == SourceState.read && Updates.system-count + Updates.system-held > 0: HorizontalLayout {
+                              padding-right: Updates.system-count > 0 ? Theme.spacing-l : 0;
+                              spacing: Theme.spacing-s;
+                              FoldHead {
+                                horizontal-stretch: 1;
+                                property <string> what: Updates.system-count == 0 ? @tr("Retenues par le système : {}", Updates.system-held)
+                                    : Updates.has-system-download ? @tr("{}, {} à télécharger", UpdatesWords.count(Updates.system-count, Updates.system-security), Words.size(Updates.system-download))
+                                    : UpdatesWords.count(Updates.system-count, Updates.system-security);
                                 expanded: Updates.system-expanded;
                                 label: Updates.system-expanded
                                     ? @tr("{}, {}, déplié", UpdatesWords.system-name(), self.what)
@@ -641,6 +1010,19 @@ export component UpdatesPage inherits VerticalLayout {
                                     tone-soft: Theme.security-soft;
                                     y: (parent.height - self.height) / 2;
                                 }
+                              }
+                              // Beside the line, never in it: a button in a button is not read.
+                              if Updates.system-count > 0: ActionButton {
+                                text: @tr("Tout mettre à jour");
+                                accessible-label: @tr("Mettre à jour {}", UpdatesWords.system-name());
+                                icon: @image-url("../assets/icons/download.svg");
+                                kind: ButtonKind.primary;
+                                enabled: UpdatesWords.can-install();
+                                y: (parent.height - self.height) / 2;
+                                clicked => {
+                                    Updates.update-system();
+                                }
+                              }
                             }
                             if Updates.system-state == SourceState.read && Updates.system-expanded: VerticalLayout {
                                 accessible-role: list;
@@ -684,6 +1066,15 @@ export component UpdatesPage inherits VerticalLayout {
                         aside: Updates.snaps-state != SourceState.read || Updates.snap-lines.length == 0 ? ""
                             : Updates.has-snaps-size ? @tr("{}, {}", UpdatesWords.count(Updates.snap-lines.length, 0), Words.size(Updates.snaps-size))
                             : UpdatesWords.count(Updates.snap-lines.length, 0);
+                        if Updates.snaps-state == SourceState.read && Updates.snap-lines.length > 1: ActionButton {
+                            text: @tr("Tout mettre à jour");
+                            accessible-label: @tr("Mettre à jour toutes les applis");
+                            enabled: UpdatesWords.can-install();
+                            y: (parent.height - self.height) / 2;
+                            clicked => {
+                                Updates.update-snaps();
+                            }
+                        }
                     }
                     Card {
                         VerticalLayout {
@@ -696,8 +1087,9 @@ export component UpdatesPage inherits VerticalLayout {
                             if Updates.snaps-state == SourceState.read: VerticalLayout {
                                 accessible-role: list;
                                 accessible-label: @tr("Applis à mettre à jour");
-                                for line in Updates.snap-lines: SnapRow {
+                                for line[index] in Updates.snap-lines: SnapRow {
                                     line: line;
+                                    index: index;
                                 }
                             }
                         }

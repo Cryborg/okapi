@@ -315,6 +315,7 @@ fn the_rights_refused_are_told_by_their_kind_and_a_change_by_its_status() {
             status: "Error".to_owned(),
             ready: true,
             err: Some("cannot remove".to_owned()),
+            tasks: Vec::new(),
         }
     );
 }
@@ -347,4 +348,116 @@ fn a_name_that_is_no_snap_s_is_never_asked() {
         snapd.remove("../v2/snaps", false),
         Err(SnapdError::InvalidName(name)) if name == "../v2/snaps"
     ));
+}
+
+#[test]
+fn a_refresh_asks_polkit_for_the_snaps_named_and_never_for_none() {
+    // Catches a refresh that cannot ask for the rights, or names the snaps
+    // wrong; and an empty list, which snapd takes for every snap.
+    let (_directory, snapd, requests) = serving(with_length(
+        "202 Accepted",
+        r#"{"type":"async","status-code":202,"status":"Accepted","result":null,"change":"9"}"#,
+    ));
+    let names = ["snap-store".to_owned(), "obs-studio".to_owned()];
+    assert_eq!(snapd.refresh(&names).unwrap(), "9");
+    let request = requests.recv().unwrap();
+    assert!(
+        request.starts_with("POST /v2/snaps HTTP/1.1\r\n"),
+        "{request}"
+    );
+    assert!(request.contains("\r\nX-Allow-Interaction: true\r\n"));
+    let body = request.split("\r\n\r\n").nth(1).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(body).unwrap(),
+        serde_json::json!({ "action": "refresh", "snaps": names })
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let snapd = Snapd::at(&directory.path().join("none"), Duration::from_secs(1));
+    assert!(matches!(
+        snapd.refresh(&[]),
+        Err(SnapdError::InvalidName(_))
+    ));
+    assert!(matches!(
+        snapd.refresh(&["ok".to_owned(), "../x".to_owned()]),
+        Err(SnapdError::InvalidName(name)) if name == "../x"
+    ));
+}
+
+#[test]
+fn a_change_s_tasks_say_their_progress() {
+    let (_directory, snapd, _) = serving(with_length(
+        "200 OK",
+        r#"{"type":"sync","status-code":200,"result":{"status":"Doing","ready":false,"tasks":[
+            {"kind":"download-snap","status":"Doing","progress":{"label":"x","done":400,"total":1000}},
+            {"kind":"link-snap","status":"Do","progress":{"done":0,"total":1}},
+            {"kind":"run-hook","status":"Do"}]}}"#,
+    ));
+    let change = snapd.change("9").unwrap();
+    assert_eq!(change.tasks.len(), 3);
+    assert_eq!(change.tasks[0].kind, TASK_DOWNLOAD);
+    assert_eq!(change.tasks[0].status, "Doing");
+    assert_eq!(
+        change.tasks[0].progress,
+        TaskProgress {
+            done: 400,
+            total: 1000
+        }
+    );
+    assert_eq!(change.tasks[2].progress, TaskProgress::default());
+}
+
+/// A snapd that answers each request, one per connection, with the next of
+/// `answers` (`None`: closed unanswered).
+fn answering(answers: Vec<Option<&'static str>>) -> (tempfile::TempDir, Snapd) {
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("snapd.socket");
+    let listener = UnixListener::bind(&socket).unwrap();
+    thread::spawn(move || {
+        for answer in answers {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = vec![0; 4096];
+            let _ = stream.read(&mut request).unwrap();
+            if let Some(body) = answer {
+                let _ = stream.write_all(&with_length("200 OK", body));
+            }
+        }
+    });
+    (directory, Snapd::at(&socket, Duration::from_secs(5)))
+}
+
+const DOING: &str =
+    r#"{"type":"sync","status-code":200,"result":{"status":"Doing","ready":false}}"#;
+const DONE: &str = r#"{"type":"sync","status-code":200,"result":{"status":"Done","ready":true}}"#;
+
+#[test]
+fn a_change_is_followed_through_short_silences_and_heard_at_each_look() {
+    // Catches failed looks counted in total rather than in a row, the
+    // tolerance asked ignored, and its progress never heard.
+    let (_directory, snapd) = answering(vec![
+        Some(DOING),
+        None,
+        None,
+        Some(DOING),
+        None,
+        None,
+        Some(DONE),
+    ]);
+    let heard = std::cell::Cell::new(0);
+    let followed = snapd.follow("9", Duration::from_mins(1), 3, &|_| {
+        heard.set(heard.get() + 1);
+    });
+    assert!(matches!(followed, Followed::Ready(change) if change.status == CHANGE_DONE));
+    assert_eq!(heard.get(), 2);
+
+    let (_directory, snapd) = answering(vec![None, None, None, Some(DONE)]);
+    assert_eq!(
+        snapd.follow("9", Duration::from_mins(1), 3, &|_| {}),
+        Followed::Unanswered
+    );
+    let (_directory, snapd) = answering(vec![Some(DONE)]);
+    assert_eq!(
+        snapd.follow("9", Duration::ZERO, 3, &|_| {}),
+        Followed::TimedOut,
+        "no look once the wait has passed"
+    );
 }

@@ -13,6 +13,14 @@ const INFO_INSTALLING: u32 = 12;
 const STATUS_RUNNING: u32 = 3;
 const TRANSACTION_PATH: &str = "/org/freedesktop/PackageKit/1_abc";
 
+/// What a status changed says.
+fn status(status: u32) -> Signal {
+    Signal::Properties {
+        status: Some(status),
+        percentage: None,
+    }
+}
+
 fn package(info: u32, name: &str) -> Package {
     Package {
         info,
@@ -22,6 +30,10 @@ fn package(info: u32, name: &str) -> Package {
 }
 
 fn folded(signals: Vec<Signal>) -> Option<Result<Vec<Package>, PackageKitError>> {
+    folded_whole(signals).map(|ended| ended.map(|said| said.packages))
+}
+
+fn folded_whole(signals: Vec<Signal>) -> Option<Result<Said, PackageKitError>> {
     let mut collector = Collector::default();
     signals
         .into_iter()
@@ -41,7 +53,7 @@ fn packages_one_by_one_or_together_come_out_the_same_in_order() {
     let mixed = folded(vec![
         Signal::Package(package(8, "openssl")),
         Signal::Packages(vec![package(6, "bash"), package(5, "zsh")]),
-        Signal::Status(STATUS_RUNNING),
+        status(STATUS_RUNNING),
         Signal::Package(package(3, "vim")),
         Signal::Finished { exit: EXIT_SUCCESS },
     ]);
@@ -115,14 +127,14 @@ fn a_failure_without_its_reason_is_no_empty_list() {
 fn waiting_follows_the_last_status_only() {
     let mut collector = Collector::default();
     assert!(!collector.waiting());
-    for (status, waiting) in [
-        (STATUS_WAIT, true),
+    for (said, waiting) in [
+        (status::WAIT, true),
         (STATUS_RUNNING, false),
-        (STATUS_WAITING_FOR_LOCK, true),
+        (status::WAITING_FOR_LOCK, true),
         (STATUS_RUNNING, false),
     ] {
-        collector.take(Signal::Status(status));
-        assert_eq!(collector.waiting(), waiting, "{status}");
+        collector.take(status(said));
+        assert_eq!(collector.waiting(), waiting, "{said}");
     }
 }
 
@@ -130,16 +142,20 @@ fn waiting_follows_the_last_status_only() {
 fn a_transaction_followed_tells_its_waits_and_its_end() {
     let heard = RefCell::new(Vec::new());
     let signals = futures_lite::stream::iter(vec![
-        Signal::Status(STATUS_WAITING_FOR_LOCK),
-        Signal::Status(STATUS_WAITING_FOR_LOCK),
-        Signal::Status(STATUS_RUNNING),
+        status(status::WAITING_FOR_LOCK),
+        status(status::WAITING_FOR_LOCK),
+        status(STATUS_RUNNING),
         Signal::Package(package(8, "openssl")),
         Signal::Finished { exit: EXIT_SUCCESS },
     ]);
-    let ended = block_on(follow(signals, Duration::from_secs(10), &|waiting| {
-        heard.borrow_mut().push(waiting);
-    }));
-    assert_eq!(ended.unwrap(), [package(8, "openssl")]);
+    let ended = block_on(follow(
+        signals,
+        Duration::from_secs(10),
+        Collector::default(),
+        &|waiting| heard.borrow_mut().push(waiting),
+        &|_| {},
+    ));
+    assert_eq!(ended.unwrap().packages, [package(8, "openssl")]);
     assert_eq!(*heard.borrow(), [true, false], "each change told once");
 }
 
@@ -149,20 +165,24 @@ fn a_silent_transaction_times_out_saying_whether_it_still_waits() {
     // still going on.
     for (statuses, still, told) in [
         // Still waiting when the time runs out: its end ends the wait too.
-        (vec![STATUS_WAITING_FOR_LOCK], true, vec![true, false]),
+        (vec![status::WAITING_FOR_LOCK], true, vec![true, false]),
         (
-            vec![STATUS_WAITING_FOR_LOCK, STATUS_RUNNING],
+            vec![status::WAITING_FOR_LOCK, STATUS_RUNNING],
             false,
             vec![true, false],
         ),
         (vec![], false, vec![]),
     ] {
         let heard = RefCell::new(Vec::new());
-        let signals = futures_lite::stream::iter(statuses.into_iter().map(Signal::Status))
+        let signals = futures_lite::stream::iter(statuses.into_iter().map(status))
             .chain(futures_lite::stream::pending());
-        let ended = block_on(follow(signals, Duration::from_millis(50), &|waiting| {
-            heard.borrow_mut().push(waiting);
-        }));
+        let ended = block_on(follow(
+            signals,
+            Duration::from_millis(50),
+            Collector::default(),
+            &|waiting| heard.borrow_mut().push(waiting),
+            &|_| {},
+        ));
         assert!(
             matches!(
                 ended,
@@ -177,11 +197,13 @@ fn a_silent_transaction_times_out_saying_whether_it_still_waits() {
     let heard = RefCell::new(Vec::new());
     let ended = block_on(follow(
         futures_lite::stream::iter(vec![
-            Signal::Status(STATUS_WAIT),
+            status(status::WAIT),
             Signal::Finished { exit: EXIT_FAILED },
         ]),
         Duration::from_secs(10),
+        Collector::default(),
         &|waiting| heard.borrow_mut().push(waiting),
+        &|_| {},
     ));
     assert!(matches!(ended, Err(PackageKitError::Ended { .. })));
     assert_eq!(*heard.borrow(), [true, false]);
@@ -189,6 +211,8 @@ fn a_silent_transaction_times_out_saying_whether_it_still_waits() {
     let ended = block_on(follow(
         futures_lite::stream::empty(),
         Duration::from_secs(10),
+        Collector::default(),
+        &|_| {},
         &|_| {},
     ));
     assert!(matches!(ended, Err(PackageKitError::Vanished)));
@@ -270,10 +294,18 @@ fn the_messages_of_the_bus_become_signals() {
     };
     assert_eq!(
         signal_of(&changed(STATUS, Value::from(30_u32))),
-        Some(Signal::Status(30))
+        Some(status(30))
+    );
+    // The percentage comes apart from the status: a status left untold.
+    assert_eq!(
+        signal_of(&changed(PERCENTAGE, Value::from(50_u32))),
+        Some(Signal::Properties {
+            status: None,
+            percentage: Some(50)
+        })
     );
     // Another property, a status of the wrong type, another signal: skipped.
-    assert_eq!(signal_of(&changed("Percentage", Value::from(50_u32))), None);
+    assert_eq!(signal_of(&changed("Speed", Value::from(50_u32))), None);
     assert_eq!(signal_of(&changed(STATUS, Value::from("running"))), None);
     assert_eq!(
         signal_of(&signal("ItemProgress", TRANSACTION, &("x", 1_u32, 2_u32))),
@@ -457,7 +489,7 @@ fn only_a_transaction_left_running_is_cancelled() {
     assert!(given_up(&unreadable(ERROR_CODE)));
     // Its end seen: over.
     assert!(!given_up(&unreadable("Package")));
-    assert!(!given_up(&Ok(Vec::new())));
+    assert!(!given_up(&Ok(Said::default())));
     assert!(!given_up(&Err(PackageKitError::Ended {
         exit: EXIT_FAILED
     })));
@@ -478,4 +510,198 @@ fn a_simulated_removal_that_would_install_anything_is_refused_never_filtered() {
         only_removing(installing),
         Err(PackageKitError::NotOnlyRemoving { packages }) if packages.len() == 1
     ));
+}
+
+#[test]
+fn a_percentage_said_alone_leaves_the_status_as_it_was() {
+    // Catches a percentage taken for a status of 0: the wait for another
+    // program would flicker at every tick of the progress.
+    let mut collector = Collector::default();
+    collector.take(status(status::WAITING_FOR_LOCK));
+    collector.take(Signal::Properties {
+        status: None,
+        percentage: Some(40),
+    });
+    assert!(collector.waiting());
+}
+
+#[test]
+fn details_and_a_restart_are_read_and_their_loss_is_no_failure() {
+    let details = |entries: Vec<(&str, Value<'static>)>| {
+        signal(
+            DETAILS,
+            TRANSACTION,
+            &(HashMap::<&str, Value<'static>>::from_iter(entries),),
+        )
+    };
+    assert_eq!(
+        signal_of(&details(vec![
+            (DETAILS_ID, Value::from("curl;8;amd64;x")),
+            ("size", Value::from(900_u64)),
+            (DETAILS_DOWNLOAD_SIZE, Value::from(300_u64)),
+        ])),
+        Some(Signal::Details(Details {
+            id: "curl;8;amd64;x".into(),
+            download_size: Some(300),
+        }))
+    );
+    // An older PackageKit gives no download size: unknown, never `size`.
+    assert_eq!(
+        signal_of(&details(vec![
+            (DETAILS_ID, Value::from("curl;8;amd64;x")),
+            ("size", Value::from(900_u64)),
+        ])),
+        Some(Signal::Details(Details {
+            id: "curl;8;amd64;x".into(),
+            download_size: None,
+        }))
+    );
+    assert_eq!(
+        signal_of(&details(vec![("size", Value::from(900_u64))])),
+        None
+    );
+    assert_eq!(
+        signal_of(&signal(
+            REQUIRE_RESTART,
+            TRANSACTION,
+            &(4_u32, "linux;7;amd64;x")
+        )),
+        Some(Signal::RequireRestart { kind: 4 })
+    );
+    for member in [DETAILS, REQUIRE_RESTART] {
+        assert_eq!(
+            signal_of(&signal(member, TRANSACTION, &("wrong",))),
+            None,
+            "{member}"
+        );
+    }
+}
+
+#[test]
+fn only_a_restart_of_the_system_is_one_and_the_details_are_kept() {
+    // Catches a session's restart said as the system's, or the reverse.
+    for (kind, system) in [
+        (RESTART_SYSTEM, true),
+        (RESTART_SECURITY_SYSTEM, true),
+        (3, false),
+        (5, false),
+    ] {
+        let said = folded_whole(vec![
+            Signal::RequireRestart { kind },
+            Signal::Details(Details {
+                id: "a;1;amd64;x".into(),
+                download_size: Some(7),
+            }),
+            Signal::Finished { exit: EXIT_SUCCESS },
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(said.system_restart, system, "{kind}");
+        assert_eq!(said.details.len(), 1);
+    }
+}
+
+#[test]
+fn a_package_of_the_progress_lost_never_fails_the_update() {
+    // Catches two hours of installation said failed for one signal of its
+    // progress that could not be read.
+    let mut collector = Collector::of_progress();
+    collector.take(Signal::Unreadable {
+        member: "Package".into(),
+    });
+    assert!(matches!(
+        collector.take(Signal::Finished { exit: EXIT_SUCCESS }),
+        Some(Ok(_))
+    ));
+    // Its end unreadable still ends it, unknown.
+    let mut collector = Collector::of_progress();
+    assert!(matches!(
+        collector.take(Signal::Unreadable {
+            member: FINISHED.into()
+        }),
+        Some(Err(PackageKitError::Unreadable { .. }))
+    ));
+}
+
+#[test]
+fn every_signal_followed_is_heard_in_order() {
+    let heard = RefCell::new(Vec::new());
+    let said = vec![
+        status(status::DOWNLOAD),
+        Signal::Package(package(info::FINISHED, "a")),
+        Signal::Finished { exit: EXIT_SUCCESS },
+    ];
+    let ended = block_on(follow(
+        futures_lite::stream::iter(said.clone()),
+        Duration::from_secs(10),
+        Collector::of_progress(),
+        &|_| {},
+        &|signal| heard.borrow_mut().push(signal.clone()),
+    ));
+    assert!(ended.is_ok());
+    assert_eq!(*heard.borrow(), said);
+}
+
+#[test]
+fn an_update_installs_only_signed_packages_and_a_simulation_changes_nothing() {
+    // Catches an update that would install a package no trusted key signs,
+    // or a simulation that would install: the bits of `pk-bitfield.h`.
+    assert_eq!(
+        update_call(false),
+        UpdateCall {
+            flags: 2,
+            wait: Duration::from_hours(2),
+            interactive: true,
+        }
+    );
+    assert_eq!(
+        update_call(true),
+        UpdateCall {
+            flags: 2 | 4,
+            wait: Duration::from_mins(2),
+            interactive: false,
+        }
+    );
+}
+
+#[test]
+fn what_an_update_says_becomes_its_progress() {
+    // Catches several packages at once (asked for) left unheard, and a lost
+    // package never told.
+    assert_eq!(
+        updating_of(&Signal::Packages(vec![
+            package(10, "a"),
+            package(info::FINISHED, "a")
+        ])),
+        [
+            Updating::Package {
+                info: 10,
+                id: package(10, "a").id
+            },
+            Updating::Package {
+                info: info::FINISHED,
+                id: package(10, "a").id
+            },
+        ]
+    );
+    assert_eq!(
+        updating_of(&Signal::Properties {
+            status: Some(8),
+            percentage: Some(40)
+        }),
+        [Updating::Status(8), Updating::Percentage(40)]
+    );
+    for member in ["Package", "Packages"] {
+        assert_eq!(
+            updating_of(&Signal::Unreadable {
+                member: member.into()
+            }),
+            [Updating::Unreadable],
+            "{member}"
+        );
+    }
+    assert_eq!(
+        updating_of(&Signal::Finished { exit: EXIT_SUCCESS }),
+        Vec::new()
+    );
 }

@@ -23,6 +23,31 @@ export struct SystemLine {
     kind: UpdateKind,
 }
 
+// Where an installation stands: none, what it would remove awaiting the
+// user, under way, or its outcome read again.
+export enum InstallStep { idle, confirm, running, verifying }
+
+// What an installation updates: the system's packages, or snaps.
+export enum InstallTarget { system, snaps }
+
+// What an installation under way does (`okapi_tools::updates::install::Phase`).
+export enum InstallPhase { preparing, waiting, authorizing, downloading, installing, cancelling }
+
+// How the last installation ended: done (some may wait still), cancelled,
+// failed (the system: nothing installed; snaps: some wait still), or
+// stopped while dpkg installed.
+export enum InstallEnd { done, cancelled, failed, stopped }
+
+// Why the updates were not installed (`okapi_tools::updates::install::Why`).
+// `none` when it did not fail.
+export enum InstallWhy { none, busy, interrupted, offline, no-space, refused, changed, unsigned, unanswered, broken }
+
+// A package an update would take away.
+export struct RemovedLine {
+    name: string,
+    summary: string,
+}
+
 // A snap with a newer revision waiting.
 export struct SnapLine {
     title: string,
@@ -33,8 +58,7 @@ export struct SnapLine {
     has-size: bool,
 }
 
-// The updates screen: Rust fills it, the page shows it and calls back. It
-// installs nothing.
+// The updates screen: Rust fills it, the page shows it and calls back.
 export global Updates {
     in property <UpdatesStep> step;
     // The search downloads the package lists first.
@@ -62,6 +86,10 @@ export global Updates {
     // are.
     in property <[SystemLine]> system-lines;
     in property <int> system-more;
+    // What installing the system's updates downloads, when every size is
+    // known.
+    in property <bool> has-system-download;
+    in property <Size> system-download;
     in-out property <bool> system-expanded;
     // The lists were not downloaded again this time; or, not downloaded
     // this time, they are old or of an unknown age: dated, never « à jour ».
@@ -84,9 +112,73 @@ export global Updates {
     in property <[string]> reboot-packages;
     in-out property <bool> reboot-expanded;
 
+    // Anything but idle: no other installation, no search.
+    in property <InstallStep> install-step;
+    in property <InstallTarget> install-target;
+    // The snap's title, when one is updated alone.
+    in property <string> install-name;
+    in property <InstallPhase> install-phase;
+    // Of 100, when known.
+    in property <bool> install-has-percentage;
+    in property <int> install-percentage;
+    // The package at hand, and the packages dpkg finished of all it handles
+    // (0: not known).
+    in property <string> install-package;
+    in property <int> install-done;
+    in property <int> install-total;
+    in property <bool> install-cancellable;
+    // It could be cancelled, and no longer can.
+    in property <bool> install-too-late;
+    in property <bool> install-cancel-asked;
+    // What is downloaded of what is to be (snaps).
+    in property <bool> install-has-bytes;
+    in property <Size> install-bytes-done;
+    in property <Size> install-bytes-total;
+    // What the update would take away, and how many packages it brings in;
+    // the list changed since it was last shown.
+    in property <[RemovedLine]> removed;
+    // How many it removes, and how many are not listed.
+    in property <int> removed-count;
+    in property <int> removed-more;
+    in property <int> added;
+    in property <bool> removals-changed;
+
+    // The last installation's outcome, until closed.
+    in property <bool> result-shown;
+    in property <InstallEnd> result-end;
+    in property <InstallTarget> result-target;
+    in property <InstallWhy> result-why;
+    // Its counts are known: snaps by the list read again; the system done,
+    // every update asked.
+    in property <bool> result-counted;
+    in property <int> result-installed;
+    // Asked and still waiting: their names (the first ones), and how many
+    // more.
+    in property <int> result-left;
+    in property <string> result-left-names;
+    in property <int> result-left-more;
+    in property <bool> result-restart;
+    // What dpkg removed that was never shown, by name; and whether some of
+    // what it said could not be read (a removal may have gone unseen).
+    in property <string> result-unshown;
+    in property <bool> result-unchecked;
+    // Something of it still waits and trying again may mend it.
+    in property <bool> result-retriable;
+
     // Downloads the package lists, then reads again.
     callback search-now();
     // The last search, again.
     callback retry();
     callback show-all-system();
+    callback update-system();
+    // The snap of this line of `snap-lines`.
+    callback update-snap(int);
+    callback update-snaps();
+    // What the update removes, shown, is accepted.
+    callback confirm-update();
+    // Closes the confirmation, or asks the installation to stop.
+    callback cancel-update();
+    callback close-result();
+    // The last installation again, on what still waits.
+    callback retry-update();
 }

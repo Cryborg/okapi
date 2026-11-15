@@ -2,8 +2,9 @@
 //! A search reads the system's packages on one thread, the snaps and the
 //! restart awaited on another, each told to the window as soon as it is
 //! read; the window reads them every half second. It runs when the page is
-//! shown and the last one is old, or when the user asks. Nothing here
-//! installs anything.
+//! shown and the last one is old, or when the user asks; never while an
+//! installation ([`install`]) runs, which reads the list again once it
+//! ends.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -16,9 +17,10 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use okapi_rules::Language;
 use okapi_tools::packages::reboot::RebootRequired;
+use okapi_tools::updates::install::Installer;
 use okapi_tools::updates::{
-    self, Failure, Kind, ListsRefresh, Outcome, Snaps, Sources, SystemReading, SystemSources,
-    SystemUpdate,
+    self, Failure, Kind, ListsRefresh, Outcome, SnapUpdate, Snaps, Sources, SystemReading,
+    SystemSources, SystemUpdate,
 };
 use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 
@@ -35,10 +37,15 @@ const LISTS_OLD_AFTER: Duration = Duration::from_hours(7 * 24);
 /// autres ».
 const SYSTEM_LINES_FIRST: usize = 6;
 
-/// What the screen reads, and its clock.
+mod install;
+
+use install::{Install, Target};
+
+/// What the screen reads and installs with, and its clock.
 #[derive(Clone)]
 pub struct UpdatesSeams {
     pub sources: Arc<dyn Sources>,
+    pub installer: Arc<dyn Installer>,
     /// The distribution's name, said beside « Système ».
     pub distribution: Option<String>,
     pub now: fn() -> Timestamp,
@@ -49,8 +56,10 @@ impl UpdatesSeams {
     /// This system's daemons and files, texts in the session's language.
     pub fn system() -> Self {
         let language = Language::of_session(|name| std::env::var_os(name));
+        let system = Arc::new(SystemSources::new(language));
         Self {
-            sources: Arc::new(SystemSources::new(language)),
+            sources: Arc::clone(&system) as Arc<dyn Sources>,
+            installer: system,
             distribution: okapi_platform::distribution()
                 .inspect_err(|error| tracing::warn!(%error, "distribution unknown"))
                 .ok()
@@ -101,12 +110,23 @@ struct State {
     /// The page is shown: the moments are said again as the clock goes.
     on_page: bool,
     system: Vec<SystemUpdate>,
+    /// How the last reading of the system went: read, what an installation
+    /// left is known from it.
+    system_reading: ui::SourceState,
     system_all: bool,
     system_model: Rc<VecModel<ui::SystemLine>>,
+    /// The snaps shown, in their lines' order (what a line's button names);
+    /// none when not read.
+    snaps: Option<Vec<SnapUpdate>>,
     snap_model: Rc<VecModel<ui::SnapLine>>,
     reboot_model: Rc<VecModel<SharedString>>,
+    removed_model: Rc<VecModel<ui::RemovedLine>>,
+    install: Install,
+    /// What the last installation asked: « Réessayer » asks it again.
+    retry: Option<Target>,
     timer: slint::Timer,
     minutes_timer: slint::Timer,
+    install_timer: slint::Timer,
 }
 
 /// The updates screen.
@@ -132,18 +152,25 @@ impl UpdatesScreen {
             listed_at: None,
             on_page: false,
             system: Vec::new(),
+            system_reading: ui::SourceState::Absent,
             system_all: false,
             system_model: Rc::new(VecModel::default()),
+            snaps: None,
             snap_model: Rc::new(VecModel::default()),
             reboot_model: Rc::new(VecModel::default()),
+            removed_model: Rc::new(VecModel::default()),
+            install: Install::Idle,
+            retry: None,
             timer: slint::Timer::default(),
             minutes_timer: slint::Timer::default(),
+            install_timer: slint::Timer::default(),
             seams,
         };
         let updates = window.global::<ui::Updates>();
         updates.set_system_lines(ModelRc::from(Rc::clone(&state.system_model)));
         updates.set_snap_lines(ModelRc::from(Rc::clone(&state.snap_model)));
         updates.set_reboot_packages(ModelRc::from(Rc::clone(&state.reboot_model)));
+        updates.set_removed(ModelRc::from(Rc::clone(&state.removed_model)));
         updates.set_distribution(state.seams.distribution.clone().unwrap_or_default().into());
         let screen = Self(Rc::new(RefCell::new(state)));
         let weak = Rc::downgrade(&screen.0);
@@ -161,6 +188,18 @@ impl UpdatesScreen {
             screen.search(refresh);
         }));
         updates.on_show_all_system(on(Self::show_all_system));
+        updates.on_update_system(on(Self::update_system));
+        updates.on_update_snaps(on(Self::update_snaps));
+        updates.on_confirm_update(on(Self::confirm_update));
+        updates.on_cancel_update(on(Self::cancel_update));
+        updates.on_close_result(on(Self::close_result));
+        updates.on_retry_update(on(Self::retry_update));
+        let weak = Rc::downgrade(&screen.0);
+        updates.on_update_snap(move |index| {
+            if let Some(state) = weak.upgrade() {
+                Self(state).update_snap(index);
+            }
+        });
         screen
     }
 
@@ -183,6 +222,7 @@ impl UpdatesScreen {
         let due = {
             let state = self.0.borrow();
             state.search.is_none()
+                && !state.install.active()
                 && state.read_at.is_none_or(|read_at| {
                     older_than(read_at, (state.seams.now)(), READ_AGAIN_AFTER)
                 })
@@ -195,11 +235,19 @@ impl UpdatesScreen {
         }
     }
 
-    /// Starts a search, unless one is on its way; `refresh` downloads the
+    /// Starts a search, unless one is on its way or an installation runs
+    /// (the one it ends with reads the list again); `refresh` downloads the
     /// package lists first.
     fn search(&self, refresh: bool) {
-        if self.0.borrow().search.is_some() {
-            return;
+        {
+            let state = self.0.borrow();
+            if state.search.is_some() {
+                return;
+            }
+            if state.install.blocks_search() {
+                tracing::info!("a search asked while an installation runs: refused");
+                return;
+            }
         }
         // The threads' traces belong to this search.
         let search = tracing::info_span!("updates", refresh);
@@ -354,6 +402,7 @@ impl UpdatesScreen {
         if self.0.borrow().on_page {
             self.watch_minutes();
         }
+        self.tell_outcome();
     }
 
     fn moment(&self, at: Timestamp) -> Option<ui::Moment> {
@@ -387,9 +436,13 @@ impl UpdatesScreen {
             .iter()
             .filter(|update| update.kind == Kind::Blocked)
             .count();
+        let download = reading
+            .download_size
+            .filter(|_| state_shown == ui::SourceState::Read);
         {
             let mut state = self.0.borrow_mut();
             state.system = updates;
+            state.system_reading = state_shown;
             if let Some(search) = &mut state.search {
                 search.awaiting_system = false;
             }
@@ -409,6 +462,8 @@ impl UpdatesScreen {
             shown_updates.set_system_count(shown(waiting));
             shown_updates.set_system_held(shown(held));
             shown_updates.set_system_security(shown(security));
+            shown_updates.set_has_system_download(download.is_some());
+            shown_updates.set_system_download(size(download.unwrap_or_default()));
             match reading.refresh {
                 ListsRefresh::Failed(failure) => {
                     shown_updates.set_refresh_failed(true);
@@ -468,6 +523,7 @@ impl UpdatesScreen {
         {
             let mut state = self.0.borrow_mut();
             state.next_refresh = snaps.as_ref().and_then(|snaps| snaps.next_refresh);
+            state.snaps = snaps.as_ref().map(|snaps| snaps.updates.clone());
             show(&state.snap_model, lines);
             if let Some(search) = &mut state.search {
                 search.awaiting_snaps = false;
@@ -564,7 +620,7 @@ fn older_than(at: Timestamp, now: Timestamp, age: Duration) -> bool {
 
 /// What a thread tells the window; a window gone (the app closing) has
 /// nothing left to show.
-fn told(sender: &mpsc::Sender<Event>, event: Event) {
+fn told<T>(sender: &mpsc::Sender<T>, event: T) {
     if sender.send(event).is_err() {
         tracing::debug!("the updates screen is gone");
     }
@@ -586,6 +642,7 @@ const fn failed_reading() -> SystemReading {
         updates: Outcome::Failed(Failure::Broken),
         refresh: ListsRefresh::NotAsked,
         listed_at: None,
+        download_size: None,
     }
 }
 

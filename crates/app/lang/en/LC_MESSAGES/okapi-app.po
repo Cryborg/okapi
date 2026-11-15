@@ -2124,8 +2124,8 @@ msgid "recherché {}"
 msgstr "searched {}"
 
 msgctxt "UpdatesPage"
-msgid "Ce qui attend une mise à jour sur cet ordinateur. Cet écran n'installe rien."
-msgstr "What waits for an update on this computer. This screen installs nothing."
+msgid "Ce qui attend une mise à jour sur cet ordinateur."
+msgstr "What waits for an update on this computer."
 
 msgctxt "UpdatesPage"
 msgid "Recherche…"
@@ -3250,3 +3250,271 @@ msgstr "Moved to the trash unverified: see below"
 msgctxt "DuplicateStart"
 msgid "Votre dossier personnel n'a pas pu être lu : rien ne peut être recherché. Le détail est dans le journal."
 msgstr "Your home folder could not be read: nothing can be searched. The details are in the log."
+
+msgctxt "UpdatesWords"
+msgid "en attente d'une autre installation, qui doit finir d'abord"
+msgstr "waiting for another installation, which must finish first"
+
+msgctxt "UpdatesWords"
+msgid "en attente de l'autorisation, demandée par le système dans sa propre fenêtre"
+msgstr "waiting for the permission, asked by the system in its own window"
+
+msgctxt "UpdatesWords"
+msgid "téléchargement… {} %"
+msgstr "downloading… {}%"
+
+msgctxt "UpdatesWords"
+msgid "téléchargement…"
+msgstr "downloading…"
+
+msgctxt "UpdatesWords"
+msgid "installation… {} %"
+msgstr "installing… {}%"
+
+msgctxt "UpdatesWords"
+msgid "installation…"
+msgstr "installing…"
+
+msgctxt "UpdatesWords"
+msgid "annulation…"
+msgstr "cancelling…"
+
+msgctxt "UpdatesWords"
+msgid "préparation…"
+msgstr "preparing…"
+
+msgctxt "UpdatesWords"
+msgid "Applis"
+msgstr "Apps"
+
+msgctxt "UpdatesWords"
+msgid "Une autre installation est en cours. Réessayez quand elle aura fini."
+msgstr "Another installation is under way. Try again once it is over."
+
+msgctxt "UpdatesWords"
+msgid "Une installation précédente a été interrompue. Elle doit être terminée avant toute autre : lancez « sudo dpkg --configure -a » dans un terminal."
+msgstr "A previous installation was interrupted. It must be finished before any other: run “sudo dpkg --configure -a” in a terminal."
+
+msgctxt "UpdatesWords"
+msgid "Des paquets n'ont pas pu être téléchargés : vérifiez la connexion à Internet."
+msgstr "Some packages could not be downloaded: check the Internet connection."
+
+msgctxt "UpdatesWords"
+msgid "Il n'y a plus assez de place sur le disque."
+msgstr "There is not enough space left on the disk."
+
+msgctxt "UpdatesWords"
+msgid "L'autorisation n'a pas été donnée."
+msgstr "The permission was not given."
+
+msgctxt "UpdatesWords"
+msgid "Les mises à jour ont changé depuis la recherche. La liste vient d'être relue : réessayez."
+msgstr "The updates changed since the search. The list was just read again: try again."
+
+msgctxt "UpdatesWords"
+msgid "Des paquets ne sont pas signés par une source de confiance."
+msgstr "Some packages are not signed by a trusted source."
+
+msgctxt "UpdatesWords"
+msgid "Le gestionnaire de mises à jour ne répond plus. La mise à jour se termine peut-être sans Okapi."
+msgstr "The update manager no longer answers. The update may be finishing without Okapi."
+
+msgctxt "UpdatesWords"
+msgid "La mise à jour n'a pas abouti. Le détail est dans le journal."
+msgstr "The update did not succeed. The details are in the log."
+
+msgctxt "UpdatesWords"
+msgid "Mise à jour annulée"
+msgstr "Update cancelled"
+
+msgctxt "UpdatesWords"
+msgid "L'installation s'est arrêtée en cours de route"
+msgstr "The installation stopped halfway"
+
+msgctxt "UpdatesWords"
+msgid "Mises à jour installées"
+msgstr "Updates installed"
+
+msgctxt "UpdatesWords"
+msgid "Aucune mise à jour installée"
+msgstr "No update installed"
+
+msgctxt "UpdatesWords"
+msgid "La mise à jour n'a pas abouti"
+msgstr "The update did not succeed"
+
+msgctxt "UpdatesWords"
+msgid "{} installées, {} en échec"
+msgstr "{} installed, {} failed"
+
+msgctxt "UpdatesWords"
+msgid "1 mise à jour installée"
+msgstr "1 update installed"
+
+msgctxt "UpdatesWords"
+msgid "{} mises à jour installées"
+msgstr "{} updates installed"
+
+msgctxt "UpdatesWords"
+msgid "{} et {} autres"
+msgstr "{} and {} more"
+
+msgctxt "SnapRow"
+msgid "Mettre à jour"
+msgstr "Update"
+
+msgctxt "SnapRow"
+msgid "Mettre à jour {}"
+msgstr "Update {}"
+
+msgctxt "Removals"
+msgid "Cette mise à jour retire 1 paquet"
+msgstr "This update removes 1 package"
+
+msgctxt "Removals"
+msgid "Cette mise à jour retire {} paquets"
+msgstr "This update removes {} packages"
+
+msgctxt "Removals"
+msgid "Ce qu'elle retire a changé depuis : voici la liste à jour."
+msgstr "What it removes changed since: here is the list as it is now."
+
+msgctxt "Removals"
+msgid "Pour installer les nouvelles versions, le système doit retirer ces paquets :"
+msgstr "To install the new versions, the system must remove these packages:"
+
+msgctxt "Removals"
+msgid "Paquets retirés"
+msgstr "Packages removed"
+
+msgctxt "Removals"
+msgid "{}, {}"
+msgstr "{}, {}"
+
+msgctxt "Removals"
+msgid "Elle installe aussi 1 nouveau paquet."
+msgstr "It also installs 1 new package."
+
+msgctxt "Removals"
+msgid "Elle installe aussi {} nouveaux paquets."
+msgstr "It also installs {} new packages."
+
+msgctxt "Removals"
+msgid "Ensuite, le système vous demandera peut-être votre mot de passe dans sa propre fenêtre."
+msgstr "Then the system may ask for your password in its own window."
+
+msgctxt "Removals"
+msgid "Mettre à jour quand même"
+msgstr "Update anyway"
+
+msgctxt "Removals"
+msgid "Annuler"
+msgstr "Cancel"
+
+msgctxt "Installing"
+msgid "{} : {}"
+msgstr "{}: {}"
+
+msgctxt "Installing"
+msgid "Annuler"
+msgstr "Cancel"
+
+msgctxt "Installing"
+msgid "Installation des mises à jour"
+msgstr "Installing the updates"
+
+msgctxt "Installing"
+msgid "Paquet en cours : {}, {} sur {}"
+msgstr "Current package: {}, {} of {}"
+
+msgctxt "Installing"
+msgid "Paquet en cours : {}"
+msgstr "Current package: {}"
+
+msgctxt "Installing"
+msgid "{} sur {}"
+msgstr "{} of {}"
+
+msgctxt "Installing"
+msgid "Trop tard pour annuler : le système finit d'installer."
+msgstr "Too late to cancel: the system is finishing the installation."
+
+msgctxt "Installing"
+msgid "Une fois l'autorisation donnée, fermer Okapi n'arrête pas la mise à jour."
+msgstr "Once the permission is given, closing Okapi does not stop the update."
+
+msgctxt "Outcome"
+msgid "Rien n'a été installé."
+msgstr "Nothing was installed."
+
+msgctxt "Outcome"
+msgid "Avant toute autre installation, lancez « sudo dpkg --configure -a » dans un terminal pour la terminer."
+msgstr "Before any other installation, run “sudo dpkg --configure -a” in a terminal to finish it."
+
+msgctxt "Outcome"
+msgid "Encore en attente : {}"
+msgstr "Still waiting: {}"
+
+msgctxt "Outcome"
+msgid "En échec : {}"
+msgstr "Failed: {}"
+
+msgctxt "Outcome"
+msgid "Le système a aussi retiré : {}"
+msgstr "The system also removed: {}"
+
+msgctxt "Outcome"
+msgid "Redémarrage nécessaire. Le système en a besoin pour finir ; redémarrez quand cela vous arrange."
+msgstr "Restart needed. The system needs it to finish; restart when it suits you."
+
+msgctxt "Outcome"
+msgid "Réessayer"
+msgstr "Try again"
+
+msgctxt "Outcome"
+msgid "Fermer"
+msgstr "Close"
+
+msgctxt "UpdatesPage"
+msgid "Vérification de ce qui a été installé…"
+msgstr "Checking what was installed…"
+
+msgctxt "UpdatesPage"
+msgid "Vérification en cours, durée inconnue"
+msgstr "Checking, duration unknown"
+
+msgctxt "UpdatesPage"
+msgid "{}, {} à télécharger"
+msgstr "{}, {} to download"
+
+msgctxt "UpdatesPage"
+msgid "Tout mettre à jour"
+msgstr "Update all"
+
+msgctxt "UpdatesPage"
+msgid "Mettre à jour {}"
+msgstr "Update {}"
+
+msgctxt "UpdatesPage"
+msgid "Mettre à jour toutes les applis"
+msgstr "Update all the apps"
+
+msgctxt "UpdatesWords"
+msgid "1 installée, {} en échec"
+msgstr "1 installed, {} failed"
+
+msgctxt "Outcome"
+msgid "Une partie de ce que le système a dit n'a pas pu être lue : ce qu'il a retiré n'a pas tout été vérifié. Le détail est dans le journal."
+msgstr "Part of what the system said could not be read: not all of what it removed was checked. The details are in the log."
+
+msgctxt "Removals"
+msgid "Et {} autres."
+msgstr "And {} more."
+
+msgctxt "Removals"
+msgid "Et 1 autre."
+msgstr "And 1 more."
+
+msgctxt "UpdatesWords"
+msgid "{} et 1 autre"
+msgstr "{} and 1 more"

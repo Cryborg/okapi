@@ -3,7 +3,7 @@
 //! own ([`read_system`], [`read_snaps`], [`read_reboot`]), on a thread the
 //! caller starts, so that a slow or failing one never hides the others.
 //! They take their [`Sources`] as a seam: the daemons are simulated by the
-//! tests. Nothing here installs anything.
+//! tests. Installing is [`install`]'s.
 
 use std::io;
 use std::time::{Instant, SystemTime};
@@ -12,9 +12,11 @@ use jiff::Timestamp;
 use okapi_rules::Language;
 
 use crate::packages::apt;
-use crate::packages::packagekit::{self, Package, PackageId, PackageKitError, info};
+use crate::packages::packagekit::{self, Details, Package, PackageId, PackageKitError, info};
 use crate::packages::reboot::{self, RebootRequired};
 use crate::packages::snapd::{self, Refresh, Schedule, SnapdError};
+
+pub mod install;
 
 /// How an update matters, in the order they are shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -28,6 +30,9 @@ pub enum Kind {
 /// A package of the system with a newer version waiting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SystemUpdate {
+    /// PackageKit's identifier of the update (`name;version;arch;data`):
+    /// what is asked to install it.
+    pub id: String,
     pub name: String,
     /// As the package names it (`1:3.5.1-1ubuntu2`).
     pub version: String,
@@ -97,6 +102,9 @@ pub struct SystemReading {
     /// When apt last downloaded its lists with success, if known: unknown
     /// is no proof they are fresh.
     pub listed_at: Option<Timestamp>,
+    /// What installing the updates (not those held back) downloads, when
+    /// every size is known.
+    pub download_size: Option<u64>,
 }
 
 /// Where the updates are read from, on threads of their own. A source that
@@ -112,6 +120,15 @@ pub trait Sources: Send + Sync {
     /// # Errors
     /// Why PackageKit did not say.
     fn system(&self, waiting: &dyn Fn(bool)) -> Result<Vec<Package>, PackageKitError>;
+    /// The details of the packages `ids`, their download size among them.
+    ///
+    /// # Errors
+    /// Why PackageKit did not say.
+    fn details(
+        &self,
+        ids: &[String],
+        waiting: &dyn Fn(bool),
+    ) -> Result<Vec<Details>, PackageKitError>;
     /// When apt last downloaded its lists.
     ///
     /// # Errors
@@ -157,6 +174,14 @@ impl Sources for SystemSources {
 
     fn system(&self, waiting: &dyn Fn(bool)) -> Result<Vec<Package>, PackageKitError> {
         packagekit::PackageKit::connect(self.locale)?.get_updates(waiting)
+    }
+
+    fn details(
+        &self,
+        ids: &[String],
+        waiting: &dyn Fn(bool),
+    ) -> Result<Vec<Details>, PackageKitError> {
+        packagekit::PackageKit::connect(self.locale)?.details(ids, waiting)
     }
 
     fn lists_downloaded_at(&self) -> io::Result<Option<SystemTime>> {
@@ -222,11 +247,16 @@ pub fn read_system(sources: &dyn Sources, refresh: bool, waiting: &dyn Fn(bool))
                 .inspect_err(|error| tracing::warn!(%error, "apt's stamp out of range"))
                 .ok()
         });
+    let download_size = match &updates {
+        Outcome::Read(updates) => download_size(sources, updates, waiting),
+        _ => None,
+    };
     match &updates {
         Outcome::Read(updates) => tracing::info!(
             elapsed = ?started.elapsed(),
             ?refresh,
             listed_at = ?listed_at,
+            download_size,
             updates = updates.len(),
             security = updates.iter().filter(|update| update.kind == Kind::Security).count(),
             blocked = updates.iter().filter(|update| update.kind == Kind::Blocked).count(),
@@ -243,7 +273,46 @@ pub fn read_system(sources: &dyn Sources, refresh: bool, waiting: &dyn Fn(bool))
         updates,
         refresh,
         listed_at,
+        download_size,
     }
+}
+
+/// What installing `updates` (those held back aside) downloads: the sum of
+/// their download sizes, none when one is not known (a part would pass for
+/// all) or PackageKit does not say (traced).
+fn download_size(
+    sources: &dyn Sources,
+    updates: &[SystemUpdate],
+    waiting: &dyn Fn(bool),
+) -> Option<u64> {
+    let ids: Vec<String> = updates
+        .iter()
+        .filter(|update| update.kind != Kind::Blocked)
+        .map(|update| update.id.clone())
+        .collect();
+    if ids.is_empty() {
+        return Some(0);
+    }
+    let details = sources
+        .details(&ids, waiting)
+        .inspect_err(|error| tracing::warn!(%error, "the updates' download sizes not read"))
+        .ok()?;
+    let size = |id: &String| {
+        details
+            .iter()
+            .find(|details| details.id == *id)
+            .and_then(|details| details.download_size)
+    };
+    let unknown: Vec<&String> = ids.iter().filter(|id| size(id).is_none()).collect();
+    if !unknown.is_empty() {
+        tracing::warn!(
+            ?unknown,
+            said = details.len(),
+            "updates without a download size: no total"
+        );
+        return None;
+    }
+    Some(ids.iter().filter_map(size).sum())
 }
 
 /// Reads the snaps waiting, and when snapd refreshes them.
@@ -286,22 +355,21 @@ pub fn read_reboot(sources: &dyn Sources) -> Option<RebootRequired> {
 
 /// The packages PackageKit names, sorted; none when an identifier cannot be
 /// read (traced): a list short of one would pass for the whole. A name met
-/// for two architectures carries its own. What apt lists beside the updates
+/// for two architectures carries its own. Only an update's kinds (from low
+/// to security) and held back are kept: what apt lists beside them
 /// (packages it would install, remove, obsolete or downgrade to upgrade
-/// everything) is no update: left out, traced; installing the updates
-/// brings what they need, the simulation shows it.
+/// everything) and any kind unknown are no update, left out and traced;
+/// installing the updates brings what they need, the simulation shows it.
 fn system_updates(packages: &[Package]) -> Option<Vec<SystemUpdate>> {
-    let (effects, packages): (Vec<&Package>, Vec<&Package>) =
-        packages.iter().partition(|package| is_effect(package.info));
-    if !effects.is_empty() {
-        let effects: Vec<String> = effects
+    let (packages, others): (Vec<&Package>, Vec<&Package>) = packages
+        .iter()
+        .partition(|package| is_update(package.info) || package.info == info::BLOCKED);
+    if !others.is_empty() {
+        let others: Vec<String> = others
             .iter()
             .map(|package| format!("{} ({})", package.id, package.info))
             .collect();
-        tracing::info!(
-            ?effects,
-            "what upgrading everything would also do, left out of the updates"
-        );
+        tracing::info!(?others, "listed beside the updates, no update: left out");
     }
     let ids: Vec<(PackageId<'_>, &Package)> = packages
         .into_iter()
@@ -322,6 +390,7 @@ fn system_updates(packages: &[Package]) -> Option<Vec<SystemUpdate>> {
                 .count()
                 > 1;
             SystemUpdate {
+                id: package.id.clone(),
                 name: if shared {
                     format!("{}:{}", id.name, id.arch)
                 } else {
@@ -341,12 +410,9 @@ fn system_updates(packages: &[Package]) -> Option<Vec<SystemUpdate>> {
     Some(updates)
 }
 
-/// Whether `info` names an effect of upgrading everything, not an update.
-const fn is_effect(info: u32) -> bool {
-    matches!(
-        info,
-        info::INSTALL | info::REMOVE | info::OBSOLETE | info::DOWNGRADE
-    )
+/// Whether `info` is an update's kind, from low to security.
+const fn is_update(info: u32) -> bool {
+    info >= info::LOW && info <= info::SECURITY
 }
 
 fn snap_updates(refreshes: Vec<Refresh>) -> Vec<SnapUpdate> {

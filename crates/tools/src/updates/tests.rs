@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -25,6 +26,11 @@ struct Fake {
     snaps: fn() -> Result<Vec<Refresh>, SnapdError>,
     schedule: fn() -> Result<Schedule, SnapdError>,
     reboot: fn() -> io::Result<Option<RebootRequired>>,
+    /// The download size of each identifier asked.
+    size: fn(&str) -> Option<u64>,
+    details_fail: bool,
+    /// The identifiers whose details were asked.
+    asked_details: Mutex<Vec<String>>,
     waits: bool,
     refresh_waits: bool,
     refreshes: AtomicU32,
@@ -39,6 +45,9 @@ impl Default for Fake {
             snaps: || Ok(Vec::new()),
             schedule: || Ok(Schedule::default()),
             reboot: || Ok(None),
+            size: |id| u64::try_from(id.len()).ok(),
+            details_fail: false,
+            asked_details: Mutex::new(Vec::new()),
             waits: false,
             refresh_waits: false,
             refreshes: AtomicU32::new(0),
@@ -61,6 +70,25 @@ impl Sources for Fake {
             waiting(false);
         }
         (self.system)()
+    }
+    fn details(
+        &self,
+        ids: &[String],
+        _waiting: &dyn Fn(bool),
+    ) -> Result<Vec<Details>, PackageKitError> {
+        self.asked_details.lock().unwrap().extend_from_slice(ids);
+        if self.details_fail {
+            return Err(PackageKitError::Vanished);
+        }
+        // An identifier whose size is `Some(0)` gets no details at all.
+        Ok(ids
+            .iter()
+            .filter(|id| (self.size)(id) != Some(0))
+            .map(|id| Details {
+                id: id.clone(),
+                download_size: (self.size)(id),
+            })
+            .collect())
     }
     fn lists_downloaded_at(&self) -> io::Result<Option<SystemTime>> {
         (self.stamp)()
@@ -140,11 +168,17 @@ fn security_comes_first_held_back_last_by_name() {
     );
     assert_eq!(updates[0].version, "2.0-1ubuntu1");
     assert_eq!(updates[0].summary, "curl, said briefly");
-    // An unknown or lesser kind is no security.
+    assert_eq!(updates[0].id, "curl;2.0-1ubuntu1;amd64;resolute-updates");
+    // A lesser kind is no security; an unknown one is no update at all.
     let fake = Fake {
         system: || {
             Ok(vec![
                 package(99, "odd"),
+                package(1, "installed"),
+                package(2, "available"),
+                package(10, "downloading"),
+                package(11, "updating"),
+                package(INFO_LOW, "low"),
                 package(INFO_ENHANCEMENT, "new"),
                 package(INFO_NORMAL, "plain"),
             ])
@@ -154,7 +188,8 @@ fn security_comes_first_held_back_last_by_name() {
     let Outcome::Read(updates) = read_system(&fake, false, &quiet).updates else {
         panic!("read");
     };
-    assert_eq!(updates.len(), 3);
+    let names: Vec<&str> = updates.iter().map(|update| update.name.as_str()).collect();
+    assert_eq!(names, ["low", "new", "plain"]);
     assert!(updates.iter().all(|update| update.kind == Kind::Other));
 }
 
@@ -186,6 +221,67 @@ fn what_upgrading_everything_would_also_do_is_no_update() {
     };
     let names: Vec<&str> = updates.iter().map(|update| update.name.as_str()).collect();
     assert_eq!(names, ["openssl", "bash", "aardvark"]);
+}
+
+#[test]
+fn the_download_is_the_updates_sizes_summed_when_all_are_known() {
+    // Catches a total that counts what is held back, or passes a part for
+    // the whole.
+    let fake = Fake {
+        system: mixed,
+        ..Fake::default()
+    };
+    let reading = read_system(&fake, false, &quiet);
+    let asked = fake.asked_details.lock().unwrap().clone();
+    assert_eq!(asked.len(), 5, "the held back one never asked");
+    assert!(!asked.iter().any(|id| id.starts_with("aardvark;")));
+    let expected: u64 = asked.iter().map(|id| id.len() as u64).sum();
+    assert_eq!(reading.download_size, Some(expected));
+
+    let fake = Fake {
+        system: mixed,
+        size: |id| (!id.starts_with("bash;")).then_some(10),
+        ..Fake::default()
+    };
+    assert_eq!(
+        read_system(&fake, false, &quiet).download_size,
+        None,
+        "one unknown"
+    );
+    let fake = Fake {
+        system: mixed,
+        size: |id| {
+            if id.starts_with("bash;") {
+                Some(0)
+            } else {
+                Some(10)
+            }
+        },
+        ..Fake::default()
+    };
+    assert_eq!(
+        read_system(&fake, false, &quiet).download_size,
+        None,
+        "one with no details"
+    );
+    // Nothing to install: nothing asked (the bus refuses an empty list).
+    let fake = Fake {
+        system: || Ok(vec![package(info::BLOCKED, "aardvark")]),
+        ..Fake::default()
+    };
+    assert_eq!(read_system(&fake, false, &quiet).download_size, Some(0));
+    assert!(fake.asked_details.lock().unwrap().is_empty());
+    let fake = Fake {
+        system: mixed,
+        details_fail: true,
+        ..Fake::default()
+    };
+    let reading = read_system(&fake, false, &quiet);
+    assert_eq!(reading.download_size, None, "details not read");
+    assert!(
+        matches!(reading.updates, Outcome::Read(_)),
+        "the list still read"
+    );
 }
 
 #[test]

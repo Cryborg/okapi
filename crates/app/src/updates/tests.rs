@@ -1,5 +1,5 @@
 //! The updates screen in a window, its sources stand-ins: what it reads when
-//! it is shown, what it says of each source, and that it installs nothing.
+//! it is shown, what it says of each source, and what it installs.
 
 use std::cell::Cell;
 use std::io;
@@ -9,9 +9,16 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Instant, SystemTime};
 
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
-use okapi_tools::packages::packagekit::{Package, PackageKitError, error_code, info};
-use okapi_tools::packages::snapd::{Publisher, Refresh, Schedule, SnapdError};
+use okapi_tools::packages::packagekit::{
+    Details, Package, PackageKitError, Updated, Updating, error_code, info,
+};
+use okapi_tools::packages::snapd::{
+    CHANGE_DONE, Change, Followed, Publisher, Refresh, Schedule, SnapdError,
+};
+use okapi_tools::updates::install::{End, Ended, Why};
 use slint::Model as _;
+
+use super::install::{Outcome, Target, outcome, retriable, why_shown};
 
 use super::*;
 use crate::cleaner::Seams;
@@ -53,6 +60,31 @@ struct Fake {
     refreshes: AtomicU32,
     /// While set, downloading the lists finds no network.
     offline: AtomicBool,
+    /// The download size of each update, by its identifier.
+    size: fn(&str) -> Option<u64>,
+    /// What each simulation removes beyond the updates, in turn (none once
+    /// all said).
+    removals: Mutex<Vec<Vec<&'static str>>>,
+    simulations: AtomicU32,
+    /// The identifiers of each simulation asked.
+    simulated_ids: Mutex<Vec<Vec<String>>>,
+    /// What the update says as it goes.
+    said: Vec<Updating>,
+    /// When set, the update waits for a word, then ends cancelled if asked.
+    hold_update: Mutex<Option<mpsc::Receiver<()>>>,
+    updated: fn() -> Result<Updated, PackageKitError>,
+    /// The identifiers of each update asked, the names of each refresh.
+    updates_asked: Mutex<Vec<Vec<String>>>,
+    refreshes_asked: Mutex<Vec<Vec<String>>>,
+    followed: fn() -> Followed,
+    /// What the system and the snaps say once an installation ran.
+    system_after: fn() -> Result<Vec<Package>, PackageKitError>,
+    snaps_after: fn() -> Result<Vec<Refresh>, SnapdError>,
+    installed: AtomicBool,
+    /// The update's thread dies without its end.
+    dies: bool,
+    /// What the update says once let go.
+    said_after_hold: Vec<Updating>,
 }
 
 impl Default for Fake {
@@ -73,6 +105,32 @@ impl Default for Fake {
             readings: AtomicU32::new(0),
             refreshes: AtomicU32::new(0),
             offline: AtomicBool::new(false),
+            size: |_| None,
+            removals: Mutex::new(Vec::new()),
+            simulations: AtomicU32::new(0),
+            simulated_ids: Mutex::new(Vec::new()),
+            said: Vec::new(),
+            hold_update: Mutex::new(None),
+            updated: || {
+                Ok(Updated {
+                    system_restart: false,
+                })
+            },
+            updates_asked: Mutex::new(Vec::new()),
+            refreshes_asked: Mutex::new(Vec::new()),
+            followed: || {
+                Followed::Ready(Change {
+                    status: CHANGE_DONE.into(),
+                    ready: true,
+                    err: None,
+                    tasks: Vec::new(),
+                })
+            },
+            system_after: || Ok(Vec::new()),
+            snaps_after: || Ok(Vec::new()),
+            installed: AtomicBool::new(false),
+            dies: false,
+            said_after_hold: Vec::new(),
         }
     }
 }
@@ -97,12 +155,31 @@ impl Sources for Fake {
             hold.recv().unwrap();
             waiting(false);
         }
+        if self.installed.load(Ordering::SeqCst) {
+            return (self.system_after)();
+        }
         (self.system)()
+    }
+    fn details(
+        &self,
+        ids: &[String],
+        _waiting: &dyn Fn(bool),
+    ) -> Result<Vec<Details>, PackageKitError> {
+        Ok(ids
+            .iter()
+            .map(|id| Details {
+                id: id.clone(),
+                download_size: (self.size)(id),
+            })
+            .collect())
     }
     fn lists_downloaded_at(&self) -> io::Result<Option<SystemTime>> {
         (self.stamp)()
     }
     fn snaps(&self) -> Result<Vec<Refresh>, SnapdError> {
+        if self.installed.load(Ordering::SeqCst) {
+            return (self.snaps_after)();
+        }
         (self.snaps)()
     }
     fn schedule(&self) -> Result<Schedule, SnapdError> {
@@ -113,9 +190,87 @@ impl Sources for Fake {
     }
 }
 
+impl Installer for Fake {
+    fn simulate_system(
+        &self,
+        ids: &[String],
+        _waiting: &dyn Fn(bool),
+    ) -> Result<Vec<Package>, PackageKitError> {
+        self.simulations.fetch_add(1, Ordering::SeqCst);
+        self.simulated_ids.lock().unwrap().push(ids.to_vec());
+        let mut packages: Vec<Package> = ids
+            .iter()
+            .map(|id| Package {
+                info: info::UPDATING,
+                id: id.clone(),
+                summary: String::new(),
+            })
+            .collect();
+        let mut removals = self.removals.lock().unwrap();
+        if !removals.is_empty() {
+            // A name starting with `+` is brought in, any other removed.
+            packages.extend(removals.remove(0).into_iter().map(|name| {
+                let (info, name) = name
+                    .strip_prefix('+')
+                    .map_or((info::REMOVING, name), |added| (info::INSTALLING, added));
+                Package {
+                    info,
+                    id: format!("{name};1;amd64;installed"),
+                    summary: format!("{name}, said briefly"),
+                }
+            }));
+        }
+        Ok(packages)
+    }
+
+    fn update_system(
+        &self,
+        ids: &[String],
+        heard: &dyn Fn(Updating),
+        cancel: &AtomicBool,
+    ) -> Result<Updated, PackageKitError> {
+        self.updates_asked.lock().unwrap().push(ids.to_vec());
+        for updating in &self.said {
+            heard(updating.clone());
+        }
+        assert!(!self.dies, "the update's thread dies");
+        let hold = self.hold_update.lock().unwrap().take();
+        if let Some(hold) = hold {
+            hold.recv().unwrap();
+            for updating in &self.said_after_hold {
+                heard(updating.clone());
+            }
+            if cancel.load(Ordering::SeqCst) {
+                return Err(PackageKitError::Failed {
+                    code: error_code::TRANSACTION_CANCELLED,
+                    details: String::new(),
+                });
+            }
+        }
+        let updated = (self.updated)();
+        self.installed.store(updated.is_ok(), Ordering::SeqCst);
+        updated
+    }
+
+    fn dpkg_interrupted(&self) -> io::Result<bool> {
+        Ok(false)
+    }
+
+    fn refresh_snaps(&self, names: &[String]) -> Result<String, SnapdError> {
+        self.refreshes_asked.lock().unwrap().push(names.to_vec());
+        self.installed.store(true, Ordering::SeqCst);
+        Ok("7".into())
+    }
+
+    fn follow_snaps(&self, _id: &str, _heard: &dyn Fn(&Change)) -> Followed {
+        (self.followed)()
+    }
+}
+
 fn seams_of(fake: &Arc<Fake>) -> UpdatesSeams {
     UpdatesSeams {
         sources: Arc::clone(fake) as Arc<dyn Sources>,
+        installer: Arc::clone(fake) as Arc<dyn Installer>,
         distribution: Some("Ubuntu 26.04".into()),
         now,
         zone: TimeZone::UTC,
@@ -727,7 +882,7 @@ fn a_snaps_thread_that_dies_ends_the_search_too() {
 }
 
 #[test]
-fn the_page_offers_no_button_that_installs() {
+fn each_button_that_installs_names_what_it_updates() {
     let fake = Arc::new(Fake {
         system: eight,
         snaps: two_snaps,
@@ -755,9 +910,383 @@ fn the_page_offers_no_button_that_installs() {
         labels,
         [
             "Afficher les 2 autres",
+            "Mettre à jour App Center",
+            "Mettre à jour OBS Studio",
+            "Mettre à jour Système Ubuntu 26.04",
+            "Mettre à jour toutes les applis",
             "Rechercher maintenant",
             "Système Ubuntu 26.04, 7 mises à jour, dont 3 de sécurité, déplié",
         ]
+    );
+    assert!(
+        fake.updates_asked.lock().unwrap().is_empty(),
+        "nothing asked"
+    );
+}
+
+/// Waits for the outcome of an installation, the list read again.
+fn installed(window: &ui::AppWindow) {
+    read_until(window, |window| updates(window).get_result_shown());
+}
+
+fn names_asked(fake: &Fake) -> Vec<Vec<String>> {
+    fake.updates_asked
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|ids| {
+            ids.iter()
+                .map(|id| id.split(';').next().unwrap().to_owned())
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn updating_the_system_asks_the_updates_read_never_those_held_back() {
+    // Catches a held back update sent, an update of the reading left out,
+    // and an outcome told before the list is read again.
+    let fake = Arc::new(Fake {
+        system: eight,
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    installed(&window);
+    assert_eq!(
+        names_asked(&fake),
+        [[
+            "libssl3t64",
+            "libxml2",
+            "openssl",
+            "bash",
+            "libreoffice-core",
+            "mesa",
+            "zsh"
+        ]]
+    );
+    assert_eq!(fake.readings.load(Ordering::SeqCst), 2, "read again");
+    assert_eq!(
+        fake.refreshes.load(Ordering::SeqCst),
+        0,
+        "read again, never downloaded"
+    );
+    assert_eq!(
+        *fake.simulated_ids.lock().unwrap(),
+        *fake.updates_asked.lock().unwrap(),
+        "simulated what is installed"
+    );
+    let shown = updates(&window);
+    assert_eq!(shown.get_result_end(), ui::InstallEnd::Done);
+    assert!(shown.get_result_counted());
+    assert_eq!(shown.get_result_installed(), 7);
+    assert_eq!(shown.get_result_left(), 0);
+    assert_eq!(shown.get_install_step(), ui::InstallStep::Idle);
+    assert_eq!(shown.get_system_count(), 0, "the list read again");
+}
+
+#[test]
+fn what_is_still_waiting_after_the_update_is_named() {
+    let fake = Arc::new(Fake {
+        system: eight,
+        system_after: || {
+            Ok(vec![
+                package(5, "mesa", "25.2.2-1"),
+                package(info::SECURITY, "openssl", "3.5.1-1ubuntu2"),
+            ])
+        },
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    installed(&window);
+    let shown = updates(&window);
+    // All installed (PackageKit done); two wait anew, in newer versions.
+    assert_eq!(shown.get_result_installed(), 7);
+    assert_eq!(shown.get_result_left(), 2);
+    assert_eq!(shown.get_result_left_names(), "openssl, mesa");
+}
+
+fn removing(removals: Vec<Vec<&'static str>>) -> Arc<Fake> {
+    Arc::new(Fake {
+        system: eight,
+        removals: Mutex::new(removals),
+        ..Fake::default()
+    })
+}
+
+fn removed_names(window: &ui::AppWindow) -> Vec<String> {
+    updates(window)
+        .get_removed()
+        .iter()
+        .map(|line| line.name.to_string())
+        .collect()
+}
+
+#[test]
+fn what_the_update_removes_is_asked_first_and_refused_installs_nothing() {
+    let fake = removing(vec![vec!["libold1"]]);
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    read_until(&window, |window| {
+        updates(window).get_install_step() == ui::InstallStep::Confirm
+    });
+    assert_eq!(removed_names(&window), ["libold1"]);
+    assert!(!updates(&window).get_removals_changed());
+    updates(&window).invoke_cancel_update();
+    assert_eq!(updates(&window).get_install_step(), ui::InstallStep::Idle);
+    assert_eq!(updates(&window).get_install_step(), ui::InstallStep::Idle);
+    assert!(
+        fake.updates_asked.lock().unwrap().is_empty(),
+        "nothing installed"
+    );
+}
+
+#[test]
+fn removals_accepted_install_but_a_change_since_asks_again() {
+    // Catches a removal accepted then installed as it changed.
+    let fake = removing(vec![
+        vec!["libold1"],
+        vec!["libold1", "libold2"],
+        vec!["libold2", "libold1"],
+    ]);
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    read_until(&window, |window| {
+        updates(window).get_install_step() == ui::InstallStep::Confirm
+    });
+    updates(&window).invoke_confirm_update();
+    read_until(&window, |window| {
+        updates(window).get_install_step() == ui::InstallStep::Confirm
+            && updates(window).get_removed().row_count() == 2
+    });
+    assert!(updates(&window).get_removals_changed());
+    assert!(fake.updates_asked.lock().unwrap().is_empty(), "not yet");
+    updates(&window).invoke_confirm_update();
+    // The confirmation closes at once: what it accepted runs, followed.
+    assert_eq!(
+        updates(&window).get_install_step(),
+        ui::InstallStep::Running
+    );
+    installed(&window);
+    assert_eq!(fake.updates_asked.lock().unwrap().len(), 1);
+    assert_eq!(fake.simulations.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn the_progress_is_shown_and_a_cancel_reaches_the_update() {
+    let (go, hold) = mpsc::channel();
+    let fake = Arc::new(Fake {
+        system: eight,
+        said: vec![
+            Updating::Status(8),
+            Updating::Cancellable(true),
+            Updating::Percentage(38),
+            Updating::Package {
+                info: 10,
+                id: "libgtk-4-1;4.20;amd64;x".into(),
+            },
+        ],
+        hold_update: Mutex::new(Some(hold)),
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    read_until(&window, |window| {
+        updates(window).get_install_package() == "libgtk-4-1"
+    });
+    assert!(updates(&window).get_install_has_percentage());
+    assert_eq!(updates(&window).get_install_percentage(), 38);
+    let shown = updates(&window);
+    assert_eq!(shown.get_install_step(), ui::InstallStep::Running);
+    assert_eq!(shown.get_install_phase(), ui::InstallPhase::Downloading);
+    assert_eq!(shown.get_install_package(), "libgtk-4-1");
+    assert!(shown.get_install_cancellable());
+    assert_eq!(shown.get_install_step(), ui::InstallStep::Running);
+    shown.invoke_cancel_update();
+    assert!(shown.get_install_cancel_asked());
+    go.send(()).unwrap();
+    installed(&window);
+    assert_eq!(updates(&window).get_result_end(), ui::InstallEnd::Cancelled);
+    assert!(!updates(&window).get_result_counted());
+}
+
+#[test]
+fn nothing_else_starts_while_an_installation_runs() {
+    // Catches a search read in the middle of dpkg (its list then taken for
+    // the outcome), and a second installation at once.
+    let (go, hold) = mpsc::channel();
+    let fake = Arc::new(Fake {
+        system: eight,
+        snaps: two_snaps,
+        said: vec![Updating::Status(8)],
+        hold_update: Mutex::new(Some(hold)),
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    read_until(&window, |window| {
+        updates(window).get_install_phase() == ui::InstallPhase::Downloading
+    });
+    updates(&window).invoke_search_now();
+    updates(&window).invoke_retry();
+    later(10 * 60);
+    button(&window, "Accueil").invoke_accessible_default_action();
+    slint::platform::update_timers_and_animations();
+    button(&window, "Mises à jour").invoke_accessible_default_action();
+    slint::platform::update_timers_and_animations();
+    updates(&window).invoke_update_snaps();
+    updates(&window).invoke_update_system();
+    assert_eq!(fake.readings.load(Ordering::SeqCst), 1, "no search");
+    assert!(fake.refreshes_asked.lock().unwrap().is_empty());
+    go.send(()).unwrap();
+    installed(&window);
+    assert_eq!(fake.updates_asked.lock().unwrap().len(), 1);
+    assert_eq!(fake.readings.load(Ordering::SeqCst), 2, "read again once");
+}
+
+#[test]
+fn a_restart_asked_by_the_update_is_said() {
+    let fake = Arc::new(Fake {
+        system: eight,
+        updated: || {
+            Ok(Updated {
+                system_restart: true,
+            })
+        },
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    installed(&window);
+    assert!(updates(&window).get_result_restart());
+}
+
+#[test]
+fn a_refusal_installs_nothing_and_retrying_asks_again() {
+    let fake = Arc::new(Fake {
+        system: eight,
+        updated: || {
+            Err(PackageKitError::Failed {
+                code: error_code::NOT_AUTHORIZED,
+                details: "refused".into(),
+            })
+        },
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    installed(&window);
+    let shown = updates(&window);
+    assert_eq!(shown.get_result_end(), ui::InstallEnd::Failed);
+    assert_eq!(shown.get_result_why(), ui::InstallWhy::Refused);
+    assert!(!shown.get_result_counted());
+    shown.invoke_retry_update();
+    read_until(&window, |window| {
+        fake.updates_asked.lock().unwrap().len() == 2 && updates(window).get_result_shown()
+    });
+}
+
+#[test]
+fn a_snap_s_button_refreshes_that_snap_only() {
+    let fake = Arc::new(Fake {
+        snaps: two_snaps,
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    // Lines by title: App Center, then OBS Studio.
+    updates(&window).invoke_update_snap(1);
+    installed(&window);
+    assert_eq!(*fake.refreshes_asked.lock().unwrap(), [["obs-studio"]]);
+    assert_eq!(updates(&window).get_result_installed(), 1);
+    assert_eq!(
+        updates(&window).get_result_target(),
+        ui::InstallTarget::Snaps
+    );
+}
+
+#[test]
+fn all_the_snaps_are_refreshed_together() {
+    let fake = Arc::new(Fake {
+        snaps: two_snaps,
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_snaps();
+    installed(&window);
+    assert_eq!(
+        *fake.refreshes_asked.lock().unwrap(),
+        [["snap-store", "obs-studio"]]
+    );
+}
+
+#[test]
+fn a_line_never_shown_asks_nothing() {
+    // Catches an index taken on trust from the window.
+    let fake = Arc::new(Fake {
+        snaps: two_snaps,
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    for index in [2, -1] {
+        updates(&window).invoke_update_snap(index);
+    }
+    assert_eq!(updates(&window).get_install_step(), ui::InstallStep::Idle);
+    assert!(fake.refreshes_asked.lock().unwrap().is_empty());
+}
+
+#[test]
+fn snaps_still_waiting_after_a_failed_refresh_are_in_failure() {
+    let fake = Arc::new(Fake {
+        snaps: two_snaps,
+        snaps_after: two_snaps,
+        followed: || {
+            Followed::Ready(Change {
+                status: "Error".into(),
+                ready: true,
+                err: Some("cannot refresh".into()),
+                tasks: Vec::new(),
+            })
+        },
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_snaps();
+    installed(&window);
+    let shown = updates(&window);
+    assert_eq!(shown.get_result_end(), ui::InstallEnd::Failed);
+    assert!(shown.get_result_counted());
+    assert_eq!(shown.get_result_installed(), 0);
+    assert_eq!(shown.get_result_left_names(), "App Center, OBS Studio");
+}
+
+#[test]
+fn the_download_is_said_beside_the_count() {
+    let fake = Arc::new(Fake {
+        system: eight,
+        size: |_| Some(1_000_000),
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    assert!(updates(&window).get_has_system_download());
+    assert_eq!(updates(&window).get_system_download(), size(7_000_000));
+    assert!(
+        ElementHandle::find_by_element_type_name(&window, "FoldHead")
+            .filter_map(|head| head.accessible_label())
+            .any(|label| label.contains("à télécharger")),
     );
 }
 
@@ -954,4 +1483,508 @@ fn a_download_of_okapi_s_own_is_remembered_without_a_stamp() {
     assert_eq!(fake.readings.load(Ordering::SeqCst), 3);
     assert!(!updates(&window).get_lists_old());
     assert!(shows(&window, "Tout est à jour"));
+}
+
+#[test]
+fn no_installation_starts_while_a_search_runs() {
+    // Catches an installation started during a search, its outcome then
+    // read from a list of before.
+    let (go, hold) = mpsc::channel();
+    let fake = Arc::new(Fake {
+        system: eight,
+        snaps: two_snaps,
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    *fake.hold.lock().unwrap() = Some(hold);
+    updates(&window).invoke_search_now();
+    read_until(&window, |window| updates(window).get_waiting());
+    updates(&window).invoke_update_system();
+    updates(&window).invoke_update_snaps();
+    updates(&window).invoke_update_snap(0);
+    assert_eq!(updates(&window).get_install_step(), ui::InstallStep::Idle);
+    go.send(()).unwrap();
+    read(&window);
+    assert!(fake.updates_asked.lock().unwrap().is_empty());
+    assert!(fake.refreshes_asked.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_failure_once_dpkg_ran_says_it_stopped_halfway_without_counts() {
+    // Catches « Aucune mise à jour installée » said of a dpkg that already
+    // unpacked packages.
+    let fake = Arc::new(Fake {
+        system: eight,
+        said: vec![Updating::Package {
+            info: 21,
+            id: "bash;5;amd64;x".into(),
+        }],
+        updated: || {
+            Err(PackageKitError::Failed {
+                code: 58,
+                details: "dpkg failed".into(),
+            })
+        },
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    installed(&window);
+    assert_eq!(updates(&window).get_result_end(), ui::InstallEnd::Stopped);
+    assert!(!updates(&window).get_result_counted());
+}
+
+#[test]
+fn too_late_to_cancel_is_said_once_it_could_and_no_longer_can() {
+    let (go, hold) = mpsc::channel();
+    let fake = Arc::new(Fake {
+        system: eight,
+        said: vec![
+            Updating::Cancellable(true),
+            Updating::Cancellable(false),
+            Updating::Status(16),
+        ],
+        hold_update: Mutex::new(Some(hold)),
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    read_until(&window, |window| updates(window).get_install_too_late());
+    assert!(!updates(&window).get_install_cancellable());
+    go.send(()).unwrap();
+    installed(&window);
+}
+
+#[test]
+fn an_installation_thread_that_dies_ends_in_failure() {
+    // Catches a screen stuck on « installation » for ever.
+    let fake = Arc::new(Fake {
+        system: eight,
+        dies: true,
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    installed(&window);
+    assert_eq!(updates(&window).get_result_end(), ui::InstallEnd::Failed);
+    assert_eq!(updates(&window).get_install_step(), ui::InstallStep::Idle);
+}
+
+#[test]
+fn a_removal_never_shown_is_said_in_the_outcome() {
+    let fake = Arc::new(Fake {
+        system: eight,
+        said: vec![Updating::Package {
+            info: info::REMOVING,
+            id: "ubuntu-desktop;1;amd64;installed".into(),
+        }],
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    installed(&window);
+    assert_eq!(updates(&window).get_result_unshown(), "ubuntu-desktop");
+}
+
+#[test]
+fn no_download_is_said_when_a_size_is_unknown() {
+    let fake = Arc::new(Fake {
+        system: eight,
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    assert!(!updates(&window).get_has_system_download());
+}
+
+#[test]
+fn retrying_snaps_asks_only_those_still_waiting() {
+    // Catches a retry that asks again a snap already refreshed.
+    let fake = Arc::new(Fake {
+        snaps: two_snaps,
+        snaps_after: || {
+            two_snaps().map(|snaps| {
+                snaps
+                    .into_iter()
+                    .filter(|snap| snap.name == "obs-studio")
+                    .collect()
+            })
+        },
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_snaps();
+    installed(&window);
+    assert_eq!(updates(&window).get_result_left_names(), "OBS Studio");
+    updates(&window).invoke_retry_update();
+    read_until(&window, |_| fake.refreshes_asked.lock().unwrap().len() == 2);
+    assert_eq!(
+        fake.refreshes_asked.lock().unwrap()[1],
+        ["obs-studio".to_owned()]
+    );
+}
+
+fn asked_system(names: &[&str]) -> Vec<SystemUpdate> {
+    names
+        .iter()
+        .map(|name| SystemUpdate {
+            id: format!("{name};2;amd64;x"),
+            name: (*name).to_owned(),
+            version: "2".into(),
+            summary: String::new(),
+            kind: Kind::Other,
+        })
+        .collect()
+}
+
+fn ending(end: End, reached_dpkg: bool) -> Ended {
+    Ended {
+        reached_dpkg,
+        ..Ended::before(end)
+    }
+}
+
+#[test]
+fn each_case_of_the_outcome_is_told_by_its_end_and_the_list_read_again() {
+    let asked = Target::System(asked_system(&["bash", "curl", "zsh"]));
+    let read = asked_system(&["zsh"]);
+    let done = outcome(&asked, &ending(End::Done, true), Some(&read), None);
+    assert_eq!(done.end, ui::InstallEnd::Done);
+    let counts = done.counts.unwrap();
+    // PackageKit done: all asked installed; one listed again waits anew.
+    assert_eq!((counts.installed, counts.left), (3, vec!["zsh".to_owned()]));
+    // Done, the list not read again: PackageKit installed all it was asked.
+    let unread = outcome(&asked, &ending(End::Done, true), None, None);
+    assert_eq!(unread.counts.unwrap().installed, 3);
+    for (end, reached, shown) in [
+        (End::Cancelled, false, ui::InstallEnd::Cancelled),
+        (End::Cancelled, true, ui::InstallEnd::Stopped),
+        (End::Failed(Why::Refused), false, ui::InstallEnd::Failed),
+        (End::Failed(Why::Broken), true, ui::InstallEnd::Stopped),
+    ] {
+        let told = outcome(&asked, &ending(end, reached), Some(&read), None);
+        assert_eq!(told.end, shown, "{end:?} {reached}");
+        assert_eq!(told.counts, None, "{end:?} {reached}: no count");
+    }
+    // Snaps: the list read again decides.
+    let snaps = |names: &[&str]| -> Vec<okapi_tools::updates::SnapUpdate> {
+        names
+            .iter()
+            .map(|name| okapi_tools::updates::SnapUpdate {
+                name: (*name).to_owned(),
+                title: name.to_uppercase(),
+                publisher: None,
+                verified: false,
+                version: "1".into(),
+                download_size: None,
+            })
+            .collect()
+    };
+    let asked = Target::Snaps(snaps(&["a", "b"]));
+    let all_gone = outcome(
+        &asked,
+        &ending(End::Failed(Why::Unanswered), false),
+        None,
+        Some(&[]),
+    );
+    assert_eq!(all_gone.end, ui::InstallEnd::Done, "gone despite no answer");
+    assert_eq!(all_gone.why, None, "no failure said of what is done");
+    let one_left = outcome(
+        &asked,
+        &ending(End::Done, false),
+        None,
+        Some(&snaps(&["b"])),
+    );
+    // Done by snapd, one still waiting: done, the rest said waiting.
+    assert_eq!((one_left.end, one_left.why), (ui::InstallEnd::Done, None));
+    assert_eq!(one_left.counts.unwrap().left, ["B"]);
+    let one_failed = outcome(
+        &asked,
+        &ending(End::Failed(Why::Broken), false),
+        None,
+        Some(&snaps(&["b"])),
+    );
+    assert_eq!(one_failed.end, ui::InstallEnd::Failed);
+    assert_eq!(one_failed.counts.unwrap().installed, 1);
+    let unread = outcome(&asked, &ending(End::Failed(Why::Busy), false), None, None);
+    assert_eq!((unread.end, unread.counts), (ui::InstallEnd::Failed, None));
+}
+
+#[test]
+fn a_cancel_refused_or_late_says_it_came_too_late() {
+    // Catches « Trop tard pour annuler » hidden once Annuler is pressed,
+    // when PackageKit lets go of cancelling without taking it.
+    let (go, hold) = mpsc::channel();
+    let fake = Arc::new(Fake {
+        system: eight,
+        said: vec![Updating::Cancellable(true)],
+        hold_update: Mutex::new(Some(hold)),
+        said_after_hold: vec![Updating::Cancellable(false), Updating::Status(16)],
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    read_until(&window, |window| updates(window).get_install_cancellable());
+    updates(&window).invoke_cancel_update();
+    go.send(()).unwrap();
+    read_until(&window, |window| updates(window).get_install_too_late());
+}
+
+#[test]
+fn a_thread_that_dies_once_dpkg_ran_says_it_may_be_finishing() {
+    // Catches « Aucune mise à jour installée » said of a dpkg at work.
+    let fake = Arc::new(Fake {
+        system: eight,
+        said: vec![Updating::Package {
+            info: 21,
+            id: "bash;5;amd64;x".into(),
+        }],
+        dies: true,
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    installed(&window);
+    assert_eq!(updates(&window).get_result_end(), ui::InstallEnd::Stopped);
+    assert_eq!(
+        updates(&window).get_result_why(),
+        ui::InstallWhy::Unanswered
+    );
+}
+
+#[test]
+fn trying_again_is_offered_only_when_something_still_waits() {
+    // Catches « Réessayer » shown with nothing left to try.
+    let fake = Arc::new(Fake {
+        system: eight,
+        updated: || {
+            Err(PackageKitError::Failed {
+                code: error_code::UPDATE_NOT_FOUND,
+                details: "changed".into(),
+            })
+        },
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    installed(&window);
+    assert_eq!(updates(&window).get_result_why(), ui::InstallWhy::Changed);
+    assert!(
+        updates(&window).get_result_retriable(),
+        "the list still waits"
+    );
+}
+
+#[test]
+fn trying_again_is_not_offered_when_nothing_waits() {
+    let fake = Arc::new(Fake {
+        snaps: two_snaps,
+        followed: || Followed::Unanswered,
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_snaps();
+    installed(&window);
+    assert!(!updates(&window).get_result_retriable(), "none still waits");
+    assert_eq!(updates(&window).get_result_end(), ui::InstallEnd::Done);
+}
+
+#[test]
+fn trying_again_needs_an_update_still_waiting_and_a_cause_it_can_mend() {
+    // Catches « Réessayer » offered on a list with nothing left, all held
+    // back, or a failure only the user can mend.
+    let asked = Target::System(asked_system(&["bash"]));
+    let failed = |why| Outcome {
+        end: ui::InstallEnd::Failed,
+        why: Some(why),
+        counts: None,
+    };
+    let held = vec![SystemUpdate {
+        kind: Kind::Blocked,
+        ..asked_system(&["aardvark"]).remove(0)
+    }];
+    assert!(retriable(
+        &asked,
+        &failed(Why::Busy),
+        &asked_system(&["bash"]),
+        None
+    ));
+    assert!(
+        !retriable(&asked, &failed(Why::Busy), &[], None),
+        "nothing left"
+    );
+    assert!(
+        !retriable(&asked, &failed(Why::Busy), &held, None),
+        "only held back"
+    );
+    for why in [Why::Interrupted, Why::Unsigned] {
+        assert!(
+            !retriable(&asked, &failed(why), &asked_system(&["bash"]), None),
+            "{why:?}"
+        );
+    }
+    let stopped = Outcome {
+        end: ui::InstallEnd::Stopped,
+        why: Some(Why::Broken),
+        counts: None,
+    };
+    assert!(!retriable(&asked, &stopped, &asked_system(&["bash"]), None));
+}
+
+#[test]
+fn the_buttons_clicked_ask_what_they_name() {
+    // Catches a line's button asking another snap, and the system's button
+    // wired to the snaps.
+    let fake = Arc::new(Fake {
+        system: eight,
+        snaps: two_snaps,
+        system_after: eight,
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    button(&window, "Mettre à jour OBS Studio").invoke_accessible_default_action();
+    installed(&window);
+    assert_eq!(*fake.refreshes_asked.lock().unwrap(), [["obs-studio"]]);
+    assert!(fake.updates_asked.lock().unwrap().is_empty());
+    button(&window, "Mettre à jour Système Ubuntu 26.04").invoke_accessible_default_action();
+    read_until(&window, |window| {
+        updates(window).get_result_target() == ui::InstallTarget::System
+            && updates(window).get_result_shown()
+    });
+    assert_eq!(fake.updates_asked.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn the_confirmation_s_buttons_refuse_or_accept() {
+    // Catches « Annuler » wired to installing what the update removes.
+    let fake = removing(vec![vec!["libold1"], vec!["libold1"], vec!["libold1"]]);
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    read_until(&window, |window| {
+        updates(window).get_install_step() == ui::InstallStep::Confirm
+    });
+    button(&window, "Annuler").invoke_accessible_default_action();
+    assert_eq!(updates(&window).get_install_step(), ui::InstallStep::Idle);
+    assert!(fake.updates_asked.lock().unwrap().is_empty());
+    updates(&window).invoke_update_system();
+    read_until(&window, |window| {
+        updates(window).get_install_step() == ui::InstallStep::Confirm
+    });
+    button(&window, "Mettre à jour quand même").invoke_accessible_default_action();
+    installed(&window);
+    assert_eq!(fake.updates_asked.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn the_confirmation_counts_what_it_removes_and_brings_and_fits() {
+    // Catches a list of removals unbounded, its count lost, or what the
+    // update brings in left unsaid.
+    let fake = removing(vec![vec![
+        "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "+new1", "+new2",
+    ]]);
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    read_until(&window, |window| {
+        updates(window).get_install_step() == ui::InstallStep::Confirm
+    });
+    let shown = updates(&window);
+    assert_eq!(shown.get_removed().row_count(), 8);
+    assert_eq!(shown.get_removed_count(), 10);
+    assert_eq!(shown.get_removed_more(), 2);
+    assert_eq!(shown.get_added(), 2);
+}
+
+#[test]
+fn no_search_while_the_confirmation_waits() {
+    let fake = removing(vec![vec!["libold1"]]);
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    read_until(&window, |window| {
+        updates(window).get_install_step() == ui::InstallStep::Confirm
+    });
+    updates(&window).invoke_search_now();
+    updates(&window).invoke_retry();
+    read_once();
+    assert_eq!(fake.readings.load(Ordering::SeqCst), 1);
+    assert_eq!(updates(&window).get_step(), ui::UpdatesStep::Read);
+}
+
+#[test]
+fn a_cancel_taken_is_never_said_too_late() {
+    let (go, hold) = mpsc::channel();
+    let fake = Arc::new(Fake {
+        system: eight,
+        said: vec![Updating::Cancellable(true)],
+        hold_update: Mutex::new(Some(hold)),
+        said_after_hold: vec![Updating::Status(19), Updating::Cancellable(false)],
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    read_until(&window, |window| updates(window).get_install_cancellable());
+    updates(&window).invoke_cancel_update();
+    go.send(()).unwrap();
+    installed(&window);
+    assert!(!updates(&window).get_install_too_late());
+    assert_eq!(updates(&window).get_result_end(), ui::InstallEnd::Cancelled);
+}
+
+#[test]
+fn many_still_waiting_are_named_six_then_counted() {
+    let fake = Arc::new(Fake {
+        system: eight,
+        system_after: eight,
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    installed(&window);
+    let shown = updates(&window);
+    assert_eq!(shown.get_result_left(), 7);
+    assert_eq!(shown.get_result_left_names().split(", ").count(), 6);
+    assert_eq!(shown.get_result_left_more(), 1);
+}
+
+#[test]
+fn each_cause_is_shown_as_itself() {
+    // Catches two causes swapped on their way to the window.
+    use std::collections::HashSet;
+    let shown: HashSet<String> = [
+        Why::Busy,
+        Why::Interrupted,
+        Why::Offline,
+        Why::NoSpace,
+        Why::Refused,
+        Why::Changed,
+        Why::Unsigned,
+        Why::Unanswered,
+        Why::Broken,
+    ]
+    .into_iter()
+    .map(|why| format!("{:?}", why_shown(why)))
+    .collect();
+    assert_eq!(shown.len(), 9);
+    assert!(!shown.contains("None"));
+    assert_eq!(why_shown(Why::NoSpace), ui::InstallWhy::NoSpace);
+    assert_eq!(why_shown(Why::Busy), ui::InstallWhy::Busy);
+    assert_eq!(why_shown(Why::Offline), ui::InstallWhy::Offline);
+    assert_eq!(why_shown(Why::Unsigned), ui::InstallWhy::Unsigned);
+    assert_eq!(why_shown(Why::Interrupted), ui::InstallWhy::Interrupted);
+    assert_eq!(why_shown(Why::Broken), ui::InstallWhy::Broken);
 }

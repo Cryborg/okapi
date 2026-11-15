@@ -7,13 +7,13 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use okapi_rules::Language;
 
 use super::dpkg::{self, Status};
 use super::snap::{is_snap_name, read_snaps};
-use super::uninstall::{Ended, Going, Step, Target, Uninstaller, Why};
+use super::uninstall::{Ended, Going, Step, Target, Uninstaller, Why, same_architecture};
 use super::{Reading, SourceReading};
 use crate::packages::packagekit::{
     self, PackageId, PackageKit, PackageKitError, Removing, error_code,
@@ -22,6 +22,15 @@ use crate::packages::snapd::{self, CHANGE_DONE, Snapd, SnapdError};
 
 /// How often a change of snapd is asked where it stands.
 const CHANGE_LOOK_EVERY: Duration = Duration::from_millis(500);
+/// How long a snap's removal is followed at most once snapd took it (the
+/// rights given): unmounting and a snapshot of its data, minutes at worst.
+const SNAP_REMOVAL_WAIT: Duration = Duration::from_mins(30);
+/// How many looks at a change may fail in a row before its outcome is read
+/// from the snaps installed: snapd restarting answers nothing a moment.
+const CHANGE_LOOKS_FAILED: u32 = 5;
+/// The HTTP statuses of a request refused for its rights (unauthorized,
+/// forbidden), whatever kind snapd gives it.
+const HTTP_NOT_ALLOWED: [u16; 2] = [401, 403];
 
 /// PackageKit, snapd and dpkg's files, on this system.
 #[derive(Debug, Clone)]
@@ -29,6 +38,8 @@ pub struct Services {
     locale: &'static str,
     dpkg: PathBuf,
     snapd: Snapd,
+    /// How long a snap's removal is followed at most.
+    removal_wait: Duration,
 }
 
 impl Services {
@@ -46,6 +57,7 @@ impl Services {
             locale: crate::packagekit_locale(language),
             dpkg: PathBuf::from(dpkg::DPKG_DIRECTORY),
             snapd: Snapd::system(),
+            removal_wait: SNAP_REMOVAL_WAIT,
         }
     }
 
@@ -68,8 +80,7 @@ impl Services {
             .filter(|found| found.info == packagekit::info::INSTALLED)
             .filter(|found| {
                 PackageId::parse(&found.id).is_some_and(|id| {
-                    id.name == package
-                        && (id.arch == architecture || id.arch == "all" || architecture == "all")
+                    id.name == package && same_architecture(id.arch, architecture)
                 })
             })
             .map(|found| found.id)
@@ -111,13 +122,19 @@ impl Uninstaller for Services {
                     .map(|package| {
                         let Some(id) = PackageId::parse(&package.id) else {
                             tracing::warn!(id = %package.id, "a package PackageKit names unreadably");
-                            return Err(Why::Service(package.id.clone()));
+                            return Err(Why::Unclear);
                         };
                         let bytes = status
                             .installed
                             .iter()
-                            .find(|installed| installed.name == id.name && installed.architecture == id.arch)
+                            .find(|installed| {
+                                installed.name == id.name
+                                    && same_architecture(&installed.architecture, id.arch)
+                            })
                             .and_then(|installed| installed.installed_bytes);
+                        if bytes.is_none() {
+                            tracing::info!(name = id.name, architecture = id.arch, "a package going without its size in dpkg's state");
+                        }
                         Ok(Going {
                             id: package.id.clone(),
                             name: id.name.to_owned(),
@@ -139,14 +156,14 @@ impl Uninstaller for Services {
             }
             Err(error) => {
                 tracing::warn!(%error, "dpkg's updates unreadable");
-                return Err(Why::Service(error.to_string()));
+                return Err(Why::Unclear);
             }
         }
         std::fs::read_to_string(self.dpkg.join("status"))
             .map(|text| dpkg::parse_status(&text))
             .map_err(|error| {
                 tracing::warn!(%error, "dpkg's status unreadable");
-                Why::Service(error.to_string())
+                Why::Unclear
             })
     }
 
@@ -165,18 +182,23 @@ impl Uninstaller for Services {
                 };
                 let ids: Vec<String> = going.iter().map(|package| package.id.clone()).collect();
                 let heard = |removing| {
+                    // The screen gone, nobody hears: the removal goes on.
                     let _ = steps.send(match removing {
-                        Removing::Waiting(true) => Step::WaitingForLock,
-                        Removing::Waiting(false) => return,
+                        Removing::Waiting(waiting) => Step::Waiting(waiting),
                         Removing::Cancellable(can) => Step::Cancellable(can),
                     });
                 };
                 match packagekit.remove_packages(&ids, &heard, cancel) {
                     Ok(()) => Ended::Done,
-                    Err(PackageKitError::Failed {
-                        code: error_code::TRANSACTION_CANCELLED,
-                        ..
-                    }) => Ended::Cancelled,
+                    Err(
+                        PackageKitError::Failed {
+                            code: error_code::TRANSACTION_CANCELLED,
+                            ..
+                        }
+                        | PackageKitError::Ended {
+                            exit: packagekit::EXIT_CANCELLED,
+                        },
+                    ) => Ended::Cancelled,
                     Err(error) => Ended::Failed(why_packagekit(&error)),
                 }
             }
@@ -186,7 +208,9 @@ impl Uninstaller for Services {
 }
 
 impl Services {
-    /// Removes the snap `name`, then follows the change snapd started.
+    /// Removes the snap `name`, then follows the change snapd started, for
+    /// `removal_wait` at most: past it, or after looks failed in a row, the
+    /// snap gone is a removal done.
     fn remove_snap(&self, name: &str, purge: bool) -> Ended {
         if !is_snap_name(name) {
             tracing::error!(name, "a snap's name refused: nothing asked");
@@ -200,19 +224,52 @@ impl Services {
             }
         };
         tracing::info!(name, purge, change, "snapd removes the snap");
+        let followed = Instant::now();
+        let mut failed_looks = 0;
         loop {
             std::thread::sleep(CHANGE_LOOK_EVERY);
+            if followed.elapsed() >= self.removal_wait {
+                tracing::warn!(name, change, waited = ?self.removal_wait, "snapd's removal followed no longer");
+                return self.snap_outcome(name, Why::TimedOut);
+            }
             match self.snapd.change(&change) {
-                Ok(state) if !state.ready => {}
+                Ok(state) if !state.ready => failed_looks = 0,
                 Ok(state) if state.status == CHANGE_DONE => return Ended::Done,
                 Ok(state) => {
                     tracing::warn!(name, change, status = %state.status, err = ?state.err, "snapd's removal did not end done");
                     return Ended::Failed(Why::Service(state.err.unwrap_or(state.status)));
                 }
                 Err(error) => {
-                    tracing::warn!(name, change, %error, "snapd's change unreadable: the outcome unknown");
-                    return Ended::Failed(Why::Unanswered);
+                    failed_looks += 1;
+                    tracing::warn!(name, change, %error, failed_looks, "snapd's change unreadable");
+                    if failed_looks == CHANGE_LOOKS_FAILED {
+                        return self.snap_outcome(name, Why::Unanswered);
+                    }
                 }
+            }
+        }
+    }
+
+    /// What became of a removal whose change is followed no longer: the
+    /// snap gone, it is done; still there, it failed as `why` says (it may
+    /// yet end, the list read again shows it).
+    fn snap_outcome(&self, name: &str, why: Why) -> Ended {
+        match self.snapd.installed(name) {
+            Ok(false) => {
+                tracing::info!(name, "the snap is gone: its removal done");
+                Ended::Done
+            }
+            Ok(true) => {
+                tracing::warn!(
+                    name,
+                    ?why,
+                    "the snap still installed: its removal not seen to end"
+                );
+                Ended::Failed(why)
+            }
+            Err(error) => {
+                tracing::warn!(name, %error, "whether the snap is still installed unknown");
+                Ended::Failed(Why::Unanswered)
             }
         }
     }
@@ -244,6 +301,7 @@ fn why_packagekit(error: &PackageKitError) -> Why {
             error_code::PACKAGE_NOT_INSTALLED => Why::NotFound,
             _ => Why::Service(details.clone()),
         },
+        PackageKitError::NotOnlyRemoving { .. } => Why::Unclear,
         PackageKitError::TimedOut { waiting: true, .. } => Why::Busy,
         PackageKitError::TimedOut { waiting: false, .. } => Why::TimedOut,
         PackageKitError::Transport(_)
@@ -267,7 +325,7 @@ fn why_snapd(error: &SnapdError) -> Why {
             snapd::KIND_AUTH_CANCELLED | snapd::KIND_LOGIN_REQUIRED => Why::NotAuthorized,
             snapd::KIND_CHANGE_CONFLICT => Why::Busy,
             snapd::KIND_NOT_INSTALLED => Why::NotFound,
-            _ if matches!(status, 401 | 403) => Why::NotAuthorized,
+            _ if HTTP_NOT_ALLOWED.contains(status) => Why::NotAuthorized,
             _ => Why::Service(message.clone()),
         },
         SnapdError::Io(_)
@@ -280,7 +338,96 @@ fn why_snapd(error: &SnapdError) -> Why {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read as _, Write as _};
+    use std::os::unix::net::UnixListener;
+
     use super::*;
+
+    /// A snapd that answers each request, one per connection, with the
+    /// next of `answers` (`None`: closed unanswered); the services that
+    /// ask it, a snap's removal followed for `removal_wait`.
+    fn snapd_answering(
+        answers: Vec<Option<&'static str>>,
+        removal_wait: Duration,
+    ) -> (tempfile::TempDir, Services) {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("snapd.socket");
+        let listener = UnixListener::bind(&socket).unwrap();
+        std::thread::spawn(move || {
+            for answer in answers {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = vec![0; 4096];
+                let _ = stream.read(&mut request).unwrap();
+                if let Some(body) = answer {
+                    let status = if body.contains(r#""type":"error""#) {
+                        "404 Not Found"
+                    } else {
+                        "200 OK"
+                    };
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 {status}\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    );
+                }
+            }
+        });
+        let services = Services {
+            snapd: Snapd::at(&socket, Duration::from_secs(5)),
+            removal_wait,
+            ..Services::new(Language::French)
+        };
+        (directory, services)
+    }
+
+    const STARTED: &str =
+        r#"{"type":"async","status-code":202,"status":"Accepted","result":null,"change":"7"}"#;
+    const DOING: &str = r#"{"type":"sync","status-code":200,"status":"OK","result":{"status":"Doing","ready":false}}"#;
+    const DONE: &str = r#"{"type":"sync","status-code":200,"status":"OK","result":{"status":"Done","ready":true}}"#;
+    const GONE: &str = r#"{"type":"error","status-code":404,"status":"Not Found","result":{"kind":"snap-not-installed","message":"not installed"}}"#;
+    const THERE: &str =
+        r#"{"type":"sync","status-code":200,"status":"OK","result":{"name":"android-studio"}}"#;
+    const LONG: Duration = Duration::from_mins(1);
+
+    #[test]
+    fn a_snap_s_removal_followed_to_its_end_is_done() {
+        let (_directory, services) =
+            snapd_answering(vec![Some(STARTED), Some(DOING), Some(DONE)], LONG);
+        assert_eq!(services.remove_snap("android-studio", false), Ended::Done);
+    }
+
+    #[test]
+    fn a_change_unreadable_a_while_is_told_by_the_snap_gone_or_still_there() {
+        // Catches a single failed look taken for a failure, and looks that
+        // fail forever never ending the follow.
+        let mut gone = vec![Some(STARTED), Some(DOING)];
+        gone.extend(std::iter::repeat_n(None, CHANGE_LOOKS_FAILED as usize));
+        gone.push(Some(GONE));
+        let (_directory, services) = snapd_answering(gone, LONG);
+        assert_eq!(services.remove_snap("android-studio", false), Ended::Done);
+
+        let mut there = vec![Some(STARTED)];
+        there.extend(std::iter::repeat_n(None, CHANGE_LOOKS_FAILED as usize));
+        there.push(Some(THERE));
+        let (_directory, services) = snapd_answering(there, LONG);
+        assert_eq!(
+            services.remove_snap("android-studio", false),
+            Ended::Failed(Why::Unanswered)
+        );
+    }
+
+    #[test]
+    fn a_change_never_ready_is_followed_no_longer_than_its_wait() {
+        // Catches a follow without end: snapd saying `Doing` forever.
+        let (_directory, services) = snapd_answering(
+            vec![Some(STARTED), Some(DOING), Some(THERE)],
+            CHANGE_LOOK_EVERY * 3 / 2,
+        );
+        assert_eq!(
+            services.remove_snap("android-studio", false),
+            Ended::Failed(Why::TimedOut)
+        );
+    }
 
     fn refused(status: u16, kind: &str) -> SnapdError {
         SnapdError::Refused {

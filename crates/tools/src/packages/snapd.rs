@@ -2,8 +2,8 @@
 //! One request per connection, HTTP/1.1 with `Connection: close`; the
 //! answer's body is read whole, by its length or its chunks, within a
 //! deadline and a cap, then its envelope (`type`, `status-code`, `result`)
-//! is told apart: an error of snapd is a [`SnapdError::Refused`]. Reading
-//! only.
+//! is told apart: an error of snapd is a [`SnapdError::Refused`]. Reads,
+//! and a snap's removal, polkit asking the user for the rights.
 
 use std::io::{self, Read as _, Write as _};
 use std::os::unix::net::UnixStream;
@@ -17,10 +17,10 @@ use serde_json::Value;
 const SOCKET: &str = "/run/snapd.socket";
 /// The longest a request waits: `select=refresh` asks the store.
 const WAIT: Duration = Duration::from_secs(60);
-/// What snapd says when its store cannot be reached (`client/errors.go`).
 /// How long a request that asks the user may wait: snapd answers once
 /// polkit's window is closed.
 const ASKING_WAIT: Duration = Duration::from_mins(30);
+/// What snapd says when its store cannot be reached (`client/errors.go`).
 pub const KIND_NETWORK_TIMEOUT: &str = "network-timeout";
 /// The rights were not given: the window closed, or no one logged in.
 pub const KIND_AUTH_CANCELLED: &str = "auth-cancelled";
@@ -245,6 +245,19 @@ impl Snapd {
         envelope.change.ok_or(SnapdError::Malformed(
             "an asynchronous answer without its change",
         ))
+    }
+
+    /// Whether the snap `name` (a name checked by the caller) is installed.
+    ///
+    /// # Errors
+    /// Whatever kept snapd from answering, or a refusal other than the snap
+    /// not installed.
+    pub fn installed(&self, name: &str) -> Result<bool, SnapdError> {
+        match self.get(&format!("/v2/snaps/{name}")) {
+            Ok(_) => Ok(true),
+            Err(SnapdError::Refused { kind, .. }) if kind == KIND_NOT_INSTALLED => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     /// Where the change `id` stands.

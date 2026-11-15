@@ -390,7 +390,9 @@ fn failure_of_packagekit(error: &PackageKitError) -> Failure {
         | PackageKitError::Bus(_)
         | PackageKitError::Ended { .. }
         | PackageKitError::Vanished
-        | PackageKitError::Unreadable { .. } => Failure::Broken,
+        | PackageKitError::Unreadable { .. }
+        // A removal's: never one of the updates.
+        | PackageKitError::NotOnlyRemoving { .. } => Failure::Broken,
     }
 }
 

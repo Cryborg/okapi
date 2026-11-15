@@ -5,9 +5,10 @@ use zbus::zvariant::Value;
 
 use super::*;
 
-/// `PkExitEnum`: failed, cancelled.
+/// `PkExitEnum::Failed`.
 const EXIT_FAILED: u32 = 2;
-const EXIT_CANCELLED: u32 = 3;
+/// `PkInfoEnum::Installing`.
+const INFO_INSTALLING: u32 = 12;
 /// `PkStatusEnum::Running`.
 const STATUS_RUNNING: u32 = 3;
 const TRANSACTION_PATH: &str = "/org/freedesktop/PackageKit/1_abc";
@@ -429,4 +430,21 @@ fn only_a_transaction_left_running_is_cancelled() {
     assert!(!given_up(&Err(PackageKitError::Ended {
         exit: EXIT_FAILED
     })));
+}
+
+#[test]
+fn a_simulated_removal_that_would_install_anything_is_refused_never_filtered() {
+    // Catches a filter that drops what is not a removal: an install unseen,
+    // or every removal said by PackageKit 1.3 (`Remove`) thrown away.
+    let removing = vec![
+        package(info::REMOVING, "gimp"),
+        package(info::REMOVE, "gimp-data"),
+    ];
+    assert_eq!(only_removing(removing.clone()).unwrap(), removing);
+    let mut installing = removing;
+    installing.push(package(INFO_INSTALLING, "gimp-alternative"));
+    assert!(matches!(
+        only_removing(installing),
+        Err(PackageKitError::NotOnlyRemoving { packages }) if packages.len() == 1
+    ));
 }

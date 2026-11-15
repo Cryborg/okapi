@@ -46,15 +46,18 @@ const REFRESH_WAIT: Duration = Duration::from_mins(5);
 /// the cache.
 const RESOLVE_WAIT: Duration = Duration::from_mins(2);
 /// How long a removal is followed at most: polkit's window waits on the
-/// user, then dpkg works. Beyond it, said unanswered; it may still end.
+/// user, then the package manager works. Beyond it, said timed out and
+/// cancelled if it still can be (it waits for the rights or for another
+/// program: nothing then runs behind the screen); dpkg already writing
+/// cannot be stopped, so it may still end.
 const REMOVE_WAIT: Duration = Duration::from_mins(30);
 /// How often a removal is asked whether it may still be cancelled, and
 /// cancelled once asked to and allowed.
 const CANCEL_LOOK_EVERY: Duration = Duration::from_millis(300);
 const ALLOW_CANCEL: &str = "AllowCancel";
 
-/// The hints of every transaction: never ask the user anything (reading
-/// only), and send packages several at once.
+/// The hints of a transaction that reads: never ask the user anything; and
+/// of every one: send packages several at once.
 const HINT_NOT_INTERACTIVE: &str = "interactive=false";
 /// The hint of a removal: polkit may ask the user for the rights.
 const HINT_INTERACTIVE: &str = "interactive=true";
@@ -67,14 +70,18 @@ const FILTER_INSTALLED: u64 = 1 << 2;
 /// `PkTransactionFlagEnum`: none, or a simulation that changes nothing.
 const TRANSACTION_NONE: u64 = 0;
 const TRANSACTION_SIMULATE: u64 = 1 << 2;
-/// A removal takes what depends on what it removes, never what is no
-/// longer needed (`allow_deps`, `autoremove`).
-const ALLOW_DEPENDENTS: bool = true;
+/// A simulated removal lists what depends on what it removes (`allow_deps`);
+/// the removal made is given all of them and allows none more: what came to
+/// depend on it since it was shown fails it, never goes unseen. Never what
+/// is no longer needed (`autoremove`).
+const SIMULATION_ALLOWS_DEPENDENTS: bool = true;
+const REMOVAL_ALLOWS_DEPENDENTS: bool = false;
 const AUTOREMOVE: bool = false;
 /// `RefreshCache` only downloads lists that changed.
 const REFRESH_UNFORCED: bool = false;
-/// `PkExitEnum::Success`.
+/// `PkExitEnum::Success`, and `Cancelled`.
 const EXIT_SUCCESS: u32 = 1;
+pub const EXIT_CANCELLED: u32 = 3;
 /// `PkStatusEnum`: queued behind another transaction, or waiting for
 /// another program to let go of the package manager.
 const STATUS_WAIT: u32 = 1;
@@ -86,8 +93,9 @@ pub mod info {
     pub const SECURITY: u32 = 8;
     /// Held back by the system: it will not be installed.
     pub const BLOCKED: u32 = 9;
-    /// What a removal takes away.
+    /// What a removal takes away: under way, or intended (PackageKit 1.3).
     pub const REMOVING: u32 = 13;
+    pub const REMOVE: u32 = 28;
 }
 
 /// Values of `PkErrorEnum`.
@@ -162,6 +170,9 @@ pub enum PackageKitError {
     /// known whole.
     #[error("a PackageKit signal could not be read: {member}")]
     Unreadable { member: String },
+    /// A removal simulated that would also install or change packages.
+    #[error("the removal would not only remove: {packages:?}")]
+    NotOnlyRemoving { packages: Vec<String> },
     #[error("no end after {waited:?} (waiting for another program: {waiting})")]
     TimedOut {
         waited: Duration,
@@ -307,7 +318,7 @@ pub struct PackageKit {
 
 impl PackageKit {
     /// Joins the system bus; the transactions ask for texts in `locale`
-    /// (`fr_FR.UTF-8`) and never for the user's interaction.
+    /// (`fr_FR.UTF-8`), and only a removal for the user's interaction.
     ///
     /// # Errors
     /// A bus that is not a socket, or that cannot be joined.
@@ -357,20 +368,21 @@ impl PackageKit {
     /// depends on them), simulated: nothing changes, nothing is asked.
     ///
     /// # Errors
-    /// Whatever kept PackageKit from answering, or its own error.
+    /// Whatever kept PackageKit from answering, its own error, or a removal
+    /// that would also install or change packages.
     pub fn simulate_remove(&self, ids: &[String]) -> Result<Vec<Package>, PackageKitError> {
-        self.run(
+        let packages = self.run(
             "RemovePackages",
-            &(TRANSACTION_SIMULATE, ids, ALLOW_DEPENDENTS, AUTOREMOVE),
+            &(
+                TRANSACTION_SIMULATE,
+                ids,
+                SIMULATION_ALLOWS_DEPENDENTS,
+                AUTOREMOVE,
+            ),
             Asked::reading(RESOLVE_WAIT),
             &|_| {},
-        )
-        .map(|packages| {
-            packages
-                .into_iter()
-                .filter(|package| package.info == info::REMOVING)
-                .collect()
-        })
+        )?;
+        only_removing(packages)
     }
 
     /// Removes the packages `ids` and what depends on them, polkit asking
@@ -389,7 +401,7 @@ impl PackageKit {
     ) -> Result<(), PackageKitError> {
         self.run(
             "RemovePackages",
-            &(TRANSACTION_NONE, ids, ALLOW_DEPENDENTS, AUTOREMOVE),
+            &(TRANSACTION_NONE, ids, REMOVAL_ALLOWS_DEPENDENTS, AUTOREMOVE),
             Asked {
                 wait: REMOVE_WAIT,
                 interactive: true,
@@ -553,14 +565,25 @@ async fn watch_cancel(
 ) -> Result<Vec<Package>, PackageKitError> {
     let mut allowed = false;
     let mut asked = false;
+    let mut unreadable_told = false;
     loop {
         async_io::Timer::after(CANCEL_LOOK_EVERY).await;
-        let now = properties
+        let read = properties
             .call::<_, _, OwnedValue>("Get", &(TRANSACTION, ALLOW_CANCEL))
             .await
-            .ok()
-            .and_then(|value| bool::try_from(value).ok())
-            .unwrap_or(allowed);
+            .map_err(|error| error.to_string())
+            .and_then(|value| bool::try_from(value).map_err(|error| error.to_string()));
+        let now = match read {
+            Ok(now) => now,
+            Err(error) => {
+                // Told once, not every look: what it was stays meanwhile.
+                if !unreadable_told {
+                    unreadable_told = true;
+                    tracing::warn!(%error, allowed, "whether the removal may be cancelled unreadable");
+                }
+                allowed
+            }
+        };
         if now != allowed {
             allowed = now;
             steps(Removing::Cancellable(allowed));
@@ -569,10 +592,31 @@ async fn watch_cancel(
             asked = true;
             match transaction.call_method("Cancel", &()).await {
                 Ok(_) => tracing::info!("removal cancel asked of PackageKit"),
-                Err(error) => tracing::warn!(%error, "removal cancel refused by PackageKit"),
+                Err(error) => {
+                    // Asked once: the screen says it came too late.
+                    tracing::warn!(%error, "removal cancel refused by PackageKit");
+                    steps(Removing::Cancellable(false));
+                }
             }
         }
     }
+}
+
+/// What a simulated removal takes away, when it does nothing else: a
+/// package it would install or change is never left unseen.
+fn only_removing(packages: Vec<Package>) -> Result<Vec<Package>, PackageKitError> {
+    let (removing, other): (Vec<Package>, Vec<Package>) = packages
+        .into_iter()
+        .partition(|package| matches!(package.info, info::REMOVING | info::REMOVE));
+    if other.is_empty() {
+        return Ok(removing);
+    }
+    let packages: Vec<String> = other
+        .iter()
+        .map(|package| format!("{} ({})", package.id, package.info))
+        .collect();
+    tracing::warn!(?packages, "a removal simulated would not only remove");
+    Err(PackageKitError::NotOnlyRemoving { packages })
 }
 
 /// Whether the transaction was left while it may still run: it would hold

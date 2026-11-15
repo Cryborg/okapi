@@ -46,8 +46,9 @@ impl Going {
 }
 
 /// Whether two architectures name the same package's: equal, or one of
-/// them every one's (`all`).
-fn same_architecture(one: &str, other: &str) -> bool {
+/// them every one's (`all`); PackageKit and dpkg may each say it their way.
+#[must_use]
+pub(crate) fn same_architecture(one: &str, other: &str) -> bool {
     one == other || one == "all" || other == "all"
 }
 
@@ -75,6 +76,10 @@ pub enum Why {
     TimedOut,
     /// It is no longer installed.
     NotFound,
+    /// What would go cannot be told for sure (dpkg's state unreadable, an
+    /// answer of the service not read whole, a removal that would also
+    /// install or change packages): nothing removed.
+    Unclear,
     /// The service refused, in its own words.
     Service(String),
 }
@@ -84,8 +89,9 @@ pub enum Why {
 pub enum Step {
     /// It may still be cancelled, or no longer.
     Cancellable(bool),
-    /// Another installation holds the package manager: it waits its turn.
-    WaitingForLock,
+    /// Another installation holds the package manager and it waits its
+    /// turn, or no longer.
+    Waiting(bool),
 }
 
 /// How an uninstallation ended.
@@ -176,7 +182,7 @@ pub fn remove_as_shown(
 ) -> Removal {
     if let Target::Deb { .. } = target {
         match check(uninstaller, target) {
-            Ok(Checked::Going(again)) if again == going => {}
+            Ok(Checked::Going(again)) if same_packages(&again, going) => {}
             other => {
                 tracing::warn!(
                     ?target,
@@ -191,6 +197,17 @@ pub fn remove_as_shown(
     let ended = uninstaller.remove(target, going, steps, cancel);
     tracing::info!(?target, packages = going.len(), ?ended, elapsed = ?started.elapsed(), "removal ended");
     Removal::Ended(ended)
+}
+
+/// Whether `one` and `other` take the same packages, whatever their order
+/// (the application first in both).
+fn same_packages(one: &[Going], other: &[Going]) -> bool {
+    let sorted = |going: &[Going]| {
+        let mut going = going.to_vec();
+        going.sort_by(|one, other| one.id.cmp(&other.id));
+        going
+    };
+    one.first() == other.first() && sorted(one) == sorted(other)
 }
 
 /// The packages of `going` that never go: those the system needs
@@ -340,12 +357,65 @@ mod tests {
     }
 
     fn going(name: &str) -> Going {
+        going_for(name, "amd64")
+    }
+
+    fn going_for(name: &str, architecture: &str) -> Going {
         Going {
-            id: format!("{name};1;amd64;installed"),
+            id: format!("{name};1;{architecture};installed"),
             name: name.to_owned(),
-            architecture: "amd64".to_owned(),
+            architecture: architecture.to_owned(),
             bytes: None,
         }
+    }
+
+    #[test]
+    fn what_goes_must_hold_the_application_asked_put_first() {
+        // Catches a check that takes any package for the target, or an
+        // architecture rule that no longer matches `all`.
+        let service = Service::new(vec![Ok(vec![going_for("gimp", "i386")])]);
+        assert_eq!(
+            check(&service, &deb()),
+            Err(Why::NotFound),
+            "another architecture"
+        );
+        let service = Service::new(vec![Ok(vec![going("help"), going("other")])]);
+        assert_eq!(check(&service, &deb()), Err(Why::NotFound), "not there");
+        let service = Service::new(vec![Ok(vec![going("help"), going("gimp")])]);
+        assert_eq!(
+            check(&service, &deb()),
+            Ok(Checked::Going(vec![going("gimp"), going("help")]))
+        );
+        let service = Service::new(vec![Ok(vec![going_for("gimp", "all")])]);
+        assert!(matches!(check(&service, &deb()), Ok(Checked::Going(_))));
+    }
+
+    #[test]
+    fn the_same_packages_in_another_order_are_what_was_shown() {
+        let shown = [going("gimp"), going("help"), going("other")];
+        let service = Service::new(vec![Ok(vec![going("gimp"), going("other"), going("help")])]);
+        assert_eq!(
+            removal(&service, &deb(), &shown),
+            Removal::Ended(Ended::Done)
+        );
+    }
+
+    #[test]
+    fn a_package_of_every_architecture_is_known_to_dpkg_either_way() {
+        // Catches a guard that compares architectures as they are written:
+        // dpkg says `all`, PackageKit the machine's (or the other way).
+        let status = parse_status(
+            "Package: gimp\nStatus: install ok installed\nArchitecture: amd64\n\n\
+             Package: gimp-data\nStatus: install ok installed\nArchitecture: all\n",
+        );
+        assert_eq!(
+            refused(&[going("gimp"), going("gimp-data")], &status),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            refused(&[going_for("gimp", "all")], &status),
+            Vec::<String>::new()
+        );
     }
 
     #[test]

@@ -109,7 +109,8 @@ component ResultLine inherits VerticalLayout {
         HorizontalLayout {
             padding-left: Theme.spacing-s;
             padding-right: Theme.spacing-l;
-            // Room for a badge and a note, clear of the lines between rows.
+            // Room for a badge and a note, clear of the lines between rows,
+            // and for the focus ring around them.
             padding-top: Theme.spacing-m;
             padding-bottom: Theme.spacing-m;
             spacing: Theme.spacing-m;
@@ -170,8 +171,14 @@ component ResultLine inherits VerticalLayout {
                     }
                 }
 
+                // Out of the row's content, in its padding: a badge reaches
+                // the top of the row's content and would touch the ring.
                 FocusRing {
                     shown: keys.has-focus;
+                    x: -Theme.spacing-xs;
+                    y: -Theme.spacing-xs;
+                    width: parent.width + 2 * Theme.spacing-xs;
+                    height: parent.height + 2 * Theme.spacing-xs;
                     border-radius: Theme.radius-medium;
                 }
 

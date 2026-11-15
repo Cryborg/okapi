@@ -856,6 +856,7 @@ impl CleanerScreen {
         if log_lost {
             tracing::error!("the deletion log asked for is not written");
         }
+        let mut close = false;
         self.with_window(|window, state| {
             show(&state.step_model, steps);
             let shown_to = window.global::<ui::Cleaner>();
@@ -894,11 +895,21 @@ impl CleanerScreen {
                 tracing::warn!("closing held back: the receipt says the deletion log is lost");
             } else if cleaning.close_when_done {
                 tracing::info!("receipt in: the window closes as asked");
-                if let Err(error) = window.hide() {
-                    tracing::error!(%error, "window not hidden");
-                }
+                close = true;
             }
         });
+        if close {
+            // Asked as the window's own button asks: every screen may still
+            // hold it (an uninstallation running), never hidden past them.
+            let window = self.0.borrow().window.upgrade();
+            if let Some(window) = window
+                && let Err(error) = window
+                    .window()
+                    .dispatch_event_with_result(slint::platform::WindowEvent::CloseRequested)
+            {
+                tracing::error!(%error, "window not closed");
+            }
+        }
         // Even when it freed nothing it knows of: root's part, or a thread
         // that died, may have removed entries.
         self.emit(CleanerEvent::CleaningDone {

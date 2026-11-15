@@ -20,7 +20,7 @@ use okapi_rules::Language;
 use okapi_store::{History, HistoryUnavailable, UninstallEntry, UninstallSource};
 use okapi_tools::apps::icons::IconPixels;
 use okapi_tools::apps::uninstall::{
-    Checked, Ended, Going, Removal, Step, Target, Uninstaller, Why, check, remove_as_shown,
+    Checked, Ended, Going, Gone, Removal, Step, Target, Uninstaller, Why, check, remove_as_shown,
 };
 use okapi_tools::apps::{AppKey, Arrival, Part, Rest, Source, SourceReading};
 use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
@@ -182,7 +182,8 @@ fn system_uninstaller() -> Arc<dyn Uninstaller> {
 /// What a source is, as shown.
 fn source_shown(reading: &SourceReading) -> ui::SourceShown {
     match reading {
-        SourceReading::Read { .. } => ui::SourceShown::Read,
+        SourceReading::Read { partial: false, .. } => ui::SourceShown::Read,
+        SourceReading::Read { partial: true, .. } => ui::SourceShown::Partial,
         SourceReading::Absent => ui::SourceShown::Absent,
         SourceReading::Busy => ui::SourceShown::Busy,
         SourceReading::Failed(_) => ui::SourceShown::Failed,
@@ -251,9 +252,12 @@ struct Operation {
     name: String,
     target: Target,
     /// What it frees whatever is chosen (the application, its old
-    /// versions; a deb's packages once checked), when every size is known;
-    /// its data are added when they go.
+    /// versions; a deb's packages or a flatpak's extensions once checked),
+    /// when every size is known; its data are added when they go.
     freed: Option<u64>,
+    /// The row's estimate of the application and its old versions: what a
+    /// check that sizes nothing falls back on, and a retry starts from.
+    estimated: Option<u64>,
     data_bytes: u64,
     phase: Phase,
     receiver: Receiver<Said>,
@@ -368,6 +372,7 @@ impl AppsScreen {
         apps.set_going(ModelRc::from(Rc::clone(&state.going_model)));
         apps.set_debs(ui::SourceShown::Reading);
         apps.set_snaps(ui::SourceShown::Reading);
+        apps.set_flatpaks(ui::SourceShown::Reading);
         let screen = Self(Rc::new(RefCell::new(state)));
         let weak = Rc::downgrade(&screen.0);
         let on = move |action: fn(&Self)| {
@@ -455,10 +460,12 @@ impl AppsScreen {
         let (reading, stale, running) = {
             let state = self.0.borrow();
             let now = (state.seams.now)();
-            let failed = state
-                .sources
-                .values()
-                .any(|source| matches!(source, ui::SourceShown::Busy | ui::SourceShown::Failed));
+            let failed = state.sources.values().any(|source| {
+                matches!(
+                    source,
+                    ui::SourceShown::Busy | ui::SourceShown::Failed | ui::SourceShown::Partial
+                )
+            });
             let old = state
                 .read_at
                 .is_none_or(|read_at| now.duration_since(read_at) >= READ_AGAIN_AFTER);
@@ -599,7 +606,7 @@ impl AppsScreen {
         match arrival {
             Arrival::Source(source, reading) => {
                 state.sources.insert(source, source_shown(&reading));
-                if let SourceReading::Read { apps, rest } = reading {
+                if let SourceReading::Read { apps, rest, .. } = reading {
                     state.rests.insert(source, rest);
                     for app in apps {
                         state.order.push(app.key());
@@ -658,7 +665,15 @@ impl AppsScreen {
                 );
             }
             state.read_at = Some(now);
-            tracing::info!(apps = state.entries.len(), "applications read whole");
+            let partial = state
+                .sources
+                .values()
+                .any(|source| *source == ui::SourceShown::Partial);
+            tracing::info!(
+                apps = state.entries.len(),
+                partial,
+                "applications read to their end"
+            );
         }
         state.sort_owed = true;
         state.readings_since_sort = u32::MAX;
@@ -776,6 +791,7 @@ impl AppsScreen {
         );
         apps.set_debs(source(Source::Deb));
         apps.set_snaps(source(Source::Snap));
+        apps.set_flatpaks(source(Source::Flatpak));
         apps.set_rest_packages(shown(rest(Source::Deb).count));
         apps.set_rest_packages_size(size(rest(Source::Deb).bytes));
         apps.set_rest_snaps(shown(rest(Source::Snap).count));
@@ -914,6 +930,7 @@ impl AppsScreen {
             name,
             target,
             freed,
+            estimated: freed,
             data_bytes,
             phase,
             receiver,
@@ -957,12 +974,14 @@ impl AppsScreen {
             tracing::info!(?target, packages = going.len(), "uninstallation confirmed");
             let entry = UninstallEntry {
                 time: now.as_second(),
-                source: match target {
-                    Target::Deb { .. } => UninstallSource::Deb,
-                    Target::Snap { .. } => UninstallSource::Snap,
+                source: match target.source() {
+                    Source::Deb => UninstallSource::Deb,
+                    Source::Snap => UninstallSource::Snap,
+                    Source::Flatpak => UninstallSource::Flatpak,
                 },
                 name: operation.name.clone(),
-                packages: going.iter().map(|package| package.name.clone()).collect(),
+                // What went is known once removed: `went` writes it.
+                packages: Vec::new(),
                 freed_bytes: operation.freed_now(),
                 data_removed: operation.purges(),
             };
@@ -1032,14 +1051,14 @@ impl AppsScreen {
         if let Some(operation) = operation {
             let target = match operation.target {
                 Target::Snap { name, .. } => Target::Snap { name, purge: false },
-                deb @ Target::Deb { .. } => deb,
+                other @ (Target::Deb { .. } | Target::Flatpak(_)) => other,
             };
             self.with_window(|window| window.global::<ui::Apps>().set_purge(false));
             self.check(
                 operation.key,
                 operation.name,
                 target,
-                operation.freed,
+                operation.estimated,
                 operation.data_bytes,
             );
         }
@@ -1124,7 +1143,8 @@ impl AppsScreen {
                     }
                     operation.phase = match checked {
                         Ok(Checked::Going(going)) => {
-                            if let Target::Deb { .. } = operation.target {
+                            // A snap's size is the line's, old versions with it.
+                            if !matches!(operation.target, Target::Snap { .. }) {
                                 let sizes: Option<Vec<u64>> =
                                     going.iter().map(|package| package.bytes).collect();
                                 operation.freed = match sizes {
@@ -1133,7 +1153,7 @@ impl AppsScreen {
                                     }
                                     // The application alone: the row's estimate
                                     // of it stays.
-                                    None if going.len() == 1 => operation.freed,
+                                    None if going.len() == 1 => operation.estimated,
                                     // Another package unknown: the sum would
                                     // say less than goes.
                                     None => None,
@@ -1170,10 +1190,11 @@ impl AppsScreen {
             }
         }
         match &ending {
-            Some((Ended::Done, recorded)) => {
+            Some((Ended::Done(gone), recorded)) => {
                 let operation = self.0.borrow_mut().operation.take();
                 if let Some(operation) = operation {
-                    self.show_toast(&operation.name, operation.freed_now(), *recorded);
+                    let freed = operation.freed_now().filter(|_| !gone.space_unknown);
+                    self.show_toast(&operation.name, freed, !gone.left.is_empty(), *recorded);
                 }
             }
             Some((Ended::Cancelled, _)) => self.0.borrow_mut().operation = None,
@@ -1210,10 +1231,11 @@ impl AppsScreen {
         }
     }
 
-    fn show_toast(&self, name: &str, freed: Option<u64>, recorded: bool) {
+    fn show_toast(&self, name: &str, freed: Option<u64>, partly: bool, recorded: bool) {
         self.with_window(|window| {
             let apps = window.global::<ui::Apps>();
             apps.set_toast_name(name.into());
+            apps.set_toast_partly(partly);
             apps.set_toast_freed_known(freed.is_some());
             apps.set_toast_freed(size(freed.unwrap_or(0)));
             apps.set_toast_recorded(recorded);
@@ -1247,7 +1269,7 @@ impl AppsScreen {
             return;
         };
         apps.set_target(operation.name.as_str().into());
-        apps.set_target_snap(matches!(operation.target, Target::Snap { .. }));
+        apps.set_target_source(rows::source(operation.target.source()));
         apps.set_freed_known(operation.freed.is_some());
         apps.set_freed(size(operation.freed.unwrap_or(0)));
         let going: Vec<SharedString> = match &operation.phase {
@@ -1321,7 +1343,12 @@ impl AppsScreen {
             .as_ref()
             .filter(|operation| operation.running())
         {
-            tracing::warn!(key = ?operation.key, "uninstallation left running at closing");
+            let source = operation.target.source();
+            if source == Source::Flatpak {
+                tracing::warn!(key = ?operation.key, "flatpak's uninstallation left at closing: its extensions and clean-up may not be done");
+            } else {
+                tracing::warn!(key = ?operation.key, ?source, "uninstallation left running at closing");
+            }
         }
     }
 }
@@ -1359,11 +1386,28 @@ fn remove(
     let said_now = match removal {
         Removal::Changed(checked) => Said::Checked(checked),
         Removal::Ended(ended) => {
-            let recorded = ended == Ended::Done && record(entry).is_ok();
+            let recorded = match &ended {
+                Ended::Done(gone) => record(&went(entry, going, gone)).is_ok(),
+                Ended::Cancelled | Ended::Failed(_) => false,
+            };
             Said::Ended { ended, recorded }
         }
     };
     let _ = said.send(said_now);
+}
+
+/// The history line of what went: `entry`, with what of `going` did not
+/// stay, by name; its space unknown when it is not known free.
+fn went(entry: &UninstallEntry, going: &[Going], gone: &Gone) -> UninstallEntry {
+    UninstallEntry {
+        packages: going
+            .iter()
+            .filter(|package| !gone.left.contains(&package.id))
+            .map(|package| package.name.clone())
+            .collect(),
+        freed_bytes: entry.freed_bytes.filter(|_| !gone.space_unknown),
+        ..entry.clone()
+    }
 }
 
 fn why_shown(why: &Why) -> (ui::UninstallWhy, String) {
@@ -1421,6 +1465,7 @@ fn detail(entry: &Entry, icon: Option<&slint::Image>, uninstalling: bool) -> ui:
         system: app.system,
         uninstallable: !app.system && app.target.is_some() && !uninstalling,
         uninstalling,
+        for_account_only: app.source == Source::Flatpak && app.target.is_none(),
     }
 }
 

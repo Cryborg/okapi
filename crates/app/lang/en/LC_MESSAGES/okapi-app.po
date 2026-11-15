@@ -2464,8 +2464,8 @@ msgid "Le bureau a besoin de {} pour fonctionner. Okapi ne propose donc pas de l
 msgstr "The desktop needs {} to work. So Okapi does not offer to uninstall it."
 
 msgctxt "Panel"
-msgid "Okapi ne désinstalle pas encore les flatpaks."
-msgstr "Okapi does not uninstall flatpaks yet."
+msgid "Installée pour votre compte seulement : Okapi ne sait pas la désinstaller."
+msgstr "Installed for your account only: Okapi cannot uninstall it."
 
 msgctxt "Uninstall"
 msgid "Vérification…"
@@ -2532,12 +2532,28 @@ msgid "Votre mot de passe vous sera demandé."
 msgstr "You will be asked for your password."
 
 msgctxt "Uninstall"
+msgid "Votre mot de passe peut vous être demandé."
+msgstr "You may be asked for your password."
+
+msgctxt "Uninstall"
+msgid "Ses traductions et extensions installées partent avec elle."
+msgstr "Its translations and installed extensions go with it."
+
+msgctxt "Uninstall"
+msgid "Ses données dans votre dossier personnel restent en place, ainsi que les environnements qu'elle utilisait."
+msgstr "Its data in your home folder stay, and so do the runtimes it used."
+
+msgctxt "Uninstall"
 msgid "La désinstaller retirerait aussi des paquets dont le système a besoin. Rien n'a été modifié."
 msgstr "Uninstalling it would also remove packages the system needs. Nothing was changed."
 
 msgctxt "Uninstall"
 msgid "Une désinstallation est en cours. Fermez encore Okapi pour le quitter quand même : elle se terminera sans lui, et ne sera pas inscrite à l'historique."
 msgstr "An uninstallation is under way. Close Okapi again to quit anyway: it will end without it, and will not be in the history."
+
+msgctxt "Uninstall"
+msgid "Une désinstallation est en cours. Fermez encore Okapi pour le quitter quand même : elle peut rester inachevée, et ne sera pas inscrite à l'historique."
+msgstr "An uninstallation is under way. Close Okapi again to quit anyway: it may be left unfinished, and will not be in the history."
 
 msgctxt "Uninstall"
 msgid "Trop tard pour annuler : le système termine."
@@ -2598,6 +2614,14 @@ msgstr "The Ubuntu packages could not be read. The detail is in the journal."
 msgctxt "AppsPage"
 msgid "Les snaps ne sont pas lisibles : le service snapd ne répond pas."
 msgstr "The snaps cannot be read: the snapd service does not answer."
+
+msgctxt "AppsPage"
+msgid "Les flatpaks n'ont pas pu être lus. Le détail est dans le journal."
+msgstr "The flatpaks could not be read. The details are in the log."
+
+msgctxt "AppsPage"
+msgid "Une partie des flatpaks n'a pas pu être lue : certains peuvent manquer. Le détail est dans le journal."
+msgstr "Part of the flatpaks could not be read: some may be missing. The details are in the log."
 
 msgctxt "AppsPage"
 msgid "Chercher une appli ou un paquet"
@@ -2690,6 +2714,10 @@ msgstr "Another installation is under way: Okapi waits its turn."
 msgctxt "Toast"
 msgid "{}. Elle n'a pas pu être inscrite à l'historique."
 msgstr "{}. It could not be written in the history."
+
+msgctxt "Toast"
+msgid "{}. Certaines de ses extensions sont restées installées"
+msgstr "{}. Some of its extensions stayed installed"
 
 msgctxt "Toast"
 msgid "{} désinstallée"

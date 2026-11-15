@@ -1,7 +1,8 @@
 //! The system's services as an [`Uninstaller`]: PackageKit for a deb (its
 //! package found installed, the removal simulated, then made), snapd for a
-//! snap (its change followed to its end). dpkg's state is read from its
-//! files. Nothing here runs a command; the rights are asked by the
+//! snap (its change followed to its end), flatpak's system helper for a
+//! flatpak (with the extensions that go with it). dpkg's state is read from
+//! its files. Nothing here runs a command; the rights are asked by the
 //! services' own polkit windows.
 
 use std::path::{Path, PathBuf};
@@ -12,9 +13,12 @@ use std::time::{Duration, Instant};
 use okapi_rules::Language;
 
 use super::dpkg::{self, Status};
+use super::flatpak::{FlatpakRef, SYSTEM_INSTALLATION, related};
+use super::measure::{Measured, measure};
 use super::snap::{is_snap_name, read_snaps};
-use super::uninstall::{Ended, Going, Step, Target, Uninstaller, Why, same_architecture};
+use super::uninstall::{Ended, Going, Gone, Step, Target, Uninstaller, Why, same_architecture};
 use super::{Reading, SourceReading};
+use crate::packages::flatpak::{FlatpakError, SystemHelper};
 use crate::packages::packagekit::{
     self, PackageId, PackageKit, PackageKitError, Removing, error_code,
 };
@@ -32,12 +36,14 @@ const CHANGE_LOOKS_FAILED: u32 = 5;
 /// forbidden), whatever kind snapd gives it.
 const HTTP_NOT_ALLOWED: [u16; 2] = [401, 403];
 
-/// PackageKit, snapd and dpkg's files, on this system.
+/// PackageKit, snapd, flatpak's helper and dpkg's files, on this system.
 #[derive(Debug, Clone)]
 pub struct Services {
     locale: &'static str,
     dpkg: PathBuf,
     snapd: Snapd,
+    /// The installation flatpak's helper changes: the system's.
+    flatpak: PathBuf,
     /// How long a snap's removal is followed at most.
     removal_wait: Duration,
 }
@@ -57,6 +63,7 @@ impl Services {
             locale: crate::packagekit_locale(language),
             dpkg: PathBuf::from(dpkg::DPKG_DIRECTORY),
             snapd: Snapd::system(),
+            flatpak: PathBuf::from(SYSTEM_INSTALLATION),
             removal_wait: SNAP_REMOVAL_WAIT,
         }
     }
@@ -107,6 +114,26 @@ impl Uninstaller for Services {
                 architecture: String::new(),
                 bytes: None,
             }]),
+            Target::Flatpak(reference) => {
+                let started = Instant::now();
+                let related = related(&self.flatpak, reference)?;
+                let going = |reference: &FlatpakRef, deployment: &Path| Going {
+                    id: reference.to_string(),
+                    name: reference.id().to_owned(),
+                    architecture: reference.arch().to_owned(),
+                    bytes: measured(deployment),
+                };
+                let going: Vec<Going> = std::iter::once(going(reference, &related.deployment))
+                    .chain(
+                        related
+                            .extensions
+                            .iter()
+                            .map(|(extension, deployment)| going(extension, deployment)),
+                    )
+                    .collect();
+                tracing::info!(%reference, going = going.len(), elapsed = ?started.elapsed(), "flatpak's removal checked and measured");
+                Ok(going)
+            }
             Target::Deb {
                 package,
                 architecture,
@@ -189,7 +216,7 @@ impl Uninstaller for Services {
                     });
                 };
                 match packagekit.remove_packages(&ids, &heard, cancel) {
-                    Ok(()) => Ended::Done,
+                    Ok(()) => Ended::Done(Gone::default()),
                     Err(
                         PackageKitError::Failed {
                             code: error_code::TRANSACTION_CANCELLED,
@@ -203,7 +230,54 @@ impl Uninstaller for Services {
                 }
             }
             Target::Snap { name, purge } => self.remove_snap(name, *purge),
+            Target::Flatpak(reference) => remove_flatpak(&reference.to_string(), going),
         }
+    }
+}
+
+/// What a deployment takes, when measured whole.
+fn measured(deployment: &Path) -> Option<u64> {
+    match measure(deployment, &AtomicBool::new(false)) {
+        Measured::Bytes {
+            bytes,
+            partial: false,
+        } => Some(bytes),
+        other => {
+            tracing::info!(path = %deployment.display(), ?other, "a deployment going without its size");
+            None
+        }
+    }
+}
+
+/// Removes the flatpak `app` and the extensions of `going` with it, by
+/// flatpak's system helper.
+fn remove_flatpak(app: &str, going: &[Going]) -> Ended {
+    match SystemHelper::connect() {
+        Ok(helper) => removed_by(&helper, app, going),
+        Err(error) => {
+            tracing::warn!(app, %error, "flatpak's helper not reached");
+            Ended::Failed(why_flatpak(&error))
+        }
+    }
+}
+
+/// Removes `app` and the extensions of `going` by `helper`: what stayed of
+/// them said, and the space unknown unless all went by this removal and the
+/// repository was pruned.
+fn removed_by(helper: &SystemHelper, app: &str, going: &[Going]) -> Ended {
+    let related: Vec<String> = going
+        .iter()
+        .filter(|package| package.id != app)
+        .map(|package| package.id.clone())
+        .collect();
+    match helper.remove(app, &related) {
+        Ok(removed) => Ended::Done(Gone {
+            space_unknown: !removed.pruned
+                || !removed.left.is_empty()
+                || !removed.already_gone.is_empty(),
+            left: removed.left,
+        }),
+        Err(error) => Ended::Failed(why_flatpak(&error)),
     }
 }
 
@@ -234,7 +308,7 @@ impl Services {
             }
             match self.snapd.change(&change) {
                 Ok(state) if !state.ready => failed_looks = 0,
-                Ok(state) if state.status == CHANGE_DONE => return Ended::Done,
+                Ok(state) if state.status == CHANGE_DONE => return Ended::Done(Gone::default()),
                 Ok(state) => {
                     tracing::warn!(name, change, status = %state.status, err = ?state.err, "snapd's removal did not end done");
                     return Ended::Failed(Why::Service(state.err.unwrap_or(state.status)));
@@ -257,7 +331,7 @@ impl Services {
         match self.snapd.installed(name) {
             Ok(false) => {
                 tracing::info!(name, "the snap is gone: its removal done");
-                Ended::Done
+                Ended::Done(Gone::default())
             }
             Ok(true) => {
                 tracing::warn!(
@@ -309,6 +383,20 @@ fn why_packagekit(error: &PackageKitError) -> Why {
         | PackageKitError::Vanished
         | PackageKitError::Unreadable { .. }
         | PackageKitError::Ended { .. } => Why::Unanswered,
+    }
+}
+
+/// Why, as the screen says it, flatpak's helper did not remove.
+fn why_flatpak(error: &FlatpakError) -> Why {
+    match error {
+        FlatpakError::Absent => Why::Absent,
+        FlatpakError::NotAuthorized(_) => Why::NotAuthorized,
+        FlatpakError::NotInstalled(_) => Why::NotFound,
+        FlatpakError::TimedOut { .. } => Why::TimedOut,
+        FlatpakError::Service { message, .. } => Why::Service(message.clone()),
+        FlatpakError::Transport(_) | FlatpakError::Unanswered(_) | FlatpakError::Bus(_) => {
+            Why::Unanswered
+        }
     }
 }
 
@@ -393,7 +481,10 @@ mod tests {
     fn a_snap_s_removal_followed_to_its_end_is_done() {
         let (_directory, services) =
             snapd_answering(vec![Some(STARTED), Some(DOING), Some(DONE)], LONG);
-        assert_eq!(services.remove_snap("android-studio", false), Ended::Done);
+        assert_eq!(
+            services.remove_snap("android-studio", false),
+            Ended::Done(Gone::default())
+        );
     }
 
     #[test]
@@ -404,7 +495,10 @@ mod tests {
         gone.extend(std::iter::repeat_n(None, CHANGE_LOOKS_FAILED as usize));
         gone.push(Some(GONE));
         let (_directory, services) = snapd_answering(gone, LONG);
-        assert_eq!(services.remove_snap("android-studio", false), Ended::Done);
+        assert_eq!(
+            services.remove_snap("android-studio", false),
+            Ended::Done(Gone::default())
+        );
 
         let mut there = vec![Some(STARTED)];
         there.extend(std::iter::repeat_n(None, CHANGE_LOOKS_FAILED as usize));
@@ -498,5 +592,196 @@ mod tests {
             checked,
             super::super::uninstall::Checked::Going(going) if going.len() == 1 && going[0].is(&target)
         ));
+    }
+
+    #[test]
+    fn a_flatpak_s_check_is_the_application_then_its_extensions_never_against_dpkg() {
+        // Catches the extensions left out of what is shown (they would go
+        // unseen, or stay), the application not first, dpkg asked.
+        let root = tempfile::tempdir().unwrap();
+        let installation = root.path().to_path_buf();
+        let branch = installation.join("app/org.gimp.GIMP/aarch64/stable");
+        std::fs::create_dir_all(branch.join("abc123")).unwrap();
+        std::os::unix::fs::symlink("abc123", branch.join("active")).unwrap();
+        std::fs::write(
+            branch.join("abc123/metadata"),
+            "[Extension org.gimp.GIMP.Locale]\n",
+        )
+        .unwrap();
+        let locale = installation.join("runtime/org.gimp.GIMP.Locale/aarch64/stable");
+        std::fs::create_dir_all(locale.join("def456")).unwrap();
+        std::os::unix::fs::symlink("def456", locale.join("active")).unwrap();
+        std::fs::write(locale.join("def456/fr.mo"), [0; 10]).unwrap();
+        std::fs::write(branch.join("abc123/gimp"), vec![0; 256 * 1024]).unwrap();
+        let target =
+            Target::Flatpak(FlatpakRef::app("org.gimp.GIMP", "aarch64", "stable").unwrap());
+        let services = Services {
+            flatpak: installation,
+            ..Services::new(Language::French)
+        };
+        let Ok(super::super::uninstall::Checked::Going(going)) =
+            super::super::uninstall::check(&services, &target)
+        else {
+            panic!("checked");
+        };
+        let shown: Vec<(&str, &str)> = going
+            .iter()
+            .map(|package| (package.id.as_str(), package.name.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("app/org.gimp.GIMP/aarch64/stable", "org.gimp.GIMP"),
+                (
+                    "runtime/org.gimp.GIMP.Locale/aarch64/stable",
+                    "org.gimp.GIMP.Locale"
+                ),
+            ]
+        );
+        assert!(going[0].is(&target));
+        assert!(!going[1].is(&target));
+        // Each measured, of its own architecture: the space freed is told
+        // whole, never the application's alone.
+        for package in &going {
+            assert_eq!(package.architecture, "aarch64");
+            assert!(package.bytes.is_some(), "{package:?}");
+        }
+        assert!(going[0].bytes > going[1].bytes, "each its own: {going:?}");
+    }
+
+    #[test]
+    fn a_flatpak_removed_says_what_stayed_by_its_reference_and_the_space_unknown() {
+        // Catches the application asked among its extensions, what stayed
+        // told by a name two branches share, an extension already gone told
+        // left, the space said free when a part stayed or the repository was
+        // not pruned.
+        use crate::packages::flatpak::tests::{Answer, fake_helper};
+        let reference = |kind: &str, id: &str, branch: &str| Going {
+            id: format!("{kind}/{id}/x86_64/{branch}"),
+            name: id.to_owned(),
+            architecture: "x86_64".to_owned(),
+            bytes: Some(1),
+        };
+        let app = reference("app", "org.gimp.GIMP", "stable");
+        let going = [
+            app.clone(),
+            reference("runtime", "org.gimp.GIMP.Plugin", "2"),
+            reference("runtime", "org.gimp.GIMP.Plugin", "3"),
+            reference("runtime", "org.gimp.GIMP.Locale", "stable"),
+        ];
+        let (helper, heard) = fake_helper(|member, reference| match (member, reference) {
+            ("Uninstall", "runtime/org.gimp.GIMP.Plugin/x86_64/3") => {
+                Answer::Error("org.freedesktop.Flatpak.Error.Aborted")
+            }
+            ("Uninstall", "runtime/org.gimp.GIMP.Locale/x86_64/stable") => {
+                Answer::Error("org.freedesktop.Flatpak.Error.NotInstalled")
+            }
+            _ => Answer::Done,
+        });
+        assert_eq!(
+            removed_by(&helper, &app.id, &going),
+            Ended::Done(Gone {
+                left: vec!["runtime/org.gimp.GIMP.Plugin/x86_64/3".to_owned()],
+                space_unknown: true,
+            })
+        );
+        let asked: Vec<String> = heard
+            .try_iter()
+            .filter(|heard| heard.member == "Uninstall")
+            .map(|heard| heard.strings[0].clone())
+            .collect();
+        let shown: Vec<String> = going.iter().map(|package| package.id.clone()).collect();
+        assert_eq!(asked, shown, "the application first, then each as shown");
+
+        // An extension already gone: gone, but not freed by this removal.
+        let (helper, _heard) = fake_helper(|member, reference| {
+            if member == "Uninstall" && reference == "runtime/org.gimp.GIMP.Locale/x86_64/stable" {
+                Answer::Error("org.freedesktop.Flatpak.Error.NotInstalled")
+            } else {
+                Answer::Done
+            }
+        });
+        assert_eq!(
+            removed_by(&helper, &app.id, &going),
+            Ended::Done(Gone {
+                left: Vec::new(),
+                space_unknown: true,
+            })
+        );
+
+        // All gone, the repository not pruned: the space is not known free.
+        let (helper, _heard) = fake_helper(|member, _| {
+            if member == "PruneLocalRepo" {
+                Answer::Error("org.freedesktop.Flatpak.Error.Aborted")
+            } else {
+                Answer::Done
+            }
+        });
+        assert_eq!(
+            removed_by(&helper, &app.id, &going),
+            Ended::Done(Gone {
+                left: Vec::new(),
+                space_unknown: true,
+            })
+        );
+
+        // All gone, the repository pruned: the space is known.
+        let (helper, _heard) = fake_helper(|_, _| Answer::Done);
+        assert_eq!(
+            removed_by(&helper, &app.id, &going),
+            Ended::Done(Gone::default())
+        );
+    }
+
+    #[test]
+    fn each_failure_of_flatpak_s_helper_is_told_by_its_kind() {
+        for (error, why) in [
+            (FlatpakError::Absent, Why::Absent),
+            (
+                FlatpakError::NotAuthorized("x".to_owned()),
+                Why::NotAuthorized,
+            ),
+            (FlatpakError::NotInstalled("x".to_owned()), Why::NotFound),
+            (
+                FlatpakError::TimedOut {
+                    waited: Duration::from_secs(1),
+                },
+                Why::TimedOut,
+            ),
+            (
+                FlatpakError::Service {
+                    name: "n".to_owned(),
+                    message: "words".to_owned(),
+                },
+                Why::Service("words".to_owned()),
+            ),
+            (FlatpakError::Unanswered("x".to_owned()), Why::Unanswered),
+            (FlatpakError::Transport("x".to_owned()), Why::Unanswered),
+            (
+                FlatpakError::Bus(zbus::Error::Failure("x".to_owned())),
+                Why::Unanswered,
+            ),
+        ] {
+            assert_eq!(why_flatpak(&error), why, "{error}");
+        }
+    }
+
+    #[test]
+    fn a_deployment_measured_in_part_has_no_size() {
+        use std::os::unix::fs::PermissionsExt as _;
+        // Catches a size read in part taken for the whole: the space freed
+        // would be said less than goes.
+        if okapi_platform::running_as_root() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let closed = root.path().join("closed");
+        std::fs::create_dir(&closed).unwrap();
+        std::fs::write(root.path().join("file"), [0; 10]).unwrap();
+        assert!(measured(root.path()).is_some());
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let size = measured(root.path());
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(size, None);
     }
 }

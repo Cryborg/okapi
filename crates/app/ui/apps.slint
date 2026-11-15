@@ -452,8 +452,8 @@ component Panel inherits Card {
             text: @tr("Le bureau a besoin de {} pour fonctionner. Okapi ne propose donc pas de la désinstaller.", Apps.detail.name);
             wrap: word-wrap;
         }
-        if Apps.detail.source == AppSource.flatpak: Detail {
-            text: @tr("Okapi ne désinstalle pas encore les flatpaks.");
+        if Apps.detail.for-account-only: Detail {
+            text: @tr("Installée pour votre compte seulement : Okapi ne sait pas la désinstaller.");
             wrap: word-wrap;
         }
         Rectangle {
@@ -485,32 +485,43 @@ component Uninstall inherits ModalFrame {
         indeterminate: true;
         label: title.text;
     }
-    if Apps.step == UninstallStep.confirm && !Apps.target-snap && !Apps.freed-known: Detail {
+    if Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.deb && !Apps.freed-known: Detail {
         text: Apps.going.length > 2
             ? @tr("{} et les paquets qui en dépendent partiront. Place libérée : inconnue.", Apps.target)
             : Apps.going.length == 2
             ? @tr("{} et un paquet qui en dépend partiront. Place libérée : inconnue.", Apps.target)
             : @tr("Place libérée : inconnue.");
     }
-    if Apps.step == UninstallStep.confirm && !Apps.target-snap && Apps.freed-known: Detail {
+    if Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.deb && Apps.freed-known: Detail {
         text: Apps.going.length > 2
             ? @tr("{} et {} paquets qui en dépendent partiront. Place libérée : {}.", Apps.target, Apps.going.length - 1, Words.size(Apps.freed))
             : Apps.going.length == 2
             ? @tr("{} et un paquet qui en dépend partiront. Place libérée : {}.", Apps.target, Words.size(Apps.freed))
             : @tr("Place libérée : {}.", Words.size(Apps.freed));
     }
-    if (Apps.step == UninstallStep.confirm && Apps.going.length > 1) || (Apps.step == UninstallStep.refused && Apps.going.length > 0): Detail {
+    if (Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.deb && Apps.going.length > 1) || (Apps.step == UninstallStep.refused && Apps.going.length > 0): Detail {
         text: @tr("Ce qui partirait : {}", AppWords.names(Apps.going));
         wrap: word-wrap;
     }
-    if Apps.step == UninstallStep.confirm && !Apps.target-snap: Detail {
+    if Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.deb: Detail {
         text: @tr("Ses réglages dans votre dossier personnel restent en place : vous les retrouvez si vous la réinstallez.");
     }
-    if Apps.step == UninstallStep.confirm && Apps.target-snap: Detail {
+    if Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.flatpak: Detail {
+        text: Apps.freed-known ? @tr("Place libérée : {}.", Words.size(Apps.freed)) : @tr("Place libérée : inconnue.");
+    }
+    if Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.flatpak && Apps.going.length > 1: Detail {
+        text: @tr("Ses traductions et extensions installées partent avec elle.");
+        wrap: word-wrap;
+    }
+    if Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.flatpak: Detail {
+        text: @tr("Ses données dans votre dossier personnel restent en place, ainsi que les environnements qu'elle utilisait.");
+        wrap: word-wrap;
+    }
+    if Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.snap: Detail {
         text: Apps.freed-known ? @tr("Place libérée : {}, anciennes versions comprises.", Words.size(Apps.freed))
             : @tr("Place libérée : inconnue.");
     }
-    if Apps.step == UninstallStep.confirm && Apps.target-snap: data-box := Rectangle {
+    if Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.snap: data-box := Rectangle {
         accessible-role: checkbox;
         accessible-checkable: true;
         accessible-checked: Apps.purge;
@@ -551,18 +562,19 @@ component Uninstall inherits ModalFrame {
             }
         }
     }
-    if Apps.step == UninstallStep.confirm && Apps.target-snap: Detail {
+    if Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.snap: Detail {
         text: Apps.purge ? @tr("Ses données partent tout de suite, pour tous les comptes et celles du système, sans copie gardée.")
             : @tr("Une copie de ses données (de tous les comptes et du système) est gardée 31 jours par le système.");
     }
     if Apps.step == UninstallStep.confirm: Detail {
-        text: @tr("Votre mot de passe vous sera demandé.");
+        text: Apps.target-source == AppSource.flatpak ? @tr("Votre mot de passe peut vous être demandé.") : @tr("Votre mot de passe vous sera demandé.");
     }
     if Apps.step == UninstallStep.refused: Detail {
         text: @tr("La désinstaller retirerait aussi des paquets dont le système a besoin. Rien n'a été modifié.");
     }
     if Apps.step == UninstallStep.running: Detail {
-        text: Apps.closing ? @tr("Une désinstallation est en cours. Fermez encore Okapi pour le quitter quand même : elle se terminera sans lui, et ne sera pas inscrite à l'historique.")
+        text: Apps.closing && Apps.target-source == AppSource.flatpak ? @tr("Une désinstallation est en cours. Fermez encore Okapi pour le quitter quand même : elle peut rester inachevée, et ne sera pas inscrite à l'historique.")
+            : Apps.closing ? @tr("Une désinstallation est en cours. Fermez encore Okapi pour le quitter quand même : elle se terminera sans lui, et ne sera pas inscrite à l'historique.")
             : Apps.waiting ? @tr("Une autre installation est en cours : Okapi attend son tour.")
             : Apps.too-late ? @tr("Trop tard pour annuler : le système termine.")
             : @tr("Fermer cette fenêtre n'arrête pas la désinstallation.");
@@ -580,7 +592,7 @@ component Uninstall inherits ModalFrame {
                 Apps.close-modal();
             }
         }
-        if Apps.step == UninstallStep.running && !Apps.target-snap: ActionButton {
+        if Apps.step == UninstallStep.running && Apps.target-source == AppSource.deb: ActionButton {
             text: @tr("Annuler la désinstallation");
             enabled: Apps.cancellable;
             clicked => {
@@ -631,8 +643,9 @@ component Toast inherits Rectangle {
         spacing: Theme.spacing-m;
         words := Text {
             horizontal-stretch: 1;
-            property <string> done: Apps.toast-freed-known ? @tr("{} désinstallée : {} libérés", Apps.toast-name, Words.size(Apps.toast-freed))
+            property <string> gone: Apps.toast-freed-known ? @tr("{} désinstallée : {} libérés", Apps.toast-name, Words.size(Apps.toast-freed))
                 : @tr("{} désinstallée", Apps.toast-name);
+            property <string> done: Apps.toast-partly ? @tr("{}. Certaines de ses extensions sont restées installées", self.gone) : self.gone;
             text: Apps.toast-recorded ? self.done : @tr("{}. Elle n'a pas pu être inscrite à l'historique.", self.done);
             color: Theme.text;
             vertical-alignment: center;
@@ -788,6 +801,14 @@ export component AppsPage inherits Rectangle {
             if Apps.snaps == SourceShown.failed: Banner {
                 warning: true;
                 text: @tr("Les snaps ne sont pas lisibles : le service snapd ne répond pas.");
+            }
+            if Apps.flatpaks == SourceShown.failed: Banner {
+                warning: true;
+                text: @tr("Les flatpaks n'ont pas pu être lus. Le détail est dans le journal.");
+            }
+            if Apps.flatpaks == SourceShown.partial: Banner {
+                warning: true;
+                text: @tr("Une partie des flatpaks n'a pas pu être lue : certains peuvent manquer. Le détail est dans le journal.");
             }
             HorizontalLayout {
                 spacing: Theme.spacing-m;

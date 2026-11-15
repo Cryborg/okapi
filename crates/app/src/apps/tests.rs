@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use okapi_tools::apps::dpkg::{Status, parse_status};
+use okapi_tools::apps::flatpak::FlatpakRef;
 use okapi_tools::apps::measure::Measured;
 use okapi_tools::apps::{App, AppSize, Origin};
 use slint::Model as _;
@@ -23,7 +24,7 @@ const WAIT: Duration = Duration::from_secs(20);
 pub(crate) fn inert() -> AppsSeams {
     AppsSeams {
         read: Rc::new(|_, _, _| {}),
-        uninstaller: Fake::new(Vec::new(), Ended::Done),
+        uninstaller: Fake::new(Vec::new(), Ended::Done(Gone::default())),
         record: Arc::new(|_| Ok(())),
         now: Timestamp::now,
     }
@@ -87,6 +88,7 @@ fn arrivals() -> Vec<Arrival> {
                     count: 2026,
                     bytes: 9_400_000_000,
                 },
+                partial: false,
             },
         ),
         Arrival::Source(
@@ -97,6 +99,7 @@ fn arrivals() -> Vec<Arrival> {
                     count: 6,
                     bytes: 1_800_000_000,
                 },
+                partial: false,
             },
         ),
         Arrival::Measured(
@@ -112,6 +115,7 @@ fn arrivals() -> Vec<Arrival> {
             SourceReading::Read {
                 apps: vec![builder.clone()],
                 rest: Rest::default(),
+                partial: false,
             },
         ),
         Arrival::Measured(
@@ -212,6 +216,15 @@ fn on_apps(uninstaller: Arc<dyn Uninstaller>) -> OnApps {
 
 /// [`on_apps`], its history written when `writable`.
 fn on_apps_recording(uninstaller: Arc<dyn Uninstaller>, writable: bool) -> OnApps {
+    on_apps_reading(uninstaller, writable, arrivals)
+}
+
+/// [`on_apps_recording`], reading `arrivals`.
+fn on_apps_reading(
+    uninstaller: Arc<dyn Uninstaller>,
+    writable: bool,
+    arrivals: fn() -> Vec<Arrival>,
+) -> OnApps {
     let recorded = Arc::new(Mutex::new(Vec::new()));
     let kept = Arc::clone(&recorded);
     let reads = Rc::new(std::cell::Cell::new(0));
@@ -429,7 +442,10 @@ fn the_keyboard_stays_on_its_application_and_the_system_s_is_never_offered() {
             "Fichiers",
             "Le bureau a besoin de Fichiers pour fonctionner. Okapi ne propose donc pas de la désinstaller.",
         ),
-        ("Builder", "Okapi ne désinstalle pas encore les flatpaks."),
+        (
+            "Builder",
+            "Installée pour votre compte seulement : Okapi ne sait pas la désinstaller.",
+        ),
     ] {
         open(&window, name);
         assert_eq!(buttons(&window, "Désinstaller"), 0, "{name}: no button");
@@ -450,7 +466,7 @@ fn a_deb_goes_as_shown_and_is_recorded_once_gone() {
             going("gimp", 3_000_000),
             going("gimp-help-fr", 1_000_000),
         ])],
-        Ended::Done,
+        Ended::Done(Gone::default()),
     );
     let (window, _, recorded, reads) = on_apps(fake.clone());
     ask(&window, "GIMP");
@@ -461,6 +477,17 @@ fn a_deb_goes_as_shown_and_is_recorded_once_gone() {
     ));
     assert!(shows(&window, "Ce qui partirait : gimp, gimp-help-fr"));
     assert!(shows(&window, "Votre mot de passe vous sera demandé."));
+    assert!(shows(
+        &window,
+        "Ses réglages dans votre dossier personnel restent en place : vous les retrouvez si vous la réinstallez."
+    ));
+    // Never a flatpak's words.
+    for words in [
+        "Ses traductions et extensions installées partent avec elle.",
+        "Votre mot de passe peut vous être demandé.",
+    ] {
+        assert!(!shows(&window, words), "{words}");
+    }
     assert_eq!(
         buttons(&window, "Désinstaller"),
         2,
@@ -507,7 +534,7 @@ fn what_would_take_the_system_s_is_refused_named_and_never_removed() {
             going("gimp", 1),
             going("ubuntu-desktop-minimal", 1),
         ])],
-        Ended::Done,
+        Ended::Done(Gone::default()),
     );
     let (window, _, recorded, _) = on_apps(fake.clone());
     ask(&window, "GIMP");
@@ -531,7 +558,7 @@ fn a_list_changed_since_it_was_shown_is_shown_again_and_nothing_removed() {
             // As many packages, another one among them.
             Ok(vec![going("gimp", 3), going("gimp-plugin", 1)]),
         ],
-        Ended::Done,
+        Ended::Done(Gone::default()),
     );
     let (window, _, recorded, _) = on_apps(fake.clone());
     ask(&window, "GIMP");
@@ -639,7 +666,10 @@ impl Uninstaller for Held {
 #[test]
 fn one_uninstallation_at_a_time_its_window_closed_or_not() {
     let (release, released) = mpsc::channel::<()>();
-    let fake = Fake::new(vec![Ok(vec![going("gimp", 1)])], Ended::Done);
+    let fake = Fake::new(
+        vec![Ok(vec![going("gimp", 1)])],
+        Ended::Done(Gone::default()),
+    );
     let held = Arc::new(Held {
         fake: Arc::clone(&fake),
         released: Mutex::new(released),
@@ -689,11 +719,19 @@ fn one_uninstallation_at_a_time_its_window_closed_or_not() {
 
 /// A snap uninstalled, its data asked to go when `purge`.
 fn snap_uninstalled(purge: bool) {
-    let fake = Fake::new(vec![Ok(vec![going("android-studio", 1)])], Ended::Done);
+    let fake = Fake::new(
+        vec![Ok(vec![going("android-studio", 1)])],
+        Ended::Done(Gone::default()),
+    );
     let (window, _, recorded, _) = on_apps(fake.clone());
     ask(&window, "Android Studio");
     let data = checkbox(&window, "Supprimer aussi ses données (5,0 Mo)");
     assert_eq!(data.accessible_checked(), Some(false), "unchecked");
+    assert!(shows(&window, "Votre mot de passe vous sera demandé."));
+    assert!(!shows(
+        &window,
+        "Ses données dans votre dossier personnel restent en place, ainsi que les environnements qu'elle utilisait."
+    ));
     assert!(shows(
         &window,
         "Une copie de ses données (de tous les comptes et du système) est gardée 31 jours par le système."
@@ -776,6 +814,7 @@ fn closing_the_window_during_an_uninstallation_is_held_once() {
             architecture: "amd64".to_owned(),
         },
         freed: Some(1),
+        estimated: Some(1),
         data_bytes: 0,
         phase: Phase::Running(Run::default()),
         receiver,
@@ -797,7 +836,10 @@ fn closing_the_window_during_an_uninstallation_is_held_once() {
 
 #[test]
 fn a_history_that_could_not_be_written_is_said_with_what_went() {
-    let fake = Fake::new(vec![Ok(vec![going("gimp", 3_000_000)])], Ended::Done);
+    let fake = Fake::new(
+        vec![Ok(vec![going("gimp", 3_000_000)])],
+        Ended::Done(Gone::default()),
+    );
     let (window, ..) = on_apps_recording(fake, false);
     ask(&window, "GIMP");
     apps(&window).invoke_confirm();
@@ -815,7 +857,7 @@ fn a_size_unknown_is_said_unknown_never_nothing() {
         bytes: None,
         ..going("gimp", 0)
     };
-    let fake = Fake::new(vec![Ok(vec![without_size])], Ended::Done);
+    let fake = Fake::new(vec![Ok(vec![without_size])], Ended::Done(Gone::default()));
     let (window, screen, recorded, _) = on_apps(fake);
     screen
         .0
@@ -847,7 +889,7 @@ fn a_package_going_without_its_size_makes_the_place_freed_unknown() {
     };
     let fake = Fake::new(
         vec![Ok(vec![going("gimp", 3_000_000), dependent])],
-        Ended::Done,
+        Ended::Done(Gone::default()),
     );
     let (window, _, recorded, _) = on_apps(fake);
     ask(&window, "GIMP");
@@ -863,7 +905,10 @@ fn a_package_going_without_its_size_makes_the_place_freed_unknown() {
 #[test]
 fn an_ending_away_from_the_page_is_seen_on_return() {
     let (release, released) = mpsc::channel::<()>();
-    let fake = Fake::new(vec![Ok(vec![going("gimp", 1)])], Ended::Done);
+    let fake = Fake::new(
+        vec![Ok(vec![going("gimp", 1)])],
+        Ended::Done(Gone::default()),
+    );
     let held = Arc::new(Held {
         fake,
         released: Mutex::new(released),
@@ -909,7 +954,7 @@ impl Uninstaller for Cancellable {
         let started = Instant::now();
         while !cancel.load(Ordering::Relaxed) {
             if started.elapsed() > WAIT {
-                return Ended::Done;
+                return Ended::Done(Gone::default());
             }
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -964,7 +1009,7 @@ fn a_source_busy_or_silent_is_said_and_the_others_shown() {
 
 /// The check of GIMP fails `why`: said, and the list read again or not.
 fn check_fails(why: Why, words: &str, read_again: bool) {
-    let fake = Fake::new(vec![Err(why)], Ended::Done);
+    let fake = Fake::new(vec![Err(why)], Ended::Done(Gone::default()));
     let (window, _, _, reads) = on_apps(fake.clone());
     ask(&window, "GIMP");
     assert_eq!(step(&window), ui::UninstallStep::Failed);
@@ -1031,7 +1076,10 @@ fn a_removal_that_dies_says_its_outcome_unknown_and_reads_again() {
 #[test]
 fn the_window_s_close_button_is_held_once_during_an_uninstallation() {
     let (release, released) = mpsc::channel::<()>();
-    let fake = Fake::new(vec![Ok(vec![going("gimp", 1)])], Ended::Done);
+    let fake = Fake::new(
+        vec![Ok(vec![going("gimp", 1)])],
+        Ended::Done(Gone::default()),
+    );
     let held = Arc::new(Held {
         fake,
         released: Mutex::new(released),
@@ -1054,4 +1102,371 @@ fn the_window_s_close_button_is_held_once_during_an_uninstallation() {
     assert_eq!(step(&window), ui::UninstallStep::Running);
     assert!(apps(&window).get_closing());
     drop(release);
+}
+
+/// [`arrivals`], Builder installed in the system's installation, its data
+/// 500 kB.
+fn builder_of_the_system() -> Vec<Arrival> {
+    let mut arrivals: Vec<Arrival> = arrivals()
+        .into_iter()
+        .map(|arrival| match arrival {
+            Arrival::Source(
+                Source::Flatpak,
+                SourceReading::Read {
+                    mut apps,
+                    rest,
+                    partial,
+                },
+            ) => {
+                apps[0].target = Some(builder_target());
+                apps[0].data = Some(PathBuf::from("/home/u/.var/app/org.gnome.Builder"));
+                Arrival::Source(
+                    Source::Flatpak,
+                    SourceReading::Read {
+                        apps,
+                        rest,
+                        partial,
+                    },
+                )
+            }
+            other => other,
+        })
+        .collect();
+    arrivals.push(Arrival::Measured(
+        AppKey {
+            source: Source::Flatpak,
+            id: "org.gnome.Builder".to_owned(),
+        },
+        Part::Data,
+        Measured::Bytes {
+            bytes: 500_000,
+            partial: false,
+        },
+    ));
+    arrivals
+}
+
+fn builder_target() -> Target {
+    Target::Flatpak(FlatpakRef::app("org.gnome.Builder", "x86_64", "stable").unwrap())
+}
+
+const BUILDER_LOCALE: &str = "runtime/org.gnome.Builder.Locale/x86_64/stable";
+
+/// What a check of Builder shows: the application (2 MB), then its
+/// translations (`locale`).
+fn builder_going_sized(locale: Option<u64>) -> Vec<Going> {
+    [
+        ("app/org.gnome.Builder/x86_64/stable", Some(2_000_000)),
+        (BUILDER_LOCALE, locale),
+    ]
+    .iter()
+    .map(|(reference, bytes)| Going {
+        id: (*reference).to_owned(),
+        name: reference.split('/').nth(1).unwrap().to_owned(),
+        architecture: "x86_64".to_owned(),
+        bytes: *bytes,
+    })
+    .collect()
+}
+
+fn builder_going() -> Vec<Going> {
+    builder_going_sized(Some(1_000_000))
+}
+
+#[test]
+fn a_flatpak_of_the_system_goes_with_its_extensions_without_a_cancel_and_is_recorded() {
+    // Catches a flatpak shown the texts of a deb or a snap (packages that
+    // depend on it, the data box), its extensions' space left out, a cancel
+    // it cannot have, the sentence of the user's installation, the promise
+    // that it ends without Okapi, and a history line of another source.
+    let (release, released) = mpsc::channel::<()>();
+    let fake = Fake::new(vec![Ok(builder_going())], Ended::Done(Gone::default()));
+    let held = Arc::new(Held {
+        fake: Arc::clone(&fake),
+        released: Mutex::new(released),
+    });
+    let (window, screen, recorded, reads) = on_apps_reading(held, true, builder_of_the_system);
+    open(&window, "Builder");
+    assert!(!shows(&window, ACCOUNT_ONLY));
+    assert_eq!(buttons(&window, "Désinstaller"), 1, "the detail's");
+    ask(&window, "Builder");
+    assert_eq!(step(&window), ui::UninstallStep::Confirm);
+    for words in [
+        // The application and its translations, both measured.
+        "Place libérée : 3,0 Mo.",
+        "Ses traductions et extensions installées partent avec elle.",
+        "Ses données dans votre dossier personnel restent en place, ainsi que les environnements qu'elle utilisait.",
+        "Votre mot de passe peut vous être demandé.",
+    ] {
+        assert!(shows(&window, words), "{words}");
+    }
+    for words in [
+        "Ce qui partirait : org.gnome.Builder, org.gnome.Builder.Locale",
+        "Builder et un paquet qui en dépend partiront. Place libérée : 3,0 Mo.",
+        "Ses réglages dans votre dossier personnel restent en place : vous les retrouvez si vous la réinstallez.",
+        "Une copie de ses données (de tous les comptes et du système) est gardée 31 jours par le système.",
+        "Votre mot de passe vous sera demandé.",
+    ] {
+        assert!(!shows(&window, words), "{words}");
+    }
+    assert_eq!(
+        ElementHandle::find_by_accessible_label(&window, "Supprimer aussi ses données (500,0 ko)")
+            .count(),
+        0,
+        "no data box"
+    );
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| apps(window).get_waiting());
+    assert_eq!(buttons(&window, "Annuler la désinstallation"), 0);
+    assert!(!shows(&window, ACCOUNT_ONLY));
+    // Okapi closed meanwhile would leave its extensions: said so.
+    assert_eq!(
+        screen.close_requested(),
+        slint::CloseRequestResponse::KeepWindowShown
+    );
+    assert!(shows(
+        &window,
+        "Une désinstallation est en cours. Fermez encore Okapi pour le quitter quand même : elle peut rester inachevée, et ne sera pas inscrite à l'historique."
+    ));
+    release.send(()).unwrap();
+    release.send(()).unwrap();
+    read_until(&window, |window| apps(window).get_toast());
+    assert_eq!(fake.removed(), [(builder_target(), builder_going())]);
+    assert!(apps(&window).get_toast_freed_known());
+    assert!(!apps(&window).get_toast_partly());
+    let lines = recorded.lock().unwrap().clone();
+    assert_eq!(
+        (
+            lines[0].source,
+            lines[0].packages.clone(),
+            lines[0].freed_bytes
+        ),
+        (
+            UninstallSource::Flatpak,
+            vec![
+                "org.gnome.Builder".to_owned(),
+                "org.gnome.Builder.Locale".to_owned()
+            ],
+            Some(3_000_000)
+        )
+    );
+    assert_eq!(reads.get(), 2, "read again after");
+}
+
+const ACCOUNT_ONLY: &str =
+    "Installée pour votre compte seulement : Okapi ne sait pas la désinstaller.";
+
+#[test]
+fn what_stayed_of_a_flatpak_and_a_space_not_freed_are_never_said_gone() {
+    // Catches an extension that stayed recorded as gone or never told, a
+    // space said freed when the repository was not pruned, and a removal
+    // done in part left without its history line.
+    let fake = Fake::new(
+        vec![Ok(builder_going())],
+        Ended::Done(Gone {
+            left: vec![BUILDER_LOCALE.to_owned()],
+            space_unknown: true,
+        }),
+    );
+    let (window, _, recorded, _) = on_apps_reading(fake, true, builder_of_the_system);
+    ask(&window, "Builder");
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| apps(window).get_toast());
+    assert!(apps(&window).get_toast_recorded());
+    assert!(!apps(&window).get_toast_freed_known());
+    assert!(shows(
+        &window,
+        "Builder désinstallée. Certaines de ses extensions sont restées installées"
+    ));
+    let lines = recorded.lock().unwrap().clone();
+    assert_eq!(
+        (lines[0].packages.clone(), lines[0].freed_bytes),
+        (vec!["org.gnome.Builder".to_owned()], None)
+    );
+}
+
+#[test]
+fn a_flatpak_extension_of_a_size_unknown_makes_the_space_unknown() {
+    // Catches the application's size alone said freed while its extensions
+    // go too.
+    let fake = Fake::new(
+        vec![Ok(builder_going_sized(None))],
+        Ended::Done(Gone::default()),
+    );
+    let (window, ..) = on_apps_reading(fake, true, builder_of_the_system);
+    ask(&window, "Builder");
+    assert!(shows(&window, "Place libérée : inconnue."));
+}
+
+const PARTLY_READ: &str = "Une partie des flatpaks n'a pas pu être lue : certains peuvent manquer. Le détail est dans le journal.";
+const NOT_READ: &str = "Les flatpaks n'ont pas pu être lus. Le détail est dans le journal.";
+
+/// Flatpaks read as `reading`: the banners `said` shown, the others not,
+/// and read again on return when `again`.
+fn flatpaks_said(reading: SourceReading, said: &[&str], again: bool) {
+    let reads = Rc::new(std::cell::Cell::new(0));
+    let counted = Rc::clone(&reads);
+    let seams = crate::cleaner::Seams {
+        apps: AppsSeams {
+            read: Rc::new(move |_, sink, _| {
+                counted.set(counted.get() + 1);
+                // The others read whole: only the flatpaks' state counts.
+                for source in [Source::Deb, Source::Snap] {
+                    let whole = SourceReading::Read {
+                        apps: Vec::new(),
+                        rest: Rest::default(),
+                        partial: false,
+                    };
+                    sink.send(Arrival::Source(source, whole)).unwrap();
+                }
+                sink.send(Arrival::Source(Source::Flatpak, reading.clone()))
+                    .unwrap();
+            }),
+            ..inert()
+        },
+        ..seams_never_scanning()
+    };
+    let (window, ..) =
+        crate::wide_window(seams, crate::dashboard::tests::inert(), Language::French);
+    button(&window, "Applications").invoke_accessible_default_action();
+    slint::platform::update_timers_and_animations();
+    read_once();
+    for words in [PARTLY_READ, NOT_READ] {
+        assert_eq!(shows(&window, words), said.contains(&words), "{words}");
+    }
+    button(&window, "Accueil").invoke_accessible_default_action();
+    slint::platform::update_timers_and_animations();
+    button(&window, "Applications").invoke_accessible_default_action();
+    slint::platform::update_timers_and_animations();
+    assert_eq!(
+        reads.get(),
+        if again { 2 } else { 1 },
+        "read again on return"
+    );
+}
+
+#[test]
+fn flatpaks_partly_read_are_said_and_read_again_on_return() {
+    // Catches a reading said whole with applications missing, and one never
+    // read again.
+    flatpaks_said(
+        SourceReading::Read {
+            apps: Vec::new(),
+            rest: Rest::default(),
+            partial: true,
+        },
+        &[PARTLY_READ],
+        true,
+    );
+}
+
+#[test]
+fn flatpaks_unread_are_said() {
+    flatpaks_said(
+        SourceReading::Failed("closed".to_owned()),
+        &[NOT_READ],
+        true,
+    );
+}
+
+#[test]
+fn flatpaks_read_whole_say_nothing_of_it() {
+    // Catches a banner shown when nothing is missing.
+    flatpaks_said(
+        SourceReading::Read {
+            apps: Vec::new(),
+            rest: Rest::default(),
+            partial: false,
+        },
+        &[],
+        false,
+    );
+}
+
+#[test]
+fn a_flatpak_whose_repository_was_not_pruned_says_no_space_but_all_it_removed() {
+    // Catches the space said freed when only the clean-up failed, and
+    // extensions told left when all went.
+    let fake = Fake::new(
+        vec![Ok(builder_going())],
+        Ended::Done(Gone {
+            left: Vec::new(),
+            space_unknown: true,
+        }),
+    );
+    let (window, _, recorded, _) = on_apps_reading(fake, true, builder_of_the_system);
+    ask(&window, "Builder");
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| apps(window).get_toast());
+    assert!(!apps(&window).get_toast_freed_known());
+    assert!(!apps(&window).get_toast_partly());
+    let lines = recorded.lock().unwrap().clone();
+    assert_eq!(
+        (lines[0].packages.clone(), lines[0].freed_bytes),
+        (
+            vec![
+                "org.gnome.Builder".to_owned(),
+                "org.gnome.Builder.Locale".to_owned()
+            ],
+            None
+        )
+    );
+}
+
+#[test]
+fn what_stayed_and_a_history_not_written_are_said_in_one_sentence_each() {
+    // Catches two periods in a row when both are said.
+    let fake = Fake::new(
+        vec![Ok(builder_going())],
+        Ended::Done(Gone {
+            left: vec![BUILDER_LOCALE.to_owned()],
+            space_unknown: true,
+        }),
+    );
+    let (window, ..) = on_apps_reading(fake, false, builder_of_the_system);
+    ask(&window, "Builder");
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| apps(window).get_toast());
+    assert!(shows(
+        &window,
+        "Builder désinstallée. Certaines de ses extensions sont restées installées. Elle n'a pas pu être inscrite à l'historique."
+    ));
+}
+
+/// Builder alone, its size not measured at the check.
+fn builder_alone_unsized() -> Vec<Going> {
+    vec![Going {
+        bytes: None,
+        ..builder_going()[0].clone()
+    }]
+}
+
+#[test]
+fn a_flatpak_alone_unmeasured_keeps_the_row_s_estimate() {
+    // Catches a check that sizes nothing told « unknown » when the row knew.
+    let fake = Fake::new(
+        vec![Ok(builder_alone_unsized())],
+        Ended::Done(Gone::default()),
+    );
+    let (window, ..) = on_apps_reading(fake, true, builder_of_the_system);
+    ask(&window, "Builder");
+    assert!(shows(&window, "Place libérée : 2,0 Mo."));
+}
+
+#[test]
+fn a_flatpak_tried_again_starts_from_the_row_s_estimate_not_the_last_sum() {
+    // Catches a retry that shows the first check's sum (application and
+    // extensions) when the second check sizes nothing.
+    let fake = Fake::new(
+        vec![Ok(builder_going()), Ok(builder_alone_unsized())],
+        Ended::Failed(Why::NotAuthorized),
+    );
+    let (window, ..) = on_apps_reading(fake, true, builder_of_the_system);
+    ask(&window, "Builder");
+    assert!(shows(&window, "Place libérée : 3,0 Mo."));
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| step(window) == ui::UninstallStep::Failed);
+    button(&window, "Réessayer").invoke_accessible_default_action();
+    read_until(&window, |window| step(window) == ui::UninstallStep::Confirm);
+    assert!(shows(&window, "Place libérée : 2,0 Mo."));
 }

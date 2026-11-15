@@ -389,7 +389,7 @@ fn only_a_missing_service_is_no_packagekit() {
         .unwrap()
         .build(&())
         .unwrap();
-    for missing in UNKNOWN_SERVICE {
+    for missing in super::bus::UNKNOWN_SERVICE {
         let error = zbus::Error::MethodError(name(missing), None, message.clone());
         assert!(
             matches!(absent_or_bus(error), PackageKitError::Absent),

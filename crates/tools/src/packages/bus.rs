@@ -1,7 +1,18 @@
 //! A bus, the system's or the session's, joined by a socket only: an
 //! address that is not one (`unixexec:`) would run a program to reach it.
 
+use std::time::Duration;
+
 use zbus::address::Transport;
+
+/// The longest a call that answers at once waits, the daemon's start by the
+/// bus included; flatpak's client also bounds joining the bus by it.
+pub const CALL_WAIT: Duration = Duration::from_secs(10);
+/// What the bus answers for a service nobody provides.
+pub const UNKNOWN_SERVICE: [&str; 2] = [
+    "org.freedesktop.DBus.Error.ServiceUnknown",
+    "org.freedesktop.DBus.Error.NameHasNoOwner",
+];
 
 /// The bus at `address`, if it is reached by a socket only; otherwise the
 /// address refused.

@@ -30,14 +30,6 @@ const STATUS: &str = "Status";
 /// The signals that end a transaction or say why it failed.
 const FINISHED: &str = "Finished";
 const ERROR_CODE: &str = "ErrorCode";
-/// What the bus answers for a service nobody provides.
-const UNKNOWN_SERVICE: [&str; 2] = [
-    "org.freedesktop.DBus.Error.ServiceUnknown",
-    "org.freedesktop.DBus.Error.NameHasNoOwner",
-];
-/// The longest a call to the bus waits for its reply, the daemon's start
-/// by the bus included (a transaction's end is waited for apart).
-const CALL_WAIT: Duration = Duration::from_secs(10);
 /// How long the updates are listed at most: from the cache, seconds.
 const UPDATES_WAIT: Duration = Duration::from_mins(2);
 /// How long the package lists are downloaded at most: a slow network.
@@ -327,7 +319,8 @@ impl PackageKit {
             bus::socket_only(zbus::Address::system()?).map_err(PackageKitError::Transport)?;
         let connection = futures_lite::future::block_on(
             zbus::connection::Builder::address(address)?
-                .method_timeout(CALL_WAIT)
+                // A transaction's end is waited for apart, on its signals.
+                .method_timeout(bus::CALL_WAIT)
                 .build(),
         )?;
         Ok(Self {
@@ -634,7 +627,7 @@ fn given_up(ended: &Result<Vec<Package>, PackageKitError>) -> bool {
 /// absent).
 fn absent_or_bus(error: zbus::Error) -> PackageKitError {
     match &error {
-        zbus::Error::MethodError(name, ..) if UNKNOWN_SERVICE.contains(&name.as_str()) => {
+        zbus::Error::MethodError(name, ..) if bus::UNKNOWN_SERVICE.contains(&name.as_str()) => {
             PackageKitError::Absent
         }
         _ => PackageKitError::Bus(error),

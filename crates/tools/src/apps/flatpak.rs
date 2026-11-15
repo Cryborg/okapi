@@ -1,36 +1,175 @@
 //! The flatpaks installed, read from their installations' folders (no
 //! public interface lists them): `app/<id>/<arch>/<branch>/active` names
 //! the deployment in use, beside it, whose launcher says the name. Its size
-//! is measured, its data is `~/.var/app/<id>`.
+//! is measured, its data is `~/.var/app/<id>`. An application of the
+//! system's installation is uninstalled by flatpak's system helper, with the
+//! extensions that go with it ([`related`]); one of the user's installation
+//! is not (no service changes it).
 
 use std::collections::HashSet;
+use std::fmt;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use super::icons::IconRoots;
+use super::uninstall::{Target, Why};
 use super::{App, AppSize, Reading, Rest, Source, SourceReading, names_a_folder};
 
 /// The system's installation.
 pub const SYSTEM_INSTALLATION: &str = "/var/lib/flatpak";
 /// The user's, under the home folder.
 pub const USER_INSTALLATION: &str = ".local/share/flatpak";
+/// What describes a deployment: its runtime, its extensions...
+const METADATA: &str = "metadata";
+/// The most of a deployment's metadata read: such files are small, the cap
+/// bounds a hostile one.
+pub(crate) const METADATA_LIMIT: usize = 64 * 1024;
+/// The groups of the metadata that name an extension: `[Extension <name>]`,
+/// the name maybe followed by `@<tag>`.
+const EXTENSION_GROUP: &str = "Extension ";
+const TAG: char = '@';
+/// Extensions that always go with their application, whatever their keys.
+const ALWAYS_DELETED: [&str; 2] = [".Locale", ".Debug"];
+const KEY_AUTODELETE: &str = "autodelete";
+const KEY_LOCALE_SUBSET: &str = "locale-subset";
+const KEY_VERSION: &str = "version";
+const KEY_VERSIONS: &str = "versions";
+const KEY_SUBDIRECTORIES: &str = "subdirectories";
+/// What separates the items of a list, in a key file.
+const LIST_SEPARATOR: char = ';';
 
-/// The installations of this system: the system's and `home`'s.
-#[must_use]
-pub fn installations(home: Option<&Path>) -> Vec<PathBuf> {
-    std::iter::once(PathBuf::from(SYSTEM_INSTALLATION))
-        .chain(home.map(|home| home.join(USER_INSTALLATION)))
-        .collect()
+/// One installation of flatpaks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Installation {
+    pub path: PathBuf,
+    /// The system's: its helper uninstalls from it.
+    pub system: bool,
 }
 
-/// The names of the folders in `folder` that may be names, sorted.
+/// The installations of this system: the system's, then `home`'s.
+#[must_use]
+pub fn installations(home: Option<&Path>) -> Vec<Installation> {
+    std::iter::once(Installation {
+        path: PathBuf::from(SYSTEM_INSTALLATION),
+        system: true,
+    })
+    .chain(home.map(|home| Installation {
+        path: home.join(USER_INSTALLATION),
+        system: false,
+    }))
+    .collect()
+}
+
+/// What a reference names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefKind {
+    App,
+    Runtime,
+}
+
+/// A flatpak, as flatpak names it: `app/<id>/<arch>/<branch>` or
+/// `runtime/…`; each part a name read from a folder, never a path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlatpakRef {
+    kind: RefKind,
+    id: String,
+    arch: String,
+    branch: String,
+}
+
+impl FlatpakRef {
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    #[must_use]
+    pub fn arch(&self) -> &str {
+        &self.arch
+    }
+
+    /// An application's reference, if each part may name a folder.
+    #[must_use]
+    pub fn app(id: &str, arch: &str, branch: &str) -> Option<Self> {
+        Self::new(RefKind::App, id, arch, branch)
+    }
+
+    fn new(kind: RefKind, id: &str, arch: &str, branch: &str) -> Option<Self> {
+        [id, arch, branch]
+            .iter()
+            .all(|part| names_a_folder(part))
+            .then(|| Self {
+                kind,
+                id: id.to_owned(),
+                arch: arch.to_owned(),
+                branch: branch.to_owned(),
+            })
+    }
+
+    /// Its branch's folder in `installation`.
+    fn folder(&self, installation: &Path) -> PathBuf {
+        installation
+            .join(self.kind.folder())
+            .join(&self.id)
+            .join(&self.arch)
+            .join(&self.branch)
+    }
+}
+
+impl RefKind {
+    const fn folder(self) -> &'static str {
+        match self {
+            Self::App => "app",
+            Self::Runtime => "runtime",
+        }
+    }
+}
+
+impl fmt::Display for FlatpakRef {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{}/{}/{}/{}",
+            self.kind.folder(),
+            self.id,
+            self.arch,
+            self.branch
+        )
+    }
+}
+
+/// The folders of a folder that may be names, sorted, and whether each of
+/// its entries could be read.
+struct Listed {
+    names: Vec<String>,
+    whole: bool,
+}
+
+/// The names of the folders in `folder` that may be names: never a link
+/// (`app/<id>/current` is one to a branch). An entry that cannot be read
+/// (gone meanwhile) is passed over, the listing then not whole (what
+/// follows it may be lost too).
 ///
 /// # Errors
 ///
 /// The system's error listing it.
-fn subfolders(folder: &Path) -> std::io::Result<Vec<String>> {
+fn subfolders(folder: &Path) -> io::Result<Listed> {
     let mut names = Vec::new();
+    let mut whole = true;
     for entry in std::fs::read_dir(folder)? {
-        let name = entry?.file_name();
+        let read = entry.and_then(|entry| Ok((entry.file_name(), entry.file_type()?)));
+        let (name, kind) = match read {
+            Ok(read) => read,
+            Err(error) => {
+                tracing::warn!(folder = %folder.display(), %error, "an entry of a flatpak folder unreadable");
+                whole = false;
+                continue;
+            }
+        };
+        if !kind.is_dir() {
+            tracing::debug!(?name, folder = %folder.display(), "not a folder of flatpak: passed over");
+            continue;
+        }
         match name.to_str() {
             Some(name) if names_a_folder(name) => names.push(name.to_owned()),
             _ => {
@@ -39,133 +178,496 @@ fn subfolders(folder: &Path) -> std::io::Result<Vec<String>> {
         }
     }
     names.sort_unstable();
-    Ok(names)
+    Ok(Listed { names, whole })
 }
 
-/// [`subfolders`], none when it cannot be listed (traced).
-fn subfolders_or_none(folder: &Path) -> Vec<String> {
-    subfolders(folder)
-        .inspect_err(
-            |error| tracing::warn!(path = %folder.display(), %error, "flatpak folder not listed"),
-        )
-        .unwrap_or_default()
+/// [`subfolders`], none when it is gone; `partial` set when it, or an entry
+/// of it, cannot be read (traced).
+fn subfolders_or_none(folder: &Path, partial: &mut bool) -> Vec<String> {
+    match subfolders(folder) {
+        Ok(listed) => {
+            *partial |= !listed.whole;
+            listed.names
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => {
+            tracing::warn!(path = %folder.display(), %error, "flatpak folder not listed");
+            *partial = true;
+            Vec::new()
+        }
+    }
 }
 
 /// The deployment `active` names in `branch`, if it is a folder beside it
-/// and not a link: never followed elsewhere.
-fn deployment(branch: &Path) -> Option<PathBuf> {
+/// and not a link: never followed elsewhere. None when there is none, or one
+/// refused (traced).
+///
+/// # Errors
+///
+/// `active` could not be read.
+fn deployment(branch: &Path) -> io::Result<Option<PathBuf>> {
     let active = branch.join("active");
     let target = match std::fs::read_link(&active) {
         Ok(target) => target,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
             tracing::debug!(path = %active.display(), "no active deployment");
-            return None;
+            return Ok(None);
         }
         Err(error) => {
             tracing::warn!(path = %active.display(), %error, "the active deployment unreadable");
-            return None;
+            return Err(error);
         }
     };
     let Some(name) = target.to_str().filter(|name| names_a_folder(name)) else {
         tracing::warn!(path = %active.display(), target = %target.display(), "the active deployment is not beside it: refused");
-        return None;
+        return Ok(None);
     };
     let deployment = branch.join(name);
     let is_folder = std::fs::symlink_metadata(&deployment).is_ok_and(|metadata| metadata.is_dir());
     if !is_folder {
         tracing::warn!(path = %active.display(), "the active deployment is not a folder beside it");
-        return None;
+        return Ok(None);
     }
-    Some(deployment)
+    Ok(Some(deployment))
 }
 
-/// The flatpaks of `installations`, their data under `home`.
+/// The flatpaks of `installations`, their data under `home`. An
+/// installation, or a folder of one, that cannot be read is passed over and
+/// the reading said partial; it failed only when no installation there gave
+/// its list.
 #[must_use]
 pub fn read_flatpaks(
-    installations: &[PathBuf],
+    installations: &[Installation],
     home: Option<&Path>,
     reading: &Reading,
 ) -> SourceReading {
     let _span = tracing::info_span!("flatpaks").entered();
+    let mut found = Found::default();
     let mut present = Vec::new();
     for installation in installations {
-        match std::fs::metadata(installation) {
+        match std::fs::metadata(&installation.path) {
             Ok(metadata) if metadata.is_dir() => present.push(installation),
             Ok(_) => {
-                tracing::warn!(path = %installation.display(), "a flatpak installation that is no folder");
+                tracing::warn!(path = %installation.path.display(), "a flatpak installation that is no folder");
+                found.unread("not a folder".to_owned());
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => {
-                tracing::warn!(path = %installation.display(), %error, "flatpak installation unreadable");
-                return SourceReading::Failed(error.to_string());
+                // There, maybe: never said absent.
+                tracing::warn!(path = %installation.path.display(), %error, "flatpak installation unreadable");
+                found.unread(error.to_string());
             }
         }
     }
-    if present.is_empty() {
+    if present.is_empty() && found.failure.is_none() {
         tracing::info!("no flatpak installation");
         return SourceReading::Absent;
     }
-    let mut apps = Vec::new();
-    let mut rest = Rest::default();
-    let mut seen = HashSet::new();
+    let mut listed = 0_usize;
     for installation in present {
-        let app_folder = installation.join("app");
-        let ids = match subfolders(&app_folder) {
-            Ok(ids) => ids,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(error) => {
-                tracing::warn!(path = %app_folder.display(), %error, "flatpak installation unreadable");
-                return SourceReading::Failed(error.to_string());
-            }
-        };
-        for id in ids {
-            for arch in subfolders_or_none(&app_folder.join(&id)) {
-                for branch in subfolders_or_none(&app_folder.join(&id).join(&arch)) {
-                    let branch = app_folder.join(&id).join(&arch).join(&branch);
-                    let Some(deployment) = deployment(&branch) else {
-                        continue;
-                    };
-                    if seen.contains(&id) {
-                        tracing::warn!(id, branch = %branch.display(), "a flatpak installed twice: shown once");
+        match read_installation(installation, home, reading, &mut found) {
+            Ok(()) => listed += 1,
+            Err(error) => found.unread(error.to_string()),
+        }
+    }
+    let Found {
+        apps,
+        rest,
+        partial,
+        failure,
+        ..
+    } = found;
+    if listed == 0 {
+        let error = failure.unwrap_or_default();
+        tracing::warn!(%error, "no flatpak installation read");
+        return SourceReading::Failed(error);
+    }
+    tracing::info!(
+        apps = apps.len(),
+        rest = rest.count,
+        partial,
+        "flatpaks read"
+    );
+    SourceReading::Read {
+        apps,
+        rest,
+        partial,
+    }
+}
+
+/// What the installations read so far gave.
+#[derive(Default)]
+struct Found {
+    apps: Vec<App>,
+    rest: Rest,
+    /// The ids of the applications shown: one line each.
+    seen: HashSet<String>,
+    partial: bool,
+    /// Why the last installation not read was not.
+    failure: Option<String>,
+}
+
+impl Found {
+    /// An installation, or a part of one, not read, for `why`.
+    fn unread(&mut self, why: String) {
+        self.partial = true;
+        self.failure = Some(why);
+    }
+}
+
+/// Reads the flatpaks of `installation` into `found`.
+///
+/// # Errors
+///
+/// Its applications could not be listed (traced).
+fn read_installation(
+    installation: &Installation,
+    home: Option<&Path>,
+    reading: &Reading,
+    found: &mut Found,
+) -> io::Result<()> {
+    let app_folder = installation.path.join(RefKind::App.folder());
+    let ids = match subfolders(&app_folder) {
+        Ok(listed) => {
+            found.partial |= !listed.whole;
+            listed.names
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => {
+            tracing::warn!(path = %app_folder.display(), %error, "flatpak installation unreadable");
+            return Err(error);
+        }
+    };
+    for id in ids {
+        for arch in subfolders_or_none(&app_folder.join(&id), &mut found.partial) {
+            for branch in subfolders_or_none(&app_folder.join(&id).join(&arch), &mut found.partial)
+            {
+                let Some(reference) = FlatpakRef::app(&id, &arch, &branch) else {
+                    continue;
+                };
+                let deployment = match deployment(&reference.folder(&installation.path)) {
+                    Ok(Some(deployment)) => deployment,
+                    Ok(None) => continue,
+                    Err(_) => {
+                        found.partial = true;
                         continue;
                     }
-                    let export = deployment.join("export/share");
-                    // Its exported icons, beside its launcher: those under
-                    // the installation's exports are links to them.
-                    let roots = IconRoots {
-                        themes: vec![export.join("icons")],
-                        pixmaps: Vec::new(),
-                        absolute: vec![deployment.clone()],
-                    };
-                    let launcher = export.join("applications").join(format!("{id}.desktop"));
-                    let Some((name, icon)) = reading.launcher(&launcher, &roots) else {
-                        rest.count += 1;
-                        continue;
-                    };
-                    // The system's installation first, then the user's; a
-                    // branch, then another: one line per application, the
-                    // first shown in the menu.
-                    seen.insert(id.clone());
-                    apps.push(App {
-                        source: Source::Flatpak,
-                        id: id.clone(),
-                        package: id.clone(),
-                        name,
-                        version: String::new(),
-                        publisher: None,
-                        origin: None,
-                        icon,
-                        size: AppSize::ToMeasure(deployment),
-                        old_bytes: 0,
-                        old_versions: 0,
-                        data: home.map(|home| home.join(".var/app").join(&id)),
-                        system: false,
-                        target: None,
-                    });
+                };
+                if found.seen.contains(&id) {
+                    tracing::warn!(%reference, installation = %installation.path.display(), "a flatpak installed twice: shown once");
+                    continue;
+                }
+                let Some(app) = app_of(installation, reference, deployment, home, reading) else {
+                    found.rest.count += 1;
+                    continue;
+                };
+                // The system's installation first, then the user's; a
+                // branch, then another: one line per application, the first
+                // shown in the menu.
+                found.seen.insert(id.clone());
+                found.apps.push(app);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The application `reference` deployed at `deployment` in `installation`,
+/// if its launcher is shown in the menu; its data under `home`.
+fn app_of(
+    installation: &Installation,
+    reference: FlatpakRef,
+    deployment: PathBuf,
+    home: Option<&Path>,
+    reading: &Reading,
+) -> Option<App> {
+    let export = deployment.join("export/share");
+    // Its exported icons, beside its launcher: those under the
+    // installation's exports are links to them.
+    let roots = IconRoots {
+        themes: vec![export.join("icons")],
+        pixmaps: Vec::new(),
+        absolute: vec![deployment.clone()],
+    };
+    let id = reference.id.clone();
+    let launcher = export.join("applications").join(format!("{id}.desktop"));
+    let (name, icon) = reading.launcher(&launcher, &roots)?;
+    Some(App {
+        source: Source::Flatpak,
+        package: id.clone(),
+        name,
+        version: String::new(),
+        publisher: None,
+        origin: None,
+        icon,
+        size: AppSize::ToMeasure(deployment),
+        old_bytes: 0,
+        old_versions: 0,
+        data: home.map(|home| home.join(".var/app").join(&id)),
+        system: false,
+        target: installation.system.then_some(Target::Flatpak(reference)),
+        id,
+    })
+}
+
+/// What an extension of an application's metadata says when it goes with
+/// the application.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Extension {
+    name: String,
+    /// Its branches: its own, or the application's.
+    branches: Vec<String>,
+    /// Its own subdirectories are extensions too (`<name>.<x>`).
+    subdirectories: bool,
+}
+
+/// Whether a key file's `value` says true.
+fn says_true(value: Option<&str>) -> bool {
+    matches!(value, Some("true" | "1"))
+}
+
+/// The extensions of `metadata` that go with their application (whose
+/// branch is `branch`), as libflatpak tells them: marked `autodelete`, a
+/// subset of locales, or translations or debugging symbols by their name.
+fn extensions_deleted(metadata: &str, branch: &str) -> Vec<Extension> {
+    let mut groups: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    for line in metadata.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(group) = line
+            .strip_prefix('[')
+            .and_then(|line| line.strip_suffix(']'))
+        {
+            groups.push((group.to_owned(), Vec::new()));
+        } else if let (Some((_, keys)), Some((key, value))) =
+            (groups.last_mut(), line.split_once('='))
+        {
+            keys.push((key.trim().to_owned(), value.trim().to_owned()));
+        }
+    }
+    groups
+        .into_iter()
+        .filter_map(|(group, keys)| {
+            let tagged = group.strip_prefix(EXTENSION_GROUP)?;
+            let name = tagged.split_once(TAG).map_or(tagged, |(name, _)| name);
+            let value = |wanted: &str| {
+                keys.iter()
+                    .rev()
+                    .find(|(key, _)| key == wanted)
+                    .map(|(_, value)| value.as_str())
+            };
+            let deleted = says_true(value(KEY_AUTODELETE))
+                || says_true(value(KEY_LOCALE_SUBSET))
+                || ALWAYS_DELETED.iter().any(|suffix| name.ends_with(suffix));
+            if !deleted || !names_a_folder(name) {
+                return None;
+            }
+            let branches: Vec<String> = match (value(KEY_VERSIONS), value(KEY_VERSION)) {
+                (Some(versions), _) => versions
+                    .split(LIST_SEPARATOR)
+                    .filter(|version| !version.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+                (None, Some(version)) => vec![version.to_owned()],
+                (None, None) => vec![branch.to_owned()],
+            };
+            Some(Extension {
+                name: name.to_owned(),
+                branches,
+                subdirectories: says_true(value(KEY_SUBDIRECTORIES)),
+            })
+        })
+        .collect()
+}
+
+/// The deployment of `reference` in `installation`, none when it has none.
+///
+/// # Errors
+///
+/// [`Why::Unclear`] when it cannot be read (traced).
+fn deployed_or_unclear(
+    installation: &Path,
+    reference: &FlatpakRef,
+) -> Result<Option<PathBuf>, Why> {
+    deployment(&reference.folder(installation)).map_err(|_| Why::Unclear)
+}
+
+/// The ids of the runtimes of `installation`, listed whole, for the
+/// extensions of `app` whose subdirectories are extensions too.
+///
+/// # Errors
+///
+/// [`Why::Unclear`] when they cannot be listed whole (traced).
+fn runtime_ids(installation: &Path, app: &FlatpakRef) -> Result<Vec<String>, Why> {
+    match subfolders(&installation.join(RefKind::Runtime.folder())) {
+        Ok(Listed { names, whole: true }) => Ok(names),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        Ok(Listed { whole: false, .. }) => {
+            tracing::warn!(%app, "the runtimes not listed whole: what goes unknown");
+            Err(Why::Unclear)
+        }
+        Err(error) => {
+            tracing::warn!(%app, %error, "the runtimes not listed: what goes unknown");
+            Err(Why::Unclear)
+        }
+    }
+}
+
+/// An application deployed, and the extensions that go with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Related {
+    /// The application's deployment.
+    pub deployment: PathBuf,
+    /// Each extension that goes with it, and its deployment.
+    pub extensions: Vec<(FlatpakRef, PathBuf)>,
+}
+
+/// The application `app` deployed in `installation`, and the extensions
+/// installed there that go with it, read from its deployment's metadata now
+/// (none when it has no metadata).
+///
+/// # Errors
+///
+/// [`Why::NotFound`] when the application is no longer deployed;
+/// [`Why::Unclear`] when what goes cannot be told: its deployment, its
+/// metadata, an extension's or the runtimes' folder unreadable.
+pub fn related(installation: &Path, app: &FlatpakRef) -> Result<Related, Why> {
+    let deployed = match deployment(&app.folder(installation)) {
+        Ok(Some(deployed)) => deployed,
+        Ok(None) => {
+            tracing::info!(%app, "no longer deployed");
+            return Err(Why::NotFound);
+        }
+        Err(_) => return Err(Why::Unclear),
+    };
+    let metadata =
+        match okapi_platform::read_regular_capped(&deployed.join(METADATA), METADATA_LIMIT) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                tracing::info!(%app, "no metadata: no extension goes with it");
+                String::new()
+            }
+            Err(error) => {
+                tracing::warn!(%app, %error, "its metadata unreadable: what goes unknown");
+                return Err(Why::Unclear);
+            }
+        };
+    let extensions = extensions_deleted(&metadata, &app.branch);
+    let runtimes = if extensions.iter().any(|extension| extension.subdirectories) {
+        runtime_ids(installation, app)?
+    } else {
+        Vec::new()
+    };
+    let mut found: Vec<(FlatpakRef, PathBuf)> = Vec::new();
+    for extension in extensions {
+        for branch in &extension.branches {
+            let Some(base) = FlatpakRef::new(RefKind::Runtime, &extension.name, &app.arch, branch)
+            else {
+                continue;
+            };
+            // As libflatpak: its subdirectories only when it is not itself
+            // installed.
+            let candidates = if deployed_or_unclear(installation, &base)?.is_some() {
+                vec![base]
+            } else if extension.subdirectories {
+                let prefix = format!("{}.", extension.name);
+                runtimes
+                    .iter()
+                    .filter(|id| id.starts_with(&prefix))
+                    .filter_map(|id| FlatpakRef::new(RefKind::Runtime, id, &app.arch, branch))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            for reference in candidates {
+                if found.iter().any(|(known, _)| *known == reference) {
+                    continue;
+                }
+                if let Some(deployed) = deployed_or_unclear(installation, &reference)? {
+                    found.push((reference, deployed));
                 }
             }
         }
     }
-    tracing::info!(apps = apps.len(), rest = rest.count, "flatpaks read");
-    SourceReading::Read { apps, rest }
+    let references: Vec<String> = found
+        .iter()
+        .map(|(reference, _)| reference.to_string())
+        .collect();
+    tracing::info!(%app, ?references, "the extensions that go with it");
+    Ok(Related {
+        deployment: deployed,
+        extensions: found,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_reference_is_its_kind_id_arch_and_branch_each_a_name() {
+        let app = FlatpakRef::app("org.gimp.GIMP", "x86_64", "stable").unwrap();
+        assert_eq!(app.to_string(), "app/org.gimp.GIMP/x86_64/stable");
+        assert_eq!(
+            FlatpakRef::new(RefKind::Runtime, "org.gimp.GIMP.Locale", "x86_64", "stable")
+                .unwrap()
+                .to_string(),
+            "runtime/org.gimp.GIMP.Locale/x86_64/stable"
+        );
+        // Catches a part that would climb or add a level.
+        for (id, arch, branch) in [("..", "x", "y"), ("a/b", "x", "y"), ("a", "", "y")] {
+            assert_eq!(
+                FlatpakRef::app(id, arch, branch),
+                None,
+                "{id} {arch} {branch}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_extensions_that_go_are_those_libflatpak_deletes_on_their_branches() {
+        // Catches an extension kept that flatpak would remove, one removed
+        // that it keeps, a branch taken from the application when the
+        // extension names its own, a tag left in the name.
+        let metadata = "[Application]\nname=org.gimp.GIMP\n\n\
+            [Extension org.gimp.GIMP.Locale]\ndirectory=share/runtime/locale\nlocale-subset=true\n\n\
+            [Extension org.gimp.GIMP.Debug]\ndirectory=lib/debug\n\n\
+            [Extension org.gimp.GIMP.Plugin]\nautodelete=true\nversions=2.40;3\nsubdirectories=true\n\n\
+            [Extension org.freedesktop.Platform.GL@gl]\nversion=24.08\n\n\
+            [Extension org.gimp.GIMP.Help]\nautodelete=false\nversion=1\n\n\
+            [Extension org.gimp.GIMP.Data@x]\nautodelete=1\n\n\
+            [Extension org.gimp.GIMP.Fonts.Locale]\n\n\
+            [Extension org.gimp.GIMP.Both]\nautodelete=true\nversion=9\nversions=1;2;\n\n\
+            [Extension org.gimp.GIMP.Lang]\nlocale-subset=true\n\n\
+            [Extension org.gimp.GIMP.Twice]\nautodelete=true\nautodelete=false\n";
+        let names: Vec<(String, Vec<String>, bool)> = extensions_deleted(metadata, "stable")
+            .into_iter()
+            .map(|extension| (extension.name, extension.branches, extension.subdirectories))
+            .collect();
+        let owned = |values: &[&str]| values.iter().map(|value| (*value).to_owned()).collect();
+        assert_eq!(
+            names,
+            [
+                ("org.gimp.GIMP.Locale".to_owned(), owned(&["stable"]), false),
+                ("org.gimp.GIMP.Debug".to_owned(), owned(&["stable"]), false),
+                (
+                    "org.gimp.GIMP.Plugin".to_owned(),
+                    owned(&["2.40", "3"]),
+                    true
+                ),
+                ("org.gimp.GIMP.Data".to_owned(), owned(&["stable"]), false),
+                // By its name alone, keys or none.
+                (
+                    "org.gimp.GIMP.Fonts.Locale".to_owned(),
+                    owned(&["stable"]),
+                    false
+                ),
+                // `versions` first, an empty item dropped.
+                ("org.gimp.GIMP.Both".to_owned(), owned(&["1", "2"]), false),
+                // A subset of locales goes, whatever its name.
+                ("org.gimp.GIMP.Lang".to_owned(), owned(&["stable"]), false),
+            ]
+        );
+    }
 }

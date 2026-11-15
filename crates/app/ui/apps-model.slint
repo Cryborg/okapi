@@ -19,8 +19,9 @@ export enum AppData {
 
 export enum AppsFilter { all, deb, snap, flatpak }
 
-// How a source stands.
-export enum SourceShown { reading, read, absent, busy, failed }
+// How a source stands; `partial`: read, but a part of it could not be (a
+// flatpak installation).
+export enum SourceShown { reading, read, partial, absent, busy, failed }
 
 export enum AppOrigin { none, by-user, as-dependency, with-system }
 
@@ -60,9 +61,11 @@ export struct AppDetail {
     old-versions: int,
     total: Size,
     system: bool,
-    // A deb or a snap, not the system's.
+    // Okapi can uninstall it, and its own uninstallation does not run.
     uninstallable: bool,
     uninstalling: bool,
+    // A flatpak installed for the user's account only: no service removes it.
+    for-account-only: bool,
 }
 
 export enum UninstallStep { closed, checking, confirm, refused, running, failed }
@@ -83,6 +86,7 @@ export global Apps {
     in property <bool> has-flatpak;
     in property <SourceShown> debs;
     in property <SourceShown> snaps;
+    in property <SourceShown> flatpaks;
     // The packages and snap components that are no application.
     in property <int> rest-packages;
     in property <Size> rest-packages-size;
@@ -96,8 +100,9 @@ export global Apps {
 
     in property <UninstallStep> step;
     in property <string> target;
-    in property <bool> target-snap;
-    // What would go, by name: the package and those that depend on it.
+    in property <AppSource> target-source;
+    // What would go, by name: the package and what goes with it (packages
+    // that depend on it, a flatpak's extensions).
     in property <[string]> going;
     in property <Size> freed;
     // Every size of what goes is known.
@@ -121,6 +126,8 @@ export global Apps {
     in property <bool> toast-freed-known;
     // Its history line was written.
     in property <bool> toast-recorded;
+    // Some of what was shown stayed (a flatpak's extension).
+    in property <bool> toast-partly;
 
     callback refresh();
     callback searched();

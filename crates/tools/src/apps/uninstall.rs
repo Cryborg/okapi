@@ -1,12 +1,16 @@
 //! Uninstalling an application through the system's own services: a deb by
 //! `PackageKit` (simulated first, so that what goes is shown, then removed
-//! exactly as shown), a snap by snapd. Never a command run; the rights are
-//! asked by the service's polkit window. What the system needs never goes.
+//! exactly as shown), a snap by snapd, a flatpak of the system's
+//! installation by flatpak's system helper (with the extensions that go with
+//! it, found when it is checked). Never a command run; the rights are asked
+//! by the service's polkit window. What the system needs never goes.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 
+use super::Source;
 use super::dpkg::Status;
+use super::flatpak::FlatpakRef;
 
 /// What is to be uninstalled.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,12 +21,27 @@ pub enum Target {
     },
     /// `purge`: its data goes now, no copy kept.
     Snap { name: String, purge: bool },
+    /// In the system's installation, the only one its helper changes.
+    Flatpak(FlatpakRef),
 }
 
-/// A package that would go with it.
+impl Target {
+    /// Who installed it.
+    #[must_use]
+    pub const fn source(&self) -> Source {
+        match self {
+            Self::Deb { .. } => Source::Deb,
+            Self::Snap { .. } => Source::Snap,
+            Self::Flatpak(_) => Source::Flatpak,
+        }
+    }
+}
+
+/// A package that would go with it (a flatpak's extension).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Going {
-    /// The service's own identifier of it, passed back to remove it.
+    /// The service's own identifier of it, passed back to remove it (a
+    /// flatpak's reference).
     pub id: String,
     pub name: String,
     pub architecture: String,
@@ -41,6 +60,7 @@ impl Going {
                 architecture,
             } => self.name == *package && same_architecture(&self.architecture, architecture),
             Target::Snap { name, .. } => self.name == *name,
+            Target::Flatpak(reference) => self.id == reference.to_string(),
         }
     }
 }
@@ -78,7 +98,8 @@ pub enum Why {
     NotFound,
     /// What would go cannot be told for sure (dpkg's state unreadable, an
     /// answer of the service not read whole, a removal that would also
-    /// install or change packages): nothing removed.
+    /// install or change packages, a flatpak's deployment or metadata
+    /// unreadable): nothing removed.
     Unclear,
     /// The service refused, in its own words.
     Service(String),
@@ -97,16 +118,29 @@ pub enum Step {
 /// How an uninstallation ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ended {
-    Done,
+    Done(Gone),
     Cancelled,
     Failed(Why),
+}
+
+/// What stayed of what was shown once an uninstallation is done: a deb's
+/// and a snap's leave nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Gone {
+    /// What was shown and not removed (a flatpak's extension), by its
+    /// [`Going::id`].
+    pub left: Vec<String>,
+    /// The space is not known to be free (flatpak's repository not pruned,
+    /// or a part left).
+    pub space_unknown: bool,
 }
 
 /// What uninstalls: the system's services, or a test's. Never called
 /// directly: [`check`] and [`remove_as_shown`] hold the guards.
 pub trait Uninstaller: Send + Sync {
     /// What uninstalling `target` would take with it, as the service says
-    /// (the application first).
+    /// (for a flatpak, as its deployment's metadata says), the application
+    /// first.
     ///
     /// # Errors
     ///
@@ -120,8 +154,8 @@ pub trait Uninstaller: Send + Sync {
     /// [`Why`] it cannot be read.
     fn status(&self) -> Result<Status, Why>;
 
-    /// Removes `target` and exactly `going`, telling `steps` how it goes,
-    /// cancelled when `cancel` is set and it still can be; no sender of
+    /// Removes `target` and exactly `going`, telling `steps` how it goes
+    /// and cancelled when `cancel` is set, when the service can; no sender of
     /// `steps` is kept once it returns (its end is waited for). No guard
     /// here.
     fn remove(
@@ -172,7 +206,8 @@ pub enum Removal {
 }
 
 /// Removes `target` if what would go is still `going`, as shown and
-/// confirmed (a deb is checked once more; a snap has no list that changes).
+/// confirmed (a deb is checked once more; a snap has no list that changes;
+/// a flatpak's extensions are asked as shown, one already gone counts gone).
 pub fn remove_as_shown(
     uninstaller: &dyn Uninstaller,
     target: &Target,
@@ -281,7 +316,7 @@ mod tests {
             _cancel: &AtomicBool,
         ) -> Ended {
             self.removed.fetch_add(1, Ordering::Relaxed);
-            Ended::Done
+            Ended::Done(Gone::default())
         }
     }
 
@@ -320,7 +355,7 @@ mod tests {
         let service = Service::new(vec![Ok(shown.to_vec())]);
         assert_eq!(
             removal(&service, &deb(), &shown),
-            Removal::Ended(Ended::Done)
+            Removal::Ended(Ended::Done(Gone::default()))
         );
         assert_eq!(service.removed.load(Ordering::Relaxed), 1);
 
@@ -351,7 +386,7 @@ mod tests {
         let service = Service::new(Vec::new());
         assert_eq!(
             removal(&service, &snap, &[going("x")]),
-            Removal::Ended(Ended::Done)
+            Removal::Ended(Ended::Done(Gone::default()))
         );
         assert_eq!(service.simulated.load(Ordering::Relaxed), 0);
     }
@@ -396,7 +431,7 @@ mod tests {
         let service = Service::new(vec![Ok(vec![going("gimp"), going("other"), going("help")])]);
         assert_eq!(
             removal(&service, &deb(), &shown),
-            Removal::Ended(Ended::Done)
+            Removal::Ended(Ended::Done(Gone::default()))
         );
     }
 

@@ -920,16 +920,34 @@ fn apps(app: &ui::AppWindow, detail: bool, asking: bool) {
             system: false,
             uninstallable: true,
             uninstalling: false,
+            for_account_only: false,
         });
     }
     if asking {
         apps.set_target("Android Studio".into());
-        apps.set_target_snap(true);
+        apps.set_target_source(ui::AppSource::Snap);
         apps.set_freed(size(3, 2, ui::SizeUnit::Gigabyte));
         apps.set_has_data(true);
         apps.set_data_size(size(2, 1, ui::SizeUnit::Gigabyte));
         apps.set_step(ui::UninstallStep::Confirm);
     }
+}
+
+/// The uninstallation of a flatpak asked, with its translations.
+fn apps_flatpak(app: &ui::AppWindow) {
+    apps(app, false, false);
+    let apps = app.global::<ui::Apps>();
+    apps.set_has_flatpak(true);
+    apps.set_flatpaks(ui::SourceShown::Read);
+    apps.set_target("GIMP".into());
+    apps.set_target_source(ui::AppSource::Flatpak);
+    apps.set_going(ModelRc::new(VecModel::from(vec![
+        slint::SharedString::from("org.gimp.GIMP"),
+        slint::SharedString::from("org.gimp.GIMP.Locale"),
+    ])));
+    apps.set_freed_known(true);
+    apps.set_freed(size(412, 0, ui::SizeUnit::Megabyte));
+    apps.set_step(ui::UninstallStep::Confirm);
 }
 
 fn main() {
@@ -1001,8 +1019,9 @@ fn main() {
         "apps" => apps(&app, true, false),
         "apps-small" => apps(&app, false, false),
         "apps-uninstall" => apps(&app, true, true),
+        "apps-uninstall-flatpak" => apps_flatpak(&app),
         other => panic!(
-            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall"
+            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

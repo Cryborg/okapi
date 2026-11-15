@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 
 use okapi_rules::Language;
 
-use super::flatpak::read_flatpaks;
+use super::flatpak::{FlatpakRef, Installation, installations, read_flatpaks, related};
 use super::icons::IconRoots;
 use super::snap::read_snaps;
+use super::uninstall::{Target, Why};
 use super::*;
 
 fn write(path: &Path, text: &str) {
@@ -33,7 +34,7 @@ fn launcher(name: &str, extra: &str) -> String {
 
 fn apps(read: SourceReading) -> (Vec<App>, Rest) {
     match read {
-        SourceReading::Read { apps, rest } => (apps, rest),
+        SourceReading::Read { apps, rest, .. } => (apps, rest),
         other => panic!("{other:?}"),
     }
 }
@@ -249,6 +250,24 @@ fn deploy(installation: &Path, id: &str, target: &str) -> PathBuf {
     deployment
 }
 
+fn system_installation(path: &Path) -> Installation {
+    Installation {
+        path: path.to_path_buf(),
+        system: true,
+    }
+}
+
+fn user_installation(path: &Path) -> Installation {
+    Installation {
+        path: path.to_path_buf(),
+        system: false,
+    }
+}
+
+fn both(system: &Path, user: &Path) -> [Installation; 2] {
+    [system_installation(system), user_installation(user)]
+}
+
 #[test]
 fn a_flatpak_is_read_from_its_active_deployment_never_through_a_link_elsewhere() {
     let root = tempfile::tempdir().unwrap();
@@ -260,18 +279,32 @@ fn a_flatpak_is_read_from_its_active_deployment_never_through_a_link_elsewhere()
     std::os::unix::fs::symlink(&gimp, linked.parent().unwrap().join("linked")).unwrap();
     let home = root.path().join("home");
     let (apps, rest) = apps(read_flatpaks(
-        &[system, user, root.path().join("none")],
+        &[
+            system_installation(&system),
+            user_installation(&user),
+            user_installation(&root.path().join("none")),
+        ],
         Some(&home),
         &reading(root.path()),
     ));
     assert_eq!(apps.len(), 1, "{apps:?}");
     assert_eq!(apps[0].id, "org.gimp.GIMP");
     assert_eq!(apps[0].size, AppSize::ToMeasure(gimp), "measured");
-    assert_eq!(apps[0].target, None, "never uninstalled yet");
+    assert_eq!(
+        apps[0].target,
+        Some(Target::Flatpak(
+            FlatpakRef::app("org.gimp.GIMP", "x86_64", "stable").unwrap()
+        )),
+        "the system's installation's"
+    );
     assert_eq!(apps[0].data, Some(home.join(".var/app/org.gimp.GIMP")));
     assert_eq!(rest, Rest::default());
     assert_eq!(
-        read_flatpaks(&[root.path().join("none")], None, &reading(root.path())),
+        read_flatpaks(
+            &[user_installation(&root.path().join("none"))],
+            None,
+            &reading(root.path())
+        ),
         SourceReading::Absent
     );
 }
@@ -312,6 +345,7 @@ fn a_slow_source_never_holds_the_others_and_each_says_its_folders_then_its_end()
     let quick: Reader = Box::new(move || SourceReading::Read {
         apps: vec![quick_app],
         rest: Rest::default(),
+        partial: false,
     });
     let (sink, arrivals) = mpsc::channel();
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -453,10 +487,11 @@ fn an_active_deployment_elsewhere_is_never_read_even_when_it_exists() {
         let _ = fs::remove_file(branch.join("active"));
         std::os::unix::fs::symlink(target, branch.join("active")).unwrap();
         assert_eq!(
-            read_flatpaks(std::slice::from_ref(&user), None, &reading(root.path())),
+            read_flatpaks(&[user_installation(&user)], None, &reading(root.path())),
             SourceReading::Read {
                 apps: Vec::new(),
-                rest: Rest::default()
+                rest: Rest::default(),
+                partial: false,
             },
             "{target}"
         );
@@ -470,7 +505,11 @@ fn a_flatpak_installed_twice_is_one_line() {
     let user = root.path().join("user");
     let in_system = deploy(&system, "org.gimp.GIMP", "abc123");
     deploy(&user, "org.gimp.GIMP", "abc123");
-    let (found, _) = apps(read_flatpaks(&[system, user], None, &reading(root.path())));
+    let (found, _) = apps(read_flatpaks(
+        &both(&system, &user),
+        None,
+        &reading(root.path()),
+    ));
     assert_eq!(found.len(), 1);
     assert_eq!(
         found[0].size,
@@ -490,6 +529,7 @@ fn a_reading_stopped_sends_its_source_and_measures_nothing() {
     let reader: Reader = Box::new(move || SourceReading::Read {
         apps: vec![measured],
         rest: Rest::default(),
+        partial: false,
     });
     let (sink, arrivals) = mpsc::channel();
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -531,7 +571,11 @@ fn a_flatpak_first_without_a_launcher_never_hides_its_other_install() {
         &launcher("GIMP", "NoDisplay=true"),
     );
     let in_user = deploy(&user, "org.gimp.GIMP", "abc123");
-    let (found, rest) = apps(read_flatpaks(&[system, user], None, &reading(root.path())));
+    let (found, rest) = apps(read_flatpaks(
+        &both(&system, &user),
+        None,
+        &reading(root.path()),
+    ));
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].size, AppSize::ToMeasure(in_user));
     assert_eq!(rest.count, 1);
@@ -545,10 +589,376 @@ fn a_flatpak_installation_unreadable_is_a_failure_never_none() {
     let installation = closed.join("flatpak");
     fs::create_dir_all(&installation).unwrap();
     fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).unwrap();
-    let read = read_flatpaks(&[installation], None, &reading(root.path()));
+    let read = read_flatpaks(
+        &[user_installation(&installation)],
+        None,
+        &reading(root.path()),
+    );
     fs::set_permissions(&closed, fs::Permissions::from_mode(0o700)).unwrap();
     // Root reads through anything: then it is simply read.
     if !matches!(read, SourceReading::Read { .. }) {
         assert!(matches!(read, SourceReading::Failed(_)), "{read:?}");
     }
+}
+
+#[test]
+fn only_the_system_s_installation_gives_a_flatpak_its_target() {
+    // Catches a button for an installation the helper cannot change, and
+    // installations whose kinds were swapped.
+    let home = Path::new("/home/f");
+    assert_eq!(
+        installations(Some(home)),
+        [
+            system_installation(Path::new(flatpak::SYSTEM_INSTALLATION)),
+            user_installation(&home.join(flatpak::USER_INSTALLATION)),
+        ]
+    );
+    let root = tempfile::tempdir().unwrap();
+    let user = root.path().join("user");
+    deploy(&user, "org.gimp.GIMP", "abc123");
+    let (found, _) = apps(read_flatpaks(
+        &[user_installation(&user)],
+        None,
+        &reading(root.path()),
+    ));
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].target, None);
+}
+
+/// Whether the tests run as root, who reads through any permission.
+fn as_root() -> bool {
+    okapi_platform::running_as_root()
+}
+
+/// Closes `folder` to everyone while `read` runs.
+fn closed<T>(folder: &Path, read: impl FnOnce() -> T) -> T {
+    use std::os::unix::fs::PermissionsExt as _;
+    fs::set_permissions(folder, fs::Permissions::from_mode(0o000)).unwrap();
+    let read = read();
+    fs::set_permissions(folder, fs::Permissions::from_mode(0o700)).unwrap();
+    read
+}
+
+#[test]
+fn a_part_of_an_installation_unreadable_makes_the_reading_partial_never_failed() {
+    // Catches one unreadable folder failing the whole source, and a reading
+    // that says itself whole with applications missing.
+    if as_root() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    let user = root.path().join("user");
+    deploy(&system, "org.gimp.GIMP", "abc123");
+    deploy(&system, "org.inkscape.Inkscape", "abc123");
+    deploy(&user, "org.example.Hidden", "abc123");
+    for closed_folder in [
+        user.join("app"),
+        user.join("app/org.example.Hidden"),
+        user.join("app/org.example.Hidden/x86_64"),
+        user.clone(),
+    ] {
+        let read = closed(&closed_folder, || {
+            read_flatpaks(&both(&system, &user), None, &reading(root.path()))
+        });
+        let SourceReading::Read { apps, partial, .. } = read else {
+            panic!("{}: {read:?}", closed_folder.display());
+        };
+        assert_eq!(apps.len(), 2, "{}", closed_folder.display());
+        assert!(partial, "{}", closed_folder.display());
+    }
+    let read = read_flatpaks(&both(&system, &user), None, &reading(root.path()));
+    assert!(matches!(read, SourceReading::Read { partial: false, .. }));
+    // Alone and unreadable, an installation is a failure, never none.
+    let read = closed(root.path(), || {
+        read_flatpaks(&[user_installation(&user)], None, &reading(root.path()))
+    });
+    assert!(matches!(read, SourceReading::Failed(_)), "{read:?}");
+}
+
+#[test]
+fn a_link_among_the_architectures_or_branches_is_never_read() {
+    // Catches `app/<id>/current` followed to another branch, or anywhere.
+    let root = tempfile::tempdir().unwrap();
+    let user = root.path().join("user");
+    let elsewhere = root.path().join("elsewhere");
+    deploy(&elsewhere, "org.example.Away", "abc123");
+    let away = user.join("app/org.example.Away");
+    fs::create_dir_all(&away).unwrap();
+    std::os::unix::fs::symlink(
+        elsewhere.join("app/org.example.Away/x86_64"),
+        away.join("current"),
+    )
+    .unwrap();
+    let branches = user.join("app/org.example.Branch/x86_64");
+    fs::create_dir_all(&branches).unwrap();
+    std::os::unix::fs::symlink(
+        elsewhere.join("app/org.example.Away/x86_64/stable"),
+        branches.join("stable"),
+    )
+    .unwrap();
+    let (found, _) = apps(read_flatpaks(
+        &[user_installation(&user)],
+        None,
+        &reading(root.path()),
+    ));
+    assert_eq!(found, Vec::new());
+}
+
+/// An extension of `id` deployed in `installation`, on `branch`.
+fn deploy_runtime(installation: &Path, id: &str, branch: &str) {
+    let folder = installation
+        .join("runtime")
+        .join(id)
+        .join("x86_64")
+        .join(branch);
+    fs::create_dir_all(folder.join("abc123")).unwrap();
+    std::os::unix::fs::symlink("abc123", folder.join("active")).unwrap();
+}
+
+#[test]
+fn the_extensions_that_go_with_a_flatpak_are_those_marked_and_installed() {
+    // Catches an extension named but not installed asked to go, a
+    // subdirectory of an extension forgotten, and another application's
+    // extension taken.
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    let deployment = deploy(&system, "org.gimp.GIMP", "abc123");
+    write(
+        &deployment.join("metadata"),
+        "[Application]\nname=org.gimp.GIMP\n\n\
+         [Extension org.gimp.GIMP.Locale]\nlocale-subset=true\n\n\
+         [Extension org.gimp.GIMP.Debug]\n\n\
+         [Extension org.gimp.GIMP.Plugin]\nautodelete=true\nversion=3\nsubdirectories=true\n\n\
+         [Extension org.gimp.GIMP.Help]\nversion=3\n\n\
+         [Extension org.gimp.GIMP.Filters]\nautodelete=true\nsubdirectories=true\n\n\
+         [Extension org.gimp.GIMP.Theme]\nautodelete=true\nversions=stable;stable\n",
+    );
+    // An extension installed itself: its subdirectories are not looked for
+    // (libflatpak's rule).
+    deploy_runtime(&system, "org.gimp.GIMP.Filters", "stable");
+    deploy_runtime(&system, "org.gimp.GIMP.Filters.Extra", "stable");
+    // Named twice: asked once.
+    deploy_runtime(&system, "org.gimp.GIMP.Theme", "stable");
+    deploy_runtime(&system, "org.gimp.GIMP.Locale", "stable");
+    deploy_runtime(&system, "org.gimp.GIMP.Plugin.Resynthesizer", "3");
+    deploy_runtime(&system, "org.gimp.GIMP.Plugin.Old", "2");
+    // Its name only begins as the extension's: another extension.
+    deploy_runtime(&system, "org.gimp.GIMP.PluginX", "3");
+    deploy_runtime(&system, "org.gimp.GIMP.Help", "3");
+    deploy_runtime(&system, "org.inkscape.Inkscape.Locale", "stable");
+    let app = FlatpakRef::app("org.gimp.GIMP", "x86_64", "stable").unwrap();
+    let names: Vec<String> = related(&system, &app)
+        .unwrap()
+        .extensions
+        .iter()
+        .map(|(reference, _)| reference.to_string())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "runtime/org.gimp.GIMP.Locale/x86_64/stable",
+            "runtime/org.gimp.GIMP.Plugin.Resynthesizer/x86_64/3",
+            "runtime/org.gimp.GIMP.Filters/x86_64/stable",
+            "runtime/org.gimp.GIMP.Theme/x86_64/stable",
+        ]
+    );
+    // No metadata: it goes alone.
+    fs::remove_file(deployment.join("metadata")).unwrap();
+    assert_eq!(
+        related(&system, &app).map(|related| related.extensions.len()),
+        Ok(0)
+    );
+    // No longer deployed: not found, nothing to remove.
+    fs::remove_file(system.join("app/org.gimp.GIMP/x86_64/stable/active")).unwrap();
+    assert_eq!(related(&system, &app), Err(Why::NotFound));
+}
+
+#[test]
+fn a_part_unreadable_even_to_root_makes_the_reading_partial() {
+    // Catches an installation, an application folder or an `active` that
+    // cannot be read taken for nothing there (no permission involved: these
+    // run as root too).
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    deploy(&system, "org.gimp.GIMP", "abc123");
+    deploy(&system, "org.inkscape.Inkscape", "abc123");
+    let partial_with = |installations: &[Installation]| {
+        let SourceReading::Read { apps, partial, .. } =
+            read_flatpaks(installations, None, &reading(root.path()))
+        else {
+            panic!("read");
+        };
+        (apps.len(), partial)
+    };
+    // The user's installation under a file: its state unreadable.
+    let blocked = root.path().join("blocked");
+    fs::write(&blocked, "").unwrap();
+    assert_eq!(
+        partial_with(&[
+            system_installation(&system),
+            user_installation(&blocked.join("flatpak")),
+        ]),
+        (2, true),
+        "an installation unreadable beside one read"
+    );
+    // Its applications' folder a file.
+    let user = root.path().join("user");
+    fs::create_dir_all(&user).unwrap();
+    fs::write(user.join("app"), "").unwrap();
+    assert_eq!(
+        partial_with(&both(&system, &user)),
+        (2, true),
+        "applications not listed"
+    );
+    // An `active` that is no link.
+    let other = root.path().join("other");
+    let branch = other.join("app/org.example.Odd/x86_64/stable");
+    fs::create_dir_all(&branch).unwrap();
+    fs::write(branch.join("active"), "").unwrap();
+    assert_eq!(
+        partial_with(&both(&system, &other)),
+        (2, true),
+        "a deployment unreadable"
+    );
+    assert_eq!(partial_with(&[system_installation(&system)]), (2, false));
+}
+
+#[test]
+fn what_goes_with_a_flatpak_unclear_is_never_told_nothing() {
+    // Catches a deployment, a metadata, an extension or the runtimes that
+    // cannot be read told « no extension »: they would stay unseen.
+    let app = FlatpakRef::app("org.gimp.GIMP", "x86_64", "stable").unwrap();
+    let unclear = |prepare: &dyn Fn(&Path, &Path)| {
+        let root = tempfile::tempdir().unwrap();
+        let system = root.path().join("system");
+        let deployment = deploy(&system, "org.gimp.GIMP", "abc123");
+        prepare(&system, &deployment);
+        related(&system, &app)
+    };
+    // The application's `active` no link.
+    assert_eq!(
+        unclear(&|system, _| {
+            let active = system.join("app/org.gimp.GIMP/x86_64/stable/active");
+            fs::remove_file(&active).unwrap();
+            fs::write(&active, "").unwrap();
+        }),
+        Err(Why::Unclear)
+    );
+    // Its metadata a folder, or too long.
+    assert_eq!(
+        unclear(&|_, deployment| fs::create_dir(deployment.join("metadata")).unwrap()),
+        Err(Why::Unclear)
+    );
+    assert_eq!(
+        unclear(&|_, deployment| {
+            fs::write(
+                deployment.join("metadata"),
+                vec![b'#'; flatpak::METADATA_LIMIT + 1],
+            )
+            .unwrap();
+        }),
+        Err(Why::Unclear)
+    );
+    // An extension whose `active` is no link.
+    assert_eq!(
+        unclear(&|system, deployment| {
+            write(
+                &deployment.join("metadata"),
+                "[Extension org.gimp.GIMP.Locale]\n",
+            );
+            let branch = system.join("runtime/org.gimp.GIMP.Locale/x86_64/stable");
+            fs::create_dir_all(&branch).unwrap();
+            fs::write(branch.join("active"), "").unwrap();
+        }),
+        Err(Why::Unclear)
+    );
+    // The runtimes not listable (still crossed), when subdirectories count
+    // and the extension itself is not installed.
+    if !as_root() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = tempfile::tempdir().unwrap();
+        let system = root.path().join("system");
+        let deployment = deploy(&system, "org.gimp.GIMP", "abc123");
+        write(
+            &deployment.join("metadata"),
+            "[Extension org.gimp.GIMP.Plugin]\nautodelete=true\nsubdirectories=true\n",
+        );
+        deploy_runtime(&system, "org.gimp.GIMP.Plugin.Resynthesizer", "stable");
+        let runtime = system.join("runtime");
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o300)).unwrap();
+        let related = related(&system, &app);
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(related, Err(Why::Unclear));
+    }
+    // No runtime at all: nothing more goes.
+    assert_eq!(
+        unclear(&|_, deployment| {
+            write(
+                &deployment.join("metadata"),
+                "[Extension org.gimp.GIMP.Plugin]\nautodelete=true\nsubdirectories=true\n",
+            );
+        })
+        .map(|related| related.extensions.len()),
+        Ok(0)
+    );
+}
+
+#[test]
+fn an_installation_that_is_a_file_is_never_said_absent() {
+    // Catches an installation path holding a file taken for no installation.
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    deploy(&system, "org.gimp.GIMP", "abc123");
+    deploy(&system, "org.inkscape.Inkscape", "abc123");
+    let file = root.path().join("file");
+    fs::write(&file, "").unwrap();
+    let read = read_flatpaks(
+        &[system_installation(&system), user_installation(&file)],
+        None,
+        &reading(root.path()),
+    );
+    assert!(
+        matches!(&read, SourceReading::Read { apps, partial: true, .. } if apps.len() == 2),
+        "{read:?}"
+    );
+    let read = read_flatpaks(&[user_installation(&file)], None, &reading(root.path()));
+    assert!(matches!(read, SourceReading::Failed(_)), "{read:?}");
+}
+
+#[test]
+fn a_folder_unread_is_never_forgotten_by_one_read_after_it() {
+    // Catches `partial` set by one folder and reset by the next one read.
+    if as_root() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let user = root.path().join("user");
+    deploy(&user, "org.aaa.First", "abc123");
+    deploy(&user, "org.zzz.Last", "abc123");
+    let read = closed(&user.join("app/org.aaa.First/x86_64"), || {
+        read_flatpaks(&[user_installation(&user)], None, &reading(root.path()))
+    });
+    assert!(
+        matches!(&read, SourceReading::Read { apps, partial: true, .. } if apps.len() == 1),
+        "{read:?}"
+    );
+}
+
+#[test]
+fn a_subextension_unreadable_is_never_told_nothing() {
+    // Catches a subextension whose deployment cannot be read passed over:
+    // it would stay unseen.
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    let deployment = deploy(&system, "org.gimp.GIMP", "abc123");
+    write(
+        &deployment.join("metadata"),
+        "[Extension org.gimp.GIMP.Plugin]\nautodelete=true\nsubdirectories=true\n",
+    );
+    let branch = system.join("runtime/org.gimp.GIMP.Plugin.Odd/x86_64/stable");
+    fs::create_dir_all(&branch).unwrap();
+    fs::write(branch.join("active"), "").unwrap();
+    let app = FlatpakRef::app("org.gimp.GIMP", "x86_64", "stable").unwrap();
+    assert_eq!(related(&system, &app), Err(Why::Unclear));
 }

@@ -79,7 +79,8 @@ pub struct App {
     pub data: Option<PathBuf>,
     /// The system needs it: never offered to uninstall.
     pub system: bool,
-    /// How it is uninstalled, when Okapi can (never a flatpak yet).
+    /// How it is uninstalled, when Okapi can (never a flatpak of the user's
+    /// installation).
     pub target: Option<uninstall::Target>,
 }
 
@@ -207,6 +208,9 @@ pub enum SourceReading {
     Read {
         apps: Vec<App>,
         rest: Rest,
+        /// A part of it could not be read (a flatpak installation): some
+        /// applications may be missing.
+        partial: bool,
     },
     /// Not on this system.
     Absent,
@@ -429,7 +433,11 @@ pub fn read_debs(places: &DebPlaces, reading: &Reading) -> SourceReading {
         rest_without_size = without_size,
         "debs read"
     );
-    SourceReading::Read { apps, rest }
+    SourceReading::Read {
+        apps,
+        rest,
+        partial: false,
+    }
 }
 
 /// Whether `name` may name a file of a folder: no path, no `.` nor `..`,

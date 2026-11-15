@@ -30,6 +30,10 @@ zbus = { workspace = true, optional = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 
+# A fake flatpak helper on a socket pair, for the tests of its client.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+zbus = { workspace = true, features = ["p2p"] }
+
 [features]
 # What the dashboard reads of the system, and the thread that reads it.
 monitor = ["dep:okapi-platform", "dep:okapi-rules", "dep:tracing"]
@@ -37,8 +41,8 @@ monitor = ["dep:okapi-platform", "dep:okapi-rules", "dep:tracing"]
 disk-usage = ["dep:okapi-platform", "dep:thiserror", "dep:tracing"]
 # Copies of one content in the user's folders, read on threads of their own.
 duplicates = ["dep:okapi-platform", "dep:okapi-engine", "dep:blake3", "dep:jiff", "dep:thiserror", "dep:tracing"]
-# The package managers' daemons, asked and never run: PackageKit on the
-# system bus, snapd on its socket.
+# The package managers' daemons, asked and never run: PackageKit and
+# flatpak's system helper on the system bus, snapd on its socket.
 packages = [
     "dep:async-io",
     "dep:futures-lite",

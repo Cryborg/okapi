@@ -156,7 +156,11 @@ pub fn read_snaps(
         without_size,
         "snaps read"
     );
-    SourceReading::Read { apps, rest }
+    SourceReading::Read {
+        apps,
+        rest,
+        partial: false,
+    }
 }
 
 #[cfg(test)]

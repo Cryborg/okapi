@@ -293,6 +293,37 @@ fn the_messages_of_the_bus_become_signals() {
 }
 
 #[test]
+fn an_update_s_severity_is_no_part_of_its_kind() {
+    // Catches a kind read whole: apt sends a security update as `0x80008`
+    // (its severity in the upper half), which no kind equals.
+    let security = info::SECURITY | info::SECURITY << 16;
+    assert_eq!(
+        signal_of(&signal(
+            "Package",
+            TRANSACTION,
+            &(security, "openssl;3.5.1;amd64;security", "TLS")
+        )),
+        Some(Signal::Package(Package {
+            info: info::SECURITY,
+            id: "openssl;3.5.1;amd64;security".into(),
+            summary: "TLS".into(),
+        }))
+    );
+    assert_eq!(
+        signal_of(&signal(
+            "Packages",
+            TRANSACTION,
+            &(vec![(security, "curl;8;amd64;x", "")],)
+        )),
+        Some(Signal::Packages(vec![Package {
+            info: info::SECURITY,
+            id: "curl;8;amd64;x".into(),
+            summary: String::new()
+        }]))
+    );
+}
+
+#[test]
 fn a_package_that_could_not_be_read_makes_the_list_unknown() {
     // Catches a list short of a package, taken for the whole list: one
     // security update lost would say « Tout est à jour ».

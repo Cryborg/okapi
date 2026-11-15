@@ -286,10 +286,25 @@ pub fn read_reboot(sources: &dyn Sources) -> Option<RebootRequired> {
 
 /// The packages PackageKit names, sorted; none when an identifier cannot be
 /// read (traced): a list short of one would pass for the whole. A name met
-/// for two architectures carries its own.
+/// for two architectures carries its own. What apt lists beside the updates
+/// (packages it would install, remove, obsolete or downgrade to upgrade
+/// everything) is no update: left out, traced; installing the updates
+/// brings what they need, the simulation shows it.
 fn system_updates(packages: &[Package]) -> Option<Vec<SystemUpdate>> {
+    let (effects, packages): (Vec<&Package>, Vec<&Package>) =
+        packages.iter().partition(|package| is_effect(package.info));
+    if !effects.is_empty() {
+        let effects: Vec<String> = effects
+            .iter()
+            .map(|package| format!("{} ({})", package.id, package.info))
+            .collect();
+        tracing::info!(
+            ?effects,
+            "what upgrading everything would also do, left out of the updates"
+        );
+    }
     let ids: Vec<(PackageId<'_>, &Package)> = packages
-        .iter()
+        .into_iter()
         .map(|package| {
             PackageId::parse(&package.id)
                 .map(|id| (id, package))
@@ -324,6 +339,14 @@ fn system_updates(packages: &[Package]) -> Option<Vec<SystemUpdate>> {
         .collect();
     updates.sort_by(|first, second| (first.kind, &first.name).cmp(&(second.kind, &second.name)));
     Some(updates)
+}
+
+/// Whether `info` names an effect of upgrading everything, not an update.
+const fn is_effect(info: u32) -> bool {
+    matches!(
+        info,
+        info::INSTALL | info::REMOVE | info::OBSOLETE | info::DOWNGRADE
+    )
 }
 
 fn snap_updates(refreshes: Vec<Refresh>) -> Vec<SnapUpdate> {

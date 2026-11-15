@@ -79,12 +79,21 @@ pub const EXIT_CANCELLED: u32 = 3;
 const STATUS_WAIT: u32 = 1;
 const STATUS_WAITING_FOR_LOCK: u32 = 30;
 
+/// The bits of a package's value that say its kind: the upper ones say an
+/// update's severity.
+const INFO_BITS: u32 = 0xFFFF;
+
 /// What `PkInfoEnum` says of an update.
 pub mod info {
     pub const INSTALLED: u32 = 1;
     pub const SECURITY: u32 = 8;
     /// Held back by the system: it will not be installed.
     pub const BLOCKED: u32 = 9;
+    /// What `GetUpdates` lists beside the updates (apt): the effects of
+    /// upgrading everything, never updates themselves.
+    pub const INSTALL: u32 = 27;
+    pub const OBSOLETE: u32 = 29;
+    pub const DOWNGRADE: u32 = 30;
     /// What a removal takes away: under way, or intended (PackageKit 1.3).
     pub const REMOVING: u32 = 13;
     pub const REMOVE: u32 = 28;
@@ -634,6 +643,17 @@ fn absent_or_bus(error: zbus::Error) -> PackageKitError {
     }
 }
 
+/// A package as the bus says it. Its kind shares its value with the
+/// update's severity, in the upper half (`info | severity << 16`, as
+/// `pk-client.c` reads it back): apt says a security update `0x80008`.
+fn package_of((info, id, summary): (u32, String, String)) -> Package {
+    Package {
+        info: info & INFO_BITS,
+        id,
+        summary,
+    }
+}
+
 /// What `message` says, if it is a signal folded. A package, an error or an
 /// end that cannot be read is [`Signal::Unreadable`]: the transaction can
 /// no longer be told whole. A status that cannot be read is only skipped,
@@ -645,17 +665,10 @@ fn signal_of(message: &zbus::Message) -> Option<Signal> {
     let read = match member {
         "Package" => body
             .deserialize::<(u32, String, String)>()
-            .map(|(info, id, summary)| Signal::Package(Package { info, id, summary })),
+            .map(|said| Signal::Package(package_of(said))),
         "Packages" => body
             .deserialize::<Vec<(u32, String, String)>>()
-            .map(|packages| {
-                Signal::Packages(
-                    packages
-                        .into_iter()
-                        .map(|(info, id, summary)| Package { info, id, summary })
-                        .collect(),
-                )
-            }),
+            .map(|packages| Signal::Packages(packages.into_iter().map(package_of).collect())),
         ERROR_CODE => body
             .deserialize::<(u32, String)>()
             .map(|(code, details)| Signal::ErrorCode { code, details }),

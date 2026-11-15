@@ -158,6 +158,36 @@ fn security_comes_first_held_back_last_by_name() {
 }
 
 #[test]
+fn what_upgrading_everything_would_also_do_is_no_update() {
+    // Catches a package apt would install, remove, obsolete or downgrade
+    // counted, shown and sent as an update; and one of them taken for the
+    // other architecture of an update.
+    let fake = Fake {
+        system: || {
+            Ok(vec![
+                package(info::SECURITY, "openssl"),
+                package(INFO_NORMAL, "bash"),
+                package(info::BLOCKED, "aardvark"),
+                package(info::INSTALL, "linux-image-7.1"),
+                package(info::REMOVE, "libold1"),
+                package(info::OBSOLETE, "python3-gone"),
+                Package {
+                    info: info::DOWNGRADE,
+                    id: "bash;5.1-1;i386;resolute".into(),
+                    summary: String::new(),
+                },
+            ])
+        },
+        ..Fake::default()
+    };
+    let Outcome::Read(updates) = read_system(&fake, false, &quiet).updates else {
+        panic!("read");
+    };
+    let names: Vec<&str> = updates.iter().map(|update| update.name.as_str()).collect();
+    assert_eq!(names, ["openssl", "bash", "aardvark"]);
+}
+
+#[test]
 fn a_wait_for_another_program_is_passed_on() {
     let heard = RefCell::new(Vec::new());
     let fake = Fake {

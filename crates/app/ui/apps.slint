@@ -65,6 +65,7 @@ global AppWords {
             : why == UninstallWhy.unanswered ? @tr("Le service ne répond pas. La liste est relue.")
             : why == UninstallWhy.timed-out ? @tr("Pas de réponse à temps. Si vous avez accordé les droits, la désinstallation peut se faire quand même.")
             : why == UninstallWhy.not-found ? @tr("Elle n'est plus installée. La liste est relue.")
+            : why == UninstallWhy.unclear ? @tr("Okapi ne peut pas dire avec certitude ce qui partirait : rien n'a été retiré.")
             : @tr("Le système a refusé : {}", detail)
     }
 }
@@ -485,8 +486,10 @@ component Uninstall inherits ModalFrame {
         label: title.text;
     }
     if Apps.step == UninstallStep.confirm && !Apps.target-snap && !Apps.freed-known: Detail {
-        text: Apps.going.length > 1
+        text: Apps.going.length > 2
             ? @tr("{} et les paquets qui en dépendent partiront. Place libérée : inconnue.", Apps.target)
+            : Apps.going.length == 2
+            ? @tr("{} et un paquet qui en dépend partiront. Place libérée : inconnue.", Apps.target)
             : @tr("Place libérée : inconnue.");
     }
     if Apps.step == UninstallStep.confirm && !Apps.target-snap && Apps.freed-known: Detail {

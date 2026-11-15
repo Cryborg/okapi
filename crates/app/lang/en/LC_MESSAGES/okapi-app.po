@@ -2348,6 +2348,10 @@ msgid "Le service ne répond pas. La liste est relue."
 msgstr "The service does not answer. The list is read again."
 
 msgctxt "AppWords"
+msgid "Okapi ne peut pas dire avec certitude ce qui partirait : rien n'a été retiré."
+msgstr "Okapi cannot tell for sure what would go: nothing was removed."
+
+msgctxt "AppWords"
 msgid "Pas de réponse à temps. Si vous avez accordé les droits, la désinstallation peut se faire quand même."
 msgstr "No answer in time. If you granted the rights, the uninstallation may still happen."
 
@@ -2702,6 +2706,10 @@ msgstr "Apps: {}, read {} min ago"
 msgctxt "Uninstall"
 msgid "{} et les paquets qui en dépendent partiront. Place libérée : inconnue."
 msgstr "{} and the packages that depend on it will go. Space freed: unknown."
+
+msgctxt "Uninstall"
+msgid "{} et un paquet qui en dépend partiront. Place libérée : inconnue."
+msgstr "{} and a package that depends on it will go. Space freed: unknown."
 
 msgctxt "Uninstall"
 msgid "Place libérée : inconnue."

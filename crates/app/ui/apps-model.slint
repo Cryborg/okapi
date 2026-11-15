@@ -68,7 +68,7 @@ export struct AppDetail {
 export enum UninstallStep { closed, checking, confirm, refused, running, failed }
 
 // Why an uninstallation did not happen.
-export enum UninstallWhy { none, absent, not-authorized, busy, unanswered, timed-out, not-found, service }
+export enum UninstallWhy { none, absent, not-authorized, busy, unanswered, timed-out, not-found, unclear, service }
 
 export global Apps {
     in property <bool> reading;

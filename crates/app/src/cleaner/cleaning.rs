@@ -894,21 +894,11 @@ impl CleanerScreen {
                 // What is lost must be read before the window goes.
                 tracing::warn!("closing held back: the receipt says the deletion log is lost");
             } else if cleaning.close_when_done {
-                tracing::info!("receipt in: the window closes as asked");
                 close = true;
             }
         });
         if close {
-            // Asked as the window's own button asks: every screen may still
-            // hold it (an uninstallation running), never hidden past them.
-            let window = self.0.borrow().window.upgrade();
-            if let Some(window) = window
-                && let Err(error) = window
-                    .window()
-                    .dispatch_event_with_result(slint::platform::WindowEvent::CloseRequested)
-            {
-                tracing::error!(%error, "window not closed");
-            }
+            self.close_as_asked();
         }
         // Even when it freed nothing it knows of: root's part, or a thread
         // that died, may have removed entries.
@@ -916,6 +906,31 @@ impl CleanerScreen {
             freed: receipt.as_ref().map(|(_, receipt)| receipt.freed),
             at: seconds(SystemTime::now()),
         });
+    }
+
+    /// The closing the user asked during the cleaning, asked again as the
+    /// window's own button asks: every screen may still hold it (an
+    /// uninstallation running), never hidden past them.
+    fn close_as_asked(&self) {
+        let window = self.0.borrow().window.upgrade();
+        let Some(window) = window else {
+            return;
+        };
+        match window
+            .window()
+            .dispatch_event_with_result(slint::platform::WindowEvent::CloseRequested)
+        {
+            Ok(slint::platform::WindowEventDispatchResult::Accepted) => {
+                tracing::info!("receipt in: the window closes as asked");
+            }
+            Ok(held) => {
+                tracing::info!(
+                    ?held,
+                    "receipt in: the closing asked is held by another screen"
+                );
+            }
+            Err(error) => tracing::error!(%error, "window not closed"),
+        }
     }
 
     /// Cancels the cleaning: what is not yet removed stays; the entry under

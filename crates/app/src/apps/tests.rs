@@ -627,7 +627,10 @@ impl Uninstaller for Held {
         steps: &Sender<Step>,
         cancel: &AtomicBool,
     ) -> Ended {
-        let _ = steps.send(Step::WaitingForLock);
+        // Waits for another program, then its turn comes: released twice.
+        let _ = steps.send(Step::Waiting(true));
+        let _ = self.released.lock().unwrap().recv();
+        let _ = steps.send(Step::Waiting(false));
         let _ = self.released.lock().unwrap().recv();
         self.fake.remove(target, going, steps, cancel)
     }
@@ -671,6 +674,9 @@ fn one_uninstallation_at_a_time_its_window_closed_or_not() {
     );
     apps(&window).invoke_refresh();
     assert_eq!(reads.get(), 1, "never read during it");
+    release.send(()).unwrap();
+    // Its turn come, it no longer says it waits.
+    read_until(&window, |window| !apps(window).get_waiting());
     release.send(()).unwrap();
     read_until(&window, |window| apps(window).get_toast());
     assert_eq!(
@@ -831,6 +837,30 @@ fn a_size_unknown_is_said_unknown_never_nothing() {
 }
 
 #[test]
+fn a_package_going_without_its_size_makes_the_place_freed_unknown() {
+    // Catches the application's size said for the whole, a package that
+    // depends on it unknown: the screen and the history would say less
+    // than goes.
+    let dependent = Going {
+        bytes: None,
+        ..going("gimp-plugin", 0)
+    };
+    let fake = Fake::new(
+        vec![Ok(vec![going("gimp", 3_000_000), dependent])],
+        Ended::Done,
+    );
+    let (window, _, recorded, _) = on_apps(fake);
+    ask(&window, "GIMP");
+    assert!(shows(
+        &window,
+        "GIMP et un paquet qui en dépend partiront. Place libérée : inconnue."
+    ));
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| apps(window).get_toast());
+    assert_eq!(recorded.lock().unwrap()[0].freed_bytes, None);
+}
+
+#[test]
 fn an_ending_away_from_the_page_is_seen_on_return() {
     let (release, released) = mpsc::channel::<()>();
     let fake = Fake::new(vec![Ok(vec![going("gimp", 1)])], Ended::Done);
@@ -843,7 +873,7 @@ fn an_ending_away_from_the_page_is_seen_on_return() {
     apps(&window).invoke_confirm();
     button(&window, "Accueil").invoke_accessible_default_action();
     slint::platform::update_timers_and_animations();
-    release.send(()).unwrap();
+    drop(release);
     read_until(&window, |window| apps(window).get_toast());
     i_slint_backend_testing::mock_elapsed_time(TOAST_SHOWN_FOR * 2);
     slint::platform::update_timers_and_animations();

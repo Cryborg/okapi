@@ -1128,11 +1128,17 @@ impl AppsScreen {
                             if let Target::Deb { .. } = operation.target {
                                 let sizes: Option<Vec<u64>> =
                                     going.iter().map(|package| package.bytes).collect();
-                                // A size unknown: dpkg's estimate stays.
-                                if let Some(sizes) = sizes {
-                                    operation.freed =
-                                        Some(sizes.into_iter().fold(0, u64::saturating_add));
-                                }
+                                operation.freed = match sizes {
+                                    Some(sizes) => {
+                                        Some(sizes.into_iter().fold(0, u64::saturating_add))
+                                    }
+                                    // The application alone: the row's estimate
+                                    // of it stays.
+                                    None if going.len() == 1 => operation.freed,
+                                    // Another package unknown: the sum would
+                                    // say less than goes.
+                                    None => None,
+                                };
                             }
                             Phase::Confirm(going)
                         }
@@ -1151,7 +1157,7 @@ impl AppsScreen {
                                 run.cancelling = Cancelling::TooLate;
                             }
                             Step::Cancellable(false) => {}
-                            Step::WaitingForLock => run.waiting = true,
+                            Step::Waiting(waiting) => run.waiting = waiting,
                         }
                     }
                 }
@@ -1214,13 +1220,16 @@ impl AppsScreen {
             apps.set_toast_recorded(recorded);
             apps.set_toast(true);
         });
-        // Arrived away from the page, it waits to be seen there.
+        // Arrived away from the page, it waits to be seen there: the time of
+        // an earlier one never takes it away unseen.
         let (held, on_page) = {
             let state = self.0.borrow();
             (state.toast_held, state.on_page)
         };
         if on_page {
             self.hold_toast(held);
+        } else {
+            self.0.borrow().toast_timer.stop();
         }
     }
 
@@ -1366,6 +1375,7 @@ fn why_shown(why: &Why) -> (ui::UninstallWhy, String) {
         Why::Unanswered => (ui::UninstallWhy::Unanswered, String::new()),
         Why::TimedOut => (ui::UninstallWhy::TimedOut, String::new()),
         Why::NotFound => (ui::UninstallWhy::NotFound, String::new()),
+        Why::Unclear => (ui::UninstallWhy::Unclear, String::new()),
         Why::Service(words) => (ui::UninstallWhy::Service, words.clone()),
     }
 }

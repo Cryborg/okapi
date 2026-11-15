@@ -120,7 +120,7 @@ component Spared inherits Rectangle {
         Icon {
             source: @image-url("../assets/icons/shield.svg");
             colorize: Theme.text-2;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
         }
         Detail {
             horizontal-stretch: 1;
@@ -177,7 +177,7 @@ component Choosing inherits VerticalLayout {
             kind: ButtonKind.primary;
             large: true;
             enabled: Cleaner.chosen-count > 0 && Cleaner.problem == SetupProblem.none;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
             clicked => {
                 Cleaner.analyze();
             }
@@ -216,7 +216,7 @@ component ScanRowView inherits Rectangle {
         Icon {
             source: Words.icon(scan.kind);
             colorize: scan.state == RowState.waiting ? Theme.text-3 : Theme.text-2;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
         }
         Text {
             width: Theme.row-name-width;
@@ -231,6 +231,7 @@ component ScanRowView inherits Rectangle {
         HorizontalLayout {
             width: Theme.row-status-width;
             spacing: Theme.spacing-xs;
+            cross-axis-self-alignment: center;
             Icon {
                 source: scan.state == RowState.done ? @image-url("../assets/icons/circle-check.svg")
                     : scan.state == RowState.running ? @image-url("../assets/icons/loader.svg")
@@ -238,7 +239,7 @@ component ScanRowView inherits Rectangle {
                 colorize: state-color;
                 width: Theme.icon-small;
                 height: Theme.icon-small;
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
             }
             Text {
                 text: state-text;
@@ -330,7 +331,7 @@ component Scanning inherits VerticalLayout {
                 colorize: Theme.text-2;
                 width: Theme.icon-small;
                 height: Theme.icon-small;
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
             }
             Detail {
                 horizontal-stretch: 1;
@@ -361,7 +362,7 @@ component Scanning inherits VerticalLayout {
         cancel := ActionButton {
             text: @tr("Annuler l'analyse");
             enabled: Cleaner.step != CleanerStep.cancelling;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
             clicked => {
                 Cleaner.cancel();
             }

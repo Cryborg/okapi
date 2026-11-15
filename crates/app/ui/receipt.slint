@@ -54,7 +54,7 @@ component CleanStepRow inherits Rectangle {
                 colorize: state-color;
                 width: Theme.icon-small;
                 height: Theme.icon-small;
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
             }
             Text {
                 horizontal-stretch: 1;
@@ -79,7 +79,7 @@ component CleanStepRow inherits Rectangle {
             spacing: Theme.spacing-m;
             ProgressBar {
                 horizontal-stretch: 1;
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
                 progress: counted ? step.done / step.total : step.state == RowState.done ? 1 : 0;
                 indeterminate: step.state == RowState.running && !counted;
                 label: name;
@@ -160,7 +160,7 @@ export component CleaningPage inherits VerticalLayout {
         cancel := ActionButton {
             text: @tr("Annuler le nettoyage");
             enabled: !Cleaner.clean-cancel-asked;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
             clicked => {
                 Cleaner.cancel-cleaning();
             }
@@ -254,7 +254,7 @@ component ReceiptLine inherits VerticalLayout {
                 colorize: Theme.text-2;
                 width: Theme.icon-small;
                 height: Theme.icon-small;
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
             }
             Line {
                 horizontal-stretch: 1;
@@ -410,7 +410,7 @@ export component ReceiptPage inherits VerticalLayout {
             text: @tr("Terminer");
             kind: ButtonKind.primary;
             large: true;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
             clicked => {
                 Cleaner.finish();
             }

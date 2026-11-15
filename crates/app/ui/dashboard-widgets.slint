@@ -416,7 +416,7 @@ component EditBar inherits Rectangle {
             padding-right: Theme.spacing-s;
             spacing: Theme.spacing-s;
             grip := Grip {
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
                 title: root.title;
                 slot: root.slot;
                 grabbed: root.grabbed;
@@ -438,19 +438,20 @@ component EditBar inherits Rectangle {
                 vertical-alignment: center;
             }
             if root.grabbed: Badge {
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
                 text: @tr("Saisi");
                 icon: @image-url("../assets/icons/grip-vertical.svg");
                 tone: Theme.accent;
                 tone-soft: Theme.surface;
             }
             if !root.grabbed && root.accepted.length > 1: Rectangle {
+                cross-axis-self-alignment: center;
                 accessible-role: groupbox;
                 accessible-label: @tr("Taille de {}", root.title);
                 HorizontalLayout {
                     spacing: Theme.spacing-xxs;
                     for choice in root.accepted: SizeButton {
-                        y: (parent.height - self.height) / 2;
+                        cross-axis-self-alignment: center;
                         size: choice;
                         chosen: choice == root.size;
                         clicked => {
@@ -466,7 +467,7 @@ component EditBar inherits Rectangle {
                 vertical-alignment: center;
             }
             if !root.grabbed: ActionButton {
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
                 kind: ButtonKind.ghost;
                 icon: @image-url("../assets/icons/x.svg");
                 text: root.width >= Theme.remove-word-from ? @tr("Retirer") : "";
@@ -533,7 +534,7 @@ export component WidgetCard inherits Card {
                     colorize: Theme.text-2;
                     width: Theme.icon-small;
                     height: Theme.icon-small;
-                    y: (parent.height - self.height) / 2;
+                    cross-axis-self-alignment: center;
                 }
                 Text {
                     horizontal-stretch: 1;
@@ -694,7 +695,7 @@ export component ReclaimableWidget inherits WidgetCard {
                     text: root.heading;
                 }
                 if root.shown.state == ReclaimableState.estimate: Badge {
-                    y: (parent.height - self.height) / 2;
+                    cross-axis-self-alignment: center;
                     text: @tr("Estimation");
                     icon: @image-url("../assets/icons/clock.svg");
                     tone: Theme.text-2;
@@ -847,7 +848,7 @@ component VolumeLine inherits VerticalLayout {
             colorize: Theme.text-2;
             width: Theme.icon-small;
             height: Theme.icon-small;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
         }
         Text {
             horizontal-stretch: root.detailed ? 0 : 1;
@@ -867,12 +868,12 @@ component VolumeLine inherits VerticalLayout {
             accessible-role: none;
         }
         if root.volume.space == SpaceState.known && root.volume.nearly-full: Badge {
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
             text: @tr("Presque plein");
             icon: @image-url("../assets/icons/triangle-alert.svg");
         }
         if root.volume.space != SpaceState.known: Badge {
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
             text: root.volume.space == SpaceState.failed ? @tr("Illisible") : @tr("Ne répond pas");
             icon: @image-url("../assets/icons/ban.svg");
             tone: Theme.text-2;
@@ -896,7 +897,7 @@ component VolumeLine inherits VerticalLayout {
         spacing: Theme.spacing-m;
         ProgressBar {
             horizontal-stretch: 1;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
             progress: root.part-used;
             tone: root.volume.nearly-full ? Theme.warning : Theme.accent;
             label: root.bar-label;

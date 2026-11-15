@@ -204,7 +204,7 @@ component Inline inherits VerticalLayout {
         warning: true;
         ActionButton {
             text: @tr("Réessayer");
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
             enabled: Updates.step != UpdatesStep.searching;
             clicked => {
                 Updates.retry();
@@ -263,7 +263,7 @@ component FoldHead inherits Rectangle {
         Icon {
             source: root.expanded ? @image-url("../assets/icons/chevron-down.svg") : @image-url("../assets/icons/chevron-right.svg");
             colorize: Theme.text-2;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
         }
         @children
     }
@@ -298,7 +298,7 @@ component SystemRow inherits Row {
             icon: root.line.kind == UpdateKind.security ? @image-url("../assets/icons/shield.svg") : @image-url("../assets/icons/ban.svg");
             tone: root.line.kind == UpdateKind.security ? Theme.security : Theme.text-2;
             tone-soft: root.line.kind == UpdateKind.security ? Theme.security-soft : Theme.surface-2;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
         }
     }
     Text {
@@ -347,7 +347,7 @@ component SnapRow inherits Row {
     Rectangle {
         width: Theme.updates-app-icon;
         height: Theme.updates-app-icon;
-        y: (parent.height - self.height) / 2;
+        cross-axis-self-alignment: center;
         border-radius: Theme.radius-medium;
         background: Theme.surface-2;
         border-width: Theme.border-width;
@@ -384,7 +384,7 @@ component SnapRow inherits Row {
                 colorize: Theme.accent;
                 width: Theme.icon-badge;
                 height: Theme.icon-badge;
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
             }
             if root.line.verified: Text {
                 text: @tr("vérifié");
@@ -419,7 +419,7 @@ component SnapRow inherits Row {
         text: @tr("Mettre à jour");
         accessible-label: @tr("Mettre à jour {}", root.line.title);
         enabled: UpdatesWords.can-install();
-        y: (parent.height - self.height) / 2;
+        cross-axis-self-alignment: center;
         clicked => {
             Updates.update-snap(root.index);
         }
@@ -436,7 +436,7 @@ component SourceTitle inherits HorizontalLayout {
     Icon {
         source: root.icon;
         colorize: Theme.text-2;
-        y: (parent.height - self.height) / 2;
+        cross-axis-self-alignment: center;
     }
     Text {
         text: root.name;
@@ -684,7 +684,7 @@ component Outcome inherits Card {
             Icon {
                 source: UpdatesWords.result-whole() ? @image-url("../assets/icons/circle-check.svg") : @image-url("../assets/icons/triangle-alert.svg");
                 colorize: UpdatesWords.result-whole() ? Theme.success : Theme.warning;
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
             }
             Text {
                 horizontal-stretch: 1;
@@ -848,7 +848,7 @@ export component UpdatesPage inherits VerticalLayout {
                         Icon {
                             source: @image-url("../assets/icons/rotate-ccw.svg");
                             colorize: Theme.text-2;
-                            y: (parent.height - self.height) / 2;
+                            cross-axis-self-alignment: center;
                         }
                         Line {
                             horizontal-stretch: 1;
@@ -961,7 +961,7 @@ export component UpdatesPage inherits VerticalLayout {
                             icon: @image-url("../assets/icons/clock.svg");
                             tone: Theme.text-2;
                             tone-soft: Theme.surface-2;
-                            y: (parent.height - self.height) / 2;
+                            cross-axis-self-alignment: center;
                         }
                     }
                     Card {
@@ -1008,7 +1008,7 @@ export component UpdatesPage inherits VerticalLayout {
                                     icon: @image-url("../assets/icons/shield.svg");
                                     tone: Theme.security;
                                     tone-soft: Theme.security-soft;
-                                    y: (parent.height - self.height) / 2;
+                                    cross-axis-self-alignment: center;
                                 }
                               }
                               // Beside the line, never in it: a button in a button is not read.
@@ -1018,7 +1018,7 @@ export component UpdatesPage inherits VerticalLayout {
                                 icon: @image-url("../assets/icons/download.svg");
                                 kind: ButtonKind.primary;
                                 enabled: UpdatesWords.can-install();
-                                y: (parent.height - self.height) / 2;
+                                cross-axis-self-alignment: center;
                                 clicked => {
                                     Updates.update-system();
                                 }
@@ -1038,7 +1038,7 @@ export component UpdatesPage inherits VerticalLayout {
                                             text: Updates.system-more == 1 ? @tr("Afficher l'autre")
                                                 : @tr("Afficher les {} autres", Updates.system-more);
                                             kind: ButtonKind.ghost;
-                                            y: (parent.height - self.height) / 2;
+                                            cross-axis-self-alignment: center;
                                             clicked => {
                                                 Updates.show-all-system();
                                             }
@@ -1070,7 +1070,7 @@ export component UpdatesPage inherits VerticalLayout {
                             text: @tr("Tout mettre à jour");
                             accessible-label: @tr("Mettre à jour toutes les applis");
                             enabled: UpdatesWords.can-install();
-                            y: (parent.height - self.height) / 2;
+                            cross-axis-self-alignment: center;
                             clicked => {
                                 Updates.update-snaps();
                             }

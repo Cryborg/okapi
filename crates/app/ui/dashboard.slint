@@ -121,7 +121,7 @@ component AddDialog inherits Dialog {
             }
         }
         ActionButton {
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
             text: @tr("Ajouter");
             accessible-label: @tr("Ajouter {}", DashboardWords.title(widget.kind));
             clicked => {
@@ -244,7 +244,7 @@ component DropSlot inherits Rectangle {
             colorize: Theme.accent;
             width: Theme.icon-small;
             height: Theme.icon-small;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
         }
         Text {
             text: @tr("Déposer ici");

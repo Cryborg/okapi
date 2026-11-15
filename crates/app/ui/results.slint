@@ -26,7 +26,7 @@ component RightsBanner inherits Rectangle {
         Icon {
             source: @image-url("../assets/icons/shield.svg");
             colorize: Theme.admin;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
         }
         said := Line {
             horizontal-stretch: 1;
@@ -47,7 +47,7 @@ component RightsBanner inherits Rectangle {
         if Cleaner.rights-step == RightsStep.idle: ActionButton {
             text: @tr("Obtenir les droits");
             kind: ButtonKind.secondary;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
             clicked => {
                 Cleaner.obtain-rights();
             }
@@ -55,7 +55,7 @@ component RightsBanner inherits Rectangle {
         if Cleaner.rights-step == RightsStep.authenticating || Cleaner.rights-step == RightsStep.scanning: ActionButton {
             text: @tr("Annuler");
             kind: ButtonKind.ghost;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
             clicked => {
                 Cleaner.cancel-rights();
             }
@@ -182,12 +182,12 @@ component ResultLine inherits VerticalLayout {
                         checked: line.state == CheckState.checked;
                         partial: line.state == CheckState.partial;
                         enabled: line.enabled;
-                        y: (parent.height - self.height) / 2;
+                        cross-axis-self-alignment: center;
                     }
                     if line.kind == RowKind.category: Icon {
                         source: Words.icon(line.category);
                         colorize: Theme.text-2;
-                        y: (parent.height - self.height) / 2;
+                        cross-axis-self-alignment: center;
                     }
                     VerticalLayout {
                         horizontal-stretch: 1;
@@ -338,7 +338,7 @@ component Confirmation inherits ModalFrame {
             spacing: Theme.spacing-s;
             CheckMark {
                 checked: Cleaner.understood;
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
             }
             understood-text := Detail {
                 text: @tr("J'ai compris que c'est définitif");
@@ -523,7 +523,7 @@ export component ResultsPage inherits VerticalLayout {
             ActionButton {
                 text: @tr("Choisir d'autres catégories");
                 kind: ButtonKind.ghost;
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
                 clicked => {
                     Cleaner.choose-again();
                 }
@@ -535,7 +535,7 @@ export component ResultsPage inherits VerticalLayout {
                 // A refused cleaning does not keep an analysis from starting.
                 enabled: Cleaner.problem == SetupProblem.none || Cleaner.problem == SetupProblem.history
                     || Cleaner.problem == SetupProblem.start;
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
                 clicked => {
                     Cleaner.analyze();
                 }
@@ -617,7 +617,7 @@ export component ResultsPage inherits VerticalLayout {
                     colorize: Theme.text-2;
                     width: Theme.icon-small;
                     height: Theme.icon-small;
-                    y: (parent.height - self.height) / 2;
+                    cross-axis-self-alignment: center;
                 }
                 Detail {
                     horizontal-stretch: 1;
@@ -665,7 +665,7 @@ export component ResultsPage inherits VerticalLayout {
             text: @tr("Tout désélectionner");
             kind: ButtonKind.ghost;
             enabled: Cleaner.selected-entries > 0;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
             clicked => {
                 Cleaner.deselect-all();
             }
@@ -676,7 +676,7 @@ export component ResultsPage inherits VerticalLayout {
             kind: ButtonKind.primary;
             large: true;
             enabled: Cleaner.selected-entries > 0;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
             clicked => {
                 Cleaner.clean();
             }

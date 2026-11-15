@@ -74,7 +74,7 @@ component NavItem inherits Rectangle {
             colorize: active ? Theme.text : Theme.text-2;
             width: Theme.icon;
             height: Theme.icon;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
             accessible-role: none;
         }
         if !root.folded: Text {
@@ -121,7 +121,7 @@ export component Sidebar inherits Rectangle {
                 source: @image-url("../assets/okapi.svg");
                 width: Theme.mark-small;
                 height: Theme.mark-small;
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
                 // Decorates the name beside it.
                 accessible-role: none;
             }
@@ -134,7 +134,7 @@ export component Sidebar inherits Rectangle {
                 horizontal-stretch: 1;
             }
             if !root.narrow: IconButton {
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
                 icon: root.folded ? @image-url("../assets/icons/panel-left-open.svg") : @image-url("../assets/icons/panel-left-close.svg");
                 label: root.folded ? @tr("Déplier la barre latérale") : @tr("Replier la barre latérale");
                 accessible-expandable: true;

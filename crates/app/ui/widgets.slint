@@ -210,7 +210,7 @@ export component ActionButton inherits Rectangle {
         if root.icon.width > 0: Icon {
             source: root.icon;
             colorize: label.color;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
         }
         label := Text {
             text: root.text;
@@ -275,7 +275,7 @@ export component Badge inherits Rectangle {
             colorize: root.tone;
             width: Theme.icon-badge;
             height: Theme.icon-badge;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
         }
         Text {
             text: root.text;
@@ -482,7 +482,7 @@ export component Banner inherits Rectangle {
         Icon {
             source: root.warning ? @image-url("../assets/icons/triangle-alert.svg") : @image-url("../assets/icons/info.svg");
             colorize: root.warning ? Theme.warning : Theme.info;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
         }
         Detail {
             horizontal-stretch: 1;

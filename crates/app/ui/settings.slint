@@ -305,7 +305,7 @@ component Exclusions inherits Card {
                             Icon {
                                 source: row.kind == ExclusionKind.folder ? @image-url("../assets/icons/folder.svg") : @image-url("../assets/icons/file.svg");
                                 colorize: Theme.text-2;
-                                y: (parent.height - self.height) / 2;
+                                cross-axis-self-alignment: center;
                             }
                             Text {
                                 horizontal-stretch: 1;

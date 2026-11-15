@@ -266,12 +266,12 @@ component PickLine inherits Rectangle {
         CheckMark {
             checked: root.checked;
             enabled: root.enabled;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
         }
         Icon {
             source: root.icon;
             colorize: Theme.text-2;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
         }
         VerticalLayout {
             horizontal-stretch: 1;
@@ -479,7 +479,7 @@ component DuplicateSearching inherits FocusScope {
                     Rectangle {
                         width: Theme.icon-small;
                         height: Theme.icon-small;
-                        y: (parent.height - self.height) / 2;
+                        cross-axis-self-alignment: center;
                         border-radius: Theme.radius-small;
                         background: Theme.surface-2;
                     }
@@ -503,7 +503,7 @@ component DuplicateSearching inherits FocusScope {
             ActionButton {
                 text: @tr("Rechercher à nouveau");
                 icon: @image-url("../assets/icons/rotate-ccw.svg");
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
                 clicked => {
                     Duplicates.again();
                 }
@@ -515,7 +515,7 @@ component DuplicateSearching inherits FocusScope {
             ActionButton {
                 text: @tr("Rechercher à nouveau");
                 icon: @image-url("../assets/icons/rotate-ccw.svg");
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
                 clicked => {
                     Duplicates.again();
                 }
@@ -592,12 +592,12 @@ component TreeLine inherits Rectangle {
         Icon {
             source: line.open ? @image-url("../assets/icons/chevron-down.svg") : @image-url("../assets/icons/chevron-right.svg");
             colorize: Theme.text-2;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
         }
         Icon {
             source: @image-url("../assets/icons/file.svg");
             colorize: Theme.text-2;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
         }
         Text {
             horizontal-stretch: 1;
@@ -1079,7 +1079,7 @@ component DuplicateResult inherits VerticalLayout {
                 icon: @image-url("../assets/icons/folder.svg");
                 kind: ButtonKind.ghost;
                 enabled: !Duplicates.trashing;
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
                 clicked => {
                     Duplicates.change();
                 }
@@ -1088,7 +1088,7 @@ component DuplicateResult inherits VerticalLayout {
                 text: @tr("Rechercher à nouveau");
                 icon: @image-url("../assets/icons/rotate-ccw.svg");
                 enabled: !Duplicates.trashing;
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
                 clicked => {
                     Duplicates.again();
                 }
@@ -1101,7 +1101,7 @@ component DuplicateResult inherits VerticalLayout {
                 text: @tr("Sélection rapide");
                 icon: @image-url("../assets/icons/chevron-down.svg");
                 enabled: !Duplicates.trashing;
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
                 clicked => {
                     root.menu-x = self.absolute-position.x - root.absolute-position.x;
                     root.menu-y = self.absolute-position.y - root.absolute-position.y + self.height + Theme.spacing-xs;
@@ -1119,7 +1119,7 @@ component DuplicateResult inherits VerticalLayout {
                 text: @tr("Tout désélectionner");
                 kind: ButtonKind.ghost;
                 enabled: Duplicates.chosen-files > 0 && !Duplicates.trashing;
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
                 clicked => {
                     Duplicates.deselect-all();
                 }
@@ -1216,7 +1216,7 @@ component DuplicateResult inherits VerticalLayout {
             kind: ButtonKind.primary;
             large: true;
             enabled: Duplicates.chosen-files > 0 && !Duplicates.trashing;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
             clicked => {
                 Duplicates.trash();
             }
@@ -1249,7 +1249,7 @@ component KeptLine inherits Rectangle {
                 : root.kept.why == ReceiptWhy.refused ? @image-url("../assets/icons/lock.svg")
                 : @image-url("../assets/icons/shield.svg");
             colorize: root.kept.why == ReceiptWhy.unchecked ? Theme.warning : Theme.text-2;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
         }
         VerticalLayout {
             horizontal-stretch: 1;
@@ -1308,7 +1308,7 @@ component DuplicateReceipt inherits VerticalLayout {
             Rectangle {
                 width: Theme.icon-box;
                 height: Theme.icon-box;
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
                 border-radius: Theme.radius-medium;
                 background: Duplicates.moved-files > 0 ? Theme.success-soft : Theme.surface-2;
                 Icon {
@@ -1343,7 +1343,7 @@ component DuplicateReceipt inherits VerticalLayout {
                     Icon {
                         source: @image-url("../assets/icons/shield.svg");
                         colorize: Theme.text-2;
-                        y: (parent.height - self.height) / 2;
+                        cross-axis-self-alignment: center;
                     }
                     Text {
                         horizontal-stretch: 1;
@@ -1394,7 +1394,7 @@ component DuplicateReceipt inherits VerticalLayout {
             icon: @image-url("../assets/icons/rotate-ccw.svg");
             kind: ButtonKind.primary;
             large: true;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
             clicked => {
                 Duplicates.again();
             }

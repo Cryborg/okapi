@@ -134,7 +134,7 @@ component AppRow inherits Rectangle {
         AppIcon {
             source: line.icon;
             has-source: line.has-icon;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
         }
         VerticalLayout {
             horizontal-stretch: 1;
@@ -161,7 +161,7 @@ component AppRow inherits Rectangle {
                     colorize: Theme.text-2;
                     width: Theme.icon-badge;
                     height: Theme.icon-badge;
-                    y: (parent.height - self.height) / 2;
+                    cross-axis-self-alignment: center;
                 }
                 if line.system || line.has-old || line.uninstalling: Text {
                     text: line.uninstalling ? @tr("· Désinstallation en cours")
@@ -196,7 +196,7 @@ component AppRow inherits Rectangle {
         Rectangle {
             width: Screen.narrow ? Theme.app-bar-width-narrow : Theme.app-bar-width;
             height: Theme.disk-bar-height;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
             border-radius: Theme.radius-pill;
             background: Theme.track;
             Rectangle {
@@ -321,7 +321,7 @@ component Rest inherits Rectangle {
                 text: @tr("C'est quoi ?");
                 accessible-expandable: true;
                 accessible-expanded: Apps.rest-open;
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
                 clicked => {
                     Apps.rest-open = !Apps.rest-open;
                 }
@@ -553,7 +553,7 @@ component Uninstall inherits ModalFrame {
             spacing: Theme.spacing-s;
             CheckMark {
                 checked: Apps.purge;
-                y: (parent.height - self.height) / 2;
+                cross-axis-self-alignment: center;
             }
             data-text := Detail {
                 text: Apps.has-data ? @tr("Supprimer aussi ses données ({})", Words.size(Apps.data-size)) : @tr("Supprimer aussi ses données");
@@ -712,7 +712,7 @@ component Segment inherits Rectangle {
             colorize: Theme.text;
             width: Theme.icon-badge;
             height: Theme.icon-badge;
-            y: (parent.height - self.height) / 2;
+            cross-axis-self-alignment: center;
         }
         Text {
             text: root.text;
@@ -784,7 +784,7 @@ export component AppsPage inherits Rectangle {
                     text: Apps.reading ? @tr("Lecture…") : @tr("Actualiser");
                     icon: @image-url("../assets/icons/rotate-ccw.svg");
                     enabled: !Apps.reading && !Apps.busy;
-                    y: (parent.height - self.height) / 2;
+                    cross-axis-self-alignment: center;
                     clicked => {
                         Apps.refresh();
                     }

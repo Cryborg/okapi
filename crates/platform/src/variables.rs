@@ -89,7 +89,7 @@ fn data_directories_from(
 /// An XDG base directory: its environment variable, and its default below
 /// the home directory.
 #[derive(Clone, Copy)]
-struct XdgBase {
+pub(crate) struct XdgBase {
     variable: &'static str,
     default: &'static str,
 }
@@ -98,7 +98,7 @@ impl XdgBase {
     /// This directory: the variable when it holds an absolute path (the
     /// specification ignores an empty or relative value), else the default
     /// below `home`; `None` when neither is known.
-    fn resolve(
+    pub(crate) fn resolve(
         self,
         read: impl Fn(&str) -> Option<OsString>,
         home: Option<&Path>,
@@ -125,7 +125,7 @@ const STATE: XdgBase = XdgBase {
     default: ".local/state",
 };
 
-const CONFIG: XdgBase = XdgBase {
+pub(crate) const CONFIG: XdgBase = XdgBase {
     variable: "XDG_CONFIG_HOME",
     default: ".config",
 };
@@ -154,7 +154,7 @@ fn xdg_directory_from(
 
 /// The home directory, when it is an absolute path: an empty or relative one
 /// says nothing of where the user's files are.
-fn usable_home(home: Option<PathBuf>) -> Option<PathBuf> {
+pub(crate) fn usable_home(home: Option<PathBuf>) -> Option<PathBuf> {
     home.filter(|home| home.is_absolute())
 }
 

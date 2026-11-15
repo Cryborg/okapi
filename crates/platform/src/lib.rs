@@ -9,6 +9,8 @@ mod probe;
 mod session;
 mod trash;
 #[cfg(target_os = "linux")]
+mod user_dirs;
+#[cfg(target_os = "linux")]
 mod variables;
 
 pub use browser::{CHROMIUM_LOCK, FIREFOX_LOCK, LockKind, lock_is_live};
@@ -35,5 +37,7 @@ pub use session::{
     running_as_root,
 };
 pub use trash::{Trash, TrashError};
+#[cfg(target_os = "linux")]
+pub use user_dirs::{PersonalFolder, PersonalKind, personal_folders};
 #[cfg(target_os = "linux")]
 pub use variables::{VariablesError, config_directory, state_directory, template_variables};

@@ -9,6 +9,7 @@ use serde::Deserialize;
 
 use super::uninstall::Target;
 use super::{App, AppSize, Reading, Rest, Source, SourceReading};
+use crate::packages::snapd::is_snap_name;
 
 /// What snapd says of one revision.
 #[derive(Debug, Deserialize)]
@@ -39,17 +40,6 @@ struct Publisher {
 struct SnapApp {
     #[serde(rename = "desktop-file", default)]
     desktop_file: Option<String>,
-}
-
-/// Whether `name` is a snap's name (an instance key after `_`): it is then
-/// safe in a path and in a request.
-#[must_use]
-pub fn is_snap_name(name: &str) -> bool {
-    let (base, instance) = name.split_once('_').unwrap_or((name, ""));
-    let lower = |byte: u8| byte.is_ascii_lowercase() || byte.is_ascii_digit();
-    base.bytes().next().is_some_and(lower)
-        && base.bytes().all(|byte| lower(byte) || byte == b'-')
-        && (!name.contains('_') || (!instance.is_empty() && instance.bytes().all(lower)))
 }
 
 /// The snaps of `result` (snapd's list of every revision), their launchers
@@ -160,28 +150,5 @@ pub fn read_snaps(
         apps,
         rest,
         partial: false,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_snap_name_is_safe_in_a_path_and_a_request() {
-        for name in [
-            "firefox",
-            "gnome-46-2404",
-            "core24",
-            "android-studio",
-            "lxd_test2",
-        ] {
-            assert!(is_snap_name(name), "{name}");
-        }
-        for name in [
-            "", "-x", "Firefox", "a/b", "..", "a b", "a_", "a_B", "a%2Fb", "a_b_c",
-        ] {
-            assert!(!is_snap_name(name), "{name}");
-        }
     }
 }

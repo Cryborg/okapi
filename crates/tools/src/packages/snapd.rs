@@ -29,6 +29,9 @@ pub const KIND_LOGIN_REQUIRED: &str = "login-required";
 pub const KIND_CHANGE_CONFLICT: &str = "snap-change-conflict";
 pub const KIND_NOT_INSTALLED: &str = "snap-not-installed";
 pub const KIND_DNS_FAILURE: &str = "dns-failure";
+/// The HTTP statuses of a request refused for its rights (unauthorized,
+/// forbidden), whatever kind snapd gives it.
+const HTTP_NOT_ALLOWED: [u16; 2] = [401, 403];
 /// What a publisher's `validation` is when the store vouches for it.
 pub const VALIDATION_VOUCHED: [&str; 2] = ["verified", "starred"];
 /// The largest answer read: beyond, snapd is not what answers.
@@ -51,6 +54,9 @@ pub enum SnapdError {
     /// Nothing listens on its socket: snapd is not installed or not running.
     #[error("snapd is not listening on {}: {source}", socket.display())]
     Absent { socket: PathBuf, source: io::Error },
+    /// A name that is no snap's: nothing was asked.
+    #[error("not a snap's name: {0:?}")]
+    InvalidName(String),
     /// The socket was reached, then failed or fell silent.
     #[error("snapd did not answer: {0}")]
     Io(#[source] io::Error),
@@ -86,6 +92,20 @@ impl SnapdError {
     pub fn offline(&self) -> bool {
         matches!(self, Self::Refused { kind, .. } if kind == KIND_NETWORK_TIMEOUT || kind == KIND_DNS_FAILURE)
     }
+
+    /// Whether the rights were not given (the window closed, no one logged
+    /// in, or a refusal by its HTTP status).
+    #[must_use]
+    pub fn rights_refused(&self) -> bool {
+        matches!(self, Self::Refused { kind, status, .. }
+            if kind == KIND_AUTH_CANCELLED || kind == KIND_LOGIN_REQUIRED || HTTP_NOT_ALLOWED.contains(status))
+    }
+
+    /// Whether another change holds the snap (an automatic refresh).
+    #[must_use]
+    pub fn busy(&self) -> bool {
+        matches!(self, Self::Refused { kind, .. } if kind == KIND_CHANGE_CONFLICT)
+    }
 }
 
 /// snapd's envelope: `type` is `sync`, `async` or `error`; an `async` one
@@ -115,6 +135,19 @@ pub struct Change {
 
 /// The change status of a change that did all it was asked.
 pub const CHANGE_DONE: &str = "Done";
+/// How often a change is asked where it stands.
+pub const CHANGE_LOOK_EVERY: Duration = Duration::from_millis(500);
+
+/// How following a change ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Followed {
+    /// It is over, done or not as its status says.
+    Ready(Change),
+    /// Still going when the wait ran out.
+    TimedOut,
+    /// It could not be read that many times in a row.
+    Unanswered,
+}
 
 /// How a request is made.
 struct Request<'a> {
@@ -177,6 +210,28 @@ struct SystemInfo {
     refresh: Schedule,
 }
 
+/// Whether `name` is a snap's name (an instance key after `_`): it is then
+/// safe in a path and in a request.
+#[must_use]
+pub fn is_snap_name(name: &str) -> bool {
+    let (base, instance) = name.split_once('_').unwrap_or((name, ""));
+    let lower = |byte: u8| byte.is_ascii_lowercase() || byte.is_ascii_digit();
+    base.bytes().next().is_some_and(lower)
+        && base.bytes().all(|byte| lower(byte) || byte == b'-')
+        && (!name.contains('_') || (!instance.is_empty() && instance.bytes().all(lower)))
+}
+
+/// `name`, if it is a snap's name; refused, traced, before anything is
+/// asked.
+fn checked(name: &str) -> Result<&str, SnapdError> {
+    if is_snap_name(name) {
+        Ok(name)
+    } else {
+        tracing::error!(name, "a snap's name refused: nothing asked");
+        Err(SnapdError::InvalidName(name.to_owned()))
+    }
+}
+
 /// snapd, reached on a socket.
 #[derive(Debug, Clone)]
 pub struct Snapd {
@@ -227,14 +282,14 @@ impl Snapd {
         self.get("/v2/snaps?select=all")
     }
 
-    /// Removes the snap `name` (a name checked by the caller), its data
-    /// with it when `purge` (no copy kept), polkit asking the user for the
-    /// rights: the change it started.
+    /// Removes the snap `name`, its data with it when `purge` (no copy
+    /// kept), polkit asking the user for the rights: the change it started.
     ///
     /// # Errors
-    /// Whatever kept snapd from answering, or its refusal (the rights not
-    /// given among them).
+    /// A name that is no snap's (nothing asked), whatever kept snapd from
+    /// answering, or its refusal (the rights not given among them).
     pub fn remove(&self, name: &str, purge: bool) -> Result<String, SnapdError> {
+        let name = checked(name)?;
         let envelope = self.request(&Request {
             method: "POST",
             path: &format!("/v2/snaps/{name}"),
@@ -268,6 +323,43 @@ impl Snapd {
         Ok(serde_json::from_value(
             self.get(&format!("/v2/changes/{id}"))?,
         )?)
+    }
+
+    /// Follows the change `id` until it is ready, telling `heard` where it
+    /// stands at each look; for `wait` at most, and until `unanswered_after`
+    /// looks in a row could not read it (snapd restarting answers nothing a
+    /// moment).
+    pub fn follow(
+        &self,
+        id: &str,
+        wait: Duration,
+        unanswered_after: u32,
+        heard: &dyn Fn(&Change),
+    ) -> Followed {
+        let followed = Instant::now();
+        let mut failed_looks = 0;
+        loop {
+            std::thread::sleep(CHANGE_LOOK_EVERY);
+            // Before each look: a change never ready ends all the same.
+            if followed.elapsed() >= wait {
+                tracing::warn!(change = id, ?wait, "snapd's change followed no longer");
+                return Followed::TimedOut;
+            }
+            match self.change(id) {
+                Ok(state) if state.ready => return Followed::Ready(state),
+                Ok(state) => {
+                    failed_looks = 0;
+                    heard(&state);
+                }
+                Err(error) => {
+                    failed_looks += 1;
+                    tracing::warn!(change = id, %error, failed_looks, "snapd's change unreadable");
+                    if failed_looks == unanswered_after {
+                        return Followed::Unanswered;
+                    }
+                }
+            }
+        }
     }
 
     /// What snapd answers to `path`: the `result` of its envelope.

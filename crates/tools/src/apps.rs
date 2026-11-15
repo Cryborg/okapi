@@ -278,7 +278,7 @@ impl DebPlaces {
     #[must_use]
     pub fn system() -> Self {
         Self {
-            dpkg: PathBuf::from(dpkg::DPKG_DIRECTORY),
+            dpkg: PathBuf::from(crate::packages::dpkg::DPKG_DIRECTORY),
             extended_states: PathBuf::from(dpkg::EXTENDED_STATES),
             root: PathBuf::from("/"),
         }
@@ -298,7 +298,7 @@ struct DebState {
 /// What dpkg and apt say now, or what the source is when they cannot be
 /// read.
 fn deb_state(places: &DebPlaces) -> Result<DebState, SourceReading> {
-    match dpkg::pending_updates(&places.dpkg) {
+    match crate::packages::dpkg::pending_updates(&places.dpkg) {
         Ok(0) => {}
         Ok(pending) => {
             tracing::info!(pending, "dpkg is writing: packages read later");

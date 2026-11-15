@@ -15,26 +15,21 @@ use okapi_rules::Language;
 use super::dpkg::{self, Status};
 use super::flatpak::{FlatpakRef, SYSTEM_INSTALLATION, related};
 use super::measure::{Measured, measure};
-use super::snap::{is_snap_name, read_snaps};
+use super::snap::read_snaps;
 use super::uninstall::{Ended, Going, Gone, Step, Target, Uninstaller, Why, same_architecture};
 use super::{Reading, SourceReading};
 use crate::packages::flatpak::{FlatpakError, SystemHelper};
 use crate::packages::packagekit::{
     self, PackageId, PackageKit, PackageKitError, Removing, error_code,
 };
-use crate::packages::snapd::{self, CHANGE_DONE, Snapd, SnapdError};
+use crate::packages::snapd::{self, CHANGE_DONE, Followed, Snapd, SnapdError};
 
-/// How often a change of snapd is asked where it stands.
-const CHANGE_LOOK_EVERY: Duration = Duration::from_millis(500);
 /// How long a snap's removal is followed at most once snapd took it (the
 /// rights given): unmounting and a snapshot of its data, minutes at worst.
 const SNAP_REMOVAL_WAIT: Duration = Duration::from_mins(30);
 /// How many looks at a change may fail in a row before its outcome is read
 /// from the snaps installed: snapd restarting answers nothing a moment.
 const CHANGE_LOOKS_FAILED: u32 = 5;
-/// The HTTP statuses of a request refused for its rights (unauthorized,
-/// forbidden), whatever kind snapd gives it.
-const HTTP_NOT_ALLOWED: [u16; 2] = [401, 403];
 
 /// PackageKit, snapd, flatpak's helper and dpkg's files, on this system.
 #[derive(Debug, Clone)]
@@ -61,7 +56,7 @@ impl Services {
     pub fn new(language: Language) -> Self {
         Self {
             locale: crate::packagekit_locale(language),
-            dpkg: PathBuf::from(dpkg::DPKG_DIRECTORY),
+            dpkg: PathBuf::from(crate::packages::dpkg::DPKG_DIRECTORY),
             snapd: Snapd::system(),
             flatpak: PathBuf::from(SYSTEM_INSTALLATION),
             removal_wait: SNAP_REMOVAL_WAIT,
@@ -175,7 +170,7 @@ impl Uninstaller for Services {
     }
 
     fn status(&self) -> Result<Status, Why> {
-        match dpkg::pending_updates(&self.dpkg) {
+        match crate::packages::dpkg::pending_updates(&self.dpkg) {
             Ok(0) => {}
             Ok(pending) => {
                 tracing::info!(pending, "dpkg is writing: its state read later");
@@ -217,15 +212,7 @@ impl Uninstaller for Services {
                 };
                 match packagekit.remove_packages(&ids, &heard, cancel) {
                     Ok(()) => Ended::Done(Gone::default()),
-                    Err(
-                        PackageKitError::Failed {
-                            code: error_code::TRANSACTION_CANCELLED,
-                            ..
-                        }
-                        | PackageKitError::Ended {
-                            exit: packagekit::EXIT_CANCELLED,
-                        },
-                    ) => Ended::Cancelled,
+                    Err(error) if error.cancelled() => Ended::Cancelled,
                     Err(error) => Ended::Failed(why_packagekit(&error)),
                 }
             }
@@ -286,10 +273,6 @@ impl Services {
     /// `removal_wait` at most: past it, or after looks failed in a row, the
     /// snap gone is a removal done.
     fn remove_snap(&self, name: &str, purge: bool) -> Ended {
-        if !is_snap_name(name) {
-            tracing::error!(name, "a snap's name refused: nothing asked");
-            return Ended::Failed(Why::NotFound);
-        }
         let change = match self.snapd.remove(name, purge) {
             Ok(change) => change,
             Err(error) => {
@@ -298,29 +281,17 @@ impl Services {
             }
         };
         tracing::info!(name, purge, change, "snapd removes the snap");
-        let followed = Instant::now();
-        let mut failed_looks = 0;
-        loop {
-            std::thread::sleep(CHANGE_LOOK_EVERY);
-            if followed.elapsed() >= self.removal_wait {
-                tracing::warn!(name, change, waited = ?self.removal_wait, "snapd's removal followed no longer");
-                return self.snap_outcome(name, Why::TimedOut);
+        match self
+            .snapd
+            .follow(&change, self.removal_wait, CHANGE_LOOKS_FAILED, &|_| {})
+        {
+            Followed::Ready(state) if state.status == CHANGE_DONE => Ended::Done(Gone::default()),
+            Followed::Ready(state) => {
+                tracing::warn!(name, change, status = %state.status, err = ?state.err, "snapd's removal did not end done");
+                Ended::Failed(Why::Service(state.err.unwrap_or(state.status)))
             }
-            match self.snapd.change(&change) {
-                Ok(state) if !state.ready => failed_looks = 0,
-                Ok(state) if state.status == CHANGE_DONE => return Ended::Done(Gone::default()),
-                Ok(state) => {
-                    tracing::warn!(name, change, status = %state.status, err = ?state.err, "snapd's removal did not end done");
-                    return Ended::Failed(Why::Service(state.err.unwrap_or(state.status)));
-                }
-                Err(error) => {
-                    failed_looks += 1;
-                    tracing::warn!(name, change, %error, failed_looks, "snapd's change unreadable");
-                    if failed_looks == CHANGE_LOOKS_FAILED {
-                        return self.snap_outcome(name, Why::Unanswered);
-                    }
-                }
-            }
+            Followed::TimedOut => self.snap_outcome(name, Why::TimedOut),
+            Followed::Unanswered => self.snap_outcome(name, Why::Unanswered),
         }
     }
 
@@ -369,15 +340,15 @@ pub fn snaps(home: Option<&Path>, reading: &Reading) -> SourceReading {
 fn why_packagekit(error: &PackageKitError) -> Why {
     match error {
         PackageKitError::Absent => Why::Absent,
-        PackageKitError::Failed { code, details } => match *code {
-            error_code::NOT_AUTHORIZED => Why::NotAuthorized,
-            error_code::CANNOT_GET_LOCK | error_code::LOCK_REQUIRED => Why::Busy,
-            error_code::PACKAGE_NOT_INSTALLED => Why::NotFound,
-            _ => Why::Service(details.clone()),
-        },
+        error if error.rights_refused() => Why::NotAuthorized,
+        error if error.busy() => Why::Busy,
+        PackageKitError::Failed {
+            code: error_code::PACKAGE_NOT_INSTALLED,
+            ..
+        } => Why::NotFound,
+        PackageKitError::Failed { details, .. } => Why::Service(details.clone()),
         PackageKitError::NotOnlyRemoving { .. } => Why::Unclear,
-        PackageKitError::TimedOut { waiting: true, .. } => Why::Busy,
-        PackageKitError::TimedOut { waiting: false, .. } => Why::TimedOut,
+        PackageKitError::TimedOut { .. } => Why::TimedOut,
         PackageKitError::Transport(_)
         | PackageKitError::Bus(_)
         | PackageKitError::Vanished
@@ -404,18 +375,17 @@ fn why_flatpak(error: &FlatpakError) -> Why {
 fn why_snapd(error: &SnapdError) -> Why {
     match error {
         SnapdError::Absent { .. } => Why::Absent,
+        SnapdError::InvalidName(_) => Why::NotFound,
         error if error.timed_out() => Why::TimedOut,
-        SnapdError::Refused {
-            kind,
-            status,
-            message,
-        } => match kind.as_str() {
-            snapd::KIND_AUTH_CANCELLED | snapd::KIND_LOGIN_REQUIRED => Why::NotAuthorized,
-            snapd::KIND_CHANGE_CONFLICT => Why::Busy,
-            snapd::KIND_NOT_INSTALLED => Why::NotFound,
-            _ if HTTP_NOT_ALLOWED.contains(status) => Why::NotAuthorized,
-            _ => Why::Service(message.clone()),
-        },
+        error if error.rights_refused() => Why::NotAuthorized,
+        error if error.busy() => Why::Busy,
+        SnapdError::Refused { kind, message, .. } => {
+            if kind == snapd::KIND_NOT_INSTALLED {
+                Why::NotFound
+            } else {
+                Why::Service(message.clone())
+            }
+        }
         SnapdError::Io(_)
         | SnapdError::Truncated { .. }
         | SnapdError::TooLarge
@@ -430,6 +400,7 @@ mod tests {
     use std::os::unix::net::UnixListener;
 
     use super::*;
+    use crate::packages::snapd::CHANGE_LOOK_EVERY;
 
     /// A snapd that answers each request, one per connection, with the
     /// next of `answers` (`None`: closed unanswered); the services that
@@ -541,6 +512,7 @@ mod tests {
             (refused(403, ""), Why::NotAuthorized),
             (refused(500, "other"), Why::Service("words".to_owned())),
             (SnapdError::Malformed("x"), Why::Unanswered),
+            (SnapdError::InvalidName("a/b".into()), Why::NotFound),
         ] {
             assert_eq!(why_snapd(&error), why, "{error}");
         }
@@ -574,6 +546,16 @@ mod tests {
                 Why::TimedOut,
             ),
             (PackageKitError::Vanished, Why::Unanswered),
+            (
+                PackageKitError::Bus(zbus::Error::Failure("gone".into())),
+                Why::Unanswered,
+            ),
+            (
+                PackageKitError::Ended {
+                    exit: packagekit::EXIT_CANCELLED,
+                },
+                Why::Unanswered,
+            ),
         ] {
             assert_eq!(why_packagekit(&error), why, "{error}");
         }

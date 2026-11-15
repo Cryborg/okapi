@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use super::*;
+use crate::packages::packagekit::error_code;
 use crate::packages::snapd::Publisher;
 
 /// `PkInfoEnum` values that are neither security nor held back.

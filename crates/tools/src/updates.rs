@@ -12,7 +12,7 @@ use jiff::Timestamp;
 use okapi_rules::Language;
 
 use crate::packages::apt;
-use crate::packages::packagekit::{self, Package, PackageId, PackageKitError, error_code, info};
+use crate::packages::packagekit::{self, Package, PackageId, PackageKitError, info};
 use crate::packages::reboot::{self, RebootRequired};
 use crate::packages::snapd::{self, Refresh, Schedule, SnapdError};
 
@@ -391,16 +391,9 @@ fn next_refresh(schedule: Result<Schedule, SnapdError>) -> Option<Timestamp> {
 
 fn failure_of_packagekit(error: &PackageKitError) -> Failure {
     match error {
-        PackageKitError::Failed { code, .. } => match *code {
-            error_code::CANNOT_GET_LOCK | error_code::LOCK_REQUIRED => Failure::Busy,
-            error_code::NO_NETWORK
-            | error_code::REPO_NOT_AVAILABLE
-            | error_code::NO_MORE_MIRRORS_TO_TRY
-            | error_code::CANNOT_FETCH_SOURCES => Failure::Offline,
-            error_code::NOT_AUTHORIZED => Failure::Refused,
-            _ => Failure::Broken,
-        },
-        PackageKitError::TimedOut { waiting: true, .. } => Failure::Busy,
+        error if error.busy() => Failure::Busy,
+        error if error.offline() => Failure::Offline,
+        error if error.rights_refused() => Failure::Refused,
         PackageKitError::TimedOut { .. } => Failure::Unanswered,
         // A call to the bus that got no reply in time (`method_timeout`).
         PackageKitError::Bus(zbus::Error::InputOutput(error))
@@ -408,7 +401,8 @@ fn failure_of_packagekit(error: &PackageKitError) -> Failure {
         {
             Failure::Unanswered
         }
-        PackageKitError::Transport(_)
+        PackageKitError::Failed { .. }
+        | PackageKitError::Transport(_)
         | PackageKitError::Absent
         | PackageKitError::Bus(_)
         | PackageKitError::Ended { .. }

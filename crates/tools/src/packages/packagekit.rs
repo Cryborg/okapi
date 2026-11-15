@@ -182,6 +182,62 @@ pub enum PackageKitError {
     },
 }
 
+impl PackageKitError {
+    /// Whether another program held the package manager: it said so, or
+    /// the time ran out while it still waited.
+    #[must_use]
+    pub const fn busy(&self) -> bool {
+        matches!(
+            self,
+            Self::Failed {
+                code: error_code::CANNOT_GET_LOCK | error_code::LOCK_REQUIRED,
+                ..
+            } | Self::TimedOut { waiting: true, .. }
+        )
+    }
+
+    /// Whether polkit refused the rights.
+    #[must_use]
+    pub const fn rights_refused(&self) -> bool {
+        matches!(
+            self,
+            Self::Failed {
+                code: error_code::NOT_AUTHORIZED,
+                ..
+            }
+        )
+    }
+
+    /// Whether it was cancelled, as asked.
+    #[must_use]
+    pub const fn cancelled(&self) -> bool {
+        matches!(
+            self,
+            Self::Failed {
+                code: error_code::TRANSACTION_CANCELLED,
+                ..
+            } | Self::Ended {
+                exit: EXIT_CANCELLED
+            }
+        )
+    }
+
+    /// Whether the network or the repositories could not be reached.
+    #[must_use]
+    pub const fn offline(&self) -> bool {
+        matches!(
+            self,
+            Self::Failed {
+                code: error_code::NO_NETWORK
+                    | error_code::REPO_NOT_AVAILABLE
+                    | error_code::NO_MORE_MIRRORS_TO_TRY
+                    | error_code::CANNOT_FETCH_SOURCES,
+                ..
+            }
+        )
+    }
+}
+
 /// What a transaction says, as [`Collector`] folds it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Signal {

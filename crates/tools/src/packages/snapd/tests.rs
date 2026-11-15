@@ -318,3 +318,33 @@ fn the_rights_refused_are_told_by_their_kind_and_a_change_by_its_status() {
         }
     );
 }
+
+#[test]
+fn a_snap_name_is_safe_in_a_path_and_a_request() {
+    for name in [
+        "firefox",
+        "gnome-46-2404",
+        "core24",
+        "android-studio",
+        "lxd_test2",
+    ] {
+        assert!(is_snap_name(name), "{name}");
+    }
+    for name in [
+        "", "-x", "Firefox", "a/b", "..", "a b", "a_", "a_B", "a%2Fb", "a_b_c",
+    ] {
+        assert!(!is_snap_name(name), "{name}");
+    }
+}
+
+#[test]
+fn a_name_that_is_no_snap_s_is_never_asked() {
+    // Catches a name sent as it came: a path or a query in the request.
+    // No socket: anything asked would fail as `Absent`.
+    let directory = tempfile::tempdir().unwrap();
+    let snapd = Snapd::at(&directory.path().join("none"), Duration::from_secs(1));
+    assert!(matches!(
+        snapd.remove("../v2/snaps", false),
+        Err(SnapdError::InvalidName(name)) if name == "../v2/snaps"
+    ));
+}

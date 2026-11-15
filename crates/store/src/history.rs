@@ -245,11 +245,13 @@ pub struct UninstallEntry {
     pub source: UninstallSource,
     /// The application, as the user saw it.
     pub name: String,
-    /// What went, by the names its source gives (packages, a snap).
+    /// What went, by the names its source gives (packages, a snap, a
+    /// flatpak and its extensions).
     pub packages: Vec<String>,
     /// What it freed, as estimated before; absent when a size was not
-    /// known. Never `removedBytes`: a reader that knows no kind would take
-    /// the line for a cleaning's.
+    /// known, or a part stayed or is not known freed yet. Never
+    /// `removedBytes`: a reader that knows no kind would take the line for a
+    /// cleaning's.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub freed_bytes: Option<u64>,
     /// Its data went with it.
@@ -262,6 +264,7 @@ pub struct UninstallEntry {
 pub enum UninstallSource {
     Deb,
     Snap,
+    Flatpak,
 }
 
 /// The kind a line says: a cleaning's says none, and one unknown makes the
@@ -1022,6 +1025,17 @@ mod tests {
                 "dataRemoved": false,
             })]
         );
+    }
+
+    #[test]
+    fn each_source_of_an_uninstallation_is_written_by_its_name() {
+        for (source, name) in [
+            (UninstallSource::Deb, "deb"),
+            (UninstallSource::Snap, "snap"),
+            (UninstallSource::Flatpak, "flatpak"),
+        ] {
+            assert_eq!(serde_json::to_value(source).unwrap(), name);
+        }
     }
 
     #[test]

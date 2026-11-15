@@ -15,7 +15,6 @@ okapi-platform = { workspace = true, optional = true }
 okapi-rules = { workspace = true, optional = true }
 png = { workspace = true, optional = true }
 resvg = { workspace = true, optional = true }
-rustix = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
@@ -57,7 +56,6 @@ apps = [
     "dep:okapi-rules",
     "dep:png",
     "dep:resvg",
-    "dep:rustix",
     "dep:serde",
     "dep:serde_json",
 ]

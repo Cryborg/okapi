@@ -11,6 +11,7 @@ use okapi_store::journal;
 use okapi_tools::monitor::{Command, Sampler};
 use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 
+mod apps;
 mod cleaner;
 mod dashboard;
 mod dates;
@@ -27,6 +28,7 @@ mod shown;
 mod sidebar;
 mod updates;
 
+use apps::AppsScreen;
 use cleaner::{CleanerEvent, CleanerScreen, Seams};
 use dashboard::{DashboardScreen, DashboardSeams};
 use disk_usage::DiskUsageScreen;
@@ -79,7 +81,13 @@ fn license_paragraphs() -> Vec<SharedString> {
 const SPACE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The screens a window holds, beyond what Slint does alone.
-type Screens = (AppWindow, CleanerScreen, DashboardScreen, SettingsScreen);
+type Screens = (
+    AppWindow,
+    CleanerScreen,
+    DashboardScreen,
+    SettingsScreen,
+    AppsScreen,
+);
 
 /// The window in `language`, filled with what it shows of Okapi itself, its
 /// cleaner reading, scanning and cleaning through `seams`, its settings
@@ -125,15 +133,21 @@ fn window(
     });
     let disk = DiskUsageScreen::attach(&window, seams.disk.clone(), language);
     let updates = UpdatesScreen::attach(&window, seams.updates.clone());
+    let apps = AppsScreen::attach(&window, seams.apps.clone(), language);
     let screen = CleanerScreen::attach(&window, seams, language);
     // Once the writes are done, the cleaner reads them again: a refusal
     // they caused is lifted, or a failure said there.
     let refreshed = screen.clone();
     settings.when_written(Rc::new(move || refreshed.refresh()));
     let closing = screen.clone();
-    window
-        .window()
-        .on_close_requested(move || closing.close_requested());
+    let closing_apps = apps.clone();
+    window.window().on_close_requested(move || {
+        // The cleaner first: its history line is waited for.
+        match closing.close_requested() {
+            slint::CloseRequestResponse::HideWindow => closing_apps.close_requested(),
+            held @ slint::CloseRequestResponse::KeepWindowShown => held,
+        }
+    });
     tracing::debug!(page = ?window.get_page(), "page shown");
     let sized = window.as_weak();
     window.on_sidebar_shown(move |chosen_folded, narrow| {
@@ -142,8 +156,8 @@ fn window(
         let scale = window.as_ref().map(|window| window.window().scale_factor());
         tracing::debug!(chosen_folded, narrow, ?size, ?scale, "sidebar shown");
     });
-    let dashboard = attach_home(&window, &screen, &disk, &updates, home);
-    Ok((window, screen, dashboard, settings))
+    let dashboard = attach_home(&window, &screen, &disk, &updates, &apps, home);
+    Ok((window, screen, dashboard, settings, apps))
 }
 
 /// Binds the Home page to `window`: it follows the page shown, its
@@ -154,6 +168,7 @@ fn attach_home(
     screen: &CleanerScreen,
     disk: &DiskUsageScreen,
     updates: &UpdatesScreen,
+    apps: &AppsScreen,
     home: DashboardSeams,
 ) -> DashboardScreen {
     let dashboard = DashboardScreen::attach(window, home);
@@ -162,6 +177,7 @@ fn attach_home(
     // Held here, by the page's callback, as long as the window is.
     let disk = disk.clone();
     let updates = updates.clone();
+    let apps = apps.clone();
     let heard = dashboard.clone();
     let cleaner = screen.clone();
     let shown_home = dashboard.clone();
@@ -174,6 +190,7 @@ fn attach_home(
         shown_home.page_shown(page);
         disk.page_shown(page);
         updates.page_shown(page);
+        apps.page_shown(page);
     });
     let analyzing = screen.clone();
     window
@@ -252,7 +269,7 @@ fn main() -> ExitCode {
         session = ?SESSION_VARIABLES.map(|name| (name, std::env::var_os(name))),
         "app started"
     );
-    let (window, screen, home, settings) =
+    let (window, screen, home, settings, apps) =
         match window(Seams::system(), home_seams(language), language) {
             Ok(window) => window,
             Err(error) => {
@@ -268,6 +285,7 @@ fn main() -> ExitCode {
     ));
     let ran = window.run();
     screen.shut_down();
+    apps.shut_down();
     home.shut_down();
     fold.shut_down();
     settings.shut_down();
@@ -565,6 +583,7 @@ mod tests {
                 "Chaque changement est enregistré tout de suite.",
             ),
             ("Mises à jour", "Mises à jour"),
+            ("Applications", "Applications"),
             ("À propos", "À propos"),
         ] {
             button(&window, page).invoke_accessible_default_action();
@@ -731,7 +750,7 @@ mod tests {
     }
 
     /// Texts the same in both languages.
-    const SAME_IN_ENGLISH: [&str; 18] = [
+    const SAME_IN_ENGLISH: [&str; 22] = [
         "{}, {}",
         "{}, {}, {}",
         "Version {}",
@@ -750,6 +769,10 @@ mod tests {
         "snap",
         "{}, version {}",
         "{}, ",
+        "Ubuntu",
+        "Snap",
+        "Flatpak",
+        "Source",
     ];
 
     #[test]
@@ -818,6 +841,11 @@ mod tests {
             "SnapNote",
             "Settled",
             "UpdatesPage",
+            "AppWords",
+            "AppRow",
+            "Rest",
+            "Uninstall",
+            "AppsPage",
         ] {
             assert!(
                 texts.iter().any(|(component, _)| component == context),

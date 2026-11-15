@@ -38,8 +38,9 @@ const SAVER_NAME: &str = "okapi-dashboard-save";
 /// Writes a layout; whether it is kept (the store traces why not).
 pub type Write = crate::saving::Write<DashboardLayout>;
 
-/// How long the note of a widget removed stays, unless it is held.
-const TOAST_SHOWN_FOR: Duration = Duration::from_secs(8);
+/// How long a note of what was just done stays (a widget removed, an
+/// application uninstalled), unless it is held.
+pub(crate) const TOAST_SHOWN_FOR: Duration = Duration::from_secs(8);
 /// How often the readings sent are taken in: the fastest source reads
 /// every two seconds.
 const TAKE_SAMPLES_EVERY: Duration = Duration::from_millis(500);
@@ -1822,7 +1823,7 @@ pub mod tests {
 
     /// The window on the Home page, and the page itself.
     fn home_screen(seams: DashboardSeams) -> (ui::AppWindow, DashboardScreen) {
-        let (window, _cleaner, home, _settings) =
+        let (window, _cleaner, home, _settings, _apps) =
             crate::wide_window(seams_never_scanning(), seams, Language::French);
         (window, home)
     }
@@ -1830,7 +1831,7 @@ pub mod tests {
     /// The window on the Home page at the mockup's size (three columns,
     /// every widget in view), its cleaner working through `cleaner`.
     fn on_home_with(cleaner: Seams, seams: DashboardSeams) -> ui::AppWindow {
-        let (window, _cleaner, _home, _settings) =
+        let (window, _cleaner, _home, _settings, _apps) =
             crate::wide_window(cleaner, seams, Language::French);
         window
     }

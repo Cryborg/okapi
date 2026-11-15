@@ -2258,3 +2258,439 @@ msgstr "{}, {}"
 msgctxt "UpdatesPage"
 msgid "Applis à mettre à jour"
 msgstr "Apps to update"
+
+msgctxt "Sidebar"
+msgid "Applications"
+msgstr "Applications"
+
+msgctxt "AppWords"
+msgid "Ubuntu"
+msgstr "Ubuntu"
+
+msgctxt "AppWords"
+msgid "Snap"
+msgstr "Snap"
+
+msgctxt "AppWords"
+msgid "Flatpak"
+msgstr "Flatpak"
+
+msgctxt "AppWords"
+msgid "Mesure en cours"
+msgstr "Measuring"
+
+msgctxt "AppWords"
+msgid "au moins {}"
+msgstr "at least {}"
+
+msgctxt "AppWords"
+msgid "Données illisibles"
+msgstr "Data unreadable"
+
+msgctxt "AppWords"
+msgid "Aucune"
+msgstr "None"
+
+msgctxt "AppWords"
+msgid "{}, {}, {}"
+msgstr "{}, {}, {}"
+
+msgctxt "AppWords"
+msgid ", données en cours de mesure"
+msgstr ", data being measured"
+
+msgctxt "AppWords"
+msgid ", données illisibles"
+msgstr ", data unreadable"
+
+msgctxt "AppWords"
+msgid ", données {}"
+msgstr ", data {}"
+
+msgctxt "AppWords"
+msgid ", anciennes versions {}"
+msgstr ", old versions {}"
+
+msgctxt "AppWords"
+msgid ", fait partie du système"
+msgstr ", part of the system"
+
+msgctxt "AppWords"
+msgid ", désinstallation en cours"
+msgstr ", being uninstalled"
+
+msgctxt "AppWords"
+msgid "Installée par vous"
+msgstr "Installed by you"
+
+msgctxt "AppWords"
+msgid "Installée avec une autre appli"
+msgstr "Installed with another app"
+
+msgctxt "AppWords"
+msgid "Installée avec le système"
+msgstr "Installed with the system"
+
+msgctxt "AppWords"
+msgid "Le service qui désinstalle n'est pas là sur ce système."
+msgstr "The service that uninstalls is not on this system."
+
+msgctxt "AppWords"
+msgid "Les droits n'ont pas été accordés."
+msgstr "The rights were not granted."
+
+msgctxt "AppWords"
+msgid "Une autre installation est en cours : réessayez dans un moment."
+msgstr "Another installation is running: try again in a moment."
+
+msgctxt "AppWords"
+msgid "Le service ne répond pas. La liste est relue."
+msgstr "The service does not answer. The list is read again."
+
+msgctxt "AppWords"
+msgid "Pas de réponse à temps. Si vous avez accordé les droits, la désinstallation peut se faire quand même."
+msgstr "No answer in time. If you granted the rights, the uninstallation may still happen."
+
+msgctxt "AppWords"
+msgid "Elle n'est plus installée. La liste est relue."
+msgstr "It is no longer installed. The list is read again."
+
+msgctxt "AppWords"
+msgid "Le système a refusé : {}"
+msgstr "The system refused: {}"
+
+msgctxt "AppRow"
+msgid "· Désinstallation en cours"
+msgstr "· Being uninstalled"
+
+msgctxt "AppRow"
+msgid "· Fait partie du système"
+msgstr "· Part of the system"
+
+msgctxt "AppRow"
+msgid "· Anciennes versions : {}"
+msgstr "· Old versions: {}"
+
+msgctxt "Lines"
+msgid "Applications installées"
+msgstr "Installed applications"
+
+msgctxt "Rest"
+msgid "Système et composants"
+msgstr "System and components"
+
+msgctxt "Rest"
+msgid "paquets Ubuntu pas encore lus"
+msgstr "Ubuntu packages not read yet"
+
+msgctxt "Rest"
+msgid "composants snap pas encore lus"
+msgstr "snap components not read yet"
+
+msgctxt "Rest"
+msgid "C'est quoi ?"
+msgstr "What is it?"
+
+msgctxt "Rest"
+msgid "Ce qui fait tourner le système et les applis sans apparaître dans le menu : les bibliothèques, partagées par plusieurs programmes ; les environnements communs aux applis (bureau GNOME, pilotes graphiques, socles des snaps) ; les outils sans icône dans le menu, utilisés en ligne de commande ou par le système. Okapi ne les détaille pas un par un et ne propose pas de les désinstaller."
+msgstr "What runs the system and the apps without showing in the menu: libraries, shared by several programs; environments the apps share (the GNOME desktop, graphics drivers, the bases of snaps); tools without an icon in the menu, used from the command line or by the system. Okapi does not list them one by one and does not offer to uninstall them."
+
+msgctxt "Panel"
+msgid "{}, version {}"
+msgstr "{}, version {}"
+
+msgctxt "Panel"
+msgid "Fermer le détail"
+msgstr "Close the detail"
+
+msgctxt "Panel"
+msgid "Éditeur"
+msgstr "Publisher"
+
+msgctxt "Panel"
+msgid "Origine"
+msgstr "Origin"
+
+msgctxt "Panel"
+msgid "Paquet"
+msgstr "Package"
+
+msgctxt "Panel"
+msgid "Place prise"
+msgstr "Space taken"
+
+msgctxt "Panel"
+msgid "Appli : {}"
+msgstr "App: {}"
+
+msgctxt "Panel"
+msgid "Mesure en cours"
+msgstr "Measuring"
+
+msgctxt "Panel"
+msgid "Données : aucune"
+msgstr "Data: none"
+
+msgctxt "Panel"
+msgid "Données : {}"
+msgstr "Data: {}"
+
+msgctxt "Panel"
+msgid "Anciennes versions : {}"
+msgstr "Old versions: {}"
+
+msgctxt "Panel"
+msgid "Au total : {}"
+msgstr "In all: {}"
+
+msgctxt "Panel"
+msgid "Le système garde {} versions précédentes pour pouvoir revenir en arrière. Elles partent avec l'appli."
+msgstr "The system keeps {} previous versions to be able to go back. They go with the app."
+
+msgctxt "Panel"
+msgid "Désinstaller"
+msgstr "Uninstall"
+
+msgctxt "Panel"
+msgid "Voir la désinstallation en cours"
+msgstr "See the uninstallation under way"
+
+msgctxt "Panel"
+msgid "Le bureau a besoin de {} pour fonctionner. Okapi ne propose donc pas de la désinstaller."
+msgstr "The desktop needs {} to work. So Okapi does not offer to uninstall it."
+
+msgctxt "Panel"
+msgid "Okapi ne désinstalle pas encore les flatpaks."
+msgstr "Okapi does not uninstall flatpaks yet."
+
+msgctxt "Uninstall"
+msgid "Vérification…"
+msgstr "Checking…"
+
+msgctxt "Uninstall"
+msgid "{} reste installée"
+msgstr "{} stays installed"
+
+msgctxt "Uninstall"
+msgid "Désinstallation de {}…"
+msgstr "Uninstalling {}…"
+
+msgctxt "Uninstall"
+msgid "{} est toujours là"
+msgstr "{} is still there"
+
+msgctxt "Uninstall"
+msgid "Désinstaller {} ?"
+msgstr "Uninstall {}?"
+
+msgctxt "Uninstall"
+msgid "{} et {} paquets qui en dépendent partiront. Place libérée : {}."
+msgstr "{} and {} packages that depend on it will go. Space freed: {}."
+
+msgctxt "Uninstall"
+msgid "{} et un paquet qui en dépend partiront. Place libérée : {}."
+msgstr "{} and one package that depends on it will go. Space freed: {}."
+
+msgctxt "Uninstall"
+msgid "Place libérée : {}."
+msgstr "Space freed: {}."
+
+msgctxt "Uninstall"
+msgid "Ce qui partirait : {}"
+msgstr "What would go: {}"
+
+msgctxt "Uninstall"
+msgid "Ses réglages dans votre dossier personnel restent en place : vous les retrouvez si vous la réinstallez."
+msgstr "Its settings in your home folder stay: you find them again if you reinstall it."
+
+msgctxt "Uninstall"
+msgid "Place libérée : {}, anciennes versions comprises."
+msgstr "Space freed: {}, old versions included."
+
+msgctxt "Uninstall"
+msgid "Supprimer aussi ses données ({})"
+msgstr "Also delete its data ({})"
+
+msgctxt "Uninstall"
+msgid "Supprimer aussi ses données"
+msgstr "Also delete its data"
+
+msgctxt "Uninstall"
+msgid "Ses données partent tout de suite, pour tous les comptes et celles du système, sans copie gardée."
+msgstr "Its data goes at once, for every account and the system's, with no copy kept."
+
+msgctxt "Uninstall"
+msgid "Une copie de ses données (de tous les comptes et du système) est gardée 31 jours par le système."
+msgstr "A copy of its data (of every account and the system's) is kept 31 days by the system."
+
+msgctxt "Uninstall"
+msgid "Votre mot de passe vous sera demandé."
+msgstr "You will be asked for your password."
+
+msgctxt "Uninstall"
+msgid "La désinstaller retirerait aussi des paquets dont le système a besoin. Rien n'a été modifié."
+msgstr "Uninstalling it would also remove packages the system needs. Nothing was changed."
+
+msgctxt "Uninstall"
+msgid "Une désinstallation est en cours. Fermez encore Okapi pour le quitter quand même : elle se terminera sans lui, et ne sera pas inscrite à l'historique."
+msgstr "An uninstallation is under way. Close Okapi again to quit anyway: it will end without it, and will not be in the history."
+
+msgctxt "Uninstall"
+msgid "Trop tard pour annuler : le système termine."
+msgstr "Too late to cancel: the system is finishing."
+
+msgctxt "Uninstall"
+msgid "Fermer cette fenêtre n'arrête pas la désinstallation."
+msgstr "Closing this window does not stop the uninstallation."
+
+msgctxt "Uninstall"
+msgid "Annuler"
+msgstr "Cancel"
+
+msgctxt "Uninstall"
+msgid "Fermer"
+msgstr "Close"
+
+msgctxt "Uninstall"
+msgid "Annuler la désinstallation"
+msgstr "Cancel the uninstallation"
+
+msgctxt "Uninstall"
+msgid "Réessayer"
+msgstr "Try again"
+
+msgctxt "Uninstall"
+msgid "Désinstaller"
+msgstr "Uninstall"
+
+msgctxt "Toast"
+msgid "{} désinstallée : {} libérés"
+msgstr "{} uninstalled: {} freed"
+
+msgctxt "AppsPage"
+msgid "Applications"
+msgstr "Applications"
+
+msgctxt "AppsPage"
+msgid "Lecture des applis installées… Rien n'est modifié."
+msgstr "Reading the installed apps… Nothing is changed."
+
+msgctxt "AppsPage"
+msgid "Lecture…"
+msgstr "Reading…"
+
+msgctxt "AppsPage"
+msgid "Actualiser"
+msgstr "Refresh"
+
+msgctxt "AppsPage"
+msgid "Les paquets Ubuntu ne sont pas lisibles pour l'instant : une installation est en cours."
+msgstr "The Ubuntu packages cannot be read for now: an installation is under way."
+
+msgctxt "AppsPage"
+msgid "Les paquets Ubuntu n'ont pas pu être lus. Le détail est dans le journal."
+msgstr "The Ubuntu packages could not be read. The detail is in the journal."
+
+msgctxt "AppsPage"
+msgid "Les snaps ne sont pas lisibles : le service snapd ne répond pas."
+msgstr "The snaps cannot be read: the snapd service does not answer."
+
+msgctxt "AppsPage"
+msgid "Chercher une appli ou un paquet"
+msgstr "Search for an app or a package"
+
+msgctxt "AppsPage"
+msgid "Source"
+msgstr "Source"
+
+msgctxt "AppsPage"
+msgid "Toutes"
+msgstr "All"
+
+msgctxt "AppsPage"
+msgid "Ubuntu"
+msgstr "Ubuntu"
+
+msgctxt "AppsPage"
+msgid "Snap"
+msgstr "Snap"
+
+msgctxt "AppsPage"
+msgid "Flatpak"
+msgstr "Flatpak"
+
+msgctxt "AppsPage"
+msgid "Nom"
+msgstr "Name"
+
+msgctxt "AppsPage"
+msgid "Appli"
+msgstr "App"
+
+msgctxt "AppsPage"
+msgid "Données"
+msgstr "Data"
+
+msgctxt "AppsPage"
+msgid "Place prise"
+msgstr "Space taken"
+
+msgctxt "AppsPage"
+msgid "Aucune appli ne correspond à « {} »"
+msgstr "No app matches “{}”"
+
+msgctxt "AppsPage"
+msgid "La recherche porte sur le nom de l'appli et sur le nom de son paquet, dans toutes les sources."
+msgstr "The search looks at the app's name and its package's name, in every source."
+
+msgctxt "AppsPage"
+msgid "Effacer la recherche"
+msgstr "Clear the search"
+
+msgctxt "Panel"
+msgid "Le système garde la version précédente pour pouvoir revenir en arrière. Elle part avec l'appli."
+msgstr "The system keeps the previous version to be able to go back. It goes with the app."
+
+msgctxt "AppWords"
+msgid "{}, {}"
+msgstr "{}, {}"
+
+msgctxt "AppWords"
+msgid "{}, et {} de plus"
+msgstr "{}, and {} more"
+
+msgctxt "Rest"
+msgid "paquets : {} ({})"
+msgstr "packages: {} ({})"
+
+msgctxt "Rest"
+msgid "paquets Ubuntu illisibles"
+msgstr "Ubuntu packages unreadable"
+
+msgctxt "Rest"
+msgid "composants snap : {} ({})"
+msgstr "snap components: {} ({})"
+
+msgctxt "Rest"
+msgid "composants snap illisibles"
+msgstr "snap components unreadable"
+
+msgctxt "Rest"
+msgid "{} ; {}"
+msgstr "{}; {}"
+
+msgctxt "Uninstall"
+msgid "Une autre installation est en cours : Okapi attend son tour."
+msgstr "Another installation is under way: Okapi waits its turn."
+
+msgctxt "Toast"
+msgid "{} désinstallée : {} libérés. Elle n'a pas pu être inscrite à l'historique."
+msgstr "{} uninstalled: {} freed. It could not be written in the history."
+
+msgctxt "AppsPage"
+msgid "Applis : {}, lues à l'instant"
+msgstr "Apps: {}, read just now"
+
+msgctxt "AppsPage"
+msgid "Applis : {}, lues il y a {} min"
+msgstr "Apps: {}, read {} min ago"

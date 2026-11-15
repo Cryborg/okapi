@@ -1,0 +1,912 @@
+// The applications screen: what is installed (deb, snap, flatpak), what each
+// takes (the application, its data, its old versions), its detail, and its
+// uninstallation through the system's own services. Drawn from
+// docs/design/applications/project/Applications.dc.html.
+import { LineEdit, ListView } from "std-widgets.slint";
+import { Theme, Screen } from "theme.slint";
+import {
+    ActionButton, Banner, ButtonKind, Card, CheckMark, Detail, FocusRing, Icon, IconButton,
+    ModalFrame, ProgressBar, Title,
+} from "widgets.slint";
+import { Size, Words } from "cleaner-model.slint";
+import { AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, SourceShown, UninstallStep, UninstallWhy } from "apps-model.slint";
+
+global AppWords {
+    pure public function source(source: AppSource) -> string {
+        source == AppSource.deb ? @tr("Ubuntu") : source == AppSource.snap ? @tr("Snap") : @tr("Flatpak")
+    }
+
+    pure public function app-size(line: AppLine) -> string {
+        line.app-known ? Words.size(line.app-size) : @tr("Mesure en cours")
+    }
+
+    // What the "Données" column says; nothing for a deb, whose data no
+    // folder surely holds.
+    pure public function data(state: AppData, size: Size) -> string {
+        state == AppData.measured ? Words.size(size)
+            : state == AppData.partial ? @tr("au moins {}", Words.size(size))
+            : state == AppData.measuring ? @tr("Mesure en cours")
+            : state == AppData.not-measured ? @tr("Données illisibles")
+            : state == AppData.none ? @tr("Aucune")
+            : ""
+    }
+
+    // What a screen reader says of a line.
+    pure public function spoken(line: AppLine) -> string {
+        @tr("{}, {}, {}", line.name, self.source(line.source), self.app-size(line))
+            + (line.data == AppData.unknown || line.data == AppData.none ? ""
+                : line.data == AppData.measuring ? @tr(", données en cours de mesure")
+                : line.data == AppData.not-measured ? @tr(", données illisibles")
+                : @tr(", données {}", self.data(line.data, line.data-size)))
+            + (line.has-old ? @tr(", anciennes versions {}", Words.size(line.old-size)) : "")
+            + (line.system ? @tr(", fait partie du système") : "")
+            + (line.uninstalling ? @tr(", désinstallation en cours") : "")
+    }
+
+    // The first names of `names`, and how many more.
+    pure public function names(names: [string]) -> string {
+        names.length == 0 ? ""
+            : names.length == 1 ? names[0]
+            : names.length == 2 ? @tr("{}, {}", names[0], names[1])
+            : names.length == 3 ? @tr("{}, {}", @tr("{}, {}", names[0], names[1]), names[2])
+            : @tr("{}, et {} de plus", @tr("{}, {}", @tr("{}, {}", names[0], names[1]), names[2]), names.length - 3)
+    }
+
+    pure public function origin(origin: AppOrigin) -> string {
+        origin == AppOrigin.by-user ? @tr("Installée par vous")
+            : origin == AppOrigin.as-dependency ? @tr("Installée avec une autre appli")
+            : origin == AppOrigin.with-system ? @tr("Installée avec le système") : ""
+    }
+
+    pure public function why(why: UninstallWhy, detail: string) -> string {
+        why == UninstallWhy.absent ? @tr("Le service qui désinstalle n'est pas là sur ce système.")
+            : why == UninstallWhy.not-authorized ? @tr("Les droits n'ont pas été accordés.")
+            : why == UninstallWhy.busy ? @tr("Une autre installation est en cours : réessayez dans un moment.")
+            : why == UninstallWhy.unanswered ? @tr("Le service ne répond pas. La liste est relue.")
+            : why == UninstallWhy.timed-out ? @tr("Pas de réponse à temps. Si vous avez accordé les droits, la désinstallation peut se faire quand même.")
+            : why == UninstallWhy.not-found ? @tr("Elle n'est plus installée. La liste est relue.")
+            : @tr("Le système a refusé : {}", detail)
+    }
+}
+
+// The icon of an application, or a grey window when it has none.
+component AppIcon inherits Rectangle {
+    in property <image> source;
+    in property <bool> has-source;
+    in property <bool> large;
+    width: large ? Theme.app-icon-large : Theme.app-icon;
+    height: self.width;
+    border-radius: large ? Theme.app-icon-radius-large : Theme.app-icon-radius;
+    background: has-source ? transparent : Theme.surface-2;
+    border-width: has-source ? 0 : Theme.border-width;
+    border-color: Theme.border;
+    accessible-role: none;
+    if root.has-source: Image {
+        source: root.source;
+        width: parent.width;
+        height: parent.height;
+        accessible-role: none;
+    }
+    if !root.has-source: Icon {
+        source: @image-url("../assets/icons/app-window.svg");
+        colorize: Theme.text-3;
+    }
+}
+
+component AppRow inherits Rectangle {
+    in property <AppLine> line;
+    in property <int> index;
+    in property <bool> focused;
+
+    height: Theme.app-row-height;
+    background: Apps.chosen == root.index ? Theme.accent-soft : touch.has-hover ? Theme.surface-hover : transparent;
+    accessible-role: list-item;
+    accessible-label: AppWords.spoken(line);
+    accessible-item-selectable: true;
+    accessible-item-selected: Apps.chosen == root.index;
+    accessible-action-default => {
+        Apps.choose(root.index);
+    }
+
+    touch := TouchArea {
+        clicked => {
+            Apps.current = root.index;
+            Apps.choose(root.index);
+        }
+        changed has-hover => {
+            Apps.point(self.has-hover ? root.index : -1);
+        }
+    }
+    Rectangle {
+        y: parent.height - self.height;
+        height: Theme.border-width;
+        background: Theme.border;
+    }
+    FocusRing {
+        shown: root.focused;
+        border-radius: Theme.radius-small;
+    }
+    HorizontalLayout {
+        padding-left: Theme.spacing-l;
+        padding-right: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        AppIcon {
+            source: line.icon;
+            has-source: line.has-icon;
+            y: (parent.height - self.height) / 2;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: Theme.spacing-xxs;
+            name := Text {
+                text: line.name;
+                accessible-role: none;
+                color: Theme.text;
+                font-size: Theme.font-label;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                spacing: Theme.spacing-xs;
+                alignment: start;
+                Text {
+                    text: AppWords.source(line.source);
+                    accessible-role: none;
+                    color: Theme.text-2;
+                    font-size: Theme.font-caption;
+                }
+                if line.system: Icon {
+                    source: @image-url("../assets/icons/lock.svg");
+                    colorize: Theme.text-2;
+                    width: Theme.icon-badge;
+                    height: Theme.icon-badge;
+                    y: (parent.height - self.height) / 2;
+                }
+                if line.system || line.has-old || line.uninstalling: Text {
+                    text: line.uninstalling ? @tr("· Désinstallation en cours")
+                        : line.system ? @tr("· Fait partie du système")
+                        : @tr("· Anciennes versions : {}", Words.size(line.old-size));
+                    accessible-role: none;
+                    color: Theme.text-2;
+                    font-size: Theme.font-caption;
+                    overflow: elide;
+                }
+            }
+        }
+        Text {
+            width: Theme.app-col-size;
+            text: AppWords.app-size(line);
+            accessible-role: none;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            color: line.app-known ? Theme.text : Theme.text-2;
+            font-size: line.app-known ? Theme.font-label : Theme.font-caption;
+        }
+        Text {
+            width: Theme.app-col-data;
+            text: AppWords.data(line.data, line.data-size);
+            accessible-role: none;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            color: line.data == AppData.measured ? Theme.text : Theme.text-2;
+            font-size: line.data == AppData.measured ? Theme.font-label : Theme.font-caption;
+            overflow: elide;
+        }
+        Rectangle {
+            width: Screen.narrow ? Theme.app-bar-width-narrow : Theme.app-bar-width;
+            height: Theme.disk-bar-height;
+            y: (parent.height - self.height) / 2;
+            border-radius: Theme.radius-pill;
+            background: Theme.track;
+            Rectangle {
+                x: 0;
+                width: parent.width * clamp(line.bar, 0, 1);
+                height: parent.height;
+                border-radius: parent.border-radius;
+                background: Theme.size-bar;
+            }
+        }
+    }
+    // A name cut short is said whole on hover.
+    if name.width < name.preferred-width && touch.has-hover: Tooltip {
+        text: @markdown("\{line.name}");
+    }
+}
+
+// The lines, by the keyboard too: the arrows move, Enter opens the detail.
+component Lines inherits FocusScope {
+    accessible-role: list;
+    accessible-label: @tr("Applications installées");
+    // Shown, it takes the keyboard: the arrows move in it at once.
+    init => {
+        self.focus();
+    }
+
+    function show(index: int) {
+        let place = index * Theme.app-row-height;
+        if place < -view.content-y {
+            view.content-y = -place;
+        } else if place + Theme.app-row-height > -view.content-y + view.visible-height {
+            view.content-y = view.visible-height - place - Theme.app-row-height;
+        }
+    }
+
+    function move(index: int) {
+        if Apps.lines.length == 0 {
+            return;
+        }
+        Apps.current = clamp(index, 0, Apps.lines.length - 1);
+        root.show(Apps.current);
+        Apps.move-to(Apps.current);
+        Apps.list-focus(true);
+    }
+
+    key-pressed(event) => {
+        if event.text == Key.DownArrow {
+            root.move(Apps.current + 1);
+            return accept;
+        }
+        if event.text == Key.UpArrow {
+            root.move(Apps.current - 1);
+            return accept;
+        }
+        if event.text == Key.Home {
+            root.move(0);
+            return accept;
+        }
+        if event.text == Key.End {
+            root.move(Apps.lines.length - 1);
+            return accept;
+        }
+        if event.text == Key.Return && Apps.lines.length > 0 {
+            Apps.choose(Apps.current);
+            return accept;
+        }
+        reject
+    }
+    changed has-focus => {
+        if !self.has-focus {
+            Apps.list-focus(false);
+        }
+    }
+
+    view := ListView {
+        for line[index] in Apps.lines: AppRow {
+            line: line;
+            index: index;
+            focused: root.has-focus && Apps.current == index;
+        }
+    }
+}
+
+// "Système et composants": what is no application, pinned under the list.
+component Rest inherits Rectangle {
+    background: Theme.surface-2;
+    VerticalLayout {
+        Rectangle {
+            height: Theme.border-width;
+            background: Theme.border-strong;
+        }
+        HorizontalLayout {
+            height: Theme.app-sum-height;
+            padding-left: Theme.spacing-l;
+            padding-right: Theme.spacing-s;
+            spacing: Theme.spacing-m;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                Text {
+                    text: @tr("Système et composants");
+                    color: Theme.text;
+                    font-weight: Theme.weight-semibold;
+                    font-size: Theme.font-label;
+                }
+                Detail {
+                    property <string> debs: Apps.debs == SourceShown.read ? @tr("paquets : {} ({})", Apps.rest-packages, Words.size(Apps.rest-packages-size))
+                        : Apps.debs == SourceShown.reading ? @tr("paquets Ubuntu pas encore lus")
+                        : Apps.debs == SourceShown.absent ? ""
+                        : @tr("paquets Ubuntu illisibles");
+                    property <string> snaps: Apps.snaps == SourceShown.read ? @tr("composants snap : {} ({})", Apps.rest-snaps, Words.size(Apps.rest-snaps-size))
+                        : Apps.snaps == SourceShown.reading ? @tr("composants snap pas encore lus")
+                        : Apps.snaps == SourceShown.absent ? ""
+                        : @tr("composants snap illisibles");
+                    text: self.debs == "" ? self.snaps : self.snaps == "" ? self.debs : @tr("{} ; {}", self.debs, self.snaps);
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+            }
+            ActionButton {
+                kind: ButtonKind.ghost;
+                text: @tr("C'est quoi ?");
+                accessible-expandable: true;
+                accessible-expanded: Apps.rest-open;
+                y: (parent.height - self.height) / 2;
+                clicked => {
+                    Apps.rest-open = !Apps.rest-open;
+                }
+            }
+        }
+        if Apps.rest-open: Detail {
+            text: @tr("Ce qui fait tourner le système et les applis sans apparaître dans le menu : les bibliothèques, partagées par plusieurs programmes ; les environnements communs aux applis (bureau GNOME, pilotes graphiques, socles des snaps) ; les outils sans icône dans le menu, utilisés en ligne de commande ou par le système. Okapi ne les détaille pas un par un et ne propose pas de les désinstaller.");
+            wrap: word-wrap;
+        }
+        if Apps.rest-open: Rectangle {
+            height: Theme.spacing-m;
+        }
+    }
+}
+
+// A fact of the detail: its name, then what it says.
+component Fact inherits VerticalLayout {
+    in property <string> name;
+    in property <string> value;
+    spacing: Theme.spacing-xxs;
+    Detail {
+        text: root.name;
+        font-size: Theme.font-caption;
+    }
+    Text {
+        text: root.value;
+        color: Theme.text;
+        font-size: Theme.font-label;
+        wrap: word-wrap;
+    }
+}
+
+component Panel inherits Card {
+    width: Screen.narrow ? Theme.disk-panel-width-narrow : Theme.disk-panel-width;
+    VerticalLayout {
+        padding: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        HorizontalLayout {
+            spacing: Theme.spacing-m;
+            AppIcon {
+                source: Apps.detail.icon;
+                has-source: Apps.detail.has-icon;
+                large: true;
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                Text {
+                    text: Apps.detail.name;
+                    color: Theme.text;
+                    font-size: Theme.font-heading;
+                    font-weight: Theme.weight-semibold;
+                    wrap: word-wrap;
+                }
+                Detail {
+                    text: Apps.detail.version == "" ? AppWords.source(Apps.detail.source)
+                        : @tr("{}, version {}", AppWords.source(Apps.detail.source), Apps.detail.version);
+                }
+            }
+            IconButton {
+                icon: @image-url("../assets/icons/x.svg");
+                label: @tr("Fermer le détail");
+                clicked => {
+                    Apps.close-detail();
+                }
+            }
+        }
+        if Apps.detail.publisher != "": Fact {
+            name: @tr("Éditeur");
+            value: Apps.detail.publisher;
+        }
+        if Apps.detail.origin != AppOrigin.none: Fact {
+            name: @tr("Origine");
+            value: AppWords.origin(Apps.detail.origin);
+        }
+        Fact {
+            name: @tr("Paquet");
+            value: Apps.detail.package;
+        }
+        VerticalLayout {
+            spacing: Theme.spacing-xxs;
+            Detail {
+                text: @tr("Place prise");
+                font-size: Theme.font-caption;
+            }
+            Text {
+                text: @tr("Appli : {}", Apps.detail.app-known ? Words.size(Apps.detail.app-size) : @tr("Mesure en cours"));
+                color: Theme.text;
+            }
+            if Apps.detail.data != AppData.unknown: Text {
+                text: Apps.detail.data == AppData.none ? @tr("Données : aucune") : @tr("Données : {}", AppWords.data(Apps.detail.data, Apps.detail.data-size));
+                color: Theme.text;
+            }
+            if Apps.detail.has-old: Text {
+                text: @tr("Anciennes versions : {}", Words.size(Apps.detail.old-size));
+                color: Theme.text;
+            }
+            Text {
+                text: @tr("Au total : {}", Words.size(Apps.detail.total));
+                color: Theme.text;
+                font-weight: Theme.weight-semibold;
+            }
+            if Apps.detail.has-old: Detail {
+                text: Apps.detail.old-versions == 1
+                    ? @tr("Le système garde la version précédente pour pouvoir revenir en arrière. Elle part avec l'appli.")
+                    : @tr("Le système garde {} versions précédentes pour pouvoir revenir en arrière. Elles partent avec l'appli.", Apps.detail.old-versions);
+                wrap: word-wrap;
+            }
+        }
+        if Apps.detail.uninstallable: ActionButton {
+            text: @tr("Désinstaller");
+            icon: @image-url("../assets/icons/trash-2.svg");
+            kind: ButtonKind.danger;
+            enabled: !Apps.busy;
+            clicked => {
+                Apps.uninstall();
+            }
+        }
+        if Apps.detail.uninstalling: ActionButton {
+            text: @tr("Voir la désinstallation en cours");
+            kind: ButtonKind.ghost;
+            wrapped: true;
+            clicked => {
+                Apps.uninstall();
+            }
+        }
+        if Apps.detail.system: Detail {
+            text: @tr("Le bureau a besoin de {} pour fonctionner. Okapi ne propose donc pas de la désinstaller.", Apps.detail.name);
+            wrap: word-wrap;
+        }
+        if Apps.detail.source == AppSource.flatpak: Detail {
+            text: @tr("Okapi ne désinstalle pas encore les flatpaks.");
+            wrap: word-wrap;
+        }
+        Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+}
+
+// The uninstallation: what goes, asked once, followed, then said. Closed by
+// its buttons or Escape, never by a click outside; closing it stops nothing.
+component Uninstall inherits ModalFrame {
+    label: title.text;
+    escaped => {
+        Apps.close-modal();
+    }
+    title := Text {
+        text: Apps.step == UninstallStep.checking ? @tr("Vérification…")
+            : Apps.step == UninstallStep.refused ? @tr("{} reste installée", Apps.target)
+            : Apps.step == UninstallStep.running ? @tr("Désinstallation de {}…", Apps.target)
+            : Apps.step == UninstallStep.failed ? @tr("{} est toujours là", Apps.target)
+            : @tr("Désinstaller {} ?", Apps.target);
+        accessible-role: none;
+        color: Theme.text;
+        font-size: Theme.font-title;
+        font-weight: Theme.weight-semibold;
+        wrap: word-wrap;
+    }
+    if Apps.step == UninstallStep.checking || Apps.step == UninstallStep.running: ProgressBar {
+        indeterminate: true;
+        label: title.text;
+    }
+    if Apps.step == UninstallStep.confirm && !Apps.target-snap: Detail {
+        text: Apps.going.length > 2
+            ? @tr("{} et {} paquets qui en dépendent partiront. Place libérée : {}.", Apps.target, Apps.going.length - 1, Words.size(Apps.freed))
+            : Apps.going.length == 2
+            ? @tr("{} et un paquet qui en dépend partiront. Place libérée : {}.", Apps.target, Words.size(Apps.freed))
+            : @tr("Place libérée : {}.", Words.size(Apps.freed));
+    }
+    if (Apps.step == UninstallStep.confirm && Apps.going.length > 1) || (Apps.step == UninstallStep.refused && Apps.going.length > 0): Detail {
+        text: @tr("Ce qui partirait : {}", AppWords.names(Apps.going));
+        wrap: word-wrap;
+    }
+    if Apps.step == UninstallStep.confirm && !Apps.target-snap: Detail {
+        text: @tr("Ses réglages dans votre dossier personnel restent en place : vous les retrouvez si vous la réinstallez.");
+    }
+    if Apps.step == UninstallStep.confirm && Apps.target-snap: Detail {
+        text: @tr("Place libérée : {}, anciennes versions comprises.", Words.size(Apps.freed));
+    }
+    if Apps.step == UninstallStep.confirm && Apps.target-snap: data-box := Rectangle {
+        accessible-role: checkbox;
+        accessible-checkable: true;
+        accessible-checked: Apps.purge;
+        accessible-label: data-text.text;
+        accessible-action-default => {
+            Apps.purge = !Apps.purge;
+        }
+        forward-focus: data-keys;
+        data-keys := FocusScope {
+            key-pressed(event) => {
+                if !event.repeat && event.text == Key.Space {
+                    Apps.purge = !Apps.purge;
+                    return accept;
+                }
+                reject
+            }
+        }
+        TouchArea {
+            clicked => {
+                Apps.purge = !Apps.purge;
+            }
+        }
+        FocusRing {
+            shown: data-keys.has-focus;
+            border-radius: Theme.radius-medium;
+        }
+        HorizontalLayout {
+            padding: Theme.spacing-xs;
+            spacing: Theme.spacing-s;
+            CheckMark {
+                checked: Apps.purge;
+                y: (parent.height - self.height) / 2;
+            }
+            data-text := Detail {
+                text: Apps.has-data ? @tr("Supprimer aussi ses données ({})", Words.size(Apps.data-size)) : @tr("Supprimer aussi ses données");
+                accessible-role: none;
+                vertical-alignment: center;
+            }
+        }
+    }
+    if Apps.step == UninstallStep.confirm && Apps.target-snap: Detail {
+        text: Apps.purge ? @tr("Ses données partent tout de suite, pour tous les comptes et celles du système, sans copie gardée.")
+            : @tr("Une copie de ses données (de tous les comptes et du système) est gardée 31 jours par le système.");
+    }
+    if Apps.step == UninstallStep.confirm: Detail {
+        text: @tr("Votre mot de passe vous sera demandé.");
+    }
+    if Apps.step == UninstallStep.refused: Detail {
+        text: @tr("La désinstaller retirerait aussi des paquets dont le système a besoin. Rien n'a été modifié.");
+    }
+    if Apps.step == UninstallStep.running: Detail {
+        text: Apps.closing ? @tr("Une désinstallation est en cours. Fermez encore Okapi pour le quitter quand même : elle se terminera sans lui, et ne sera pas inscrite à l'historique.")
+            : Apps.waiting ? @tr("Une autre installation est en cours : Okapi attend son tour.")
+            : Apps.too-late ? @tr("Trop tard pour annuler : le système termine.")
+            : @tr("Fermer cette fenêtre n'arrête pas la désinstallation.");
+    }
+    if Apps.step == UninstallStep.failed: Detail {
+        text: AppWords.why(Apps.why, Apps.why-detail);
+    }
+    HorizontalLayout {
+        alignment: end;
+        spacing: Theme.spacing-s;
+        close := ActionButton {
+            text: Apps.step == UninstallStep.confirm || Apps.step == UninstallStep.checking ? @tr("Annuler") : @tr("Fermer");
+            kind: ButtonKind.ghost;
+            clicked => {
+                Apps.close-modal();
+            }
+        }
+        if Apps.step == UninstallStep.running && !Apps.target-snap: ActionButton {
+            text: @tr("Annuler la désinstallation");
+            enabled: Apps.cancellable;
+            clicked => {
+                Apps.cancel();
+            }
+        }
+        if Apps.step == UninstallStep.failed: ActionButton {
+            text: @tr("Réessayer");
+            clicked => {
+                Apps.retry();
+            }
+        }
+        if Apps.step == UninstallStep.confirm: ActionButton {
+            text: @tr("Désinstaller");
+            kind: ButtonKind.danger;
+            clicked => {
+                Apps.confirm();
+            }
+        }
+    }
+    init => {
+        close.focus();
+    }
+}
+
+// What an uninstallation done says, for a while.
+component Toast inherits Rectangle {
+    property <bool> held: touch.has-hover || dismiss.focused;
+    changed held => {
+        Apps.toast-held(self.held);
+    }
+    width: Theme.toast-width;
+    height: line.preferred-height;
+    border-radius: Theme.radius-large;
+    background: Theme.surface;
+    border-width: Theme.border-width;
+    border-color: Theme.border-strong;
+    drop-shadow-color: Theme.shadow-1;
+    drop-shadow-blur: Theme.shadow-1-blur;
+    drop-shadow-offset-y: Theme.shadow-1-offset;
+    accessible-role: AccessibleRole.text;
+    accessible-label: words.text;
+    accessible-live-region: polite;
+    touch := TouchArea { }
+    line := HorizontalLayout {
+        padding: Theme.spacing-m;
+        padding-left: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        words := Text {
+            horizontal-stretch: 1;
+            text: Apps.toast-recorded ? @tr("{} désinstallée : {} libérés", Apps.toast-name, Words.size(Apps.toast-freed))
+                : @tr("{} désinstallée : {} libérés. Elle n'a pas pu être inscrite à l'historique.", Apps.toast-name, Words.size(Apps.toast-freed));
+            color: Theme.text;
+            vertical-alignment: center;
+            wrap: word-wrap;
+            accessible-role: none;
+        }
+        dismiss := ActionButton {
+            kind: ButtonKind.ghost;
+            icon: @image-url("../assets/icons/x.svg");
+            text: "";
+            accessible-label: @tr("Fermer la notification");
+            clicked => {
+                Apps.close-toast();
+            }
+        }
+    }
+}
+
+// A filter of the segmented control: the one chosen raised, bold, ticked.
+component Segment inherits Rectangle {
+    in property <string> text;
+    in property <AppsFilter> filter;
+    property <bool> chosen: Apps.filter == root.filter;
+    height: Theme.app-seg-height;
+    border-radius: Theme.radius-medium;
+    background: chosen ? Theme.surface : transparent;
+    border-width: chosen ? Theme.border-width : 0;
+    border-color: Theme.border;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-checkable: true;
+    accessible-checked: root.chosen;
+    accessible-action-default => {
+        Apps.filter = root.filter;
+        Apps.filtered();
+    }
+    forward-focus: keys;
+    keys := FocusScope {
+        key-pressed(event) => {
+            if !event.repeat && (event.text == Key.Return || event.text == Key.Space) {
+                Apps.filter = root.filter;
+                Apps.filtered();
+                return accept;
+            }
+            reject
+        }
+    }
+    TouchArea {
+        clicked => {
+            Apps.filter = root.filter;
+            Apps.filtered();
+        }
+    }
+    FocusRing {
+        shown: keys.has-focus;
+        border-radius: root.border-radius;
+    }
+    HorizontalLayout {
+        padding-left: Theme.spacing-m;
+        padding-right: Theme.spacing-m;
+        spacing: Theme.spacing-xs;
+        if root.chosen: Icon {
+            source: @image-url("../assets/icons/check.svg");
+            colorize: Theme.text;
+            width: Theme.icon-badge;
+            height: Theme.icon-badge;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: root.text;
+            accessible-role: none;
+            color: root.chosen ? Theme.text : Theme.text-2;
+            font-size: Theme.font-small;
+            font-weight: root.chosen ? Theme.weight-semibold : Theme.weight-medium;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component AppsPage inherits Rectangle {
+    // Opened and closed by Rust, which keeps what it follows; a page built
+    // again shows the uninstallation still open.
+    property <bool> asking: Apps.step != UninstallStep.closed;
+    init => {
+        if self.asking {
+            uninstall.show();
+        }
+    }
+    changed asking => {
+        if self.asking {
+            uninstall.show();
+        } else {
+            uninstall.close();
+        }
+    }
+    property <bool> detail-shown: Apps.chosen >= 0;
+
+    uninstall := Uninstall {
+        x: (root.width - Theme.modal-width) / 2;
+        y: root.height / 4;
+        width: Theme.modal-width;
+    }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.modifiers.control && (event.text == "f" || event.text == "F") {
+                search.focus();
+                return accept;
+            }
+            if event.text == Key.Escape && root.detail-shown {
+                Apps.close-detail();
+                return accept;
+            }
+            reject
+        }
+
+        VerticalLayout {
+            padding: Screen.page-margin;
+            spacing: Theme.spacing-l;
+            HorizontalLayout {
+                spacing: Theme.spacing-s;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Theme.spacing-xs;
+                    Title {
+                        text: @tr("Applications");
+                    }
+                    Detail {
+                        text: Apps.reading ? @tr("Lecture des applis installées… Rien n'est modifié.")
+                            : Apps.minutes-ago < 0 ? ""
+                            : Apps.minutes-ago < 1 ? @tr("Applis : {}, lues à l'instant", Apps.app-count)
+                            : @tr("Applis : {}, lues il y a {} min", Apps.app-count, Apps.minutes-ago);
+                    }
+                }
+                ActionButton {
+                    text: Apps.reading ? @tr("Lecture…") : @tr("Actualiser");
+                    icon: @image-url("../assets/icons/rotate-ccw.svg");
+                    enabled: !Apps.reading && !Apps.busy;
+                    y: (parent.height - self.height) / 2;
+                    clicked => {
+                        Apps.refresh();
+                    }
+                }
+            }
+            if Apps.debs == SourceShown.busy: Banner {
+                warning: true;
+                text: @tr("Les paquets Ubuntu ne sont pas lisibles pour l'instant : une installation est en cours.");
+            }
+            if Apps.debs == SourceShown.failed: Banner {
+                warning: true;
+                text: @tr("Les paquets Ubuntu n'ont pas pu être lus. Le détail est dans le journal.");
+            }
+            if Apps.snaps == SourceShown.failed: Banner {
+                warning: true;
+                text: @tr("Les snaps ne sont pas lisibles : le service snapd ne répond pas.");
+            }
+            HorizontalLayout {
+                spacing: Theme.spacing-m;
+                search := LineEdit {
+                    horizontal-stretch: 1;
+                    placeholder-text: @tr("Chercher une appli ou un paquet");
+                    text <=> Apps.search;
+                    edited => {
+                        Apps.searched();
+                    }
+                }
+                Rectangle {
+                    border-radius: Theme.radius-medium;
+                    background: Theme.surface-2;
+                    border-width: Theme.border-width;
+                    border-color: Theme.border-strong;
+                    accessible-role: groupbox;
+                    accessible-label: @tr("Source");
+                    HorizontalLayout {
+                        padding: Theme.spacing-xxs;
+                        spacing: Theme.spacing-xxs;
+                        Segment {
+                            text: @tr("Toutes");
+                            filter: AppsFilter.all;
+                        }
+                        Segment {
+                            text: @tr("Ubuntu");
+                            filter: AppsFilter.deb;
+                        }
+                        Segment {
+                            text: @tr("Snap");
+                            filter: AppsFilter.snap;
+                        }
+                        if Apps.has-flatpak: Segment {
+                            text: @tr("Flatpak");
+                            filter: AppsFilter.flatpak;
+                        }
+                    }
+                }
+            }
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: Theme.spacing-l;
+                if !(Screen.narrow && root.detail-shown): Card {
+                    horizontal-stretch: 1;
+                    VerticalLayout {
+                        padding-top: Theme.spacing-xs;
+                        HorizontalLayout {
+                            padding-left: Theme.spacing-l + Theme.app-icon + Theme.spacing-m;
+                            padding-right: Theme.spacing-l;
+                            spacing: Theme.spacing-m;
+                            height: Theme.control-height;
+                            Detail {
+                                horizontal-stretch: 1;
+                                text: @tr("Nom");
+                                vertical-alignment: center;
+                                accessible-role: none;
+                            }
+                            Detail {
+                                width: Theme.app-col-size;
+                                text: @tr("Appli");
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                                accessible-role: none;
+                            }
+                            Detail {
+                                width: Theme.app-col-data;
+                                text: @tr("Données");
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                                accessible-role: none;
+                            }
+                            Detail {
+                                width: Screen.narrow ? Theme.app-bar-width-narrow : Theme.app-bar-width;
+                                text: @tr("Place prise");
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                                accessible-role: none;
+                            }
+                        }
+                        Rectangle {
+                            height: Theme.border-width;
+                            background: Theme.border;
+                        }
+                        // Never built again while a search is typed: it would take
+                        // the keyboard from the search.
+                        Rectangle {
+                            vertical-stretch: 1;
+                            Lines {
+                                visible: Apps.lines.length > 0 || Apps.search == "";
+                            }
+                            if Apps.lines.length == 0 && Apps.search != "": VerticalLayout {
+                            alignment: center;
+                            padding: Theme.spacing-xxl;
+                            spacing: Theme.spacing-s;
+                            Text {
+                                text: @tr("Aucune appli ne correspond à « {} »", Apps.search);
+                                color: Theme.text;
+                                font-weight: Theme.weight-semibold;
+                                horizontal-alignment: center;
+                                wrap: word-wrap;
+                            }
+                            Detail {
+                                text: @tr("La recherche porte sur le nom de l'appli et sur le nom de son paquet, dans toutes les sources.");
+                                horizontal-alignment: center;
+                            }
+                            HorizontalLayout {
+                                alignment: center;
+                                ActionButton {
+                                    text: @tr("Effacer la recherche");
+                                    kind: ButtonKind.ghost;
+                                    clicked => {
+                                        Apps.search = "";
+                                        Apps.searched();
+                                    }
+                                }
+                            }
+                        }
+                        }
+                        Rest { }
+                    }
+                }
+                if root.detail-shown: Panel { }
+            }
+        }
+    }
+
+    if Apps.toast: Toast {
+        x: (root.width - self.width) / 2;
+        y: root.height - self.height - Theme.spacing-xl;
+    }
+}

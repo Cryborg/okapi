@@ -122,6 +122,8 @@ pub struct Seams {
     pub settings: crate::settings::SettingsSeams,
     /// Where the updates screen reads what waits.
     pub updates: crate::updates::UpdatesSeams,
+    /// What the applications screen reads and asks of the machine.
+    pub apps: crate::apps::AppsSeams,
 }
 
 impl std::fmt::Debug for Seams {
@@ -164,6 +166,7 @@ impl Seams {
             settings: crate::settings::SettingsSeams::system(disk.home.clone()),
             disk,
             updates: crate::updates::UpdatesSeams::system(),
+            apps: crate::apps::AppsSeams::system(),
         }
     }
 }
@@ -1639,6 +1642,8 @@ pub mod tests {
             settings: crate::settings::tests::nowhere(),
             // No daemon asked: nothing on this system.
             updates: crate::updates::tests::nothing(),
+            // Nothing read, nothing uninstalled.
+            apps: crate::apps::tests::inert(),
             ..Seams::system()
         }
     }
@@ -2211,7 +2216,7 @@ pub mod tests {
 
     /// The window on the cleaner, in `language`.
     pub fn on_cleaner_in(seams: Seams, language: Language) -> (ui::AppWindow, CleanerScreen) {
-        let (window, screen, _home, _settings) =
+        let (window, screen, _home, _settings, _apps) =
             crate::wide_window(seams, crate::dashboard::tests::inert(), language);
         let cleaner = match language {
             Language::French => "Nettoyeur",
@@ -2785,7 +2790,7 @@ pub mod tests {
     }
 
     /// The entries of the sidebar, each a stop of Tab.
-    pub const SIDEBAR_ENTRIES: usize = 6;
+    pub const SIDEBAR_ENTRIES: usize = 7;
     /// The stops of Tab in the sidebar of a wide window: its fold button,
     /// then its entries.
     pub const SIDEBAR_STOPS: usize = SIDEBAR_ENTRIES + 1;

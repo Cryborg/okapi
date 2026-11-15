@@ -253,6 +253,20 @@ export global Theme {
     out property <length> updates-app-icon: 36px;
     out property <length> updates-empty-icon: 72px;
     out property <float> updates-stale: 0.5;
+    // The applications screen (okapi.css, `--ok-app-*`): a line, its icon
+    // (larger in the detail), its columns, its bar, the pinned footer, the
+    // segmented filter. Its bars, panel and states reuse the disk's.
+    out property <length> app-row-height: 56px;
+    out property <length> app-icon: 32px;
+    out property <length> app-icon-large: 44px;
+    out property <length> app-icon-radius: 8px;
+    out property <length> app-icon-radius-large: 10px;
+    out property <length> app-col-size: 76px;
+    out property <length> app-col-data: 124px;
+    out property <length> app-bar-width: 96px;
+    out property <length> app-bar-width-narrow: 80px;
+    out property <length> app-sum-height: 52px;
+    out property <length> app-seg-height: 32px;
 }
 
 // What the window's width decides for every page. Set by `AppWindow` alone.

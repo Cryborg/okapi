@@ -113,7 +113,7 @@ fn seams(home: &tempfile::TempDir, manager: &Rc<FileManager>) -> Seams {
 /// The window on the disk usage screen.
 fn on_disk(seams: Seams) -> (ui::AppWindow, Sampler) {
     let (home, sampler) = noting(None);
-    let (window, _cleaner, _dashboard, _settings) =
+    let (window, _cleaner, _dashboard, _settings, _apps) =
         crate::wide_window(seams, home, Language::French);
     button(&window, "Espace disque").invoke_accessible_default_action();
     slint::platform::update_timers_and_animations();

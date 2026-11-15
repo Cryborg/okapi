@@ -810,6 +810,129 @@ fn updates(window: &ui::AppWindow, state: &str) {
     ])));
 }
 
+
+/// The lines of the applications screen, as on the mockup.
+fn app_lines() -> Vec<ui::AppLine> {
+    let line =
+        |name: &str, source, app_size, data, data_size, old: Option<ui::Size>, system, bar| {
+            ui::AppLine {
+                name: name.into(),
+                source,
+                icon: slint::Image::default(),
+                has_icon: false,
+                app_known: true,
+                app_size,
+                data,
+                data_size,
+                has_old: old.is_some(),
+                old_size: old.unwrap_or(size(0, 0, ui::SizeUnit::Byte)),
+                system,
+                uninstalling: false,
+                bar,
+            }
+        };
+    vec![
+        line(
+            "Android Studio",
+            ui::AppSource::Snap,
+            size(1, 6, ui::SizeUnit::Gigabyte),
+            ui::AppData::Measured,
+            size(2, 1, ui::SizeUnit::Gigabyte),
+            Some(size(1, 6, ui::SizeUnit::Gigabyte)),
+            false,
+            1.0,
+        ),
+        line(
+            "Google Cloud CLI avec un nom très long pour voir la troncature",
+            ui::AppSource::Snap,
+            size(373, 1, ui::SizeUnit::Megabyte),
+            ui::AppData::Measuring,
+            size(0, 0, ui::SizeUnit::Byte),
+            None,
+            false,
+            0.07,
+        ),
+        line(
+            "GIMP",
+            ui::AppSource::Deb,
+            size(412, 0, ui::SizeUnit::Megabyte),
+            ui::AppData::Unknown,
+            size(0, 0, ui::SizeUnit::Byte),
+            None,
+            false,
+            0.08,
+        ),
+        line(
+            "Docker",
+            ui::AppSource::Snap,
+            size(478, 0, ui::SizeUnit::Megabyte),
+            ui::AppData::NotMeasured,
+            size(0, 0, ui::SizeUnit::Byte),
+            None,
+            false,
+            0.09,
+        ),
+        line(
+            "Fichiers",
+            ui::AppSource::Deb,
+            size(12, 4, ui::SizeUnit::Megabyte),
+            ui::AppData::Unknown,
+            size(0, 0, ui::SizeUnit::Byte),
+            None,
+            true,
+            0.01,
+        ),
+    ]
+}
+
+/// The applications screen, as on the mockup: its detail open when
+/// `detail`, its uninstallation asked when `asking`.
+fn apps(app: &ui::AppWindow, detail: bool, asking: bool) {
+    app.set_page(ui::Page::Apps);
+    let apps = app.global::<ui::Apps>();
+    apps.set_lines(ModelRc::new(VecModel::from(app_lines())));
+    apps.set_app_count(12);
+    apps.set_minutes_ago(1);
+    apps.set_debs(ui::SourceShown::Read);
+    apps.set_snaps(ui::SourceShown::Read);
+    apps.set_rest_packages(2026);
+    apps.set_rest_packages_size(size(9, 4, ui::SizeUnit::Gigabyte));
+    apps.set_rest_snaps(6);
+    apps.set_rest_snaps_size(size(1, 8, ui::SizeUnit::Gigabyte));
+    if detail {
+        apps.set_chosen(0);
+        apps.set_detail(ui::AppDetail {
+            name: "Android Studio".into(),
+            source: ui::AppSource::Snap,
+            icon: slint::Image::default(),
+            has_icon: false,
+            version: "2025.1.1".into(),
+            publisher: "Snapcrafters".into(),
+            origin: ui::AppOrigin::None,
+            package: "android-studio".into(),
+            app_known: true,
+            app_size: size(1, 6, ui::SizeUnit::Gigabyte),
+            data: ui::AppData::Measured,
+            data_size: size(2, 1, ui::SizeUnit::Gigabyte),
+            has_old: true,
+            old_size: size(1, 6, ui::SizeUnit::Gigabyte),
+            old_versions: 1,
+            total: size(5, 3, ui::SizeUnit::Gigabyte),
+            system: false,
+            uninstallable: true,
+            uninstalling: false,
+        });
+    }
+    if asking {
+        apps.set_target("Android Studio".into());
+        apps.set_target_snap(true);
+        apps.set_freed(size(3, 2, ui::SizeUnit::Gigabyte));
+        apps.set_has_data(true);
+        apps.set_data_size(size(2, 1, ui::SizeUnit::Gigabyte));
+        apps.set_step(ui::UninstallStep::Confirm);
+    }
+}
+
 fn main() {
     let mut arguments = std::env::args().skip(1);
     let screen = arguments.next().unwrap_or_else(|| String::from("results"));
@@ -876,8 +999,11 @@ fn main() {
             };
             updates(&app, state);
         }
+        "apps" => apps(&app, true, false),
+        "apps-small" => apps(&app, false, false),
+        "apps-uninstall" => apps(&app, true, true),
         other => panic!(
-            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked"
+            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

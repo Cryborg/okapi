@@ -1,0 +1,138 @@
+// What the applications screen shows, filled by Rust (`apps.rs`).
+import { Size } from "cleaner-model.slint";
+
+export enum AppSource { deb, snap, flatpak }
+
+// What is known of what an application keeps in the home folder.
+export enum AppData {
+    // No folder is surely its (a deb).
+    unknown,
+    // It kept nothing.
+    none,
+    measuring,
+    measured,
+    // Some of it could not be read.
+    partial,
+    // A link, or a folder that cannot be opened.
+    not-measured,
+}
+
+export enum AppsFilter { all, deb, snap, flatpak }
+
+// How a source stands.
+export enum SourceShown { reading, read, absent, busy, failed }
+
+export enum AppOrigin { none, by-user, as-dependency, with-system }
+
+export struct AppLine {
+    name: string,
+    source: AppSource,
+    icon: image,
+    has-icon: bool,
+    // A flatpak's size is measured.
+    app-known: bool,
+    app-size: Size,
+    data: AppData,
+    data-size: Size,
+    has-old: bool,
+    old-size: Size,
+    system: bool,
+    uninstalling: bool,
+    // Its total, relative to the largest.
+    bar: float,
+}
+
+export struct AppDetail {
+    name: string,
+    source: AppSource,
+    icon: image,
+    has-icon: bool,
+    version: string,
+    publisher: string,
+    origin: AppOrigin,
+    package: string,
+    app-known: bool,
+    app-size: Size,
+    data: AppData,
+    data-size: Size,
+    has-old: bool,
+    old-size: Size,
+    old-versions: int,
+    total: Size,
+    system: bool,
+    // A deb or a snap, not the system's.
+    uninstallable: bool,
+    uninstalling: bool,
+}
+
+export enum UninstallStep { closed, checking, confirm, refused, running, failed }
+
+// Why an uninstallation did not happen.
+export enum UninstallWhy { none, absent, not-authorized, busy, unanswered, timed-out, not-found, service }
+
+export global Apps {
+    in property <bool> reading;
+    // An uninstallation runs, its window shown or not: no other, no reading.
+    in property <bool> busy;
+    // When the list was last read, in minutes; -1 before.
+    in property <int> minutes-ago: -1;
+    in property <int> app-count;
+    in property <[AppLine]> lines;
+    in-out property <string> search;
+    in-out property <AppsFilter> filter;
+    in property <bool> has-flatpak;
+    in property <SourceShown> debs;
+    in property <SourceShown> snaps;
+    // The packages and snap components that are no application.
+    in property <int> rest-packages;
+    in property <Size> rest-packages-size;
+    in property <int> rest-snaps;
+    in property <Size> rest-snaps-size;
+    in-out property <bool> rest-open;
+    // The line the keyboard is on, the one whose detail is open (-1).
+    in-out property <int> current;
+    in property <int> chosen: -1;
+    in property <AppDetail> detail;
+
+    in property <UninstallStep> step;
+    in property <string> target;
+    in property <bool> target-snap;
+    // What would go, by name: the package and those that depend on it.
+    in property <[string]> going;
+    in property <Size> freed;
+    in property <bool> has-data;
+    in property <Size> data-size;
+    in-out property <bool> purge;
+    in property <bool> cancellable;
+    in property <bool> too-late;
+    // Another installation holds the package manager.
+    in property <bool> waiting;
+    in property <UninstallWhy> why;
+    // The service's own words, for `service`.
+    in property <string> why-detail;
+    // The window was asked to close while it runs.
+    in property <bool> closing;
+
+    in property <bool> toast;
+    in property <string> toast-name;
+    in property <Size> toast-freed;
+    // Its history line was written.
+    in property <bool> toast-recorded;
+
+    callback refresh();
+    callback searched();
+    callback filtered();
+    callback choose(int);
+    // The keyboard moved to a line.
+    callback move-to(int);
+    callback close-detail();
+    callback point(int);
+    callback list-focus(bool);
+    callback uninstall();
+    callback confirm();
+    callback cancel();
+    callback close-modal();
+    callback retry();
+    callback close-toast();
+    callback toast-held(bool);
+}

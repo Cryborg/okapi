@@ -117,6 +117,69 @@ impl Known {
     }
 }
 
+/// The exclusions `paths`, resolved where each really lies: on the thread
+/// of a search or a move, as a mount that stopped answering may hold it.
+fn resolve(paths: Vec<PathBuf>) -> Result<Exclusions, ui::DuplicatesRefusal> {
+    tracing::debug!(exclusions = paths.len(), "resolving exclusions");
+    let started = Instant::now();
+    let resolved = Exclusions::new(paths).map_err(|error| {
+        tracing::warn!(?error, elapsed = ?started.elapsed(), "an exclusion refused: nothing done");
+        ui::DuplicatesRefusal::Exclusion
+    })?;
+    tracing::info!(elapsed = ?started.elapsed(), "exclusions resolved");
+    Ok(resolved)
+}
+
+/// Opens the search of `roots` on the start's thread: its exclusions
+/// resolved first, nothing read when one is refused.
+fn open_search(
+    roots: &[PathBuf],
+    exclusions: Vec<PathBuf>,
+    threads: &Threads,
+) -> Result<DuplicateSearch, ui::DuplicatesRefusal> {
+    let exclusions = resolve(exclusions)?;
+    let threads = threads(roots);
+    tracing::info!(threads = threads.get(), "duplicate search threads");
+    let options = SearchOptions {
+        min_size: MIN_SIZE,
+        threads,
+        exclusions,
+    };
+    DuplicateSearch::start(roots, options).map_err(|error| {
+        tracing::warn!(%error, "duplicate search not opened");
+        match error {
+            SearchError::Thread(_) => ui::DuplicatesRefusal::Thread,
+            SearchError::NoRoot | SearchError::Root { .. } => ui::DuplicatesRefusal::Folder,
+        }
+    })
+}
+
+/// Moves the copies `ids` of `search`'s report to the trash, on the move's
+/// thread: its exclusions resolved first, then the report and the trash
+/// opened; nothing moved when any of them fails.
+fn move_to_trash(
+    search: &DuplicateSearch,
+    ids: &[CopyId],
+    exclusions: Vec<PathBuf>,
+    trash: &OpenTrash,
+) -> Result<TrashReceipt, ui::DuplicatesRefusal> {
+    let exclusions = resolve(exclusions)?;
+    let Some(report) = search.report() else {
+        tracing::error!("no report to move copies of: nothing moved");
+        return Err(ui::DuplicatesRefusal::Trash);
+    };
+    let bin = trash().map_err(|error| {
+        tracing::error!(%error, "trash not opened: nothing moved");
+        ui::DuplicatesRefusal::Trash
+    })?;
+    Ok(okapi_tools::duplicates::trash(
+        report,
+        ids,
+        &bin,
+        &exclusions,
+    ))
+}
+
 /// Reads what the start knows.
 fn read_known(seams_home: Option<&Path>, folders: &ReadFolders, trash: &OpenTrash) -> Known {
     let home = seams_home.and_then(|home| {
@@ -186,8 +249,9 @@ struct Asked {
 enum Search {
     /// None, or one stopped, failed or given up.
     Idle,
-    /// Its roots being opened.
-    Opening(Receiver<Result<DuplicateSearch, SearchError>>),
+    /// Its exclusions being resolved and its roots opened on a thread: the
+    /// search to come, or why it did not start, traced there.
+    Opening(Receiver<Result<DuplicateSearch, ui::DuplicatesRefusal>>),
     Running(Arc<DuplicateSearch>),
     /// Complete: its report shown.
     Shown(Arc<DuplicateSearch>),
@@ -196,7 +260,7 @@ enum Search {
 /// A move to the trash on its way: its receipt to come, and the search
 /// whose report names its copies.
 struct Moving {
-    receiver: Receiver<io::Result<TrashReceipt>>,
+    receiver: Receiver<Result<TrashReceipt, ui::DuplicatesRefusal>>,
     search: Arc<DuplicateSearch>,
 }
 
@@ -584,9 +648,10 @@ impl DuplicatesScreen {
         self.start(asked);
     }
 
-    /// The exclusions of the settings read now, `~/snap` with them; why
-    /// none can be had.
-    fn exclusions(&self, home: Option<&Path>) -> Result<Exclusions, ui::DuplicatesRefusal> {
+    /// The exclusions of the settings read now, `~/snap` with them, as they
+    /// are written: resolved on the thread that uses them ([`resolve`]);
+    /// why none can be had.
+    fn exclusion_paths(&self, home: Option<&Path>) -> Result<Vec<PathBuf>, ui::DuplicatesRefusal> {
         let read = Rc::clone(&self.0.borrow().exclusions);
         let mut paths = read().map_err(|problem| {
             tracing::warn!(?problem, "settings not read: nothing done");
@@ -599,20 +664,18 @@ impl DuplicatesScreen {
         })?;
         tracing::info!(settings = paths.len(), "exclusions read");
         paths.extend(home.map(|home| home.join(SNAP_FOLDER)));
-        Exclusions::new(paths).map_err(|error| {
-            tracing::warn!(?error, "an exclusion refused: nothing done");
-            ui::DuplicatesRefusal::Exclusion
-        })
+        Ok(paths)
     }
 
-    /// Starts searching on a thread of its own: opening the roots may wait
-    /// on a filesystem that stopped answering. The settings refused, what
-    /// is shown stays.
+    /// Starts searching on a thread of its own: resolving the exclusions and
+    /// opening the roots may wait on a filesystem that stopped answering.
+    /// Settings that cannot be read are said over a result, which stays, or
+    /// on the start.
     fn start(&self, asked: Asked) {
-        let exclusions = match self.exclusions(asked.known.home.as_deref()) {
-            Ok(exclusions) => exclusions,
-            // A result stays, the refusal said over it; elsewhere (a
-            // receipt, a search stopped) the start says it.
+        let exclusions = match self.exclusion_paths(asked.known.home.as_deref()) {
+            Ok(paths) => paths,
+            // Settings not read: a result stays, the refusal said over it;
+            // elsewhere (a receipt, a search stopped) the start says it.
             Err(refusal) if self.step() == Some(ui::DuplicatesStep::Result) => {
                 self.with_window(|duplicates| duplicates.set_refused(refusal));
                 return;
@@ -634,16 +697,11 @@ impl DuplicatesScreen {
         let spawned = std::thread::Builder::new()
             .name("okapi-duplicates-start".to_owned())
             .spawn(move || {
-                let threads = threads(&roots);
-                tracing::info!(threads = threads.get(), "duplicate search threads");
-                let options = SearchOptions {
-                    min_size: MIN_SIZE,
-                    threads,
-                    exclusions,
-                };
+                let opened = tracing::info_span!("duplicate_search")
+                    .in_scope(|| open_search(&roots, exclusions, &threads));
                 // Given up, or the screen gone: the search refused stops as
                 // it is dropped.
-                let _ = sender.send(DuplicateSearch::start(&roots, options));
+                let _ = sender.send(opened);
             });
         if let Err(error) = spawned {
             tracing::error!(%error, "duplicate search not started: no thread");
@@ -700,13 +758,8 @@ impl DuplicatesScreen {
                 self.0.borrow_mut().search = Search::Running(Arc::new(search));
                 self.with_window(|duplicates| duplicates.set_phase(ui::SearchPhase::Running));
             }
-            Some(Err(error)) => {
-                tracing::warn!(%error, "duplicate search not opened");
-                self.refuse_start(match error {
-                    SearchError::Thread(_) => ui::DuplicatesRefusal::Thread,
-                    SearchError::NoRoot | SearchError::Root { .. } => ui::DuplicatesRefusal::Folder,
-                });
-            }
+            // Traced where it was met.
+            Some(Err(refusal)) => self.refuse_start(refusal),
             None => {
                 tracing::error!("duplicate search start thread ended without word");
                 self.refuse_start(ui::DuplicatesRefusal::Thread);
@@ -1117,8 +1170,8 @@ impl DuplicatesScreen {
             .asked
             .as_ref()
             .and_then(|asked| asked.known.home.clone());
-        let exclusions = match self.exclusions(home.as_deref()) {
-            Ok(exclusions) => exclusions,
+        let exclusions = match self.exclusion_paths(home.as_deref()) {
+            Ok(paths) => paths,
             Err(refusal) => {
                 self.with_window(|duplicates| duplicates.set_refused(refusal));
                 return;
@@ -1152,22 +1205,8 @@ impl DuplicatesScreen {
         let spawned = std::thread::Builder::new()
             .name("okapi-duplicates-trash".to_owned())
             .spawn(move || {
-                let receipt = match (trash(), moved.report()) {
-                    (Ok(bin), Some(report)) => Ok(okapi_tools::duplicates::trash(
-                        report,
-                        &ids,
-                        &bin,
-                        &exclusions,
-                    )),
-                    (Err(error), _) => {
-                        tracing::error!(%error, "trash not opened: nothing moved");
-                        Err(error)
-                    }
-                    (_, None) => {
-                        tracing::error!("no report to move copies of: nothing moved");
-                        Err(io::Error::other("no report"))
-                    }
-                };
+                let receipt = tracing::info_span!("duplicate_trash")
+                    .in_scope(|| move_to_trash(&moved, &ids, exclusions, &trash));
                 // The screen gone: the move ended all the same, and traced
                 // its receipt.
                 let _ = sender.send(receipt);
@@ -1213,10 +1252,8 @@ impl DuplicatesScreen {
         match receipt {
             Some(Ok(receipt)) => self.show_receipt(&moving.search, &receipt),
             // Traced where it was met: nothing moved.
-            Some(Err(_)) => {
-                self.with_window(|duplicates| {
-                    duplicates.set_refused(ui::DuplicatesRefusal::Trash);
-                });
+            Some(Err(refusal)) => {
+                self.with_window(|duplicates| duplicates.set_refused(refusal));
             }
             // Some copies may be in the trash already: the report no longer
             // says what is where.

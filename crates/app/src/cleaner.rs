@@ -196,24 +196,35 @@ fn read_system() -> Result<Inputs, Problem> {
     })
 }
 
+/// The minimum age the settings `inputs` ask for at `now`. It does no I/O,
+/// so the window may check it.
+fn min_age(inputs: &Inputs, now: SystemTime) -> Result<Duration, Problem> {
+    match inputs.min_age_minutes {
+        None => Ok(DEFAULT_MIN_AGE),
+        Some(minutes) => settings_min_age(minutes, now).ok_or_else(|| {
+            tracing::warn!(minutes, "settings minimum age beyond the clock");
+            Problem::MinAge
+        }),
+    }
+}
+
 /// The options of an analysis started at `now` over `chosen`: the
-/// exclusions resolved at this instant, as each scan needs.
+/// exclusions resolved at this instant, as each scan needs. Resolving reads
+/// where each one really lies, which waits on a mount that stopped
+/// answering: call it from a task's thread, not the window's.
 fn options(
     inputs: &Inputs,
     now: SystemTime,
     chosen: BTreeSet<Category>,
 ) -> Result<ScanOptions, Problem> {
-    let min_age = match inputs.min_age_minutes {
-        None => DEFAULT_MIN_AGE,
-        Some(minutes) => settings_min_age(minutes, now).ok_or_else(|| {
-            tracing::warn!(minutes, "settings minimum age beyond the clock");
-            Problem::MinAge
-        })?,
-    };
+    let min_age = min_age(inputs, now)?;
+    tracing::debug!(exclusions = inputs.exclusions.len(), "resolving exclusions");
+    let started = Instant::now();
     let exclusions = Exclusions::new(inputs.exclusions.iter().cloned()).map_err(|error| {
-        tracing::warn!(?error, "settings exclusion refused");
+        tracing::warn!(?error, elapsed = ?started.elapsed(), "settings exclusion refused");
         Problem::Exclusion
     })?;
+    tracing::info!(elapsed = ?started.elapsed(), "exclusions resolved");
     Ok(ScanOptions::new(now, min_age, exclusions).with_categories(chosen))
 }
 
@@ -480,6 +491,40 @@ struct SummaryTarget {
     directory: Option<PathBuf>,
 }
 
+/// An analysis as the window prepares it: the settings read, its options
+/// still to build on its thread.
+struct Planned {
+    rules: Arc<RuleSet>,
+    inputs: Inputs,
+    chosen: BTreeSet<Category>,
+    target: Option<SummaryTarget>,
+}
+
+impl Planned {
+    /// Builds its options, then scans with `work`: on the analysis's
+    /// thread. Its options refused, nothing is scanned.
+    fn run(
+        self,
+        work: &Work,
+        cancel: Cancel,
+        progress: Sender<Progress>,
+    ) -> Result<Analyzed, Problem> {
+        let options = options(&self.inputs, SystemTime::now(), self.chosen)?;
+        tracing::info!(?options, "analysis started");
+        let job = Job {
+            rules: self.rules,
+            variables: self.inputs.variables,
+            options: options.clone(),
+        };
+        let report = work(job, cancel, progress);
+        let summary = self
+            .target
+            .as_ref()
+            .and_then(|target| keep_summary(&report, &options, target));
+        Ok(Analyzed { report, summary })
+    }
+}
+
 /// The summary of `report`, scanned with `options`, when the analysis came
 /// to an end the window shows: something found, or nothing to clean (at 0
 /// bytes); kept in `target`'s directory, its writing traced by the store.
@@ -744,11 +789,14 @@ impl<T: Send + 'static> Running<T> {
 
 /// An analysis under way.
 struct Analysis {
-    running: Running<Analyzed>,
+    running: Running<Result<Analyzed, Problem>>,
     view: ScanView,
     /// How long it has been waited for since it was cancelled, counted in
     /// looks at it.
     cancelled_for: Option<Duration>,
+    /// The exclusions of the settings it started with, which its thread
+    /// resolves.
+    exclusions: Vec<PathBuf>,
 }
 
 /// The one thing the screen follows at a time: an analysis and a cleaning
@@ -827,6 +875,11 @@ struct State {
     write_check: slint::Timer,
     /// The last choice among the results could not be kept.
     choices_unsaved: bool,
+    /// The exclusions read when a task's thread refused one of them: said
+    /// again by each reading of the settings that holds the same ones,
+    /// whatever page was shown when it came; forgotten once an analysis or
+    /// a cleaning starts, or other exclusions are read.
+    refused_exclusions: Option<Vec<PathBuf>>,
     listener: Option<Listener>,
 }
 
@@ -879,6 +932,7 @@ impl CleanerScreen {
             settling: slint::Timer::default(),
             write_check: slint::Timer::default(),
             choices_unsaved: false,
+            refused_exclusions: None,
             listener: None,
         };
         let cleaner = window.global::<ui::Cleaner>();
@@ -1001,8 +1055,57 @@ impl CleanerScreen {
         self.with_window(|window, _| window.global::<ui::Cleaner>().set_step(step));
     }
 
-    /// Reads the settings again, and says whether an analysis could start
-    /// with them: on showing the screen, and back to choosing.
+    /// Says `found`, a refusal a task's thread met with the settings'
+    /// `exclusions`; an exclusion refused is kept to be said again. A
+    /// problem of the settings said meanwhile stays: it may be said once
+    /// only, and the refusal comes back with the next reading of them.
+    fn say_refusal(&self, found: Problem, exclusions: Vec<PathBuf>) {
+        if found == Problem::Exclusion {
+            self.0.borrow_mut().refused_exclusions = Some(exclusions);
+        }
+        self.with_window(|window, _| {
+            let cleaner = window.global::<ui::Cleaner>();
+            let shown = cleaner.get_problem();
+            if shown == ui::SetupProblem::None {
+                cleaner.set_problem(problem(Some(found)));
+            } else {
+                tracing::debug!(?shown, problem = ?found, "refusal kept, not shown over a problem of the settings");
+            }
+        });
+    }
+
+    /// Forgets the exclusions a task's thread refused: an analysis or a
+    /// cleaning starts, whose thread meets them afresh.
+    fn forget_refused_exclusions(&self) {
+        self.0.borrow_mut().refused_exclusions = None;
+    }
+
+    /// Whether the settings read, `inputs`, still hold the exclusions a
+    /// task's thread refused: the refusal is then said again. Reading cannot
+    /// resolve them (a dead mount would hold the window): other exclusions
+    /// read, it is forgotten.
+    fn still_refused(&self, inputs: &Result<Inputs, Problem>) -> bool {
+        let mut state = self.0.borrow_mut();
+        let Some(refused) = &state.refused_exclusions else {
+            return false;
+        };
+        match inputs {
+            Ok(inputs) if inputs.exclusions != *refused => {
+                tracing::info!(
+                    "exclusions changed since one was refused: the refusal is no more said"
+                );
+                state.refused_exclusions = None;
+                false
+            }
+            // Unread now, they may be the same: kept for the next reading.
+            Ok(_) | Err(_) => true,
+        }
+    }
+
+    /// Reads the settings again, and says whether they let an analysis
+    /// start: on showing the screen, and back to choosing. The exclusions
+    /// are not resolved here, as a dead mount would hold the window: one
+    /// refused is said when a task's thread meets it.
     pub fn refresh(&self) {
         let inputs = {
             let state = self.0.borrow();
@@ -1016,8 +1119,10 @@ impl CleanerScreen {
             inputs
                 .as_ref()
                 .ok()
-                .and_then(|inputs| options(inputs, SystemTime::now(), BTreeSet::new()).err())
+                .and_then(|inputs| min_age(inputs, SystemTime::now()).err())
         });
+        // A problem of the settings read now comes first.
+        let found = found.or(self.still_refused(&inputs).then_some(Problem::Exclusion));
         let (minutes, exclusions) =
             inputs
                 .as_ref()
@@ -1044,36 +1149,37 @@ impl CleanerScreen {
         self.show_choices();
     }
 
-    /// The analysis of `chosen`, its options built now from the settings
-    /// read now (they may have changed since the screen was shown), and
-    /// where its summary is kept: none when it covers less than the
-    /// categories checked by default, whose estimate a partial analysis
-    /// never replaces.
-    fn prepare(
-        &self,
-        chosen: &BTreeSet<Category>,
-    ) -> Result<(Job, Option<SummaryTarget>), Problem> {
+    /// The analysis of `chosen`: the settings read now (they may have
+    /// changed since the screen was shown), its options to be built from
+    /// them on its thread, and where its summary is kept: none when it
+    /// covers less than the categories checked by default, whose estimate a
+    /// partial analysis never replaces.
+    fn prepare(&self, chosen: &BTreeSet<Category>) -> Result<Planned, Problem> {
         let state = self.0.borrow();
         let rules = state.rules.as_ref().ok_or(Problem::Rules)?;
         let inputs = (state.seams.read)()?;
-        let job = Job {
-            rules: Arc::clone(rules),
-            options: options(&inputs, SystemTime::now(), chosen.clone())?,
-            variables: inputs.variables,
-        };
+        // Only the age is checked here: an exclusion is met, and said, on
+        // the task's thread.
+        min_age(&inputs, SystemTime::now())?;
         let by_default = Choices::of(Some(rules)).chosen();
-        if !by_default.is_subset(chosen) {
+        let target = if by_default.is_subset(chosen) {
+            if inputs.state_directory.is_none() {
+                tracing::warn!("no state directory: the summary of the analysis is not written");
+            }
+            Some(SummaryTarget {
+                directory: inputs.state_directory.clone(),
+            })
+        } else {
             let missing: Vec<_> = by_default.difference(chosen).collect();
             tracing::info!(?missing, "partial analysis: its summary is not kept");
-            return Ok((job, None));
-        }
-        if inputs.state_directory.is_none() {
-            tracing::warn!("no state directory: the summary of the analysis is not written");
-        }
-        let target = SummaryTarget {
-            directory: inputs.state_directory,
+            None
         };
-        Ok((job, Some(target)))
+        Ok(Planned {
+            rules: Arc::clone(rules),
+            inputs,
+            chosen: chosen.clone(),
+            target,
+        })
     }
 
     /// Starts an analysis of the categories checked.
@@ -1090,8 +1196,8 @@ impl CleanerScreen {
             tracing::warn!("analysis asked for without a category");
             return;
         }
-        let (job, target) = match self.prepare(&chosen) {
-            Ok(prepared) => prepared,
+        let planned = match self.prepare(&chosen) {
+            Ok(planned) => planned,
             Err(found) => {
                 tracing::warn!(problem = ?found, "analysis cannot start");
                 self.with_window(|window, _| {
@@ -1104,29 +1210,23 @@ impl CleanerScreen {
         };
         // It starts: a refusal said before is over.
         self.with_window(|window, _| window.global::<ui::Cleaner>().set_problem(problem(None)));
-        tracing::info!(options = ?job.options, categories = ?chosen, "analysis started");
-        let replaces_estimate = target.is_some();
+        tracing::info!(categories = ?chosen, "analysis asked for");
+        let replaces_estimate = planned.target.is_some();
         self.with_window(|window, _| {
             window
                 .global::<ui::Cleaner>()
                 .set_replaces_estimate(replaces_estimate);
         });
         let work = Arc::clone(&self.0.borrow().seams.work);
-        let options = job.options.clone();
+        let exclusions = planned.inputs.exclusions.clone();
         let started = Running::start(
             "okapi-analysis",
             tracing::info_span!("analysis"),
-            move |cancel, progress| {
-                let report = work(job, cancel, progress);
-                let summary = target
-                    .as_ref()
-                    .and_then(|target| keep_summary(&report, &options, target));
-                Analyzed { report, summary }
-            },
+            move |cancel, progress| planned.run(&work, cancel, progress),
         );
+        // The results of the analysis before stay until this one ends:
+        // refused on its thread, the analysis leaves them as they were.
         self.settle();
-        // A new analysis is the last one: the results of the one before go.
-        self.0.borrow_mut().held = None;
         let running = match started {
             Ok(running) => running,
             Err(error) => {
@@ -1135,10 +1235,13 @@ impl CleanerScreen {
                 return;
             }
         };
+        // Its thread meets the exclusions afresh.
+        self.forget_refused_exclusions();
         self.0.borrow_mut().task = Some(Task::Analysis(Analysis {
             running,
             view: ScanView::new(&chosen),
             cancelled_for: None,
+            exclusions,
         }));
         self.show_view();
         self.set_step(ui::CleanerStep::Planning);
@@ -1191,7 +1294,8 @@ impl CleanerScreen {
             self.show_view();
         }
         match received {
-            Ok(Analyzed { report, summary }) => {
+            Ok(Err(found)) => self.analysis_refused(found),
+            Ok(Ok(Analyzed { report, summary })) => {
                 tracing::info!(
                     groups = report.groups().len(),
                     bytes = report.total_size(),
@@ -1267,6 +1371,38 @@ impl CleanerScreen {
         });
     }
 
+    /// The analysis refused on its thread for `found`, before anything was
+    /// scanned: back to the results it would have replaced, or to choosing,
+    /// the refusal said. The settings are not read again (`refresh`): a
+    /// problem they give that is said once only is left to the next reading.
+    fn analysis_refused(&self, found: Problem) {
+        if !matches!(self.0.borrow().task, Some(Task::Analysis(_))) {
+            tracing::error!("an analysis refused that was not under way");
+            return;
+        }
+        let Some(Task::Analysis(analysis)) = self.0.borrow_mut().task.take() else {
+            return;
+        };
+        self.0.borrow().timer.stop();
+        let held = self.0.borrow().held.is_some();
+        // Its cause is traced where it was met, on the thread.
+        tracing::info!(problem = ?found, held, "analysis refused on its thread: nothing scanned");
+        self.settle();
+        self.with_window(|window, _| {
+            let cleaner = window.global::<ui::Cleaner>();
+            if held {
+                cleaner.set_step(ui::CleanerStep::Results);
+            } else {
+                cleaner.set_back_from_analysis(true);
+                cleaner.set_step(ui::CleanerStep::Idle);
+            }
+        });
+        if held {
+            self.show_results();
+        }
+        self.say_refusal(found, analysis.exclusions);
+    }
+
     /// Ends the analysis: shows how it ended, or goes back to choosing.
     fn end(&self, outcome: Option<Outcome>) {
         let cancel_asked = {
@@ -1284,6 +1420,11 @@ impl CleanerScreen {
         };
         // A cancellation that came after the scan ended shows its report.
         tracing::info!(?outcome, cancel_asked, "analysis ended");
+        if !matches!(outcome, Outcome::Found { .. }) {
+            // The analysis is the last one: the results of the one before go
+            // (found, its report took their place in `hold`).
+            self.0.borrow_mut().held = None;
+        }
         self.with_window(|window, state| {
             let cleaner = window.global::<ui::Cleaner>();
             let shown_kind = match &outcome {
@@ -1298,8 +1439,8 @@ impl CleanerScreen {
                     cleaner.set_issues(shown(*issues));
                     ui::OutcomeKind::NothingToClean
                 }
-                Outcome::Found { bytes, .. } => {
-                    cleaner.set_found(size(*bytes));
+                // What was found is said by the results (`show_results`).
+                Outcome::Found { .. } => {
                     // "Nettoyer" takes the place of "Annuler l'analyse".
                     self.settle();
                     cleaner.set_step(ui::CleanerStep::Results);
@@ -1452,6 +1593,11 @@ impl CleanerScreen {
             cleaner.set_selected_entries(shown(entries));
             cleaner.set_selected_size(size(bytes));
             cleaner.set_result_entries(shown(results.entries()));
+            // From the report held: an analysis refused since showed its
+            // own count in its place. While one runs, its count is shown.
+            if !matches!(state.task, Some(Task::Analysis(_))) {
+                cleaner.set_found(size(held.report.total_size()));
+            }
             cleaner.set_rights_waiting(shown(results.waiting_for_rights()));
         });
     }
@@ -1582,6 +1728,7 @@ pub mod tests {
     use std::fs;
     use std::path::Path;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use i_slint_backend_testing::{AccessibleRole, ElementHandle};
     use okapi_rules::Variable;
@@ -2695,46 +2842,296 @@ pub mod tests {
         assert!(!shows_a_text_starting(&window, "Remarques de l'analyse"));
     }
 
+    pub const EXCLUSION_REFUSED: &str =
+        "Une exclusion des réglages est refusée : rien n'a démarré. Le détail est dans le journal.";
+
+    /// The settings `inputs`, an exclusion the engine refuses added while
+    /// `refused` says so.
+    pub fn refused_when(inputs: Inputs, refused: &Rc<Cell<bool>>) -> Read {
+        let refused = Rc::clone(refused);
+        Rc::new(move || {
+            let mut read = inputs.clone();
+            if refused.get() {
+                read.exclusions.push(PathBuf::from("relative"));
+            }
+            Ok(read)
+        })
+    }
+
+    /// A scan that only counts how often it is run.
+    fn counted_work(runs: &Arc<AtomicUsize>) -> Work {
+        let runs = Arc::clone(runs);
+        Arc::new(move |job, cancel, progress| {
+            runs.fetch_add(1, Ordering::SeqCst);
+            scan_watched(
+                &job.rules,
+                &job.variables,
+                &job.options,
+                &Watch::new(cancel, Some(progress)),
+            )
+        })
+    }
+
     #[test]
     fn a_new_analysis_refused_says_why_on_the_ending() {
         let refused = Rc::new(Cell::new(false));
-        let read_refused = Rc::clone(&refused);
+        let minutes = Rc::new(Cell::new(None));
+        let read_minutes = Rc::clone(&minutes);
+        let read_refused = refused_when(defaults(), &refused);
         let (window, screen) = on_cleaner(Seams {
             read: Rc::new(move || {
-                Ok(Inputs {
-                    exclusions: if read_refused.get() {
-                        vec![PathBuf::from("relative")]
-                    } else {
-                        Vec::new()
-                    },
-                    ..defaults()
+                read_refused().map(|inputs| Inputs {
+                    min_age_minutes: read_minutes.get(),
+                    ..inputs
                 })
             }),
             ..seams_never_scanning()
         });
         screen.end(Some(Outcome::NothingToClean { issues: 0 }));
-        refused.set(true);
-        button(&window, "Nouvelle analyse").invoke_accessible_default_action();
+        minutes.set(Some(u64::MAX));
+        screen.refresh();
+        show_page(&window, "Accueil");
+        show_page(&window, "Nettoyeur");
         assert_eq!(step(&window), ui::CleanerStep::Outcome);
-        assert_eq!(
-            window.global::<ui::Cleaner>().get_problem(),
-            ui::SetupProblem::Exclusion
-        );
-        assert!(shows(
-            &window,
-            "Une exclusion des réglages est refusée : rien ne peut démarrer. Le détail est dans le journal."
-        ));
-        // Shown again with the analysis refused, the focus goes to the
-        // button that still works.
-        button(&window, "Accueil").invoke_accessible_default_action();
-        button(&window, "Nettoyeur").invoke_accessible_default_action();
-        slint::platform::update_timers_and_animations();
+        // "Nouvelle analyse" greyed (a minimum age beyond the clock), the
+        // focus goes to the button that still works.
         press(&window, slint::platform::Key::Return);
         assert_eq!(step(&window), ui::CleanerStep::Idle);
         assert!(shows(
             &window,
-            "Une exclusion des réglages est refusée : rien ne peut démarrer. Le détail est dans le journal."
+            "L'âge minimal des réglages remonte avant l'horloge : rien ne serait assez ancien."
         ));
+        // An exclusion refused is only met on the analysis's thread, which
+        // goes back to choosing to say it.
+        minutes.set(None);
+        refused.set(true);
+        show_page(&window, "Accueil");
+        show_page(&window, "Nettoyeur");
+        screen.end(Some(Outcome::NothingToClean { issues: 0 }));
+        let_the_screen_settle();
+        button(&window, "Nouvelle analyse").invoke_accessible_default_action();
+        assert_eq!(step(&window), ui::CleanerStep::Planning);
+        watch_until(&window, refused_for_an_exclusion);
+        assert_eq!(step(&window), ui::CleanerStep::Idle);
+        assert!(shows(&window, EXCLUSION_REFUSED));
+    }
+
+    /// Shows the page of the sidebar's entry `label`, and lets the window
+    /// hear it (a change of page is told on the next turn).
+    pub fn show_page(window: &ui::AppWindow, label: &str) {
+        button(window, label).invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+    }
+
+    /// Whether the window says an exclusion was refused.
+    pub fn refused_for_an_exclusion(window: &ui::AppWindow) -> bool {
+        window.global::<ui::Cleaner>().get_problem() == ui::SetupProblem::Exclusion
+    }
+
+    #[test]
+    fn a_refusal_met_on_a_thread_stays_said_while_the_exclusions_are_the_same() {
+        let refused = Rc::new(Cell::new(true));
+        let (window, screen) = on_cleaner(Seams {
+            read: refused_when(defaults(), &refused),
+            ..seams_never_scanning()
+        });
+        button(&window, "Analyser").invoke_accessible_default_action();
+        show_page(&window, "Accueil");
+        watch_until(&window, refused_for_an_exclusion);
+        // Each reading of the settings (the page shown, a setting written)
+        // says it again while they hold the same exclusions, whatever page
+        // was shown when it came.
+        for _ in 0..2 {
+            show_page(&window, "Nettoyeur");
+            assert!(shows(&window, EXCLUSION_REFUSED));
+            show_page(&window, "Accueil");
+        }
+        screen.refresh();
+        assert!(refused_for_an_exclusion(&window));
+        // Other exclusions read: it is no more said.
+        refused.set(false);
+        screen.refresh();
+        assert_eq!(
+            window.global::<ui::Cleaner>().get_problem(),
+            ui::SetupProblem::None
+        );
+    }
+
+    #[test]
+    fn a_refusal_met_on_a_thread_outlives_a_reading_that_fails() {
+        let refused = Rc::new(Cell::new(true));
+        let saving = Rc::new(Cell::new(false));
+        let read_saving = Rc::clone(&saving);
+        let read_refused = refused_when(defaults(), &refused);
+        let (window, screen) = on_cleaner(Seams {
+            read: Rc::new(move || {
+                if read_saving.get() {
+                    Err(Problem::SettingsSaving)
+                } else {
+                    read_refused()
+                }
+            }),
+            ..seams_never_scanning()
+        });
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, refused_for_an_exclusion);
+        // Unread, the exclusions may be the same: the refusal waits.
+        saving.set(true);
+        screen.refresh();
+        assert_eq!(
+            window.global::<ui::Cleaner>().get_problem(),
+            ui::SetupProblem::SettingsSaving
+        );
+        saving.set(false);
+        screen.refresh();
+        assert!(refused_for_an_exclusion(&window));
+    }
+
+    #[test]
+    fn a_problem_of_the_settings_comes_before_a_refusal_met_on_a_thread() {
+        let refused = Rc::new(Cell::new(true));
+        let minutes = Rc::new(Cell::new(None));
+        let read_minutes = Rc::clone(&minutes);
+        let read_refused = refused_when(defaults(), &refused);
+        let (window, screen) = on_cleaner(Seams {
+            read: Rc::new(move || {
+                read_refused().map(|inputs| Inputs {
+                    min_age_minutes: read_minutes.get(),
+                    ..inputs
+                })
+            }),
+            ..seams_never_scanning()
+        });
+        button(&window, "Analyser").invoke_accessible_default_action();
+        // The settings read again while the thread resolves: their own
+        // problem is said, and the refusal does not cover it.
+        minutes.set(Some(u64::MAX));
+        screen.refresh();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Idle);
+        assert_eq!(
+            window.global::<ui::Cleaner>().get_problem(),
+            ui::SetupProblem::MinAge
+        );
+        // Read again with both standing: the settings' own problem first.
+        screen.refresh();
+        assert_eq!(
+            window.global::<ui::Cleaner>().get_problem(),
+            ui::SetupProblem::MinAge
+        );
+        // Kept, the refusal is said once the settings' own problem is over.
+        minutes.set(None);
+        screen.refresh();
+        assert!(refused_for_an_exclusion(&window));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn an_exclusion_that_resolves_again_is_no_more_said_once_an_analysis_starts() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let folder = tempfile::tempdir().unwrap();
+        let locked = folder.path().join("locked");
+        fs::create_dir(&locked).unwrap();
+        // Unresolvable, as a mount that stopped answering would leave it.
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        let exclusion = locked.join("keep");
+        let (window, _screen) = on_cleaner(Seams {
+            read: Rc::new(move || {
+                Ok(Inputs {
+                    exclusions: vec![exclusion.clone()],
+                    ..defaults()
+                })
+            }),
+            ..seams_never_scanning()
+        });
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, refused_for_an_exclusion);
+        // Readable again with the same settings: the analysis started leaves
+        // the refusal behind.
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        let_the_screen_settle();
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Outcome);
+        show_page(&window, "Accueil");
+        show_page(&window, "Nettoyeur");
+        assert_eq!(
+            window.global::<ui::Cleaner>().get_problem(),
+            ui::SetupProblem::None
+        );
+    }
+
+    #[test]
+    fn an_exclusion_refused_starts_no_analysis() {
+        let refused = Rc::new(Cell::new(true));
+        let runs = Arc::new(AtomicUsize::new(0));
+        let (window, _screen) = on_cleaner(Seams {
+            read: refused_when(defaults(), &refused),
+            work: counted_work(&runs),
+            ..seams_never_scanning()
+        });
+        let cleaner = window.global::<ui::Cleaner>();
+        // Nothing resolved on the window's thread: the analysis starts, and
+        // its own thread meets the refusal.
+        assert_eq!(cleaner.get_problem(), ui::SetupProblem::None);
+        button(&window, "Analyser").invoke_accessible_default_action();
+        assert_eq!(step(&window), ui::CleanerStep::Planning);
+        assert_eq!(cleaner.get_problem(), ui::SetupProblem::None);
+        watch_until(&window, refused_for_an_exclusion);
+        assert_eq!(step(&window), ui::CleanerStep::Idle);
+        assert!(shows(&window, EXCLUSION_REFUSED));
+        assert_eq!(runs.load(Ordering::SeqCst), 0, "nothing scanned");
+        // A mount may answer again: the analysis may be asked for at once.
+        refused.set(false);
+        let_the_screen_settle();
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Outcome);
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        // Started, the analysis left the refusal behind.
+        show_page(&window, "Accueil");
+        show_page(&window, "Nettoyeur");
+        assert_eq!(cleaner.get_problem(), ui::SetupProblem::None);
+    }
+
+    #[test]
+    fn an_exclusion_refused_after_cancelling_is_said_back_at_choosing() {
+        let refused = Rc::new(Cell::new(true));
+        let (window, screen) = on_cleaner(Seams {
+            read: refused_when(defaults(), &refused),
+            ..seams_never_scanning()
+        });
+        button(&window, "Analyser").invoke_accessible_default_action();
+        // Cancelled before its thread is looked at: the double click guard
+        // lifted by hand, as no time may pass.
+        screen.0.borrow().settling.stop();
+        screen.cancel();
+        assert_eq!(step(&window), ui::CleanerStep::Cancelling);
+        watch_until(&window, refused_for_an_exclusion);
+        assert_eq!(step(&window), ui::CleanerStep::Idle);
+    }
+
+    #[test]
+    fn a_minimum_age_beyond_the_clock_is_refused_at_the_click() {
+        let minutes = Rc::new(Cell::new(None));
+        let read_minutes = Rc::clone(&minutes);
+        let runs = Arc::new(AtomicUsize::new(0));
+        let (window, _screen) = on_cleaner(Seams {
+            read: Rc::new(move || {
+                Ok(Inputs {
+                    min_age_minutes: read_minutes.get(),
+                    ..defaults()
+                })
+            }),
+            work: counted_work(&runs),
+            ..seams_never_scanning()
+        });
+        // Changed since the page was shown: said at the click, nothing run.
+        minutes.set(Some(u64::MAX));
+        button(&window, "Analyser").invoke_accessible_default_action();
+        assert_eq!(step(&window), ui::CleanerStep::Idle);
+        assert_eq!(
+            window.global::<ui::Cleaner>().get_problem(),
+            ui::SetupProblem::MinAge
+        );
+        assert_eq!(runs.load(Ordering::SeqCst), 0);
     }
 
     #[test]

@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::fs;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 
 use okapi_platform::PersonalKind;
@@ -833,6 +833,137 @@ fn a_result_stays_when_the_settings_are_refused_and_a_receipt_goes_back_to_the_s
         duplicates(&window).get_refused(),
         ui::DuplicatesRefusal::Saving
     );
+}
+
+const EXCLUSION_REFUSED: &str =
+    "Une exclusion de vos réglages est refusée : rien n'a été fait. Corrigez-la dans les Réglages.";
+
+/// An exclusion the engine refuses.
+fn refused_exclusion() -> Vec<PathBuf> {
+    vec![PathBuf::from("relative")]
+}
+
+#[test]
+fn an_exclusion_refused_starts_no_search() {
+    let sandbox = Sandbox::new();
+    sandbox.write("Téléchargements/r.iso", 26, 1);
+    sandbox.write("Documents/r.iso", 26, 5);
+    let exclusions = Rc::new(RefCell::new(Ok(refused_exclusion())));
+    let threads_asked = Arc::new(AtomicUsize::new(0));
+    let mut seams = seams(&sandbox, &Rc::default(), &exclusions, None);
+    let asking = Arc::clone(&threads_asked);
+    seams.duplicates.threads = Arc::new(move |_| {
+        asking.fetch_add(1, Ordering::SeqCst);
+        NonZeroUsize::MIN
+    });
+    let window = on_duplicates(seams);
+    duplicates(&window).invoke_search();
+    // Nothing resolved on the window's thread: the search starts, and its
+    // own thread meets the refusal.
+    assert_eq!(
+        duplicates(&window).get_step(),
+        ui::DuplicatesStep::Searching
+    );
+    assert_eq!(
+        duplicates(&window).get_refused(),
+        ui::DuplicatesRefusal::None
+    );
+    read_until(&window, |window| {
+        duplicates(window).get_refused() == ui::DuplicatesRefusal::Exclusion
+    });
+    assert_eq!(duplicates(&window).get_step(), ui::DuplicatesStep::Start);
+    assert!(shows(&window, EXCLUSION_REFUSED));
+    assert_eq!(threads_asked.load(Ordering::SeqCst), 0, "nothing read");
+    // Corrected, it searches.
+    *exclusions.borrow_mut() = Ok(Vec::new());
+    searched(&window);
+    assert_eq!(threads_asked.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn an_exclusion_refused_moves_nothing_to_the_trash() {
+    let sandbox = Sandbox::new();
+    let downloaded = sandbox.write("Téléchargements/t.iso", 27, 1);
+    sandbox.write("Documents/t.iso", 27, 5);
+    let exclusions = no_exclusion();
+    let opened = Arc::new(AtomicUsize::new(0));
+    let mut seams = seams(&sandbox, &Rc::default(), &exclusions, None);
+    let counter = Arc::clone(&opened);
+    let data = sandbox.data();
+    seams.duplicates.trash = Arc::new(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Trash::in_folder(&data)
+    });
+    let window = on_duplicates(seams);
+    searched(&window);
+    let opened_before = opened.load(Ordering::SeqCst);
+    *exclusions.borrow_mut() = Ok(refused_exclusion());
+    duplicates(&window).invoke_confirm();
+    assert!(duplicates(&window).get_trashing());
+    assert_eq!(
+        duplicates(&window).get_refused(),
+        ui::DuplicatesRefusal::None
+    );
+    read_until(&window, |window| !duplicates(window).get_trashing());
+    assert_eq!(duplicates(&window).get_step(), ui::DuplicatesStep::Result);
+    assert_eq!(
+        duplicates(&window).get_refused(),
+        ui::DuplicatesRefusal::Exclusion
+    );
+    assert!(shows(&window, EXCLUSION_REFUSED));
+    assert_eq!(
+        opened.load(Ordering::SeqCst),
+        opened_before,
+        "no trash opened"
+    );
+    assert!(downloaded.exists());
+    // Searched again, the refusal is met on the search's thread: said on the
+    // start, the result let go as any new search does.
+    duplicates(&window).invoke_again();
+    read_until(&window, |window| {
+        duplicates(window).get_step() == ui::DuplicatesStep::Start
+    });
+    assert_eq!(
+        duplicates(&window).get_refused(),
+        ui::DuplicatesRefusal::Exclusion
+    );
+    // Corrected, the search and the move go.
+    *exclusions.borrow_mut() = Ok(Vec::new());
+    searched(&window);
+    duplicates(&window).invoke_confirm();
+    read_until(&window, |window| {
+        duplicates(window).get_step() == ui::DuplicatesStep::Receipt
+    });
+    assert!(!downloaded.exists());
+}
+
+#[test]
+fn a_trash_that_does_not_open_is_said_and_moves_nothing() {
+    let sandbox = Sandbox::new();
+    let downloaded = sandbox.write("Téléchargements/u.iso", 28, 1);
+    sandbox.write("Documents/u.iso", 28, 5);
+    let opens = Arc::new(AtomicBool::new(true));
+    let mut seams = seams(&sandbox, &Rc::default(), &no_exclusion(), None);
+    let opening = Arc::clone(&opens);
+    let data = sandbox.data();
+    seams.duplicates.trash = Arc::new(move || {
+        if opening.load(Ordering::SeqCst) {
+            Trash::in_folder(&data)
+        } else {
+            Err(io::Error::other("no trash, as a test asks"))
+        }
+    });
+    let window = on_duplicates(seams);
+    searched(&window);
+    opens.store(false, Ordering::SeqCst);
+    duplicates(&window).invoke_confirm();
+    read_until(&window, |window| !duplicates(window).get_trashing());
+    assert_eq!(duplicates(&window).get_step(), ui::DuplicatesStep::Result);
+    assert_eq!(
+        duplicates(&window).get_refused(),
+        ui::DuplicatesRefusal::Trash
+    );
+    assert!(downloaded.exists());
 }
 
 #[test]

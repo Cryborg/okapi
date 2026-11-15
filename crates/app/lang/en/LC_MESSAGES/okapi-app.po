@@ -140,8 +140,8 @@ msgid "L'âge minimal des réglages remonte avant l'horloge : rien ne serait ass
 msgstr "The minimum age in the settings goes back before the clock: nothing would be old enough."
 
 msgctxt "ProblemBanner"
-msgid "Une exclusion des réglages est refusée : rien ne peut démarrer. Le détail est dans le journal."
-msgstr "An exclusion in the settings is refused: nothing can start. The details are in the log."
+msgid "Une exclusion des réglages est refusée : rien n'a démarré. Le détail est dans le journal."
+msgstr "An exclusion in the settings is refused: nothing was started. The details are in the log."
 
 msgctxt "Choosing"
 msgid "Nettoyeur"

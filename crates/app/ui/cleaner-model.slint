@@ -168,6 +168,12 @@ export global Cleaner {
     in property <int> min-age-minutes;
     in property <int> exclusion-count;
     in property <SetupProblem> problem;
+    // Whether an analysis may be asked for despite `problem`: a refused
+    // cleaning, or an exclusion refused on a task's thread (a mount may
+    // answer again), leaves the settings read usable.
+    out property <bool> analysis-allowed: problem == SetupProblem.none
+        || problem == SetupProblem.history || problem == SetupProblem.start
+        || problem == SetupProblem.exclusion;
     // Set when an analysis is left: the focus then goes back to the
     // categories, once.
     in-out property <bool> back-from-analysis;
@@ -392,5 +398,5 @@ export component ProblemBanner inherits Banner {
         ? @tr("Les réglages ont changé depuis l'obtention des droits administrateur : rien n'est supprimé, obtenez-les à nouveau.")
         : Cleaner.problem == SetupProblem.history
         ? @tr("L'historique ne peut pas être tenu alors que vous demandez le journal des suppressions : rien n'est supprimé. Le détail est dans le journal.")
-        : @tr("Une exclusion des réglages est refusée : rien ne peut démarrer. Le détail est dans le journal.");
+        : @tr("Une exclusion des réglages est refusée : rien n'a démarré. Le détail est dans le journal.");
 }

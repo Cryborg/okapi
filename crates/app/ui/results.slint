@@ -539,9 +539,7 @@ export component ResultsPage inherits VerticalLayout {
                 text: @tr("Nouvelle analyse");
                 icon: @image-url("../assets/icons/search.svg");
                 kind: ButtonKind.ghost;
-                // A refused cleaning does not keep an analysis from starting.
-                enabled: Cleaner.problem == SetupProblem.none || Cleaner.problem == SetupProblem.history
-                    || Cleaner.problem == SetupProblem.start;
+                enabled: Cleaner.analysis-allowed;
                 cross-axis-self-alignment: center;
                 clicked => {
                     Cleaner.analyze();

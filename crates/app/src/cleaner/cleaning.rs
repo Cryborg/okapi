@@ -3,6 +3,7 @@
 //! it reports, and the receipt.
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::SystemTime;
@@ -17,7 +18,8 @@ use okapi_store::{AdminRecord, History, HistoryEntry, HistoryOutcome, Opened, se
 use slint::ComponentHandle as _;
 
 use super::{
-    CleanerEvent, CleanerScreen, Problem, Running, Task, options, problem, rights, stop_shown,
+    CleanerEvent, CleanerScreen, Inputs, Problem, Running, Task, min_age, options, problem, rights,
+    stop_shown,
 };
 use crate::elevation::{ElevationFailure, ElevationStep};
 use crate::receipt::{Ending, Kept, LineKind, OutcomeFacts, Receipt};
@@ -25,7 +27,7 @@ use crate::shown::{show, shown, size};
 use crate::ui;
 
 /// What a cleaning takes: identifiers of the report kept, and only them
-/// (invariant 1), with the rules, variables and options read as it starts;
+/// (invariant 1), with the rules, variables and options built as it starts;
 /// and the request of root's part, which names the rules' targets of the
 /// groups that need the administrator, never a path.
 #[derive(Debug)]
@@ -228,7 +230,7 @@ fn clean_step(
 /// would leave no history line (only the window closing with the user
 /// insisting, or the event loop ending, leaves it).
 pub(super) struct Cleaning {
-    pub(super) running: Running<Cleaned>,
+    pub(super) running: Running<Result<Cleaned, Problem>>,
     steps: Receiver<ElevationStep>,
     /// Root's part over: whether it was done to its end.
     admin_ended: Receiver<bool>,
@@ -242,6 +244,9 @@ pub(super) struct Cleaning {
     deletion_log: bool,
     /// The window asked to close: it hides once the receipt is in.
     close_when_done: bool,
+    /// The exclusions of the settings it started with, which its thread
+    /// resolves.
+    exclusions: Vec<PathBuf>,
 }
 
 impl Cleaning {
@@ -359,11 +364,41 @@ impl Confirming {
     }
 }
 
+/// What a cleaning's job takes but its options, built from the settings
+/// `inputs` on its thread: resolving the exclusions may wait on a mount that
+/// stopped answering.
+struct PendingJob {
+    report: Arc<ScanReport>,
+    ids: Vec<ItemId>,
+    rules: Arc<RuleSet>,
+    admin: Option<Vec<u8>>,
+    inputs: Inputs,
+}
+
+impl PendingJob {
+    /// The job, its options built now: on the cleaning's thread, before
+    /// anything is asked of root or removed.
+    fn build(self) -> Result<CleanJob, Problem> {
+        let options = options(&self.inputs, SystemTime::now(), BTreeSet::new())?;
+        tracing::info!(?options, "cleaning options built");
+        Ok(CleanJob {
+            report: self.report,
+            ids: self.ids,
+            rules: self.rules,
+            variables: self.inputs.variables,
+            options,
+            admin: self.admin,
+        })
+    }
+}
+
 /// A cleaning ready to start: its job, the history it writes to, and whether
 /// the user asked for a deletion log.
 struct Prepared {
-    job: CleanJob,
+    job: PendingJob,
     history: Option<History>,
+    /// Read from the settings before they go into `job`, whose `build`
+    /// consumes them: the thread still needs it for the history.
     deletion_log: bool,
 }
 
@@ -550,13 +585,16 @@ impl CleanerScreen {
         self.0.borrow().confirming.is_some() || self.is_asking()
     }
 
-    /// The cleaning of `confirmed`, its options built now from the settings
-    /// read now, its history opened before anything is removed.
+    /// The cleaning of `confirmed`, from the settings read now (its options
+    /// are built from them on its thread), its history opened before
+    /// anything is removed.
     fn prepare_cleaning(&self, confirmed: &Confirming) -> Result<Prepared, Problem> {
         let state = self.0.borrow();
         let rules = state.rules.as_ref().ok_or(Problem::Rules)?;
         let inputs = (state.seams.read)()?;
-        let options = options(&inputs, SystemTime::now(), BTreeSet::new())?;
+        // Only the age is checked here: an exclusion is met, and said, on
+        // the task's thread.
+        min_age(&inputs, SystemTime::now())?;
         let history = match History::open_for_cleaning(
             inputs.state_directory.as_deref(),
             inputs.deletion_log,
@@ -607,17 +645,17 @@ impl CleanerScreen {
             tracing::info!(targets = ?confirmed.admin_targets, ?granted, "root's part of the cleaning");
             Some(line)
         };
+        let deletion_log = inputs.deletion_log;
         Ok(Prepared {
-            job: CleanJob {
+            job: PendingJob {
                 report: Arc::clone(&confirmed.report),
                 ids,
                 rules: Arc::clone(rules),
-                variables: inputs.variables,
-                options,
                 admin,
+                inputs,
             },
             history,
-            deletion_log: inputs.deletion_log,
+            deletion_log,
         })
     }
 
@@ -690,18 +728,28 @@ impl CleanerScreen {
             history,
             deletion_log,
         } = prepared;
-        tracing::info!(ids = job.ids.len(), admin = job.admin.is_some(), options = ?job.options, history = history.is_some(), deletion_log, "cleaning started");
+        tracing::info!(
+            ids = job.ids.len(),
+            admin = job.admin.is_some(),
+            history = history.is_some(),
+            deletion_log,
+            "cleaning started"
+        );
         let report = Arc::clone(&job.report);
         let had_admin = job.admin.is_some();
         let clean = Arc::clone(&self.0.borrow().seams.clean);
         let elevate = Arc::clone(&self.0.borrow().seams.elevate);
         let entries = job.ids.len();
+        let exclusions = job.inputs.exclusions.clone();
         let (step_sender, steps) = mpsc::channel();
         let (admin_sender, admin_ended) = mpsc::channel();
         let running = Running::start(
             "okapi-cleaning",
             tracing::info_span!("cleaning"),
             move |cancel, progress| {
+                // Its options first: refused, nothing is asked of root nor
+                // removed, and no history line is written.
+                let job = job.build()?;
                 // Root's part first: the system's question, if it comes,
                 // comes before anything is removed; never asked once
                 // cancelled.
@@ -728,17 +776,18 @@ impl CleanerScreen {
                 }
                 let receipt = clean(&job, cancel, progress);
                 let history = record(history, &receipt, admin.as_ref(), deletion_log);
-                Cleaned {
+                Ok(Cleaned {
                     receipt,
                     admin,
                     history,
-                }
+                })
             },
         )
         .map_err(|error| {
             tracing::error!(%error, "cleaning thread not started: nothing removed");
             Problem::Start
         })?;
+        self.forget_refused_exclusions();
         self.with_window(|window, _| window.global::<ui::Cleaner>().set_problem(problem(None)));
         self.0.borrow_mut().task = Some(Task::Cleaning(Cleaning {
             running,
@@ -750,6 +799,7 @@ impl CleanerScreen {
             close_when_done: false,
             had_admin,
             entries,
+            exclusions,
         }));
         self.settle();
         self.with_window(|window, state| {
@@ -793,7 +843,8 @@ impl CleanerScreen {
             cleaner.set_freed(size(freed));
         });
         match result {
-            Ok(cleaned) => self.end_cleaning(Some(&cleaned)),
+            Ok(Ok(cleaned)) => self.end_cleaning(Some(&cleaned)),
+            Ok(Err(found)) => self.cleaning_refused(found),
             Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => {
                 let had_admin = matches!(
@@ -806,6 +857,30 @@ impl CleanerScreen {
                 );
                 self.end_cleaning(None);
             }
+        }
+    }
+
+    /// The cleaning refused on its thread for `found`, before root was asked
+    /// or anything removed: back to the results, still held, the refusal
+    /// said. A closing asked meanwhile goes on: nothing was done.
+    fn cleaning_refused(&self, found: Problem) {
+        if !matches!(self.0.borrow().task, Some(Task::Cleaning(_))) {
+            tracing::error!("a cleaning refused that was not under way");
+            return;
+        }
+        let Some(Task::Cleaning(cleaning)) = self.0.borrow_mut().task.take() else {
+            return;
+        };
+        self.0.borrow().timer.stop();
+        let close_when_done = cleaning.close_when_done;
+        // Its cause is traced where it was met, on the thread.
+        tracing::info!(problem = ?found, close_when_done, "cleaning refused on its thread: nothing removed");
+        self.settle();
+        self.set_step(ui::CleanerStep::Results);
+        self.show_results();
+        self.say_refusal(found, cleaning.exclusions);
+        if close_when_done {
+            self.close_as_asked();
         }
     }
 
@@ -1089,6 +1164,7 @@ fn show_receipt(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::rc::Rc;
@@ -1101,9 +1177,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::super::tests::{
-        SIDEBAR_STOPS, Sandbox, button, checkbox, let_the_screen_settle, on_cleaner, press, resize,
-        seams_never_scanning, settle_files, shows, shows_a_text_starting, start_of, step,
-        watch_until,
+        EXCLUSION_REFUSED, SIDEBAR_STOPS, Sandbox, button, checkbox, let_the_screen_settle,
+        on_cleaner, press, refused_for_an_exclusion, refused_when, resize, seams_never_scanning,
+        settle_files, shows, shows_a_text_starting, start_of, step, watch_until,
     };
     use super::super::{Inputs, Seams};
     use crate::ui;
@@ -3049,6 +3125,239 @@ mod tests {
             Some(false)
         );
         assert!(sandbox.history().is_empty(), "nothing done, nothing kept");
+    }
+
+    /// The window on results whose settings refuse an exclusion while
+    /// `refused` says so.
+    fn on_results_refused_when(
+        sandbox: &Sandbox,
+        refused: &Rc<Cell<bool>>,
+    ) -> (ui::AppWindow, super::super::CleanerScreen) {
+        let state = sandbox.root.join("state");
+        on_results(Seams {
+            read: refused_when(sandbox.inputs(Some(&state)), refused),
+            ..sandbox.read(&state)
+        })
+    }
+
+    #[test]
+    fn an_exclusion_refused_at_the_cleaning_removes_nothing() {
+        let sandbox = Sandbox::new();
+        let old = sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let refused = Rc::new(Cell::new(false));
+        let (window, _screen) = on_results_refused_when(&sandbox, &refused);
+        refused.set(true);
+        confirm(&window);
+        let cleaner = window.global::<ui::Cleaner>();
+        // Nothing resolved on the window's thread: the cleaning starts, and
+        // its own thread meets the refusal.
+        assert_eq!(step(&window), ui::CleanerStep::Cleaning);
+        assert_eq!(cleaner.get_problem(), ui::SetupProblem::None);
+        watch_until(&window, refused_for_an_exclusion);
+        assert_eq!(step(&window), ui::CleanerStep::Results);
+        assert!(shows(&window, EXCLUSION_REFUSED));
+        assert!(old.exists());
+        assert!(sandbox.history().is_empty(), "nothing done, nothing kept");
+        // The results held still clean, once the settings are corrected.
+        refused.set(false);
+        let_the_screen_settle();
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(!old.exists());
+        assert_eq!(sandbox.history().len(), 1);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn an_exclusion_that_resolves_again_is_no_more_said_once_a_cleaning_starts() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let sandbox = Sandbox::new();
+        let old = sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let locked = sandbox.root.join("locked");
+        fs::create_dir(&locked).unwrap();
+        let state = sandbox.root.join("state");
+        let mut inputs = sandbox.inputs(Some(&state));
+        inputs.exclusions.push(locked.join("keep"));
+        let (window, _screen) = on_results(Seams {
+            read: Rc::new(move || Ok(inputs.clone())),
+            ..sandbox.read(&state)
+        });
+        // Unresolvable, as a mount that stopped answering would leave it.
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        confirm(&window);
+        watch_until(&window, refused_for_an_exclusion);
+        // Readable again with the same settings: the cleaning started leaves
+        // the refusal behind.
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        let_the_screen_settle();
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(!old.exists());
+        let_the_screen_settle();
+        button(&window, "Terminer").invoke_accessible_default_action();
+        assert_eq!(
+            window.global::<ui::Cleaner>().get_problem(),
+            ui::SetupProblem::None
+        );
+    }
+
+    #[test]
+    fn a_minimum_age_beyond_the_clock_is_refused_at_the_confirmation() {
+        let sandbox = Sandbox::new();
+        let old = sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let state = sandbox.root.join("state");
+        let minutes = Rc::new(Cell::new(Some(0)));
+        let read_minutes = Rc::clone(&minutes);
+        let inputs = sandbox.inputs(Some(&state));
+        let (window, _screen) = on_results(Seams {
+            read: Rc::new(move || {
+                Ok(Inputs {
+                    min_age_minutes: read_minutes.get(),
+                    ..inputs.clone()
+                })
+            }),
+            ..sandbox.read(&state)
+        });
+        minutes.set(Some(u64::MAX));
+        confirm(&window);
+        // Said at the click: no cleaning started.
+        assert_eq!(step(&window), ui::CleanerStep::Results);
+        assert_eq!(
+            window.global::<ui::Cleaner>().get_problem(),
+            ui::SetupProblem::MinAge
+        );
+        assert!(old.exists());
+    }
+
+    #[test]
+    fn closing_asked_during_a_refused_cleaning_closes() {
+        let sandbox = Sandbox::new();
+        let old = sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let refused = Rc::new(Cell::new(false));
+        let (window, screen) = on_results_refused_when(&sandbox, &refused);
+        refused.set(true);
+        confirm(&window);
+        window.window().show().unwrap();
+        assert_eq!(
+            screen.close_requested(),
+            slint::CloseRequestResponse::KeepWindowShown
+        );
+        watch_until(&window, refused_for_an_exclusion);
+        assert!(!window.window().is_visible(), "nothing to read: it closes");
+        assert!(old.exists());
+    }
+
+    #[test]
+    fn a_refusal_after_an_analysis_that_found_nothing_goes_back_to_choosing() {
+        let sandbox = Sandbox::new();
+        let old = sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let refused = Rc::new(Cell::new(false));
+        let (window, _screen) = on_results_refused_when(&sandbox, &refused);
+        // The analysis after finds nothing: the results before are no more
+        // the last ones, and nothing may clean them.
+        std::fs::remove_file(&old).unwrap();
+        button(&window, "Nouvelle analyse").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Outcome);
+        let_the_screen_settle();
+        refused.set(true);
+        button(&window, "Nouvelle analyse").invoke_accessible_default_action();
+        watch_until(&window, refused_for_an_exclusion);
+        assert_eq!(step(&window), ui::CleanerStep::Idle);
+    }
+
+    /// Root's scan offers the crash reports, the window holds them unlocked
+    /// and checked; the settings refuse an exclusion while `refused` says so.
+    fn on_unlocked_results_refused_when(
+        sandbox: &Sandbox,
+        asked: &Asked,
+        refused: &Rc<Cell<bool>>,
+    ) -> ui::AppWindow {
+        let rules = admin_rules(sandbox);
+        let answer = {
+            let scan = scan_answer(sandbox);
+            move |operation, _: &serde_json::Value| match operation {
+                okapi_helper::Operation::Scan => (0, scan.clone()),
+                okapi_helper::Operation::Clean => (0, clean_answer(&[], &serde_json::json!([]))),
+            }
+        };
+        let seams = Seams {
+            read: refused_when(sandbox.inputs(Some(&sandbox.root.join("state"))), refused),
+            ..admin_seams(sandbox, &rules, asked, answer)
+        };
+        let (window, _screen) = on_admin_results(seams, &rules);
+        obtain_rights(&window);
+        found(&window, "Rapports de plantage").invoke_accessible_default_action();
+        window
+    }
+
+    #[test]
+    fn an_exclusion_refused_never_asks_root_to_clean() {
+        let sandbox = Sandbox::new();
+        let pip = sandbox.file("home/.cache/pip/old");
+        let crash = sandbox.file("var/crash/core");
+        settle_files();
+        let asked = Asked::default();
+        let refused = Rc::new(Cell::new(false));
+        let window = on_unlocked_results_refused_when(&sandbox, &asked, &refused);
+        refused.set(true);
+        confirm(&window);
+        watch_until(&window, refused_for_an_exclusion);
+        assert_eq!(step(&window), ui::CleanerStep::Results);
+        assert_eq!(
+            asked.lock().unwrap().len(),
+            1,
+            "root asked for its scan alone"
+        );
+        assert!(pip.exists());
+        assert!(crash.exists());
+        assert!(sandbox.history().is_empty(), "nothing done, nothing kept");
+    }
+
+    #[test]
+    fn a_new_analysis_refused_from_the_results_keeps_them_and_the_rights() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        sandbox.file("var/crash/core");
+        settle_files();
+        let asked = Asked::default();
+        let refused = Rc::new(Cell::new(false));
+        let window = on_unlocked_results_refused_when(&sandbox, &asked, &refused);
+        let cleaner = window.global::<ui::Cleaner>();
+        let found_before = cleaner.get_found();
+        assert_ne!(found_before, crate::shown::size(0));
+        refused.set(true);
+        button(&window, "Nouvelle analyse").invoke_accessible_default_action();
+        assert_eq!(step(&window), ui::CleanerStep::Planning);
+        watch_until(&window, refused_for_an_exclusion);
+        assert_eq!(step(&window), ui::CleanerStep::Results);
+        assert!(shows(&window, EXCLUSION_REFUSED));
+        assert_eq!(cleaner.get_found(), found_before, "what the results found");
+        assert_eq!(
+            cleaner.get_rights_waiting(),
+            0,
+            "root's group still unlocked"
+        );
+        assert_eq!(
+            button(&window, "Nouvelle analyse").accessible_enabled(),
+            Some(true),
+            "a mount may answer again: it may be asked for again"
+        );
+        let crash = found(&window, "Rapports de plantage");
+        assert_eq!(crash.accessible_enabled(), Some(true));
+        assert_eq!(crash.accessible_checked(), Some(true));
+        // The same report cleans, root's part with it.
+        refused.set(false);
+        let_the_screen_settle();
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        let asked = asked.lock().unwrap();
+        assert_eq!(asked.len(), 2);
+        assert_eq!(asked[1].0, okapi_helper::Operation::Clean);
     }
 
     /// Root's part of a cleaning ends with `code` and `output`: the user's

@@ -176,7 +176,7 @@ component Choosing inherits VerticalLayout {
             icon: @image-url("../assets/icons/search.svg");
             kind: ButtonKind.primary;
             large: true;
-            enabled: Cleaner.chosen-count > 0 && Cleaner.problem == SetupProblem.none;
+            enabled: Cleaner.chosen-count > 0 && Cleaner.analysis-allowed;
             cross-axis-self-alignment: center;
             clicked => {
                 Cleaner.analyze();
@@ -469,7 +469,7 @@ component Ended inherits VerticalLayout {
                 again := ActionButton {
                     text: @tr("Nouvelle analyse");
                     kind: ButtonKind.primary;
-                    enabled: Cleaner.chosen-count > 0 && Cleaner.problem == SetupProblem.none;
+                    enabled: Cleaner.chosen-count > 0 && Cleaner.analysis-allowed;
                     clicked => {
                         Cleaner.analyze();
                     }

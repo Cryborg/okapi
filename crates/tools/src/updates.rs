@@ -145,10 +145,7 @@ impl SystemSources {
     #[must_use]
     pub const fn new(language: Language) -> Self {
         Self {
-            locale: match language {
-                Language::French => "fr_FR.UTF-8",
-                Language::English => "en_US.UTF-8",
-            },
+            locale: crate::packagekit_locale(language),
         }
     }
 }

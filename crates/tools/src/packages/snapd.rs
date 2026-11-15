@@ -18,7 +18,16 @@ const SOCKET: &str = "/run/snapd.socket";
 /// The longest a request waits: `select=refresh` asks the store.
 const WAIT: Duration = Duration::from_secs(60);
 /// What snapd says when its store cannot be reached (`client/errors.go`).
+/// How long a request that asks the user may wait: snapd answers once
+/// polkit's window is closed.
+const ASKING_WAIT: Duration = Duration::from_mins(30);
 pub const KIND_NETWORK_TIMEOUT: &str = "network-timeout";
+/// The rights were not given: the window closed, or no one logged in.
+pub const KIND_AUTH_CANCELLED: &str = "auth-cancelled";
+pub const KIND_LOGIN_REQUIRED: &str = "login-required";
+/// Another change holds the snap (an automatic refresh).
+pub const KIND_CHANGE_CONFLICT: &str = "snap-change-conflict";
+pub const KIND_NOT_INSTALLED: &str = "snap-not-installed";
 pub const KIND_DNS_FAILURE: &str = "dns-failure";
 /// What a publisher's `validation` is when the store vouches for it.
 pub const VALIDATION_VOUCHED: [&str; 2] = ["verified", "starred"];
@@ -79,7 +88,8 @@ impl SnapdError {
     }
 }
 
-/// snapd's envelope: `type` is `sync`, `async` or `error`.
+/// snapd's envelope: `type` is `sync`, `async` or `error`; an `async` one
+/// names the change it started.
 #[derive(Debug, Deserialize)]
 struct Envelope {
     #[serde(rename = "type")]
@@ -88,6 +98,33 @@ struct Envelope {
     status: u16,
     #[serde(default)]
     result: Value,
+    #[serde(default)]
+    change: Option<String>,
+}
+
+/// Where a change of snapd stands (`/v2/changes/<id>`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Change {
+    /// `Do`, `Doing`, `Done`, `Error`, `Undone`, `Hold`, `Abort`...
+    pub status: String,
+    pub ready: bool,
+    /// Why it failed, in snapd's words.
+    #[serde(default)]
+    pub err: Option<String>,
+}
+
+/// The change status of a change that did all it was asked.
+pub const CHANGE_DONE: &str = "Done";
+
+/// How a request is made.
+struct Request<'a> {
+    method: &'a str,
+    path: &'a str,
+    /// A JSON body.
+    body: Option<String>,
+    /// polkit may ask the user (`X-Allow-Interaction`).
+    interactive: bool,
+    wait: Duration,
 }
 
 /// What an error's `result` says.
@@ -181,8 +218,60 @@ impl Snapd {
         Ok(serde_json::from_value::<SystemInfo>(self.get("/v2/system-info")?)?.refresh)
     }
 
+    /// Every snap installed, every revision kept (`select=all`), as snapd
+    /// lists them.
+    ///
+    /// # Errors
+    /// Whatever kept snapd from answering, or its refusal.
+    pub fn snaps(&self) -> Result<Value, SnapdError> {
+        self.get("/v2/snaps?select=all")
+    }
+
+    /// Removes the snap `name` (a name checked by the caller), its data
+    /// with it when `purge` (no copy kept), polkit asking the user for the
+    /// rights: the change it started.
+    ///
+    /// # Errors
+    /// Whatever kept snapd from answering, or its refusal (the rights not
+    /// given among them).
+    pub fn remove(&self, name: &str, purge: bool) -> Result<String, SnapdError> {
+        let envelope = self.request(&Request {
+            method: "POST",
+            path: &format!("/v2/snaps/{name}"),
+            body: Some(serde_json::json!({ "action": "remove", "purge": purge }).to_string()),
+            interactive: true,
+            wait: ASKING_WAIT,
+        })?;
+        envelope.change.ok_or(SnapdError::Malformed(
+            "an asynchronous answer without its change",
+        ))
+    }
+
+    /// Where the change `id` stands.
+    ///
+    /// # Errors
+    /// Whatever kept snapd from answering, or its refusal.
+    pub fn change(&self, id: &str) -> Result<Change, SnapdError> {
+        Ok(serde_json::from_value(
+            self.get(&format!("/v2/changes/{id}"))?,
+        )?)
+    }
+
     /// What snapd answers to `path`: the `result` of its envelope.
     fn get(&self, path: &str) -> Result<Value, SnapdError> {
+        self.request(&Request {
+            method: "GET",
+            path,
+            body: None,
+            interactive: false,
+            wait: self.wait,
+        })
+        .map(|envelope| envelope.result)
+    }
+
+    /// snapd's answer to `request`: its envelope, when it is no error.
+    fn request(&self, request: &Request<'_>) -> Result<Envelope, SnapdError> {
+        let path = request.path;
         let mut stream = UnixStream::connect(&self.socket).map_err(|source| {
             if matches!(
                 source.kind(),
@@ -197,12 +286,12 @@ impl Snapd {
             }
         })?;
         stream
-            .set_write_timeout(Some(self.wait))
+            .set_write_timeout(Some(request.wait))
             .map_err(SnapdError::Io)?;
         stream
-            .write_all(&request_bytes(path))
+            .write_all(&request_bytes(request))
             .map_err(SnapdError::Io)?;
-        let raw = read_whole(&mut stream, Instant::now() + self.wait)?;
+        let raw = read_whole(&mut stream, Instant::now() + request.wait)?;
         let (status, body) = parse_answer(&raw)?;
         let envelope: Envelope = serde_json::from_slice(&body).inspect_err(|error| {
             tracing::warn!(path, status, %error, body = %excerpt(&body), "snapd's answer is no envelope");
@@ -230,7 +319,7 @@ impl Snapd {
                 message,
             });
         }
-        Ok(envelope.result)
+        Ok(envelope)
     }
 }
 
@@ -239,10 +328,25 @@ fn excerpt(bytes: &[u8]) -> String {
     String::from_utf8_lossy(&bytes[..bytes.len().min(TRACED_EXCERPT)]).into_owned()
 }
 
-/// The bytes of a request for `path`.
-fn request_bytes(path: &str) -> Vec<u8> {
+/// The bytes of `request`.
+fn request_bytes(request: &Request<'_>) -> Vec<u8> {
+    let interaction = if request.interactive {
+        "X-Allow-Interaction: true\r\n"
+    } else {
+        ""
+    };
+    let (content, body) = request.body.as_deref().map_or((String::new(), ""), |body| {
+        (
+            format!(
+                "Content-Type: application/json\r\nContent-Length: {}\r\n",
+                body.len()
+            ),
+            body,
+        )
+    });
     format!(
-        "GET {path} HTTP/1.1\r\nHost: localhost\r\nUser-Agent: okapi\r\nConnection: close\r\n\r\n"
+        "{} {} HTTP/1.1\r\nHost: localhost\r\nUser-Agent: okapi\r\n{interaction}{content}Connection: close\r\n\r\n{body}",
+        request.method, request.path
     )
     .into_bytes()
 }

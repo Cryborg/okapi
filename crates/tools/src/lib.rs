@@ -25,3 +25,12 @@ pub(crate) fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
         .or_else(|| panic.downcast_ref::<String>().cloned())
         .unwrap_or_default()
 }
+
+/// The locale PackageKit gives its texts in, for `language`.
+#[cfg(any(feature = "apps", feature = "updates"))]
+pub(crate) const fn packagekit_locale(language: okapi_rules::Language) -> &'static str {
+    match language {
+        okapi_rules::Language::French => "fr_FR.UTF-8",
+        okapi_rules::Language::English => "en_US.UTF-8",
+    }
+}

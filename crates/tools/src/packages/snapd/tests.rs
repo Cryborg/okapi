@@ -258,3 +258,63 @@ fn the_schedule_says_the_next_automatic_refresh() {
     ));
     assert_eq!(snapd.schedule().unwrap(), Schedule::default());
 }
+
+#[test]
+fn a_removal_asks_polkit_and_names_the_change_it_started() {
+    // Catches a removal that cannot ask for the rights, or that loses its
+    // change.
+    for purge in [false, true] {
+        let (_directory, snapd, requests) = serving(with_length(
+            "202 Accepted",
+            r#"{"type":"async","status-code":202,"status":"Accepted","result":null,"change":"42"}"#,
+        ));
+        assert_eq!(snapd.remove("android-studio", purge).unwrap(), "42");
+        let request = requests.recv().unwrap();
+        assert!(
+            request.starts_with("POST /v2/snaps/android-studio HTTP/1.1\r\n"),
+            "{request}"
+        );
+        assert!(
+            request.contains("\r\nX-Allow-Interaction: true\r\n"),
+            "{request}"
+        );
+        let body = request.split("\r\n\r\n").nth(1).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(body).unwrap(),
+            serde_json::json!({ "action": "remove", "purge": purge })
+        );
+    }
+    // A read never asks.
+    let (_directory, snapd, requests) = serving(with_length(
+        "200 OK",
+        r#"{"type":"sync","status-code":200,"status":"OK","result":[]}"#,
+    ));
+    snapd.snaps().unwrap();
+    let request = requests.recv().unwrap();
+    assert!(request.starts_with("GET /v2/snaps?select=all HTTP/1.1\r\n"));
+    assert!(!request.contains("X-Allow-Interaction"));
+}
+
+#[test]
+fn the_rights_refused_are_told_by_their_kind_and_a_change_by_its_status() {
+    let (_directory, snapd, _) = serving(with_length(
+        "403 Forbidden",
+        r#"{"type":"error","status-code":403,"status":"Forbidden","result":{"kind":"auth-cancelled","message":"cancelled"}}"#,
+    ));
+    assert!(matches!(
+        snapd.remove("x", false),
+        Err(SnapdError::Refused { kind, .. }) if kind == KIND_AUTH_CANCELLED
+    ));
+    let (_directory, snapd, _) = serving(with_length(
+        "200 OK",
+        r#"{"type":"sync","status-code":200,"status":"OK","result":{"id":"42","status":"Error","ready":true,"err":"cannot remove"}}"#,
+    ));
+    assert_eq!(
+        snapd.change("42").unwrap(),
+        Change {
+            status: "Error".to_owned(),
+            ready: true,
+            err: Some("cannot remove".to_owned()),
+        }
+    );
+}

@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 use std::pin::pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use futures_lite::{Stream, StreamExt as _};
@@ -41,14 +42,35 @@ const CALL_WAIT: Duration = Duration::from_secs(10);
 const UPDATES_WAIT: Duration = Duration::from_mins(2);
 /// How long the package lists are downloaded at most: a slow network.
 const REFRESH_WAIT: Duration = Duration::from_mins(5);
+/// How long a package is looked for, or a removal simulated, at most: from
+/// the cache.
+const RESOLVE_WAIT: Duration = Duration::from_mins(2);
+/// How long a removal is followed at most: polkit's window waits on the
+/// user, then dpkg works. Beyond it, said unanswered; it may still end.
+const REMOVE_WAIT: Duration = Duration::from_mins(30);
+/// How often a removal is asked whether it may still be cancelled, and
+/// cancelled once asked to and allowed.
+const CANCEL_LOOK_EVERY: Duration = Duration::from_millis(300);
+const ALLOW_CANCEL: &str = "AllowCancel";
 
 /// The hints of every transaction: never ask the user anything (reading
 /// only), and send packages several at once.
 const HINT_NOT_INTERACTIVE: &str = "interactive=false";
+/// The hint of a removal: polkit may ask the user for the rights.
+const HINT_INTERACTIVE: &str = "interactive=true";
 const HINT_PLURAL_SIGNALS: &str = "supports-plural-signals=true";
 const HINT_LOCALE: &str = "locale=";
 /// `PkFilterEnum::None`, as a bit field: every package.
 const FILTER_NONE: u64 = 1 << 1;
+/// `PkFilterEnum::Installed`.
+const FILTER_INSTALLED: u64 = 1 << 2;
+/// `PkTransactionFlagEnum`: none, or a simulation that changes nothing.
+const TRANSACTION_NONE: u64 = 0;
+const TRANSACTION_SIMULATE: u64 = 1 << 2;
+/// A removal takes what depends on what it removes, never what is no
+/// longer needed (`allow_deps`, `autoremove`).
+const ALLOW_DEPENDENTS: bool = true;
+const AUTOREMOVE: bool = false;
 /// `RefreshCache` only downloads lists that changed.
 const REFRESH_UNFORCED: bool = false;
 /// `PkExitEnum::Success`.
@@ -60,14 +82,19 @@ const STATUS_WAITING_FOR_LOCK: u32 = 30;
 
 /// What `PkInfoEnum` says of an update.
 pub mod info {
+    pub const INSTALLED: u32 = 1;
     pub const SECURITY: u32 = 8;
     /// Held back by the system: it will not be installed.
     pub const BLOCKED: u32 = 9;
+    /// What a removal takes away.
+    pub const REMOVING: u32 = 13;
 }
 
 /// Values of `PkErrorEnum`.
 pub mod error_code {
     pub const NO_NETWORK: u32 = 2;
+    pub const PACKAGE_NOT_INSTALLED: u32 = 7;
+    pub const TRANSACTION_CANCELLED: u32 = 17;
     pub const CANNOT_GET_LOCK: u32 = 26;
     pub const REPO_NOT_AVAILABLE: u32 = 37;
     pub const NO_MORE_MIRRORS_TO_TRY: u32 = 43;
@@ -262,11 +289,20 @@ where
     }))
 }
 
+/// What a removal under way says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Removing {
+    /// It starts or stops waiting for another program.
+    Waiting(bool),
+    /// It may be cancelled, or no longer.
+    Cancellable(bool),
+}
+
 /// PackageKit, joined on the system bus.
 #[derive(Debug, Clone)]
 pub struct PackageKit {
     connection: zbus::Connection,
-    hints: Vec<String>,
+    locale: String,
 }
 
 impl PackageKit {
@@ -285,12 +321,83 @@ impl PackageKit {
         )?;
         Ok(Self {
             connection,
-            hints: vec![
-                format!("{HINT_LOCALE}{locale}"),
-                HINT_NOT_INTERACTIVE.to_owned(),
-                HINT_PLURAL_SIGNALS.to_owned(),
-            ],
+            locale: locale.to_owned(),
         })
+    }
+
+    /// The hints of a transaction: the locale, whether the user may be
+    /// asked, several packages at once.
+    fn hints(&self, interactive: bool) -> Vec<String> {
+        vec![
+            format!("{HINT_LOCALE}{}", self.locale),
+            if interactive {
+                HINT_INTERACTIVE
+            } else {
+                HINT_NOT_INTERACTIVE
+            }
+            .to_owned(),
+            HINT_PLURAL_SIGNALS.to_owned(),
+        ]
+    }
+
+    /// The installed packages named `name`, of every architecture.
+    ///
+    /// # Errors
+    /// Whatever kept PackageKit from answering, or its own error.
+    pub fn resolve(&self, name: &str) -> Result<Vec<Package>, PackageKitError> {
+        self.run(
+            "Resolve",
+            &(FILTER_INSTALLED, [name]),
+            Asked::reading(RESOLVE_WAIT),
+            &|_| {},
+        )
+    }
+
+    /// What removing the packages `ids` would take away (them, and what
+    /// depends on them), simulated: nothing changes, nothing is asked.
+    ///
+    /// # Errors
+    /// Whatever kept PackageKit from answering, or its own error.
+    pub fn simulate_remove(&self, ids: &[String]) -> Result<Vec<Package>, PackageKitError> {
+        self.run(
+            "RemovePackages",
+            &(TRANSACTION_SIMULATE, ids, ALLOW_DEPENDENTS, AUTOREMOVE),
+            Asked::reading(RESOLVE_WAIT),
+            &|_| {},
+        )
+        .map(|packages| {
+            packages
+                .into_iter()
+                .filter(|package| package.info == info::REMOVING)
+                .collect()
+        })
+    }
+
+    /// Removes the packages `ids` and what depends on them, polkit asking
+    /// the user for the rights; `steps` hears whether it waits for another
+    /// program and whether it may still be cancelled; it is cancelled once
+    /// `cancel` is set and it still can be.
+    ///
+    /// # Errors
+    /// Whatever kept PackageKit from answering, or its own error (the user's
+    /// refusal and a cancellation among them).
+    pub fn remove_packages(
+        &self,
+        ids: &[String],
+        steps: &dyn Fn(Removing),
+        cancel: &AtomicBool,
+    ) -> Result<(), PackageKitError> {
+        self.run(
+            "RemovePackages",
+            &(TRANSACTION_NONE, ids, ALLOW_DEPENDENTS, AUTOREMOVE),
+            Asked {
+                wait: REMOVE_WAIT,
+                interactive: true,
+                cancel: Some((cancel, steps)),
+            },
+            &|waiting| steps(Removing::Waiting(waiting)),
+        )
+        .map(drop)
     }
 
     /// The updates waiting, as the package cache knows them: `GetUpdates`
@@ -300,7 +407,12 @@ impl PackageKit {
     /// # Errors
     /// Whatever kept PackageKit from answering, or its own error.
     pub fn get_updates(&self, waiting: &dyn Fn(bool)) -> Result<Vec<Package>, PackageKitError> {
-        self.run("GetUpdates", &(FILTER_NONE,), UPDATES_WAIT, waiting)
+        self.run(
+            "GetUpdates",
+            &(FILTER_NONE,),
+            Asked::reading(UPDATES_WAIT),
+            waiting,
+        )
     }
 
     /// Downloads the package lists that changed.
@@ -308,17 +420,22 @@ impl PackageKit {
     /// # Errors
     /// Whatever kept PackageKit from answering, or its own error.
     pub fn refresh_cache(&self, waiting: &dyn Fn(bool)) -> Result<(), PackageKitError> {
-        self.run("RefreshCache", &(REFRESH_UNFORCED,), REFRESH_WAIT, waiting)
-            .map(drop)
+        self.run(
+            "RefreshCache",
+            &(REFRESH_UNFORCED,),
+            Asked::reading(REFRESH_WAIT),
+            waiting,
+        )
+        .map(drop)
     }
 
-    /// Runs `method` with `body` in a new transaction, until it ends or
-    /// `wait` passes (then it is cancelled).
+    /// Runs `method` with `body` in a new transaction, as `asked`, until it
+    /// ends or its wait passes (then it is cancelled).
     fn run<B>(
         &self,
         method: &str,
         body: &B,
-        wait: Duration,
+        asked: Asked<'_>,
         waiting: &dyn Fn(bool),
     ) -> Result<Vec<Package>, PackageKitError>
     where
@@ -326,7 +443,7 @@ impl PackageKit {
     {
         let _transaction = tracing::info_span!("packagekit", method).entered();
         let started = Instant::now();
-        let ended = futures_lite::future::block_on(self.transaction(method, body, wait, waiting));
+        let ended = futures_lite::future::block_on(self.transaction(method, body, &asked, waiting));
         match &ended {
             Ok(packages) => tracing::debug!(
                 packages = packages.len(),
@@ -348,7 +465,7 @@ impl PackageKit {
         &self,
         method: &str,
         body: &B,
-        wait: Duration,
+        asked: &Asked<'_>,
         waiting: &dyn Fn(bool),
     ) -> Result<Vec<Package>, PackageKitError>
     where
@@ -365,12 +482,19 @@ impl PackageKit {
         let said = transaction.receive_all_signals().await?;
         let changed = properties.receive_signal(PROPERTIES_CHANGED).await?;
         transaction
-            .call_method("SetHints", &(self.hints.as_slice(),))
+            .call_method("SetHints", &(self.hints(asked.interactive).as_slice(),))
             .await?;
         transaction.call_method(method, body).await?;
         let signals =
             futures_lite::stream::or(said, changed).filter_map(|message| signal_of(&message));
-        let ended = follow(signals, wait, waiting).await;
+        let followed = follow(signals, asked.wait, waiting);
+        let ended = match asked.cancel {
+            None => followed.await,
+            Some((cancel, steps)) => {
+                let watched = watch_cancel(&transaction, &properties, cancel, steps);
+                futures_lite::future::or(followed, watched).await
+            }
+        };
         if given_up(&ended) {
             match transaction.call_method("Cancel", &()).await {
                 Ok(_) => tracing::debug!(%path, "the transaction given up cancelled"),
@@ -394,6 +518,60 @@ impl PackageKit {
             .cache_properties(CacheProperties::No)
             .build()
             .await
+    }
+}
+
+/// How a transaction is asked: how long it may take, whether the user may
+/// be asked for the rights, and, for one that may be cancelled, the flag
+/// that asks it to and who hears whether it still can be.
+#[derive(Clone, Copy)]
+struct Asked<'a> {
+    wait: Duration,
+    interactive: bool,
+    cancel: Option<(&'a AtomicBool, &'a dyn Fn(Removing))>,
+}
+
+impl Asked<'_> {
+    /// A transaction that reads: nothing asked, nothing cancelled.
+    const fn reading(wait: Duration) -> Self {
+        Self {
+            wait,
+            interactive: false,
+            cancel: None,
+        }
+    }
+}
+
+/// Looks every so often whether `transaction` may be cancelled, tells
+/// `steps` when that changes, and cancels it once `cancel` is set and it
+/// can be; never ends by itself (the transaction's end does).
+async fn watch_cancel(
+    transaction: &zbus::Proxy<'_>,
+    properties: &zbus::Proxy<'_>,
+    cancel: &AtomicBool,
+    steps: &dyn Fn(Removing),
+) -> Result<Vec<Package>, PackageKitError> {
+    let mut allowed = false;
+    let mut asked = false;
+    loop {
+        async_io::Timer::after(CANCEL_LOOK_EVERY).await;
+        let now = properties
+            .call::<_, _, OwnedValue>("Get", &(TRANSACTION, ALLOW_CANCEL))
+            .await
+            .ok()
+            .and_then(|value| bool::try_from(value).ok())
+            .unwrap_or(allowed);
+        if now != allowed {
+            allowed = now;
+            steps(Removing::Cancellable(allowed));
+        }
+        if allowed && !asked && cancel.load(Ordering::Relaxed) {
+            asked = true;
+            match transaction.call_method("Cancel", &()).await {
+                Ok(_) => tracing::info!("removal cancel asked of PackageKit"),
+                Err(error) => tracing::warn!(%error, "removal cancel refused by PackageKit"),
+            }
+        }
     }
 }
 

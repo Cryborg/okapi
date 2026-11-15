@@ -9,6 +9,8 @@ pub mod flatpak;
 pub mod icons;
 pub mod measure;
 pub mod snap;
+#[cfg(target_os = "linux")]
+pub mod system;
 pub mod uninstall;
 
 use std::collections::HashMap;

@@ -289,6 +289,39 @@ mod tests {
     }
 
     #[test]
+    fn each_filter_keeps_its_source_alone_and_equal_totals_go_by_name() {
+        let entries = [
+            Entry::new(app(Source::Deb, "D", 1, false)),
+            Entry::new(app(Source::Snap, "S", 1, false)),
+            Entry::new(app(Source::Flatpak, "F", 1, false)),
+        ];
+        for (filter, kept) in [
+            (ui::AppsFilter::All, vec!["D", "S", "F"]),
+            (ui::AppsFilter::Deb, vec!["D"]),
+            (ui::AppsFilter::Snap, vec!["S"]),
+            (ui::AppsFilter::Flatpak, vec!["F"]),
+        ] {
+            let shown: Vec<&str> = entries
+                .iter()
+                .filter(|entry| entry.matches("", filter))
+                .map(|entry| entry.app.name.as_str())
+                .collect();
+            assert_eq!(shown, kept, "{filter:?}");
+        }
+        // Equal totals: by name, whatever the case, never by key.
+        let beta = Entry::new(App {
+            id: "a".to_owned(),
+            ..app(Source::Deb, "beta", 5, false)
+        });
+        let alpha = Entry::new(App {
+            id: "z".to_owned(),
+            ..app(Source::Deb, "Alpha", 5, false)
+        });
+        let order = ordered([&beta, &alpha].into_iter());
+        assert_eq!(order[0].id, "z", "Alpha before beta");
+    }
+
+    #[test]
     fn the_search_reads_the_name_and_the_package_and_the_filter_the_source() {
         let gimp = Entry::new(app(Source::Deb, "GIMP", 1, false));
         assert!(gimp.matches("", ui::AppsFilter::All));

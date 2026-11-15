@@ -75,10 +75,14 @@ pub fn parse_status(text: &str) -> Status {
     let mut status = Status::default();
     for (index, paragraph) in paragraphs(text).enumerate() {
         let fields = fields(paragraph);
-        let (Some(name), Some(state)) = (fields.get("Package"), fields.get("Status")) else {
+        let (Some(name), Some(state), Some(architecture)) = (
+            fields.get("Package"),
+            fields.get("Status"),
+            fields.get("Architecture"),
+        ) else {
             tracing::debug!(
                 paragraph = index,
-                "dpkg paragraph without its package or state"
+                "dpkg paragraph without its package, state or architecture"
             );
             status.unreadable += 1;
             continue;
@@ -105,11 +109,7 @@ pub fn parse_status(text: &str) -> Status {
         let yes = |field| fields.get(field) == Some(&"yes");
         status.installed.push(DebPackage {
             name: (*name).to_owned(),
-            architecture: fields
-                .get("Architecture")
-                .copied()
-                .unwrap_or_default()
-                .to_owned(),
+            architecture: (*architecture).to_owned(),
             version: fields
                 .get("Version")
                 .copied()
@@ -301,6 +301,10 @@ Installed-Size: 9
 
 Architecture: amd64
 Status: install ok installed
+
+Package: nameless-arch
+Status: install ok installed
+Installed-Size: 1
 ";
 
     #[test]
@@ -321,7 +325,10 @@ Status: install ok installed
                 "ubuntu-desktop-minimal"
             ]
         );
-        assert_eq!(status.unreadable, 1, "the paragraph without its package");
+        assert_eq!(
+            status.unreadable, 2,
+            "the paragraphs without their package or architecture"
+        );
         let gimp = &status.installed[0];
         assert_eq!(gimp.installed_bytes, Some(3 * 1024));
         assert_eq!(gimp.version, "3.0.4-1");

@@ -53,6 +53,7 @@ updates = ["packages", "dep:jiff", "dep:okapi-rules"]
 # The applications installed and their space (deb, snap, flatpak).
 apps = [
     "disk-usage",
+    "packages",
     "dep:okapi-rules",
     "dep:png",
     "dep:resvg",

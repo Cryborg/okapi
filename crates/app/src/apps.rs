@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use okapi_rules::Language;
-use okapi_store::{History, StoreError, UninstallEntry, UninstallSource};
+use okapi_store::{History, HistoryUnavailable, UninstallEntry, UninstallSource};
 use okapi_tools::apps::icons::IconPixels;
 use okapi_tools::apps::uninstall::{
     Checked, Ended, Going, Removal, Step, Target, Uninstaller, Why, check, remove_as_shown,
@@ -43,8 +43,9 @@ const READ_AGAIN_AFTER: jiff::SignedDuration = jiff::SignedDuration::from_mins(5
 /// Reads the sources in `language`: what each finds comes on the sender;
 /// the flag stops measuring.
 pub type Read = Rc<dyn Fn(Language, &Sender<Arrival>, &Arc<AtomicBool>)>;
-/// Writes the history line of an uninstallation.
-pub type Record = Arc<dyn Fn(&UninstallEntry) -> Result<(), StoreError> + Send + Sync>;
+/// Writes the history line of an uninstallation; a failure is traced where
+/// it is met.
+pub type Record = Arc<dyn Fn(&UninstallEntry) -> Result<(), HistoryUnavailable> + Send + Sync>;
 
 /// What the screen reads and asks of the machine: the system's, or a test's.
 #[derive(Clone)]
@@ -73,20 +74,18 @@ impl AppsSeams {
     }
 }
 
-/// Writes `entry` in the user's history.
-fn record_system(entry: &UninstallEntry) -> Result<(), StoreError> {
+/// Writes `entry` in the user's history (its write traces its own failure).
+fn record_system(entry: &UninstallEntry) -> Result<(), HistoryUnavailable> {
     let Some(directory) = okapi_platform::state_directory() else {
         tracing::error!("no state directory: uninstallation not recorded");
-        return Err(StoreError::Unwritable {
-            path: std::path::PathBuf::new(),
-            error: std::io::Error::from(std::io::ErrorKind::NotFound),
-        });
+        return Err(HistoryUnavailable::NoDirectory);
     };
     History::open(&directory)
         .inspect_err(
             |error| tracing::error!(%error, "history not opened: uninstallation not recorded"),
         )?
-        .record_uninstall(entry)
+        .record_uninstall(entry)?;
+    Ok(())
 }
 
 /// The system's sources, each on a thread of its own.
@@ -136,7 +135,15 @@ fn read_system(language: Language, sink: &Sender<Arrival>, stop: &Arc<AtomicBool
 }
 
 /// The snaps snapd lists.
-// WIP IDEE-8: wired to `okapi_tools::packages::snapd` at the rebase on IDEE-9.
+#[cfg(target_os = "linux")]
+fn system_snaps(
+    home: Option<&std::path::Path>,
+    reading: &okapi_tools::apps::Reading,
+) -> SourceReading {
+    okapi_tools::apps::system::snaps(home, reading)
+}
+
+#[cfg(not(target_os = "linux"))]
 fn system_snaps(
     _home: Option<&std::path::Path>,
     _reading: &okapi_tools::apps::Reading,
@@ -144,31 +151,33 @@ fn system_snaps(
     SourceReading::Absent
 }
 
-/// WIP IDEE-8: `PackageKit` and snapd at the rebase on IDEE-9.
-struct Unwired;
-
-impl Uninstaller for Unwired {
-    fn simulate(&self, _target: &Target) -> Result<Vec<Going>, Why> {
-        Err(Why::Absent)
-    }
-
-    fn status(&self) -> Result<okapi_tools::apps::dpkg::Status, Why> {
-        Err(Why::Absent)
-    }
-
-    fn remove(
-        &self,
-        _target: &Target,
-        _going: &[Going],
-        _steps: &Sender<Step>,
-        _cancel: &AtomicBool,
-    ) -> Ended {
-        Ended::Failed(Why::Absent)
-    }
+#[cfg(target_os = "linux")]
+fn system_uninstaller() -> Arc<dyn Uninstaller> {
+    Arc::new(okapi_tools::apps::system::Services::session())
 }
 
+/// No service to uninstall with elsewhere yet.
+#[cfg(not(target_os = "linux"))]
 fn system_uninstaller() -> Arc<dyn Uninstaller> {
-    Arc::new(Unwired)
+    struct Nowhere;
+    impl Uninstaller for Nowhere {
+        fn simulate(&self, _target: &Target) -> Result<Vec<Going>, Why> {
+            Err(Why::Absent)
+        }
+        fn status(&self) -> Result<okapi_tools::apps::dpkg::Status, Why> {
+            Err(Why::Absent)
+        }
+        fn remove(
+            &self,
+            _target: &Target,
+            _going: &[Going],
+            _steps: &Sender<Step>,
+            _cancel: &AtomicBool,
+        ) -> Ended {
+            Ended::Failed(Why::Absent)
+        }
+    }
+    Arc::new(Nowhere)
 }
 
 /// What a source is, as shown.
@@ -243,9 +252,9 @@ struct Operation {
     name: String,
     target: Target,
     /// What it frees whatever is chosen (the application, its old
-    /// versions; a deb's packages once checked); its data are added when
-    /// they go.
-    freed: u64,
+    /// versions; a deb's packages once checked), when every size is known;
+    /// its data are added when they go.
+    freed: Option<u64>,
     data_bytes: u64,
     phase: Phase,
     receiver: Receiver<Said>,
@@ -257,10 +266,12 @@ impl Operation {
         matches!(self.target, Target::Snap { purge: true, .. })
     }
 
-    /// What it frees, its data with it when they go.
-    const fn freed_now(&self) -> u64 {
+    /// What it frees, its data with it when they go; unknown when a size
+    /// is.
+    fn freed_now(&self) -> Option<u64> {
         if self.purges() {
-            self.freed.saturating_add(self.data_bytes)
+            self.freed
+                .map(|freed| freed.saturating_add(self.data_bytes))
         } else {
             self.freed
         }
@@ -460,6 +471,17 @@ impl AppsScreen {
         };
         if !reading && !running && stale {
             self.refresh();
+        }
+        // A note arrived meanwhile is seen now: it goes after a while.
+        let toast = self
+            .0
+            .borrow()
+            .window
+            .upgrade()
+            .is_some_and(|window| window.global::<ui::Apps>().get_toast());
+        if toast {
+            let held = self.0.borrow().toast_held;
+            self.hold_toast(held);
         }
         self.show_operation();
         self.watch();
@@ -845,7 +867,9 @@ impl AppsScreen {
                 return;
             }
         };
-        let freed = entry.app_bytes().unwrap_or(0).saturating_add(app.old_bytes);
+        let freed = entry
+            .app_bytes()
+            .map(|bytes| bytes.saturating_add(app.old_bytes));
         tracing::info!(?target, "uninstallation asked");
         self.with_window(|window| {
             let apps = window.global::<ui::Apps>();
@@ -863,7 +887,14 @@ impl AppsScreen {
     }
 
     /// Checks what `target` would take with it, on a thread.
-    fn check(&self, key: AppKey, name: String, target: Target, freed: u64, data_bytes: u64) {
+    fn check(
+        &self,
+        key: AppKey,
+        name: String,
+        target: Target,
+        freed: Option<u64>,
+        data_bytes: u64,
+    ) {
         let (said, receiver) = mpsc::channel();
         let uninstaller = Arc::clone(&self.0.borrow().seams.uninstaller);
         let checked = target.clone();
@@ -1100,7 +1131,7 @@ impl AppsScreen {
                                 // A size unknown: dpkg's estimate stays.
                                 if let Some(sizes) = sizes {
                                     operation.freed =
-                                        sizes.into_iter().fold(0, u64::saturating_add);
+                                        Some(sizes.into_iter().fold(0, u64::saturating_add));
                                 }
                             }
                             Phase::Confirm(going)
@@ -1174,16 +1205,23 @@ impl AppsScreen {
         }
     }
 
-    fn show_toast(&self, name: &str, freed: u64, recorded: bool) {
+    fn show_toast(&self, name: &str, freed: Option<u64>, recorded: bool) {
         self.with_window(|window| {
             let apps = window.global::<ui::Apps>();
             apps.set_toast_name(name.into());
-            apps.set_toast_freed(size(freed));
+            apps.set_toast_freed_known(freed.is_some());
+            apps.set_toast_freed(size(freed.unwrap_or(0)));
             apps.set_toast_recorded(recorded);
             apps.set_toast(true);
         });
-        let held = self.0.borrow().toast_held;
-        self.hold_toast(held);
+        // Arrived away from the page, it waits to be seen there.
+        let (held, on_page) = {
+            let state = self.0.borrow();
+            (state.toast_held, state.on_page)
+        };
+        if on_page {
+            self.hold_toast(held);
+        }
     }
 
     /// Shows the uninstallation as it stands.
@@ -1202,7 +1240,8 @@ impl AppsScreen {
         };
         apps.set_target(operation.name.as_str().into());
         apps.set_target_snap(matches!(operation.target, Target::Snap { .. }));
-        apps.set_freed(size(operation.freed));
+        apps.set_freed_known(operation.freed.is_some());
+        apps.set_freed(size(operation.freed.unwrap_or(0)));
         let going: Vec<SharedString> = match &operation.phase {
             Phase::Confirm(going) => going
                 .iter()
@@ -1312,12 +1351,7 @@ fn remove(
     let said_now = match removal {
         Removal::Changed(checked) => Said::Checked(checked),
         Removal::Ended(ended) => {
-            let recorded = ended == Ended::Done
-                && record(entry)
-                    .inspect_err(
-                        |error| tracing::error!(%error, "uninstallation done, not recorded"),
-                    )
-                    .is_ok();
+            let recorded = ended == Ended::Done && record(entry).is_ok();
             Said::Ended { ended, recorded }
         }
     };

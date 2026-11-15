@@ -810,7 +810,6 @@ fn updates(window: &ui::AppWindow, state: &str) {
     ])));
 }
 
-
 /// The lines of the applications screen, as on the mockup.
 fn app_lines() -> Vec<ui::AppLine> {
     let line =

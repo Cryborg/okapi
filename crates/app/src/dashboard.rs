@@ -2201,7 +2201,7 @@ pub mod tests {
         assert!(
             shows(
                 &window,
-                "L'estimation date d'avant un nettoyage. Analysez à nouveau pour une estimation à jour."
+                "L'estimation date d'avant un changement sur le système (un nettoyage, une désinstallation). Analysez à nouveau pour une estimation à jour."
             ),
             "no one time for two cleanings"
         );
@@ -2319,7 +2319,7 @@ pub mod tests {
         assert!(shows(&window, "Estimation à refaire"));
         assert!(shows(
             &window,
-            "L'estimation date d'avant un nettoyage. Analysez à nouveau pour une estimation à jour."
+            "L'estimation date d'avant un changement sur le système (un nettoyage, une désinstallation). Analysez à nouveau pour une estimation à jour."
         ));
     }
 

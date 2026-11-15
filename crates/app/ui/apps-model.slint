@@ -100,6 +100,8 @@ export global Apps {
     // What would go, by name: the package and those that depend on it.
     in property <[string]> going;
     in property <Size> freed;
+    // Every size of what goes is known.
+    in property <bool> freed-known;
     in property <bool> has-data;
     in property <Size> data-size;
     in-out property <bool> purge;
@@ -116,6 +118,7 @@ export global Apps {
     in property <bool> toast;
     in property <string> toast-name;
     in property <Size> toast-freed;
+    in property <bool> toast-freed-known;
     // Its history line was written.
     in property <bool> toast-recorded;
 

@@ -336,7 +336,10 @@ fn a_slow_source_never_holds_the_others_and_each_says_its_folders_then_its_end()
         Arrival::Source(Source::Deb, SourceReading::Absent)
     ));
     assert!(
-        arrivals.recv_timeout(Duration::from_secs(10)).is_err(),
+        matches!(
+            arrivals.recv_timeout(Duration::from_secs(10)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ),
         "every sender gone"
     );
 }
@@ -439,7 +442,14 @@ fn an_active_deployment_elsewhere_is_never_read_even_when_it_exists() {
     );
     let branch = user.join("app/org.example.Away/x86_64/stable");
     fs::create_dir_all(&branch).unwrap();
-    for target in ["../../../../elsewhere", "/tmp", ".", ".."] {
+    let absolute = root.path().join("elsewhere");
+    for target in [
+        "../../../../../elsewhere",
+        absolute.to_str().unwrap(),
+        "/tmp",
+        ".",
+        "..",
+    ] {
         let _ = fs::remove_file(branch.join("active"));
         std::os::unix::fs::symlink(target, branch.join("active")).unwrap();
         assert_eq!(
@@ -491,4 +501,54 @@ fn a_reading_stopped_sends_its_source_and_measures_nothing() {
         arrived[0],
         Arrival::Source(Source::Snap, SourceReading::Read { .. })
     ));
+}
+
+#[test]
+fn a_snap_of_no_size_said_is_of_a_size_unknown() {
+    let root = tempfile::tempdir().unwrap();
+    let applications = root.path().join("var/lib/snapd/desktop/applications");
+    write(&applications.join("x_x.desktop"), &launcher("X", ""));
+    let list = serde_json::json!([
+        { "name": "x", "type": "app", "status": "active",
+          "apps": [{ "name": "x", "desktop-file": "/var/lib/snapd/desktop/applications/x_x.desktop" }] },
+        { "name": "x", "type": "app", "status": "installed", "installed-size": 4 },
+        { "name": "x", "type": "app", "status": "installed" },
+    ]);
+    let (found, _) = apps(read_snaps(&list, root.path(), None, &reading(root.path())));
+    assert_eq!(found[0].size, AppSize::Unknown, "never 0");
+    assert_eq!((found[0].old_bytes, found[0].old_versions), (4, 2));
+}
+
+#[test]
+fn a_flatpak_first_without_a_launcher_never_hides_its_other_install() {
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    let user = root.path().join("user");
+    let in_system = deploy(&system, "org.gimp.GIMP", "abc123");
+    // The system's has no launcher the menu shows.
+    write(
+        &in_system.join("export/share/applications/org.gimp.GIMP.desktop"),
+        &launcher("GIMP", "NoDisplay=true"),
+    );
+    let in_user = deploy(&user, "org.gimp.GIMP", "abc123");
+    let (found, rest) = apps(read_flatpaks(&[system, user], None, &reading(root.path())));
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].size, AppSize::ToMeasure(in_user));
+    assert_eq!(rest.count, 1);
+}
+
+#[test]
+fn a_flatpak_installation_unreadable_is_a_failure_never_none() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = tempfile::tempdir().unwrap();
+    let closed = root.path().join("closed");
+    let installation = closed.join("flatpak");
+    fs::create_dir_all(&installation).unwrap();
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).unwrap();
+    let read = read_flatpaks(&[installation], None, &reading(root.path()));
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o700)).unwrap();
+    // Root reads through anything: then it is simply read.
+    if !matches!(read, SourceReading::Read { .. }) {
+        assert!(matches!(read, SourceReading::Failed(_)), "{read:?}");
+    }
 }

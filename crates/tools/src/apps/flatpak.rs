@@ -55,11 +55,17 @@ fn subfolders_or_none(folder: &Path) -> Vec<String> {
 /// and not a link: never followed elsewhere.
 fn deployment(branch: &Path) -> Option<PathBuf> {
     let active = branch.join("active");
-    let target = std::fs::read_link(&active)
-        .inspect_err(
-            |error| tracing::debug!(path = %active.display(), %error, "no active deployment"),
-        )
-        .ok()?;
+    let target = match std::fs::read_link(&active) {
+        Ok(target) => target,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            tracing::debug!(path = %active.display(), "no active deployment");
+            return None;
+        }
+        Err(error) => {
+            tracing::warn!(path = %active.display(), %error, "the active deployment unreadable");
+            return None;
+        }
+    };
     let Some(name) = target.to_str().filter(|name| names_a_folder(name)) else {
         tracing::warn!(path = %active.display(), target = %target.display(), "the active deployment is not beside it: refused");
         return None;
@@ -81,10 +87,20 @@ pub fn read_flatpaks(
     reading: &Reading,
 ) -> SourceReading {
     let _span = tracing::info_span!("flatpaks").entered();
-    let present: Vec<&PathBuf> = installations
-        .iter()
-        .filter(|installation| installation.is_dir())
-        .collect();
+    let mut present = Vec::new();
+    for installation in installations {
+        match std::fs::metadata(installation) {
+            Ok(metadata) if metadata.is_dir() => present.push(installation),
+            Ok(_) => {
+                tracing::warn!(path = %installation.display(), "a flatpak installation that is no folder");
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                tracing::warn!(path = %installation.display(), %error, "flatpak installation unreadable");
+                return SourceReading::Failed(error.to_string());
+            }
+        }
+    }
     if present.is_empty() {
         tracing::info!("no flatpak installation");
         return SourceReading::Absent;
@@ -109,9 +125,7 @@ pub fn read_flatpaks(
                     let Some(deployment) = deployment(&branch) else {
                         continue;
                     };
-                    // The system's installation first, then the user's; a
-                    // branch, then another: one line per application.
-                    if !seen.insert(id.clone()) {
+                    if seen.contains(&id) {
                         tracing::warn!(id, branch = %branch.display(), "a flatpak installed twice: shown once");
                         continue;
                     }
@@ -128,6 +142,10 @@ pub fn read_flatpaks(
                         rest.count += 1;
                         continue;
                     };
+                    // The system's installation first, then the user's; a
+                    // branch, then another: one line per application, the
+                    // first shown in the menu.
+                    seen.insert(id.clone());
                     apps.push(App {
                         source: Source::Flatpak,
                         id: id.clone(),

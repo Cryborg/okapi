@@ -30,6 +30,27 @@ pub struct Going {
     pub bytes: Option<u64>,
 }
 
+impl Going {
+    /// Whether it is `target`, an architecture of every one (`all`)
+    /// matching any: the service and dpkg may each say it their way.
+    #[must_use]
+    pub fn is(&self, target: &Target) -> bool {
+        match target {
+            Target::Deb {
+                package,
+                architecture,
+            } => self.name == *package && same_architecture(&self.architecture, architecture),
+            Target::Snap { name, .. } => self.name == *name,
+        }
+    }
+}
+
+/// Whether two architectures name the same package's: equal, or one of
+/// them every one's (`all`).
+fn same_architecture(one: &str, other: &str) -> bool {
+    one == other || one == "all" || other == "all"
+}
+
 /// What a check found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Checked {
@@ -94,7 +115,9 @@ pub trait Uninstaller: Send + Sync {
     fn status(&self) -> Result<Status, Why>;
 
     /// Removes `target` and exactly `going`, telling `steps` how it goes,
-    /// cancelled when `cancel` is set and it still can be. No guard here.
+    /// cancelled when `cancel` is set and it still can be; no sender of
+    /// `steps` is kept once it returns (its end is waited for). No guard
+    /// here.
     fn remove(
         &self,
         target: &Target,
@@ -111,11 +134,18 @@ pub trait Uninstaller: Send + Sync {
 ///
 /// [`Why`] it cannot be told.
 pub fn check(uninstaller: &dyn Uninstaller, target: &Target) -> Result<Checked, Why> {
-    let going = uninstaller.simulate(target)?;
-    if going.is_empty() {
-        tracing::warn!(?target, "nothing would go: it is no longer installed");
+    let mut going = uninstaller.simulate(target)?;
+    // What goes must be the application asked, never another variant of it
+    // (another architecture): it comes first.
+    let Some(first) = going.iter().position(|package| package.is(target)) else {
+        tracing::warn!(
+            ?target,
+            ?going,
+            "what would go is not the application asked: nothing removed"
+        );
         return Err(Why::NotFound);
-    }
+    };
+    going.swap(0, first);
     if let Target::Deb { .. } = target {
         let names = refused(&going, &uninstaller.status()?);
         if !names.is_empty() {
@@ -176,7 +206,8 @@ pub fn refused(going: &[Going], status: &Status) -> Vec<String> {
                 .installed
                 .iter()
                 .find(|installed| {
-                    installed.name == package.name && installed.architecture == package.architecture
+                    installed.name == package.name
+                        && same_architecture(&installed.architecture, &package.architecture)
                 })
                 .is_none_or(|installed| installed.system || installed.metapackage)
         })

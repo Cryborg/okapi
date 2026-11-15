@@ -669,7 +669,7 @@ export component ReclaimableWidget inherits WidgetCard {
         : shown.state == ReclaimableState.current && full ? @tr("{}. Éléments trouvés : {}. Rien n'a encore été supprimé.", DashboardWords.estimate(shown.at), shown.entries)
         : shown.state == ReclaimableState.current ? @tr("Éléments trouvés : {}. Rien n'a encore été supprimé.", shown.entries)
         : shown.cleaned-at-known ? @tr("{} Analysez à nouveau pour une estimation à jour.", DashboardWords.cleaning(shown.cleaned-at))
-        : @tr("L'estimation date d'avant un nettoyage. Analysez à nouveau pour une estimation à jour.");
+        : @tr("L'estimation date d'avant un changement sur le système (un nettoyage, une désinstallation). Analysez à nouveau pour une estimation à jour.");
 
     kind: WidgetKind.reclaimable;
     state: shown.state == ReclaimableState.unavailable && !scanning ? ReadingState.unavailable : ReadingState.read;

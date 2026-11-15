@@ -247,9 +247,11 @@ pub struct UninstallEntry {
     pub name: String,
     /// What went, by the names its source gives (packages, a snap).
     pub packages: Vec<String>,
-    /// What it freed, as estimated before. Never `removedBytes`: a reader
-    /// that knows no kind would take the line for a cleaning's.
-    pub freed_bytes: u64,
+    /// What it freed, as estimated before; absent when a size was not
+    /// known. Never `removedBytes`: a reader that knows no kind would take
+    /// the line for a cleaning's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub freed_bytes: Option<u64>,
     /// Its data went with it.
     pub data_removed: bool,
 }
@@ -997,7 +999,7 @@ mod tests {
                 source: UninstallSource::Snap,
                 name: "Android Studio".to_owned(),
                 packages: vec!["android-studio".to_owned()],
-                freed_bytes: 3,
+                freed_bytes: Some(3),
                 data_removed: false,
             })
             .unwrap();

@@ -224,7 +224,7 @@ mod tests {
                 source: crate::UninstallSource::Deb,
                 name: "GIMP".to_owned(),
                 packages: vec!["gimp".to_owned()],
-                freed_bytes: 1,
+                freed_bytes: Some(1),
                 data_removed: false,
             })
             .unwrap();

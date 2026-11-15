@@ -972,8 +972,8 @@ msgid "{} Analysez à nouveau pour une estimation à jour."
 msgstr "{} Analyze again for an up-to-date estimate."
 
 msgctxt "ReclaimableWidget"
-msgid "L'estimation date d'avant un nettoyage. Analysez à nouveau pour une estimation à jour."
-msgstr "The estimate predates a cleaning. Analyze again for an up-to-date estimate."
+msgid "L'estimation date d'avant un changement sur le système (un nettoyage, une désinstallation). Analysez à nouveau pour une estimation à jour."
+msgstr "The estimate predates a change on the system (a cleaning, an uninstallation). Analyze again for an up-to-date estimate."
 
 msgctxt "ReclaimableWidget"
 msgid "Dernier nettoyage {} : {} libérés"
@@ -2684,8 +2684,12 @@ msgid "Une autre installation est en cours : Okapi attend son tour."
 msgstr "Another installation is under way: Okapi waits its turn."
 
 msgctxt "Toast"
-msgid "{} désinstallée : {} libérés. Elle n'a pas pu être inscrite à l'historique."
-msgstr "{} uninstalled: {} freed. It could not be written in the history."
+msgid "{}. Elle n'a pas pu être inscrite à l'historique."
+msgstr "{}. It could not be written in the history."
+
+msgctxt "Toast"
+msgid "{} désinstallée"
+msgstr "{} uninstalled"
 
 msgctxt "AppsPage"
 msgid "Applis : {}, lues à l'instant"
@@ -2694,3 +2698,11 @@ msgstr "Apps: {}, read just now"
 msgctxt "AppsPage"
 msgid "Applis : {}, lues il y a {} min"
 msgstr "Apps: {}, read {} min ago"
+
+msgctxt "Uninstall"
+msgid "{} et les paquets qui en dépendent partiront. Place libérée : inconnue."
+msgstr "{} and the packages that depend on it will go. Space freed: unknown."
+
+msgctxt "Uninstall"
+msgid "Place libérée : inconnue."
+msgstr "Space freed: unknown."

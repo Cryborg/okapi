@@ -207,6 +207,11 @@ type OnApps = (
 /// The window on the applications screen, reading `arrivals` (sent at
 /// once) and uninstalling with `uninstaller`.
 fn on_apps(uninstaller: Arc<dyn Uninstaller>) -> OnApps {
+    on_apps_recording(uninstaller, true)
+}
+
+/// [`on_apps`], its history written when `writable`.
+fn on_apps_recording(uninstaller: Arc<dyn Uninstaller>, writable: bool) -> OnApps {
     let recorded = Arc::new(Mutex::new(Vec::new()));
     let kept = Arc::clone(&recorded);
     let reads = Rc::new(std::cell::Cell::new(0));
@@ -221,6 +226,9 @@ fn on_apps(uninstaller: Arc<dyn Uninstaller>) -> OnApps {
             }),
             uninstaller,
             record: Arc::new(move |entry| {
+                if !writable {
+                    return Err(HistoryUnavailable::NoDirectory);
+                }
                 kept.lock().unwrap().push(entry.clone());
                 Ok(())
             }),
@@ -485,7 +493,7 @@ fn a_deb_goes_as_shown_and_is_recorded_once_gone() {
         (
             UninstallSource::Deb,
             vec!["gimp".to_owned(), "gimp-help-fr".to_owned()],
-            4_000_000,
+            Some(4_000_000),
             false
         )
     );
@@ -707,7 +715,7 @@ fn snap_uninstalled(purge: bool) {
     assert_eq!(line.data_removed, purge);
     assert_eq!(
         line.freed_bytes,
-        if purge { 7_000_000 } else { 2_000_000 },
+        Some(if purge { 7_000_000 } else { 2_000_000 }),
         "the snap and its old version, its data when they go"
     );
 }
@@ -761,7 +769,7 @@ fn closing_the_window_during_an_uninstallation_is_held_once() {
             package: "gimp".to_owned(),
             architecture: "amd64".to_owned(),
         },
-        freed: 1,
+        freed: Some(1),
         data_bytes: 0,
         phase: Phase::Running(Run::default()),
         receiver,
@@ -779,4 +787,241 @@ fn closing_the_window_during_an_uninstallation_is_held_once() {
         "insisted"
     );
     drop(said);
+}
+
+#[test]
+fn a_history_that_could_not_be_written_is_said_with_what_went() {
+    let fake = Fake::new(vec![Ok(vec![going("gimp", 3_000_000)])], Ended::Done);
+    let (window, ..) = on_apps_recording(fake, false);
+    ask(&window, "GIMP");
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| apps(window).get_toast());
+    assert!(!apps(&window).get_toast_recorded());
+    assert!(shows(
+        &window,
+        "GIMP désinstallée : 3,0 Mo libérés. Elle n'a pas pu être inscrite à l'historique."
+    ));
+}
+
+#[test]
+fn a_size_unknown_is_said_unknown_never_nothing() {
+    let without_size = Going {
+        bytes: None,
+        ..going("gimp", 0)
+    };
+    let fake = Fake::new(vec![Ok(vec![without_size])], Ended::Done);
+    let (window, screen, recorded, _) = on_apps(fake);
+    screen
+        .0
+        .borrow_mut()
+        .entries
+        .get_mut(&AppKey {
+            source: Source::Deb,
+            id: "gimp:amd64".to_owned(),
+        })
+        .unwrap()
+        .app
+        .size = AppSize::Unknown;
+    ask(&window, "GIMP");
+    assert!(shows(&window, "Place libérée : inconnue."));
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| apps(window).get_toast());
+    assert!(shows(&window, "GIMP désinstallée"));
+    assert_eq!(recorded.lock().unwrap()[0].freed_bytes, None);
+}
+
+#[test]
+fn an_ending_away_from_the_page_is_seen_on_return() {
+    let (release, released) = mpsc::channel::<()>();
+    let fake = Fake::new(vec![Ok(vec![going("gimp", 1)])], Ended::Done);
+    let held = Arc::new(Held {
+        fake,
+        released: Mutex::new(released),
+    });
+    let (window, ..) = on_apps(held);
+    ask(&window, "GIMP");
+    apps(&window).invoke_confirm();
+    button(&window, "Accueil").invoke_accessible_default_action();
+    slint::platform::update_timers_and_animations();
+    release.send(()).unwrap();
+    read_until(&window, |window| apps(window).get_toast());
+    i_slint_backend_testing::mock_elapsed_time(TOAST_SHOWN_FOR * 2);
+    slint::platform::update_timers_and_animations();
+    assert!(apps(&window).get_toast(), "not seen yet");
+    button(&window, "Applications").invoke_accessible_default_action();
+    slint::platform::update_timers_and_animations();
+    assert!(apps(&window).get_toast());
+    i_slint_backend_testing::mock_elapsed_time(TOAST_SHOWN_FOR);
+    slint::platform::update_timers_and_animations();
+    assert!(!apps(&window).get_toast(), "seen, then gone");
+}
+
+/// An uninstaller whose removal may be cancelled until it is asked to.
+struct Cancellable;
+
+impl Uninstaller for Cancellable {
+    fn simulate(&self, _target: &Target) -> Result<Vec<Going>, Why> {
+        Ok(vec![going("gimp", 1)])
+    }
+
+    fn status(&self) -> Result<Status, Why> {
+        Ok(parse_status(STATUS))
+    }
+
+    fn remove(
+        &self,
+        _target: &Target,
+        _going: &[Going],
+        steps: &Sender<Step>,
+        cancel: &AtomicBool,
+    ) -> Ended {
+        let _ = steps.send(Step::Cancellable(true));
+        let started = Instant::now();
+        while !cancel.load(Ordering::Relaxed) {
+            if started.elapsed() > WAIT {
+                return Ended::Done;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Ended::Cancelled
+    }
+}
+
+#[test]
+fn an_uninstallation_asked_to_stop_stops_and_nothing_is_said_gone() {
+    let (window, _, recorded, _) = on_apps(Arc::new(Cancellable));
+    ask(&window, "GIMP");
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| apps(window).get_cancellable());
+    assert!(!apps(&window).get_too_late());
+    button(&window, "Annuler la désinstallation").invoke_accessible_default_action();
+    read_until(&window, |window| step(window) == ui::UninstallStep::Closed);
+    assert!(!apps(&window).get_toast());
+    assert!(recorded.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_source_busy_or_silent_is_said_and_the_others_shown() {
+    let seams = crate::cleaner::Seams {
+        apps: AppsSeams {
+            // dpkg writing; snapd's thread ends without a word.
+            read: Rc::new(|_, sink, _| {
+                sink.send(Arrival::Source(Source::Deb, SourceReading::Busy))
+                    .unwrap();
+                sink.send(Arrival::Source(Source::Flatpak, SourceReading::Absent))
+                    .unwrap();
+            }),
+            ..inert()
+        },
+        ..seams_never_scanning()
+    };
+    let (window, ..) =
+        crate::wide_window(seams, crate::dashboard::tests::inert(), Language::French);
+    button(&window, "Applications").invoke_accessible_default_action();
+    slint::platform::update_timers_and_animations();
+    read_once();
+    assert_eq!(apps(&window).get_debs(), ui::SourceShown::Busy);
+    assert_eq!(apps(&window).get_snaps(), ui::SourceShown::Failed);
+    assert!(shows(
+        &window,
+        "Les paquets Ubuntu ne sont pas lisibles pour l'instant : une installation est en cours."
+    ));
+    assert!(shows(
+        &window,
+        "Les snaps ne sont pas lisibles : le service snapd ne répond pas."
+    ));
+}
+
+/// The check of GIMP fails `why`: said, and the list read again or not.
+fn check_fails(why: Why, words: &str, read_again: bool) {
+    let fake = Fake::new(vec![Err(why)], Ended::Done);
+    let (window, _, _, reads) = on_apps(fake.clone());
+    ask(&window, "GIMP");
+    assert_eq!(step(&window), ui::UninstallStep::Failed);
+    assert!(shows(&window, words), "{words}");
+    assert_eq!(reads.get(), if read_again { 2 } else { 1 }, "{words}");
+    assert_eq!(fake.removed(), []);
+}
+
+#[test]
+fn an_application_gone_since_is_said_and_the_list_read_again() {
+    check_fails(
+        Why::NotFound,
+        "Elle n'est plus installée. La liste est relue.",
+        true,
+    );
+}
+
+#[test]
+fn a_check_held_by_another_installation_is_said() {
+    check_fails(
+        Why::Busy,
+        "Une autre installation est en cours : réessayez dans un moment.",
+        false,
+    );
+}
+
+/// An uninstaller whose removal panics: its thread ends without a word.
+struct Panicking;
+
+impl Uninstaller for Panicking {
+    fn simulate(&self, _target: &Target) -> Result<Vec<Going>, Why> {
+        Ok(vec![going("gimp", 1)])
+    }
+
+    fn status(&self) -> Result<Status, Why> {
+        Ok(parse_status(STATUS))
+    }
+
+    fn remove(
+        &self,
+        _target: &Target,
+        _going: &[Going],
+        _steps: &Sender<Step>,
+        _cancel: &AtomicBool,
+    ) -> Ended {
+        panic!("the service's library failed");
+    }
+}
+
+#[test]
+fn a_removal_that_dies_says_its_outcome_unknown_and_reads_again() {
+    let (window, _, recorded, reads) = on_apps(Arc::new(Panicking));
+    ask(&window, "GIMP");
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| step(window) == ui::UninstallStep::Failed);
+    assert!(shows(
+        &window,
+        "Le service ne répond pas. La liste est relue."
+    ));
+    assert!(recorded.lock().unwrap().is_empty());
+    assert_eq!(reads.get(), 2);
+}
+
+#[test]
+fn the_window_s_close_button_is_held_once_during_an_uninstallation() {
+    let (release, released) = mpsc::channel::<()>();
+    let fake = Fake::new(vec![Ok(vec![going("gimp", 1)])], Ended::Done);
+    let held = Arc::new(Held {
+        fake,
+        released: Mutex::new(released),
+    });
+    let (window, ..) = on_apps(held);
+    ask(&window, "GIMP");
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| apps(window).get_waiting());
+    button(&window, "Fermer").invoke_accessible_default_action();
+    button(&window, "Accueil").invoke_accessible_default_action();
+    // As the window's own button asks: the cleaner, then this screen.
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+    assert_eq!(
+        window.get_page(),
+        ui::Page::Apps,
+        "the uninstallation shown"
+    );
+    assert_eq!(step(&window), ui::UninstallStep::Running);
+    assert!(apps(&window).get_closing());
+    drop(release);
 }

@@ -20,8 +20,9 @@ struct Revision {
     kind: String,
     #[serde(default)]
     status: String,
+    /// Absent when snapd does not say it.
     #[serde(rename = "installed-size", default)]
-    installed_size: u64,
+    installed_size: Option<u64>,
     #[serde(default)]
     publisher: Option<Publisher>,
     #[serde(default)]
@@ -81,13 +82,19 @@ pub fn read_snaps(
     }
     let mut apps = Vec::new();
     let mut rest = Rest::default();
+    let mut without_size = 0_usize;
     for (name, revisions) in by_name {
         let (active, old): (Vec<Revision>, Vec<Revision>) = revisions
             .into_iter()
             .partition(|revision| revision.status == "active");
+        // A revision of no size said counts nothing, and is told.
+        without_size += old
+            .iter()
+            .filter(|revision| revision.installed_size.is_none())
+            .count();
         let old_bytes = old
             .iter()
-            .map(|revision| revision.installed_size)
+            .filter_map(|revision| revision.installed_size)
             .fold(0, u64::saturating_add);
         let Some(active) = active.into_iter().next() else {
             // Every revision disabled: it takes space, and runs nothing.
@@ -112,11 +119,12 @@ pub fn read_snaps(
                 })
             })
             .flatten();
+        without_size += usize::from(active.installed_size.is_none());
         let Some((shown_name, icon)) = launcher else {
             rest.count += 1;
             rest.bytes = rest
                 .bytes
-                .saturating_add(active.installed_size)
+                .saturating_add(active.installed_size.unwrap_or(0))
                 .saturating_add(old_bytes);
             continue;
         };
@@ -129,7 +137,9 @@ pub fn read_snaps(
             publisher: active.publisher.map(|publisher| publisher.display_name),
             origin: None,
             icon,
-            size: AppSize::Known(active.installed_size),
+            size: active
+                .installed_size
+                .map_or(AppSize::Unknown, AppSize::Known),
             old_bytes,
             old_versions: old.len(),
             data: home.map(|home| home.join("snap").join(&name)),
@@ -140,7 +150,12 @@ pub fn read_snaps(
             }),
         });
     }
-    tracing::info!(apps = apps.len(), rest = rest.count, "snaps read");
+    tracing::info!(
+        apps = apps.len(),
+        rest = rest.count,
+        without_size,
+        "snaps read"
+    );
     SourceReading::Read { apps, rest }
 }
 

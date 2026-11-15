@@ -16,6 +16,7 @@ mod walk;
 pub use report::{CopyId, DuplicateReport, FileCopy, Group, SearchStats};
 pub use search::{
     DuplicateSearch, MIN_SIZE, Outcome, Progress, SearchError, SearchOptions, default_threads,
+    threads_for_roots,
 };
 pub use trash::{KeepReason, Refusal, TrashOutcome, TrashReceipt, TrashResult, trash};
 

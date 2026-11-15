@@ -17,7 +17,7 @@ use okapi_platform::Directory;
 use super::compare::{self, Comparing, Pass};
 use super::report::{DuplicateReport, Found, Root, SearchStats};
 use super::walk::{self, Cancelled, Listing};
-use crate::mounts::mounts_below;
+use crate::mounts::{mount_of, mounts_below};
 use crate::panic_message;
 
 /// The smallest file the screen compares: below, many small groups for
@@ -33,6 +33,46 @@ const MOST_THREADS: usize = 4;
 pub fn default_threads(rotational: Option<bool>) -> NonZeroUsize {
     let processors = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
     threads_for(rotational, processors)
+}
+
+/// The threads to read `roots` with: [`default_threads`], each root on the
+/// disk of the mount that holds it, from the table of mounts.
+#[must_use]
+pub fn threads_for_roots(roots: &[PathBuf]) -> NonZeroUsize {
+    let mounts = okapi_platform::mounts()
+        .inspect_err(|error| tracing::warn!(%error, "mounts unreadable: one thread reads"))
+        .ok();
+    default_threads(rotational_of(
+        roots,
+        mounts.as_ref(),
+        okapi_platform::rotational,
+    ))
+}
+
+/// `Some(false)` when every one of `roots` lies on a disk known not to
+/// rotate, else `None` (one rotating disk, or one not known not to, and a
+/// single thread reads): `rotates` reads the source of the mount it lies on.
+fn rotational_of(
+    roots: &[PathBuf],
+    mounts: Option<&okapi_platform::MountList>,
+    rotates: impl Fn(&std::path::Path) -> io::Result<bool>,
+) -> Option<bool> {
+    let mounts = mounts?;
+    let mut all_still = !roots.is_empty();
+    for root in roots {
+        let mount = mount_of(root, &mounts.mounts);
+        let rotating = mount.map(|mount| rotates(std::path::Path::new(&mount.source)));
+        if !matches!(rotating, Some(Ok(false))) {
+            all_still = false;
+        }
+        tracing::info!(
+            root = %root.display(),
+            source = mount.map(|mount| mount.source.as_str()),
+            rotating = ?rotating.as_ref().map(|answer| answer.as_ref().map_err(ToString::to_string)),
+            "disk of a root"
+        );
+    }
+    all_still.then_some(false)
 }
 
 fn threads_for(rotational: Option<bool>, processors: usize) -> NonZeroUsize {
@@ -502,5 +542,51 @@ mod tests {
         assert_eq!(threads_for(None, 16).get(), 1);
         assert_eq!(threads_for(Some(false), 16).get(), MOST_THREADS);
         assert_eq!(threads_for(Some(false), 2).get(), 2);
+    }
+
+    fn mount(point: &str, source: &str) -> okapi_platform::Mount {
+        okapi_platform::Mount {
+            id: 1,
+            device: okapi_platform::Device { major: 8, minor: 1 },
+            mount_point: PathBuf::from(point),
+            filesystem: "ext4".to_owned(),
+            source: source.to_owned(),
+            class: okapi_platform::MountClass::Block,
+        }
+    }
+
+    #[test]
+    fn a_root_lies_on_the_disk_of_the_deepest_mount_that_holds_it() {
+        let mounts = okapi_platform::MountList {
+            mounts: vec![
+                mount("/", "/dev/nvme0n1p2"),
+                mount("/home/ana/Vidéos", "/dev/sda1"),
+                mount("/home/ana/Images", "/dev/sdb1"),
+            ],
+            malformed: 0,
+        };
+        let rotates = |source: &std::path::Path| match source.to_str() {
+            Some("/dev/sda1") => Ok(true),
+            Some("/dev/sdb1") => Err(io::Error::other("no answer")),
+            _ => Ok(false),
+        };
+        let roots = |paths: &[&str]| paths.iter().map(PathBuf::from).collect::<Vec<_>>();
+        let of = |paths: &[&str], mounts| rotational_of(&roots(paths), mounts, rotates);
+        assert_eq!(of(&["/home/ana/Documents"], Some(&mounts)), Some(false));
+        // The deepest mount, not the root's.
+        assert_eq!(
+            of(
+                &["/home/ana/Documents", "/home/ana/Vidéos/x"],
+                Some(&mounts)
+            ),
+            None
+        );
+        assert_eq!(of(&["/home/ana/Images"], Some(&mounts)), None);
+        assert_eq!(of(&["/home/ana"], None), None);
+        assert_eq!(of(&[], Some(&mounts)), None);
+        assert_eq!(
+            of(&["/home/ana"], Some(&okapi_platform::MountList::default())),
+            None
+        );
     }
 }

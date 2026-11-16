@@ -471,6 +471,8 @@ pub fn ending(issues: &[ScanIssue], groups: usize, bytes: u64) -> Option<Outcome
     })
 }
 
+/// How the analysis that gave `report` ended for its summary: what the
+/// user's own scan found (a target only root may read is none of it).
 fn ending_of(report: &ScanReport) -> Option<Outcome> {
     ending(report.issues(), report.groups().len(), report.total_size())
 }
@@ -728,6 +730,7 @@ fn admin_row_of(group: &GroupFacts) -> ui::AdminRow {
     match (group.needs_admin, group.admin, &group.targets) {
         (false, ..) => ui::AdminRow::None,
         (true, AdminState::Locked, None) => ui::AdminRow::Unreachable,
+        (true, AdminState::Locked, Some(_)) if group.seen.is_none() => ui::AdminRow::Unseen,
         (true, AdminState::Locked, Some(_)) => ui::AdminRow::Locked,
         (true, AdminState::NothingToClean, _) => ui::AdminRow::Nothing,
         (true, AdminState::Unlocked { .. }, _) => ui::AdminRow::Unlocked,
@@ -1318,9 +1321,17 @@ impl CleanerScreen {
                     issues = report.issues().len(),
                     "analysis report received"
                 );
-                let outcome = ending_of(&report);
+                // Built here, where the helper's targets are known: what
+                // only root may read is found too, though no group of the
+                // report holds it.
+                let unseen = self.unseen_of(&report);
+                let outcome = ending(
+                    report.issues(),
+                    report.groups().len() + unseen.len(),
+                    report.total_size(),
+                );
                 if matches!(outcome, Some(Outcome::Found { .. })) {
-                    self.hold(report);
+                    self.hold(report, unseen);
                 }
                 self.end(outcome);
                 if let Some(summary) = summary {
@@ -1470,10 +1481,35 @@ impl CleanerScreen {
         self.show_results();
     }
 
-    /// Keeps the report of an analysis that found something, its results
-    /// checked as the engine says, less the groups the user unchecked
-    /// before (choices kept only ever uncheck).
-    fn hold(&self, report: ScanReport) {
+    /// The groups only root may read of the analysis under way, which gave
+    /// `report` ([`rights::unseen_groups`]).
+    fn unseen_of(&self, report: &ScanReport) -> Vec<GroupFacts> {
+        let state = self.0.borrow();
+        let (Some(Task::Analysis(analysis)), Some(rules)) = (&state.task, &state.rules) else {
+            return Vec::new();
+        };
+        // The analysis read them already, refusing what it could not use:
+        // compared as written, never read again.
+        let excluded = Exclusions::as_written(analysis.exclusions.iter().cloned())
+            .inspect_err(|error| {
+                tracing::warn!(?error, "exclusions of the analysis unusable: none compared");
+            })
+            .unwrap_or_else(|_| Exclusions::none());
+        rights::unseen_groups(
+            report,
+            rules,
+            state.language,
+            &state.helper_targets,
+            &analysis.view.chosen(),
+            &excluded,
+        )
+    }
+
+    /// Keeps the report of an analysis that found something, with `unseen`,
+    /// the groups only root may read; its results checked as the engine
+    /// says, less the groups the user unchecked before (choices kept only
+    /// ever uncheck).
+    fn hold(&self, report: ScanReport, unseen: Vec<GroupFacts>) {
         let mut state = self.0.borrow_mut();
         let chosen = state
             .task
@@ -1484,12 +1520,20 @@ impl CleanerScreen {
             })
             .unwrap_or_default();
         let language = state.language;
-        let groups = report
+        // After the report's own: an index of the report never names one
+        // of those (invariant 1).
+        let groups: Vec<GroupFacts> = report
             .groups()
             .iter()
             .map(|group| GroupFacts::of(group, language, &state.helper_targets))
+            .chain(unseen)
             .collect();
-        let notes: Vec<_> = report.issues().iter().filter_map(note_shown).collect();
+        let notes: Vec<_> = report
+            .issues()
+            .iter()
+            .filter(|issue| !rights::said_by(issue, &groups))
+            .filter_map(note_shown)
+            .collect();
         show(&state.note_model, notes);
         let mut results = Results::new(groups, chosen);
         if let Some(kept) = &state.kept {
@@ -1631,10 +1675,11 @@ impl CleanerScreen {
             cleaner.set_selected_entries(shown(entries));
             cleaner.set_selected_size(size(bytes));
             cleaner.set_result_entries(shown(results.entries()));
-            // From the report held: an analysis refused since showed its
-            // own count in its place. While one runs, its count is shown.
+            // From the results held, as shown (root's numbers once its scan
+            // set a group): an analysis refused since showed its own count
+            // in its place. While one runs, its count is shown.
             if !matches!(state.task, Some(Task::Analysis(_))) {
-                cleaner.set_found(size(held.report.total_size()));
+                cleaner.set_found(size(results.bytes()));
             }
             cleaner.set_rights_waiting(shown(results.waiting_for_rights()));
         });
@@ -1791,8 +1836,7 @@ pub mod tests {
             admin: AdminState::Locked,
             checked_by_default: false,
             keys: BTreeSet::new(),
-            entries: 1,
-            bytes: 1,
+            seen: Some((1, 1)),
         };
         assert_eq!(badge_of(&group), ui::ResultBadge::Admin);
         group.admin = AdminState::Unlocked {

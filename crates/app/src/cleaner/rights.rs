@@ -3,7 +3,8 @@
 //! is asked for the targets of the rules, never a path to remove
 //! (invariant 1). Every scan asks for every target and sets every group
 //! again: the age and exclusions kept for root's cleaning are always those
-//! of the one scan that unlocked what is checked.
+//! of the one scan that unlocked what is checked. A target whose root the
+//! user cannot read waits for the rights too, as a group of its own.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -12,15 +13,16 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
-use okapi_engine::{DEFAULT_MIN_AGE_MINUTES, Exclusions, Origin, ScanReport};
+use okapi_engine::{Category, DEFAULT_MIN_AGE_MINUTES, Exclusions, Origin, ScanIssue, ScanReport};
 use okapi_helper::{
     HELPER_MIN_AGE_FLOOR, Operation, RefusalAnswer, Reply, ReplyError, admin_targets, request_line,
 };
-use okapi_rules::RuleSet;
+use okapi_rules::{Language, RuleSet};
 use slint::ComponentHandle as _;
 
 use super::{CANCEL_WAIT, CleanerScreen, Inputs, Problem, Running, Task, WATCH_EVERY};
 use crate::elevation::{ElevationFailure, ElevationStep};
+use crate::results::GroupFacts;
 use crate::ui;
 
 /// The age and exclusions root's scan unlocked the groups with.
@@ -189,12 +191,84 @@ pub(super) fn helper_targets(rules: &RuleSet) -> BTreeMap<Origin, String> {
         .collect()
 }
 
+/// What only root may read of an analysis of `chosen`: one group per target
+/// of the privileged helper (`targets`) whose root the user's own scan could
+/// not open, the system refusing (a note of `report`), of a category chosen,
+/// no group of `report` holding it already, and not `excluded`. A note of
+/// several rules (two targets reaching one root through a link) stays a
+/// note. Each group waits for root's scan, which alone says what it holds.
+pub(super) fn unseen_groups(
+    report: &ScanReport,
+    rules: &RuleSet,
+    language: Language,
+    targets: &BTreeMap<Origin, String>,
+    chosen: &BTreeSet<Category>,
+    excluded: &Exclusions,
+) -> Vec<GroupFacts> {
+    let mut shown: BTreeSet<&Origin> = report
+        .groups()
+        .iter()
+        .flat_map(okapi_engine::ScanGroup::origins)
+        .collect();
+    let mut groups = Vec::new();
+    for issue in report.issues() {
+        let ScanIssue::UnreadableRoot {
+            origins,
+            path,
+            error: io::ErrorKind::PermissionDenied,
+        } = issue
+        else {
+            continue;
+        };
+        let [origin] = origins.as_slice() else {
+            tracing::debug!(
+                ?origins,
+                ?path,
+                "an unreadable root of several rules: left a note"
+            );
+            continue;
+        };
+        if !Category::is_chosen(&BTreeSet::from([origin.category()]), chosen)
+            || excluded.excludes(path)
+            || !shown.insert(origin)
+        {
+            tracing::debug!(
+                ?origin,
+                ?path,
+                "an unreadable root not chosen, excluded or shown already: no group of its own"
+            );
+            continue;
+        }
+        if let Some(group) = GroupFacts::unseen(origin, rules, language, targets) {
+            tracing::info!(?origin, ?path, targets = ?group.targets, "a target only root may read: waits for the rights");
+            groups.push(group);
+        }
+    }
+    groups
+}
+
+/// Whether `issue` is said by a group of `groups` instead: a root of one
+/// rule, whose group waits for root's scan.
+pub(super) fn said_by(issue: &ScanIssue, groups: &[GroupFacts]) -> bool {
+    match issue {
+        ScanIssue::UnreadableRoot { origins, .. } => match origins.as_slice() {
+            [origin] => groups
+                .iter()
+                .any(|group| group.seen.is_none() && group.keys.contains(&origin.key())),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 impl CleanerScreen {
-    /// The helper's targets of `rules` in the place of the embedded rules':
-    /// a test's targets lie in its sandbox.
+    /// `rules` and their helper's targets in the place of the embedded
+    /// rules': a test's targets lie in its sandbox.
     pub(super) fn use_helper_targets_of(&self, rules: &RuleSet) {
-        self.0.borrow_mut().helper_targets = helper_targets(rules);
+        let mut state = self.0.borrow_mut();
+        state.helper_targets = helper_targets(rules);
+        state.rules = Some(Arc::new(rules.clone()));
     }
 }
 

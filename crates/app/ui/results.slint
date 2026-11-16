@@ -134,7 +134,11 @@ component ResultLine inherits VerticalLayout {
         ? @tr("Droits obtenus : à cocher vous-même.")
         : line.admin == AdminRow.unreachable
         ? @tr("Hors de portée de l'assistant administrateur.")
+        : line.admin == AdminRow.unseen
+        ? @tr("Illisible sans les droits administrateur : « Obtenir les droits » ci-dessus.")
         : @tr("Demande les droits administrateur : « Obtenir les droits » ci-dessus.");
+    // What it holds is unknown until root's scan.
+    property <bool> unmeasured: line.admin == AdminRow.unseen;
 
     if !line.hidden: Rectangle {
         min-height: Theme.results-row-height;
@@ -333,14 +337,14 @@ component ResultLine inherits VerticalLayout {
                 accessible-role: none;
                 horizontal-alignment: right;
                 vertical-alignment: center;
-                text: line.entries;
+                text: root.unmeasured ? "" : "\{line.entries}";
             }
             Line {
                 width: Theme.results-size-width;
                 accessible-role: none;
                 horizontal-alignment: right;
                 vertical-alignment: center;
-                text: Words.size(line.size);
+                text: root.unmeasured ? "" : Words.size(line.size);
             }
         }
     }

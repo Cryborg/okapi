@@ -3100,6 +3100,171 @@ mod tests {
         );
     }
 
+    /// Closes `directory` to the user running the tests, as `/var/lib/snapd/cache`
+    /// is; `false` when they are root, whom nothing closes it to.
+    fn close(directory: &std::path::Path) -> bool {
+        use std::os::unix::fs::PermissionsExt as _;
+        if okapi_platform::running_as_root() {
+            return false;
+        }
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o000)).unwrap();
+        true
+    }
+
+    /// Opens again what [`close`] closed, for the sandbox to be removed.
+    fn reopen(directory: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// A target whose root the user cannot read waits for the rights as a
+    /// group of its own, what it holds unknown; root's scan sets it, and
+    /// root's cleaning is asked for its target alone, never the user's.
+    #[test]
+    fn a_target_only_root_may_read_waits_for_the_rights() {
+        let sandbox = Sandbox::new();
+        let pip = sandbox.file("home/.cache/pip/old");
+        sandbox.file("var/crash/core");
+        let dumps = sandbox.root.join("var/dumps");
+        sandbox.file("var/dumps/core");
+        settle_files();
+        if !close(&dumps) {
+            return;
+        }
+        let rules = admin_rules(&sandbox);
+        let asked = Asked::default();
+        let dumps_name = dumps.display().to_string();
+        let answer = {
+            let scan = serde_json::json!({
+                "version": okapi_helper::PROTOCOL_VERSION,
+                "operation": "scan",
+                "stops": [],
+                "groups": [{ "targets": [dumps_name], "entries": 2, "bytes": 5_000 }],
+                "issues": [],
+            })
+            .to_string();
+            let clean = serde_json::json!({
+                "version": okapi_helper::PROTOCOL_VERSION,
+                "operation": "clean",
+                "stops": [],
+                "groups": [],
+                "issues": [],
+                "outcomes": [{ "outcome": { "path": dumps.join("core"), "result": "removed", "bytes": 5_000 }, "scannedBytes": 5_000 }],
+            })
+            .to_string();
+            move |operation, _: &serde_json::Value| match operation {
+                okapi_helper::Operation::Scan => (0, scan.clone()),
+                okapi_helper::Operation::Clean => (0, clean.clone()),
+            }
+        };
+        let seams = admin_seams(&sandbox, &rules, &asked, answer);
+        let (window, _screen) = on_admin_results(seams, &rules);
+        let cleaner = window.global::<ui::Cleaner>();
+        assert_eq!(cleaner.get_rights_waiting(), 2, "the crash reports and it");
+        assert_eq!(
+            found(&window, "Vidages mémoire").accessible_enabled(),
+            Some(false)
+        );
+        assert!(shows(
+            &window,
+            "Illisible sans les droits administrateur : « Obtenir les droits » ci-dessus."
+        ));
+        assert!(
+            !shows(
+                &window,
+                &format!("Dossier illisible, non compté : {}", dumps.display())
+            ),
+            "its group says it, not a note"
+        );
+
+        obtain_rights(&window);
+        let (_, request) = asked.lock().unwrap()[0].clone();
+        assert!(
+            request["targets"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(dumps_name)),
+            "root is asked for it"
+        );
+        let unlocked = found(&window, "Vidages mémoire");
+        assert_eq!(unlocked.accessible_enabled(), Some(true));
+        assert_eq!(
+            unlocked.accessible_checked(),
+            Some(false),
+            "never checked for the user (invariant 5)"
+        );
+        assert!(
+            shows(&window, "Trouvé : 5,0 ko. Éléments : 3."),
+            "root's numbers counted with the user's file, the crash reports \
+             nothing to clean for root"
+        );
+        unlocked.invoke_accessible_default_action();
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        let (operation, request) = asked.lock().unwrap()[1].clone();
+        assert_eq!(operation, okapi_helper::Operation::Clean);
+        assert_eq!(
+            request["targets"],
+            serde_json::json!([dumps_name]),
+            "its target alone"
+        );
+        assert!(!pip.exists(), "the user's part removed");
+        reopen(&dumps);
+        assert!(
+            dumps.join("core").exists(),
+            "root's part is root's: never the user's own cleaning"
+        );
+    }
+
+    /// What only root may read is found too, though the user's own scan
+    /// found nothing; never for a category the user left out, whose rules
+    /// are planned all the same: an ancestor the user cannot cross is noted
+    /// before any root is chosen.
+    #[test]
+    fn a_target_only_root_may_read_is_found_only_in_a_category_chosen() {
+        let sandbox = Sandbox::new();
+        let var = sandbox.root.join("var");
+        sandbox.file("var/dumps/core");
+        settle_files();
+        if !close(&var) {
+            return;
+        }
+        let rules = admin_rules(&sandbox);
+        let asked = Asked::default();
+        let seams = admin_seams(&sandbox, &rules, &asked, |_, _: &serde_json::Value| {
+            panic!("no rights asked for")
+        });
+        let (window, screen) = on_cleaner(seams);
+        screen.use_helper_targets_of(&rules);
+        let ended = |window: &ui::AppWindow| {
+            matches!(
+                step(window),
+                ui::CleanerStep::Results | ui::CleanerStep::Outcome
+            )
+        };
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, ended);
+        assert_eq!(step(&window), ui::CleanerStep::Results);
+        assert_eq!(
+            window.global::<ui::Cleaner>().get_rights_waiting(),
+            2,
+            "the crash reports and the core dumps wait for the rights"
+        );
+        let_the_screen_settle();
+        button(&window, "Choisir d'autres catégories").invoke_accessible_default_action();
+        let_the_screen_settle();
+        checkbox(&window, "Système").invoke_accessible_default_action();
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, ended);
+        reopen(&var);
+        assert_eq!(
+            step(&window),
+            ui::CleanerStep::Outcome,
+            "the system left out: nothing to clean"
+        );
+        assert!(asked.lock().unwrap().is_empty());
+    }
+
     #[test]
     fn a_dismissed_question_cancels_the_whole_cleaning() {
         let sandbox = Sandbox::new();

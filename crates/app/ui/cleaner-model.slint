@@ -62,9 +62,10 @@ export enum ResultBadge { preselected, to-choose, admin }
 export enum RowKind { category, browser, group }
 
 // Where a group that needs the administrator stands: none for another;
-// waiting for the rights; never the helper's to clean; nothing for root to
-// clean; or unlocked by root's scan, to check by hand.
-export enum AdminRow { none, locked, unreachable, nothing, unlocked }
+// waiting for the rights; waiting for them, unreadable to the user, what it
+// holds unknown; never the helper's to clean; nothing for root to clean; or
+// unlocked by root's scan, to check by hand.
+export enum AdminRow { none, locked, unseen, unreachable, nothing, unlocked }
 
 // Where the rights asked for stand: their request being made (which
 // exclusions root is sent is read), their question open (the system asks

@@ -179,6 +179,7 @@ fn results(window: &ui::AppWindow, folded: bool, language: Language) {
         ("Thumbnail Cache", Preselected, true),
         ("Crash Reports", Admin, false),
         ("APT Package Cache", Admin, false),
+        ("Snap Cache", Admin, false),
         ("Snap App Cache", Preselected, true),
         ("Font Cache", ToChoose, false),
         ("Installer Logs", Admin, false),
@@ -194,6 +195,11 @@ fn results(window: &ui::AppWindow, folded: bool, language: Language) {
         line.hidden = folded;
         // The mockup's example, and a text long enough to go to the line.
         line.explained = matches!(*label, "Thumbnail Cache" | "Man Page Cache");
+        // A target only root may read: what it holds unknown.
+        if *label == "Snap Cache" {
+            line.admin = ui::AdminRow::Unseen;
+            line.explained = true;
+        }
         line
     }));
     rows.push(header(Browsers, false));
@@ -226,7 +232,7 @@ fn results(window: &ui::AppWindow, folded: bool, language: Language) {
     cleaner.set_results(ModelRc::new(VecModel::from(rows)));
     cleaner.set_selected_entries(4);
     cleaner.set_result_entries(7);
-    cleaner.set_rights_waiting(6);
+    cleaner.set_rights_waiting(7);
     cleaner.set_selected_size(size(2, 1, ui::SizeUnit::Gigabyte));
     cleaner.set_found(size(11, 6, ui::SizeUnit::Gigabyte));
     cleaner.set_step(ui::CleanerStep::Results);

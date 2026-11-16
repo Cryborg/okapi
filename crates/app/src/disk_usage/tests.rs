@@ -814,6 +814,82 @@ fn press(window: &ui::AppWindow, key: slint::platform::Key) {
 }
 
 #[test]
+fn the_pages_move_the_focus_by_what_the_list_shows() {
+    let home = home();
+    fs::create_dir(home.path().join("many")).unwrap();
+    for index in 0..60 {
+        fs::write(
+            home.path().join(format!("many/file{index:02}")),
+            noise(8_000),
+        )
+        .unwrap();
+    }
+    let manager = Rc::default();
+    let (window, _sampler) = on_disk(seams(&home, &manager));
+    analyzed(&window);
+    disk(&window).invoke_enter(index_of(&window, "many"));
+    read_until(&window, |window| names(window).len() == 60);
+    press(&window, slint::platform::Key::PageDown);
+    let page = disk(&window).get_current();
+    assert!(page > 1 && page < 30, "a page of lines: {page}");
+    press(&window, slint::platform::Key::PageDown);
+    assert_eq!(disk(&window).get_current(), 2 * page);
+    press(&window, slint::platform::Key::PageUp);
+    assert_eq!(disk(&window).get_current(), page);
+    press(&window, slint::platform::Key::PageUp);
+    press(&window, slint::platform::Key::PageUp);
+    assert_eq!(disk(&window).get_current(), 0, "never above the first");
+}
+
+#[test]
+fn a_name_cut_short_is_said_whole_under_the_focus() {
+    let home = home();
+    let long = "a".repeat(200);
+    fs::write(home.path().join(&long), b"1").unwrap();
+    let manager = Rc::default();
+    let (window, _sampler) = on_disk(seams(&home, &manager));
+    analyzed(&window);
+    read_until(&window, |window| names(window).contains(&long));
+    let tips = || ElementHandle::find_by_element_type_name(&window, "NameTip").count();
+    assert_eq!(tips(), 0);
+    press(&window, slint::platform::Key::End);
+    assert_eq!(names(&window).last(), Some(&long));
+    // `changed` handlers run on the next turn of the event loop.
+    slint::platform::update_timers_and_animations();
+    assert_eq!(tips(), 1, "its name said whole");
+    press(&window, slint::platform::Key::Home);
+    slint::platform::update_timers_and_animations();
+    assert_eq!(tips(), 0, "a name shown whole needs none");
+}
+
+#[test]
+fn others_says_its_count_in_the_singular_and_the_plural() {
+    let home = home();
+    let manager = Rc::default();
+    let (window, _sampler) = on_disk(seams(&home, &manager));
+    disk(&window).set_step(ui::DiskStep::Result);
+    let others = |count| ui::DiskLine {
+        kind: ui::DiskLineKind::Others,
+        has_size: true,
+        tall: true,
+        count,
+        ..ui::DiskLine::default()
+    };
+    disk(&window).set_lines(ModelRc::new(VecModel::from(vec![others(1), others(2)])));
+    slint::platform::update_timers_and_animations();
+    let says = |text: &str| {
+        ElementHandle::find_by_element_type_name(&window, "Row")
+            .filter_map(|row| row.accessible_label())
+            .any(|label| label.contains(text))
+    };
+    assert!(says("1 élément, moins de 1 % chacun"));
+    assert!(says("2 éléments, moins de 1 % chacun"));
+    slint::select_bundled_translation("en").unwrap();
+    assert!(says("1 item, under 1% each"));
+    assert!(says("2 items, under 1% each"));
+}
+
+#[test]
 fn folders_are_entered_and_left_with_the_keyboard() {
     let home = home();
     let manager = Rc::default();

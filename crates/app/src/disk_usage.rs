@@ -415,60 +415,12 @@ impl DiskUsageScreen {
 
     /// The volumes offered: local or removable, their space known.
     fn show_volumes(&self) {
-        let read = self
-            .0
-            .borrow()
-            .volumes_source
-            .as_ref()
-            .map(|source| source());
-        let (waited, before) = {
-            let mut state = self.0.borrow_mut();
-            state.volumes_waited = state.volumes_waited.saturating_add(1);
-            (state.volumes_waited, state.volumes_status)
-        };
-        let (state_shown, volumes) = match read {
-            None | Some(None) if waited < VOLUMES_READINGS => {
-                (ui::DiskVolumes::Reading, Vec::new())
-            }
-            None | Some(None) => {
-                if before != ui::DiskVolumes::Unavailable {
-                    tracing::warn!(readings = waited, "the volumes never came");
-                }
-                (ui::DiskVolumes::Unavailable, Vec::new())
-            }
-            Some(Some(Err(error))) => {
-                if before != ui::DiskVolumes::Unavailable {
-                    tracing::warn!(?error, "the volumes cannot be offered");
-                }
-                (ui::DiskVolumes::Unavailable, Vec::new())
-            }
-            Some(Some(Ok(volumes))) => (
-                ui::DiskVolumes::Ready,
-                volumes.into_iter().filter(offered).collect(),
-            ),
-        };
+        let (state_shown, volumes) = self.read_volumes();
         let ready = state_shown == ui::DiskVolumes::Ready;
-        // The volume chosen stays chosen, wherever it now is; one gone
-        // leaves the home folder chosen. A list not read is no list: the
-        // last one read is kept, for the choice and the disks met below.
+        // A list not read is no list: the last one read is kept, for the
+        // choice and the disks met below.
         let choice_now = if ready {
-            let choice =
-                self.with_window_value(|window| window.global::<ui::DiskUsage>().get_choice());
-            let chosen_mount = choice
-                .and_then(|choice| usize::try_from(choice).ok())
-                .and_then(|choice| {
-                    self.0
-                        .borrow()
-                        .volumes
-                        .get(choice)
-                        .map(|volume| volume.mount_point.clone())
-                });
-            chosen_mount.map(|mount| {
-                volumes
-                    .iter()
-                    .position(|volume| volume.mount_point == mount)
-                    .map_or(-1, shown)
-            })
+            self.choice_among(&volumes)
         } else {
             None
         };
@@ -489,6 +441,65 @@ impl DiskUsageScreen {
                 disk.set_choice(choice);
             }
         });
+    }
+
+    /// The volumes read once more: whether they came, and those offered.
+    /// Said unavailable once they failed, or never came.
+    fn read_volumes(&self) -> (ui::DiskVolumes, Vec<Volume>) {
+        let read = self
+            .0
+            .borrow()
+            .volumes_source
+            .as_ref()
+            .map(|source| source());
+        let (waited, before) = {
+            let mut state = self.0.borrow_mut();
+            state.volumes_waited = state.volumes_waited.saturating_add(1);
+            (state.volumes_waited, state.volumes_status)
+        };
+        match read {
+            None | Some(None) if waited < VOLUMES_READINGS => {
+                (ui::DiskVolumes::Reading, Vec::new())
+            }
+            None | Some(None) => {
+                if before != ui::DiskVolumes::Unavailable {
+                    tracing::warn!(readings = waited, "the volumes never came");
+                }
+                (ui::DiskVolumes::Unavailable, Vec::new())
+            }
+            Some(Some(Err(error))) => {
+                if before != ui::DiskVolumes::Unavailable {
+                    tracing::warn!(?error, "the volumes cannot be offered");
+                }
+                (ui::DiskVolumes::Unavailable, Vec::new())
+            }
+            Some(Some(Ok(volumes))) => (
+                ui::DiskVolumes::Ready,
+                volumes.into_iter().filter(offered).collect(),
+            ),
+        }
+    }
+
+    /// Where the volume chosen is among `volumes`, read again: it stays
+    /// chosen wherever it now is, and one gone leaves the home folder
+    /// chosen (-1); `None` when no volume was.
+    fn choice_among(&self, volumes: &[Volume]) -> Option<i32> {
+        let choice = self.with_window_value(|window| window.global::<ui::DiskUsage>().get_choice());
+        let chosen_mount = choice
+            .and_then(|choice| usize::try_from(choice).ok())
+            .and_then(|choice| {
+                self.0
+                    .borrow()
+                    .volumes
+                    .get(choice)
+                    .map(|volume| volume.mount_point.clone())
+            })?;
+        Some(
+            volumes
+                .iter()
+                .position(|volume| volume.mount_point == chosen_mount)
+                .map_or(-1, shown),
+        )
     }
 
     fn analyze_home(&self) {
@@ -1052,6 +1063,7 @@ impl DiskUsageScreen {
         ui::DiskLine {
             kind: line.kind.into(),
             state,
+            reason: reason(line.state),
             name: line.name.to_string_lossy().as_ref().into(),
             size: size(line.allocated),
             has_size: sized || counted,
@@ -1078,10 +1090,7 @@ impl DiskUsageScreen {
             LineState::Read => (ui::DiskLineState::Read, String::new()),
             LineState::Partial => (ui::DiskLineState::Partial, String::new()),
             LineState::Pending => (ui::DiskLineState::Pending, String::new()),
-            LineState::Unreadable { denied: true } => (ui::DiskLineState::Denied, String::new()),
-            LineState::Unreadable { denied: false } => {
-                (ui::DiskLineState::Unreadable, String::new())
-            }
+            LineState::Unreadable(_) => (ui::DiskLineState::Unreadable, String::new()),
             LineState::Changed => (ui::DiskLineState::Changed, String::new()),
             LineState::CountedElsewhere(counter) => {
                 let scan = self.0.borrow().scan.clone();
@@ -1464,51 +1473,13 @@ impl DiskUsageScreen {
         })
     }
 
-    /// Opens the line chosen in the file manager: a folder itself, a file in
-    /// its folder, a link's folder (a link is never followed).
+    /// Opens the line chosen in the file manager, one call at a time.
     fn open_chosen(&self) {
         if self.0.borrow().calls.awaiting() {
             return;
         }
-        let request = {
-            let state = self.0.borrow();
-            let (Some(scan), Some(Chosen::Line(chosen))) =
-                (state.scan.clone(), state.chosen.clone())
-            else {
-                return;
-            };
-            let current = state.navigation.current();
-            let Some(folder) = scan.path(current) else {
-                tracing::warn!(
-                    ?current,
-                    "folder shown unknown to the analysis: nothing opened"
-                );
-                return;
-            };
-            let line = state.shown.iter().find_map(|shown| match shown {
-                Shown::Line(line) if line.key == chosen => Some(line.clone()),
-                _ => None,
-            });
-            let Some(line) = line else {
-                return;
-            };
-            match (&line.key, line.kind) {
-                (Key::Folder(id), _) => OpenRequest {
-                    path: folder.join(&line.name),
-                    folder: true,
-                    expected: scan.identity(*id),
-                },
-                (Key::File(_), LineKind::Link) => OpenRequest {
-                    path: folder,
-                    folder: true,
-                    expected: scan.identity(current),
-                },
-                (Key::File(name), _) => OpenRequest {
-                    path: folder.join(name),
-                    folder: false,
-                    expected: None,
-                },
-            }
+        let Some(request) = self.open_request() else {
+            return;
         };
         let (calls, open) = {
             let state = self.0.borrow();
@@ -1526,6 +1497,45 @@ impl DiskUsageScreen {
                 Self(state).opened(opened);
             }
         });
+    }
+
+    /// What the file manager is asked to show of the line chosen: a folder
+    /// itself, a file in its folder, a link's folder (a link is never
+    /// followed). None for another line, or none chosen.
+    fn open_request(&self) -> Option<OpenRequest> {
+        let state = self.0.borrow();
+        let (Some(scan), Some(Chosen::Line(chosen))) = (&state.scan, &state.chosen) else {
+            return None;
+        };
+        let current = state.navigation.current();
+        let Some(folder) = scan.path(current) else {
+            tracing::warn!(
+                ?current,
+                "folder shown unknown to the analysis: nothing opened"
+            );
+            return None;
+        };
+        let line = state.shown.iter().find_map(|shown| match shown {
+            Shown::Line(line) if line.key == *chosen => Some(line),
+            _ => None,
+        })?;
+        Some(match (&line.key, line.kind) {
+            (Key::Folder(id), _) => OpenRequest {
+                path: folder.join(&line.name),
+                folder: true,
+                expected: scan.identity(*id),
+            },
+            (Key::File(_), LineKind::Link) => OpenRequest {
+                path: folder,
+                folder: true,
+                expected: scan.identity(current),
+            },
+            (Key::File(name), _) => OpenRequest {
+                path: folder.join(name),
+                folder: false,
+                expected: None,
+            },
+        })
     }
 
     /// The answer to the call awaited: opened or not; none in time.
@@ -1576,6 +1586,26 @@ fn tells_unexplained(told: bool, phase: Phase) -> bool {
     told && phase == Phase::Ended(Outcome::Complete)
 }
 
+/// Why a line could not be opened, as the screen says it: the kind of error
+/// the system gave, in the groups the user can act on.
+fn reason(state: LineState) -> ui::DiskUnreadable {
+    use std::io::ErrorKind;
+    match state {
+        LineState::Unreadable(ErrorKind::PermissionDenied) => ui::DiskUnreadable::Denied,
+        LineState::Unreadable(
+            ErrorKind::TimedOut
+            | ErrorKind::StaleNetworkFileHandle
+            | ErrorKind::HostUnreachable
+            | ErrorKind::NetworkUnreachable
+            | ErrorKind::NetworkDown
+            | ErrorKind::NotConnected
+            | ErrorKind::ConnectionReset
+            | ErrorKind::ConnectionAborted,
+        ) => ui::DiskUnreadable::NotAnswering,
+        _ => ui::DiskUnreadable::Other,
+    }
+}
+
 /// Whether `volume` is offered to be analyzed: on this machine, its space
 /// known.
 fn offered(volume: &Volume) -> bool {
@@ -1600,6 +1630,7 @@ fn others_row(arranged: &Arranged, total: u64, expanded: bool) -> ui::DiskLine {
     ui::DiskLine {
         kind: ui::DiskLineKind::Others,
         state: ui::DiskLineState::Read,
+        reason: ui::DiskUnreadable::Other,
         name: SharedString::new(),
         size: size(size_of),
         has_size: true,
@@ -1621,6 +1652,7 @@ fn unexplained_row(unexplained: u64) -> ui::DiskLine {
     ui::DiskLine {
         kind: ui::DiskLineKind::Unexplained,
         state: ui::DiskLineState::Read,
+        reason: ui::DiskUnreadable::Other,
         name: SharedString::new(),
         size: size(unexplained),
         has_size: true,
@@ -1684,6 +1716,23 @@ mod unit {
             ui::DiskFiles::Unreadable
         );
         assert_eq!(files_state(None, NodeId::ROOT), ui::DiskFiles::Listed);
+    }
+
+    #[test]
+    fn a_folder_unreadable_says_why_from_the_error_the_system_gave() {
+        use std::io::ErrorKind;
+        let said = |kind| reason(LineState::Unreadable(kind));
+        assert_eq!(
+            said(ErrorKind::PermissionDenied),
+            ui::DiskUnreadable::Denied
+        );
+        assert_eq!(said(ErrorKind::TimedOut), ui::DiskUnreadable::NotAnswering);
+        assert_eq!(
+            said(ErrorKind::StaleNetworkFileHandle),
+            ui::DiskUnreadable::NotAnswering
+        );
+        assert_eq!(said(ErrorKind::Other), ui::DiskUnreadable::Other);
+        assert_eq!(said(ErrorKind::OutOfMemory), ui::DiskUnreadable::Other);
     }
 
     #[test]

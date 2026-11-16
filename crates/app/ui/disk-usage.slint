@@ -5,7 +5,7 @@ import { VolumeShown } from "dashboard-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
 import { ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, IconButton, ProgressBar, Title } from "widgets.slint";
 import {
-    DiskUsage, DiskStep, DiskPhase, DiskVolumes, DiskFiles, DiskRefusal, DiskLine, DiskLineKind, DiskLineState,
+    DiskUsage, DiskStep, DiskPhase, DiskVolumes, DiskFiles, DiskRefusal, DiskLine, DiskLineKind, DiskLineState, DiskUnreadable,
 } from "disk-usage-model.slint";
 
 // What the screen says of a line, the same for the eye and the ear.
@@ -25,7 +25,7 @@ global DiskWords {
     // The state below a name, or nothing.
     pure public function state(line: DiskLine) -> string {
         if line.kind == DiskLineKind.others {
-            return @tr("{} éléments, moins de 1 % chacun", line.count);
+            return @tr("{n} élément, moins de 1 % chacun" | "{n} éléments, moins de 1 % chacun" % line.count);
         }
         if line.state == DiskLineState.pending {
             return @tr("Pas encore parcouru");
@@ -35,11 +35,10 @@ global DiskWords {
                 : DiskUsage.phase == DiskPhase.stopped ? @tr("Taille partielle : l'analyse a été arrêtée")
                 : @tr("Taille partielle : un dossier dessous est illisible");
         }
-        if line.state == DiskLineState.denied {
-            return @tr("Illisible : il faut les droits administrateur");
-        }
         if line.state == DiskLineState.unreadable {
-            return @tr("Illisible");
+            return line.reason == DiskUnreadable.denied ? @tr("Illisible : il faut les droits administrateur")
+                : line.reason == DiskUnreadable.not-answering ? @tr("Illisible : le disque ne répond pas")
+                : @tr("Illisible : le système n'a pas pu l'ouvrir");
         }
         if line.state == DiskLineState.changed {
             return @tr("Modifié pendant l'analyse");
@@ -66,8 +65,8 @@ global DiskWords {
             return "";
         }
         if !line.has-size {
-            return line.state == DiskLineState.unreadable || line.state == DiskLineState.denied
-                || line.state == DiskLineState.changed ? @tr("inconnue") : @tr("non compté");
+            return line.state == DiskLineState.unreadable || line.state == DiskLineState.changed
+                ? @tr("inconnue") : @tr("non compté");
         }
         Words.size(line.size)
     }
@@ -315,12 +314,25 @@ component Start inherits VerticalLayout {
     }
 }
 
-// One line of the list.
+// One line of the list. Its name cut short is said whole: on hover by
+// Slint's tooltip, with the focus by the list (`cut-short`).
 component Row inherits Rectangle {
     in property <DiskLine> line;
     in property <int> index;
     in property <bool> focused;
     in property <bool> narrow;
+    // Whether its name, cut short, has the focus: said at once, and on
+    // each change.
+    callback cut-short(bool);
+    property <bool> focused-cut: root.focused && name.width < name.preferred-width;
+    init => {
+        if root.focused-cut {
+            root.cut-short(true);
+        }
+    }
+    changed focused-cut => {
+        root.cut-short(self.focused-cut);
+    }
 
     height: line.tall ? Theme.disk-row-height-tall : Theme.disk-row-height;
     background: DiskUsage.chosen == root.index ? Theme.accent-soft
@@ -427,28 +439,65 @@ component Row inherits Rectangle {
             opacity: line.enterable || line.kind == DiskLineKind.others ? 1 : 0;
         }
     }
-    // A name cut short is said whole on hover.
-    if name.width < name.preferred-width && touch.has-hover: Tooltip {
+    if name.width < name.preferred-width && touch.has-hover && !root.focused: Tooltip {
         text: @markdown("\{DiskWords.name(line)}");
     }
 }
 
-// The lines of the folder shown, by the keyboard too: the arrows move, Enter
-// goes in, Backspace or Alt+Up goes up, Space chooses.
+// A name cut short, said whole for the keyboard: a plain rectangle, `text`
+// on `background`, as the pointer's tooltip; `widest` at most, the rest on
+// the lines below.
+component NameTip inherits Rectangle {
+    in property <string> text;
+    in property <length> widest;
+    width: min(label.preferred-width + 2 * Theme.spacing-s, root.widest);
+    height: label.preferred-height + 2 * Theme.spacing-xs;
+    border-radius: Theme.radius-small;
+    background: Theme.text;
+    label := Text {
+        x: Theme.spacing-s;
+        y: Theme.spacing-xs;
+        width: root.width - 2 * Theme.spacing-s;
+        text: root.text;
+        accessible-role: none;
+        color: Theme.background;
+        font-size: Theme.font-small;
+        wrap: word-wrap;
+    }
+}
+
+// The lines of the folder shown, by the keyboard too: the arrows move, Page
+// Up and Page Down by what the list shows, Enter goes in, Backspace or
+// Alt+Up goes up, Space chooses.
 component Lines inherits FocusScope {
     in property <bool> narrow;
     accessible-role: list;
     accessible-label: @tr("Contenu du dossier");
+    // The line whose name, cut short, has the focus; none (-1).
+    property <int> cut: -1;
+    // Where the line with the focus sits in what the list shows.
+    property <length> current-top: root.top(DiskUsage.current) + view.content-y;
+    property <length> current-height: root.height-of(DiskUsage.current);
 
     // Where line `index` sits in the list.
-    function top(index: int) -> length {
+    pure function top(index: int) -> length {
         index * Theme.disk-row-height
             + DiskUsage.lines[index].talls-before * (Theme.disk-row-height-tall - Theme.disk-row-height)
     }
 
+    pure function height-of(index: int) -> length {
+        DiskUsage.lines[index].tall ? Theme.disk-row-height-tall : Theme.disk-row-height
+    }
+
+    // How many lines a page moves by: as many as the list shows, one at
+    // least.
+    pure function page() -> int {
+        max(1, floor(view.visible-height / Theme.disk-row-height))
+    }
+
     function show(index: int) {
         let place = root.top(index);
-        let height = DiskUsage.lines[index].tall ? Theme.disk-row-height-tall : Theme.disk-row-height;
+        let height = root.height-of(index);
         if place < -view.content-y {
             view.content-y = -place;
         } else if place + height > -view.content-y + view.visible-height {
@@ -473,6 +522,14 @@ component Lines inherits FocusScope {
         }
         if event.text == Key.UpArrow && !event.modifiers.alt {
             root.move(DiskUsage.current - 1);
+            return accept;
+        }
+        if event.text == Key.PageDown {
+            root.move(DiskUsage.current + root.page());
+            return accept;
+        }
+        if event.text == Key.PageUp {
+            root.move(DiskUsage.current - root.page());
             return accept;
         }
         if event.text == Key.Home {
@@ -509,7 +566,25 @@ component Lines inherits FocusScope {
             index: index;
             focused: root.has-focus && DiskUsage.current == index;
             narrow: root.narrow;
+            cut-short(cut) => {
+                if cut {
+                    root.cut = index;
+                } else if root.cut == index {
+                    root.cut = -1;
+                }
+            }
         }
+    }
+
+    // Under its line, or over it when there is no room below; only while
+    // the line shows whole.
+    if root.has-focus && root.cut == DiskUsage.current && root.current-top >= 0
+        && root.current-top + root.current-height <= view.visible-height: NameTip {
+        x: Theme.spacing-l;
+        y: root.current-top + root.current-height + self.height <= view.visible-height
+            ? root.current-top + root.current-height : root.current-top - self.height;
+        text: DiskWords.name(DiskUsage.lines[DiskUsage.current]);
+        widest: view.visible-width - 2 * Theme.spacing-l;
     }
 }
 

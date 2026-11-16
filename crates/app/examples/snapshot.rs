@@ -447,6 +447,7 @@ fn disk_line(
     ui::DiskLine {
         kind,
         state,
+        reason: ui::DiskUnreadable::Other,
         name: name.into(),
         size: if megabytes >= 1000 {
             size(
@@ -460,7 +461,6 @@ fn disk_line(
         has_size: !matches!(
             state,
             ui::DiskLineState::Unreadable
-                | ui::DiskLineState::Denied
                 | ui::DiskLineState::OtherMount
                 | ui::DiskLineState::Pending
         ),
@@ -485,7 +485,7 @@ fn disk_line(
 /// The disk usage screen: its start, an analysis running, its result.
 fn disk(window: &ui::AppWindow, step: ui::DiskStep) {
     use ui::DiskLineKind::{File, Folder, Others, Unexplained};
-    use ui::DiskLineState::{Denied, OtherMount, Partial, Pending, Read};
+    use ui::DiskLineState::{OtherMount, Partial, Pending, Read, Unreadable};
 
     let disk = window.global::<ui::DiskUsage>();
     disk.set_step(step);
@@ -526,11 +526,16 @@ fn disk(window: &ui::AppWindow, step: ui::DiskStep) {
         disk_line(Folder, Read, "Bubble Blend", 8_200, 0.18, 7),
         disk_line(Others, Read, "", 4_500, 0.1, 4),
         disk_line(Folder, Pending, "atelier", 0, 0.0, 0),
-        disk_line(Folder, Denied, "privé", 0, 0.0, 0),
+        disk_line(Folder, Unreadable, "privé", 0, 0.0, 0),
+        disk_line(Folder, Unreadable, "partage", 0, 0.0, 0),
         disk_line(Folder, OtherMount, "clé", 0, 0.0, 0),
         disk_line(Unexplained, Read, "", 12_000, 0.0, 0),
     ];
+    // « Autres » says how many it holds below its name, as the screen does.
     lines[4].count = 412;
+    lines[4].tall = true;
+    lines[6].reason = ui::DiskUnreadable::Denied;
+    lines[7].reason = ui::DiskUnreadable::NotAnswering;
     let mut talls = 0;
     for line in &mut lines {
         line.talls_before = talls;
@@ -1060,7 +1065,8 @@ fn main() {
         }
         "home-memory" => home_tall(&app, false),
         "disk-start" => disk(&app, ui::DiskStep::Start),
-        "disk-scanning" => disk(&app, ui::DiskStep::Scanning),
+        // With the keys, running first: its end gives the list the focus.
+        "disk-scanning" | "disk-result-keys" => disk(&app, ui::DiskStep::Scanning),
         "disk-result" | "disk-result-small" => disk(&app, ui::DiskStep::Result),
         "updates" | "updates-open" | "updates-open-small" | "updates-searching"
         | "updates-uptodate" | "updates-locked" => {
@@ -1078,12 +1084,20 @@ fn main() {
         "apps-leftovers" => apps_leftovers(&app, false),
         "apps-leftovers-empty" => apps_leftovers(&app, true),
         other => panic!(
-            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty"
+            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));
     app.show().unwrap();
     slint::platform::update_timers_and_animations();
+    if screen == "disk-result-keys" {
+        // Ended, the keyboard on the name cut short.
+        disk(&app, ui::DiskStep::Result);
+        app.global::<ui::DiskUsage>().set_current(2);
+        // `changed` handlers run on the next turns of the event loop.
+        slint::platform::update_timers_and_animations();
+        slint::platform::update_timers_and_animations();
+    }
     let mut pixels = vec![PremultipliedRgbaColor::default(); (width * height) as usize];
     window.draw_if_needed(|renderer| {
         renderer.render(&mut pixels, width as usize);

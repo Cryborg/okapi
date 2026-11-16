@@ -48,9 +48,8 @@ pub(crate) enum LineState {
     Partial,
     /// Not read yet: its size grows.
     Pending,
-    /// Could not be opened: no size; denied, it needs the administrator's
-    /// rights.
-    Unreadable { denied: bool },
+    /// Could not be opened, for the kind of error the system gave: no size.
+    Unreadable(std::io::ErrorKind),
     /// Changed while it was read: no size.
     Changed,
     /// Another disk, or a part of this one mounted apart: never entered.
@@ -94,9 +93,7 @@ fn folder_line(entry: &Entry) -> Option<Line> {
         NodeState::Pending => LineState::Pending,
         NodeState::Read if entry.partial => LineState::Partial,
         NodeState::Read => LineState::Read,
-        NodeState::Unreadable(kind) => LineState::Unreadable {
-            denied: kind == std::io::ErrorKind::PermissionDenied,
-        },
+        NodeState::Unreadable(kind) => LineState::Unreadable(kind),
         NodeState::Changed => LineState::Changed,
         NodeState::OtherMount => LineState::OtherMount,
     };
@@ -514,7 +511,11 @@ mod tests {
                 line("tiny2", 20, LineState::Read),
                 line("later", 0, LineState::Pending),
                 line("mount", 0, LineState::OtherMount),
-                line("closed", 0, LineState::Unreadable { denied: true }),
+                line(
+                    "closed",
+                    0,
+                    LineState::Unreadable(std::io::ErrorKind::PermissionDenied),
+                ),
                 line("again", 0, LineState::Pending),
             ],
             100_030,
@@ -931,11 +932,11 @@ mod tests {
             (NodeState::OtherMount, LineState::OtherMount),
             (
                 NodeState::Unreadable(std::io::ErrorKind::PermissionDenied),
-                LineState::Unreadable { denied: true },
+                LineState::Unreadable(std::io::ErrorKind::PermissionDenied),
             ),
             (
-                NodeState::Unreadable(std::io::ErrorKind::NotFound),
-                LineState::Unreadable { denied: false },
+                NodeState::Unreadable(std::io::ErrorKind::TimedOut),
+                LineState::Unreadable(std::io::ErrorKind::TimedOut),
             ),
         ] {
             assert_eq!(

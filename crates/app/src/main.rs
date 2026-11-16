@@ -745,10 +745,17 @@ mod tests {
         );
     }
 
-    /// Every `@tr` text of `ui/`, with the component it is in (its
-    /// translation context). A call this parser cannot read is a failure,
-    /// never a text left unchecked.
-    fn translatable_texts() -> Vec<(String, String)> {
+    /// An `@tr` text, in the component it is in (its translation context),
+    /// with its plural form when it has one.
+    struct Translatable {
+        component: String,
+        text: String,
+        plural: Option<String>,
+    }
+
+    /// Every `@tr` text of `ui/`. A call this parser cannot read is a
+    /// failure, never a text left unchecked.
+    fn translatable_texts() -> Vec<Translatable> {
         let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("ui");
         let mut texts = Vec::new();
         for file in fs::read_dir(directory).unwrap() {
@@ -777,13 +784,25 @@ mod tests {
                         "{}: a form of @tr this test cannot read: {line}",
                         path.display()
                     );
-                    // Labels say "Label: n", never a plural form.
-                    assert!(
-                        !after.starts_with('|'),
-                        "{}: a plural form: {line}",
-                        path.display()
-                    );
-                    texts.push((component.clone(), text.to_owned()));
+                    // `"singular" | "plural" % count`, on the same line.
+                    let plural = after.strip_prefix('|').map(|rest| {
+                        let plural = rest.trim_start().strip_prefix('"').and_then(|rest| {
+                            rest.split_once('"')
+                                .filter(|(_, after)| after.trim_start().starts_with('%'))
+                        });
+                        let (plural, _) = plural.unwrap_or_else(|| {
+                            panic!(
+                                "{}: a plural form this test cannot read: {line}",
+                                path.display()
+                            )
+                        });
+                        plural.to_owned()
+                    });
+                    texts.push(Translatable {
+                        component: component.clone(),
+                        text: text.to_owned(),
+                        plural,
+                    });
                     read += 1;
                 }
             }
@@ -953,33 +972,53 @@ mod tests {
         let texts = translatable_texts();
         for context in TRANSLATED_COMPONENTS {
             assert!(
-                texts.iter().any(|(component, _)| component == context),
+                texts
+                    .iter()
+                    .any(|translatable| translatable.component == *context),
                 "{context}"
             );
         }
-        for (component, text) in texts {
-            let entry = format!("msgctxt \"{component}\"\nmsgid \"{text}\"\nmsgstr \"");
-            let translation = po
-                .split(&entry)
-                .nth(1)
-                .and_then(|rest| rest.split('"').next())
+        for Translatable {
+            component,
+            text,
+            plural,
+        } in texts
+        {
+            let plural_line = plural
+                .as_ref()
+                .map(|plural| format!("msgid_plural \"{plural}\"\n"))
                 .unwrap_or_default();
-            assert!(!translation.is_empty(), "{component}: {text}");
-
-            assert!(
-                translation != text || SAME_IN_ENGLISH.contains(&text.as_str()),
-                "{component}: {text}: left in French"
-            );
-            let before = po.split(&entry).next().unwrap_or_default();
-            assert!(
-                !before.trim_end().ends_with("#, fuzzy"),
-                "{component}: {text}: fuzzy, so never applied"
-            );
-            assert_eq!(
-                translation.matches("{}").count(),
-                text.matches("{}").count(),
-                "{component}: {text}: the placeholders are kept"
-            );
+            let head = format!("msgctxt \"{component}\"\nmsgid \"{text}\"\n{plural_line}");
+            let (before, entry) = po.split_once(&head).unwrap_or_default();
+            // Its translations, up to the next entry.
+            let entry = entry.split("\n\n").next().unwrap_or_default();
+            // Each form in English, against the French it stands for.
+            let forms = match &plural {
+                None => vec![("msgstr \"", &text)],
+                Some(plural) => vec![("msgstr[0] \"", &text), ("msgstr[1] \"", plural)],
+            };
+            for (form, french) in forms {
+                let translation = entry
+                    .split_once(form)
+                    .and_then(|(_, rest)| rest.split('"').next())
+                    .unwrap_or_default();
+                assert!(!translation.is_empty(), "{component}: {french}");
+                assert!(
+                    translation != french || SAME_IN_ENGLISH.contains(&french.as_str()),
+                    "{component}: {french}: left in French"
+                );
+                assert!(
+                    !before.trim_end().ends_with("#, fuzzy"),
+                    "{component}: {french}: fuzzy, so never applied"
+                );
+                for placeholder in ["{}", "{n}"] {
+                    assert_eq!(
+                        translation.matches(placeholder).count(),
+                        french.matches(placeholder).count(),
+                        "{component}: {french}: the placeholders are kept"
+                    );
+                }
+            }
         }
     }
 }

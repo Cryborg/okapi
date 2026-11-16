@@ -27,9 +27,8 @@ export enum DiskLineState {
     // Read, something below not read (yet, or ever): « au moins ».
     partial,
     pending,
-    // Could not be opened; `denied`, for want of the administrator's rights.
+    // Could not be opened, for its `reason`.
     unreadable,
-    denied,
     changed,
     // Another disk, never entered; or this disk, mounted apart.
     other-mount,
@@ -38,6 +37,10 @@ export enum DiskLineState {
     counted-elsewhere,
 }
 
+// Why a folder could not be opened: for want of the administrator's rights,
+// a disk that does not answer, or another fault the system gave.
+export enum DiskUnreadable { other, denied, not-answering }
+
 // One line of the list: a folder, a file, « Autres » or the space left
 // unexplained. `tall` lines carry a line of state below the name;
 // `talls-before` counts those above, for the list to know where a line
@@ -45,6 +48,8 @@ export enum DiskLineState {
 export struct DiskLine {
     kind: DiskLineKind,
     state: DiskLineState,
+    // Why it could not be opened, when it could not.
+    reason: DiskUnreadable,
     name: string,
     size: Size,
     has-size: bool,

@@ -9,6 +9,10 @@ use thiserror::Error;
 
 use crate::{StoreError, file};
 
+mod lines;
+
+pub use lines::{Deletions, HistoryRead, HistoryRecord};
+
 const HISTORY_FILE: &str = "history.jsonl";
 /// The format of each history line.
 const HISTORY_VERSION: u32 = 1;
@@ -23,7 +27,7 @@ const MAX_LINE: u64 = 1024 * 1024;
 const BLOCK: u64 = 64 * 1024;
 
 /// One cleaning, as kept in the history.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryEntry {
     /// Seconds since the clock's origin, negative before it.
@@ -44,7 +48,8 @@ pub struct HistoryEntry {
     /// Every entry, when the user keeps a deletion log: written on a line
     /// of its own (`kind: "deletions"`, the same `time`) just before the
     /// cleaning's, so that the cleaning's stays short to read back however
-    /// many entries there are.
+    /// many entries there are. Read back, it is `None`: the deletion log
+    /// read comes beside it ([`HistoryRecord::Cleaning`]).
     #[serde(skip)]
     pub entries: Option<Vec<HistoryOutcome>>,
 }
@@ -156,6 +161,21 @@ impl HistoryEntry {
             entries: deletion_log.then_some(outcomes),
         }
     }
+
+    /// What it freed; unknown when root's part did not end, as what it
+    /// removed may then be missing.
+    #[must_use]
+    pub fn freed(&self) -> Option<u64> {
+        freed(self.removed_bytes, self.admin.as_ref())
+    }
+}
+
+/// What a cleaning that removed `removed_bytes` freed, as
+/// [`HistoryEntry::freed`] says it.
+fn freed(removed_bytes: u64, admin: Option<&AdminRecord>) -> Option<u64> {
+    admin
+        .is_none_or(|admin| admin.done)
+        .then_some(removed_bytes)
 }
 
 impl HistoryOutcome {
@@ -250,7 +270,7 @@ pub enum Opened {
 
 /// One application uninstalled, as kept in the history beside the
 /// cleanings: its line says its kind, a cleaning's does not.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UninstallEntry {
     /// Seconds since the clock's origin, negative before it.
@@ -272,7 +292,7 @@ pub struct UninstallEntry {
 }
 
 /// Who removed an application.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum UninstallSource {
     Deb,
@@ -391,6 +411,29 @@ impl History {
             return Ok(None);
         };
         find_last_cleaning(&history, &path, MAX_LINE)
+    }
+
+    /// Every line the history of `directory` keeps, oldest first, each
+    /// deletion log folded into a `D` entry by entry as it is read (never
+    /// held whole unless `D` holds it): none when there is no history. A
+    /// line that cannot be read (a write cut short, another version or
+    /// kind), or a deletion log whose cleaning line does not follow it, is
+    /// skipped, counted and traced, never a reason to refuse the rest.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Unreadable`] (the file failing to be read),
+    /// [`StoreError::BrokenLink`] or [`StoreError::NotAFile`].
+    pub fn read_all<D: Default + Extend<HistoryOutcome>>(
+        directory: &Path,
+    ) -> Result<HistoryRead<D>, StoreError> {
+        let path = Self::path(directory);
+        let _span = tracing::info_span!("history_read", path = %path.display()).entered();
+        let Some(history) = file::open_regular(&path)? else {
+            tracing::info!("no history: nothing to read");
+            return Ok(HistoryRead::default());
+        };
+        lines::read(&history, &path)
     }
 
     /// Adds `entry` as one line, after the line of its deletion log if it
@@ -658,19 +701,8 @@ enum LineRead {
 /// first: a line of another version is never read as this one's, nor one of
 /// a kind unknown as a cleaning's.
 fn parse(history: &File, start: u64, end: u64, path: &Path) -> Result<LineRead, StoreError> {
-    let line = || {
-        let mut reader = history;
-        reader.seek(SeekFrom::Start(start))?;
-        // Never past the line found: one added since is not read with it.
-        Ok(BufReader::new(reader.take(end - start)))
-    };
-    let unreadable = |error| StoreError::Unreadable {
-        path: path.to_owned(),
-        error,
-    };
-    file::check_version(line().map_err(unreadable)?, path, HISTORY_VERSION)?;
-    let read: LastLine = serde_json::from_reader(line().map_err(unreadable)?)
-        .map_err(|error| file::json_error(path, error))?;
+    check_line_version(history, start, end, path)?;
+    let read: LastLine = read_line(history, start, end, path)?;
     match read.kind {
         Some(LineKind::Uninstall) => return Ok(LineRead::Uninstall),
         Some(LineKind::Deletions) => return Ok(LineRead::Deletions),
@@ -681,11 +713,49 @@ fn parse(history: &File, start: u64, end: u64, path: &Path) -> Result<LineRead, 
         .ok_or_else(|| file::json_error(path, serde::de::Error::missing_field("removedBytes")))?;
     Ok(LineRead::Cleaning(LastCleaning {
         time: read.time,
-        freed: read
-            .admin
-            .is_none_or(|admin| admin.done)
-            .then_some(removed_bytes),
+        freed: freed(removed_bytes, read.admin.as_ref()),
     }))
+}
+
+/// The line of `history` (at `path`) from `start` to `end`, to be read as
+/// it streams by: never past its end, so a line added since is not read
+/// with it.
+fn line_reader<'a>(
+    mut history: &'a File,
+    start: u64,
+    end: u64,
+    path: &Path,
+) -> Result<BufReader<io::Take<&'a File>>, StoreError> {
+    history
+        .seek(SeekFrom::Start(start))
+        .map_err(|error| StoreError::Unreadable {
+            path: path.to_owned(),
+            error,
+        })?;
+    Ok(BufReader::new(history.take(end - start)))
+}
+
+/// Checks the version of the line of `history` from `start` to `end` before
+/// anything else of it: a line of another version is never read as this
+/// one's.
+fn check_line_version(history: &File, start: u64, end: u64, path: &Path) -> Result<(), StoreError> {
+    file::check_version(
+        line_reader(history, start, end, path)?,
+        path,
+        HISTORY_VERSION,
+    )
+}
+
+/// What the line of `history` from `start` to `end` says, read as it
+/// streams by.
+fn read_line<T: serde::de::DeserializeOwned>(
+    history: &File,
+    start: u64,
+    end: u64,
+    path: &Path,
+) -> Result<T, StoreError> {
+    serde_json::from_reader(line_reader(history, start, end, path)?)
+        .map_err(|error| file::json_error(path, error))
 }
 
 /// Whether `file` is empty or ends with a line break. Its offset moves, which
@@ -704,7 +774,7 @@ fn ends_with_line_break(mut file: &File) -> io::Result<bool> {
 mod tests {
     use super::*;
 
-    fn entry(removed: usize, entries: Option<Vec<HistoryOutcome>>) -> HistoryEntry {
+    pub(super) fn entry(removed: usize, entries: Option<Vec<HistoryOutcome>>) -> HistoryEntry {
         HistoryEntry {
             time: 1_700_000_000,
             stops: vec!["minAgeBeyondClock".to_owned()],
@@ -930,7 +1000,11 @@ mod tests {
         assert_eq!(line.entries, Some(Vec::new()));
     }
 
-    fn outcome(result: &str, bytes: Option<u64>, reason: Option<&str>) -> HistoryOutcome {
+    pub(super) fn outcome(
+        result: &str,
+        bytes: Option<u64>,
+        reason: Option<&str>,
+    ) -> HistoryOutcome {
         HistoryOutcome {
             path: Some("/var/crash/core".to_owned()),
             result: result.to_owned(),
@@ -1043,7 +1117,7 @@ mod tests {
 
     /// The history of `directory`, one line per `(time, removed bytes,
     /// root's part done)` of `cleanings`, written as a cleaning writes it.
-    fn recorded(directory: &Path, cleanings: &[(i64, u64, Option<bool>)]) {
+    pub(super) fn recorded(directory: &Path, cleanings: &[(i64, u64, Option<bool>)]) {
         let mut history = History::open(directory).unwrap();
         for &(time, removed_bytes, admin_done) in cleanings {
             history
@@ -1057,7 +1131,7 @@ mod tests {
         }
     }
 
-    fn append(directory: &Path, bytes: &[u8]) {
+    pub(super) fn append(directory: &Path, bytes: &[u8]) {
         use std::io::Write as _;
         std::fs::OpenOptions::new()
             .append(true)
@@ -1076,7 +1150,7 @@ mod tests {
         file.metadata().unwrap().len()
     }
 
-    fn uninstalled(directory: &Path, time: i64) {
+    pub(super) fn uninstalled(directory: &Path, time: i64) {
         History::open(directory)
             .unwrap()
             .record_uninstall(&UninstallEntry {

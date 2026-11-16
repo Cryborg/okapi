@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
 use okapi_platform::{
     DESCRIPTOR_REMOVAL_SUPPORTED, Directory, EntryStatus, EntryType, FileIdentity,
-    IDENTITY_SUPPORTED, tells_mount_roots,
+    IDENTITY_SUPPORTED, Reached, Unreached, reach_path, reach_with, tells_mount_roots,
 };
 use okapi_rules::{MiscRules, RuleSet, TemplateVariables};
 
@@ -707,10 +707,11 @@ fn depth_below_root(item: &FoundItem) -> usize {
 }
 
 /// The directory holding the entry, reached from its scan root through
-/// descriptors, the entry's name in it, and the root's status (`None` for a
-/// single file target, its own root). The root is reached from the
-/// filesystem root, one directory at a time and never through a link, so its
-/// path is real by construction, and is recognised by its identity.
+/// descriptors ([`reach_with`]), the entry's name in it, and the root's status
+/// (`None` for a single file target, its own root). The root is reached from
+/// the filesystem root, one directory at a time and never through a link, so
+/// its path is real by construction, and is recognised by its identity (it is
+/// often a mount, `/tmp`); below it, only plain directories of its device.
 fn reach_parent(item: &FoundItem) -> Result<(Directory, &OsStr, Option<EntryStatus>), CleanResult> {
     let path = &item.found.path;
     let replaced = || CleanResult::Kept(KeepReason::Replaced);
@@ -720,70 +721,31 @@ fn reach_parent(item: &FoundItem) -> Result<(Directory, &OsStr, Option<EntryStat
         let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
             return Err(replaced());
         };
-        return Ok((open_real(parent)?, name, None));
-    }
-    let mut directory = open_real(&item.root)?;
-    let root = directory
-        .status()
-        .map_err(|error| CleanResult::Kept(keep(&error)))?;
-    // The root itself is often a mount (`/tmp`): it is recognised by identity.
-    if root.identity != item.root_identity {
-        return Err(replaced());
+        return Ok((reached_or_kept(reach_path(parent))?, name, None));
     }
     let below = path.strip_prefix(&item.root).map_err(|_| replaced())?;
     let mut names: Vec<&OsStr> = below.iter().collect();
     let Some(name) = names.pop() else {
         return Err(replaced());
     };
-    for component in names {
-        let status = directory
-            .status_of(component)
-            .map_err(|error| gone_or_failed(&error))?;
-        if !is_plain_directory_on(&status, item.root_identity.device()) {
-            return Err(replaced());
-        }
-        directory = enter_or_stop(&directory, component, &status)?;
-    }
+    let device = item.root_identity.device();
+    let Reached { directory, root } = reached_or_kept(reach_with(
+        &item.root,
+        item.root_identity,
+        &names,
+        |_, status| is_plain_directory_on(status, device),
+    ))?;
     Ok((directory, name, Some(root)))
 }
 
-/// Opens the directory at the absolute path `path`, from the filesystem root
-/// down, never through a link: what it opens is where `path` really is.
-fn open_real(path: &Path) -> Result<Directory, CleanResult> {
-    let mut directory = Directory::open(Path::new(FILESYSTEM_ROOT))
-        .map_err(|error| CleanResult::Kept(keep(&error)))?;
-    for component in path.components() {
-        let name = match component {
-            Component::RootDir => continue,
-            Component::Normal(name) => name,
-            // A canonical path holds neither `.` nor `..`.
-            Component::Prefix(_) | Component::CurDir | Component::ParentDir => {
-                return Err(CleanResult::Kept(KeepReason::Replaced));
-            }
-        };
-        // A link or a file here fails to open, and `enter` reads it again to
-        // say it was swapped.
-        let status = directory
-            .status_of(name)
-            .map_err(|error| gone_or_failed(&error))?;
-        directory = enter_or_stop(&directory, name, &status)?;
-    }
-    Ok(directory)
-}
-
-/// Where every absolute path starts.
-const FILESYSTEM_ROOT: &str = "/";
-
-/// [`enter`], with a gone or refused directory as the outcome of the entry.
-fn enter_or_stop(
-    parent: &Directory,
-    name: &OsStr,
-    status: &EntryStatus,
-) -> Result<Directory, CleanResult> {
-    match enter(parent, name, status) {
-        Ok(Some(entered)) => Ok(entered),
+/// What reaching a directory on the way to an entry means for it: gone, or
+/// kept as replaced or refused.
+fn reached_or_kept<T>(reaching: Result<Option<T>, Unreached>) -> Result<T, CleanResult> {
+    match reaching {
+        Ok(Some(found)) => Ok(found),
         Ok(None) => Err(CleanResult::Gone),
-        Err(reason) => Err(CleanResult::Kept(reason)),
+        Err(Unreached::Changed) => Err(CleanResult::Kept(KeepReason::Replaced)),
+        Err(Unreached::Io(error)) => Err(CleanResult::Kept(keep(&error))),
     }
 }
 

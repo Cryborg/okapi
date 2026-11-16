@@ -1250,3 +1250,74 @@ fn a_single_file_target_reached_through_a_link_stays() {
     );
     assert!(fixture.path("kept/errors.old").exists());
 }
+
+#[test]
+fn an_entry_whose_folder_below_the_root_is_gone_is_gone() {
+    let fixture = Fixture::new();
+    let root = fixture.directory("data");
+    // `sub` is not offered whole (it holds a recent file), its old file is.
+    fixture.file("data/sub/old", 1, 2 * HOUR);
+    let recent = fixture.file("data/sub/new", 1, Duration::ZERO);
+    make_recent(&fixture, &recent);
+    fixture.age(&fixture.path("data/sub"), 2 * HOUR);
+    let rule = target_at(&root);
+    let run = run_later(&fixture, vec![RuleEntry::Target(&rule)]);
+    let report = run.scan();
+    assert_eq!(offered_paths(&report), [fixture.path("data/sub/old")]);
+    fs::remove_dir_all(fixture.path("data/sub")).unwrap();
+    assert_eq!(
+        results(&clean(&run, &report, &ids(&report))),
+        [(fixture.path("data/sub/old"), CleanResult::Gone)]
+    );
+}
+
+#[test]
+fn a_folder_the_system_refuses_below_the_root_is_a_refusal() {
+    let fixture = Fixture::new();
+    if reads_through_permissions(&fixture) {
+        // Root reads through permissions: nothing to observe.
+        return;
+    }
+    let root = fixture.directory("data");
+    // `sub` is not offered whole (it holds a recent file), its old file is.
+    fixture.file("data/sub/old", 1, 2 * HOUR);
+    let recent = fixture.file("data/sub/new", 1, Duration::ZERO);
+    make_recent(&fixture, &recent);
+    fixture.age(&fixture.path("data/sub"), 2 * HOUR);
+    let rule = target_at(&root);
+    let run = run_later(&fixture, vec![RuleEntry::Target(&rule)]);
+    let report = run.scan();
+    assert_eq!(offered_paths(&report), [fixture.path("data/sub/old")]);
+    let closed = fixture.path("data/sub");
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).unwrap();
+    let receipt = clean(&run, &report, &ids(&report));
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o755)).unwrap();
+    let refused = KeepReason::Failed {
+        kind: std::io::ErrorKind::PermissionDenied,
+        // `EACCES`, kept from the descent to the receipt.
+        code: Some(13),
+    };
+    assert_eq!(
+        results(&receipt),
+        [(fixture.path("data/sub/old"), CleanResult::Kept(refused))]
+    );
+    assert!(fixture.path("data/sub/old").exists());
+}
+
+#[test]
+fn a_single_file_target_whose_folder_is_gone_is_gone() {
+    let fixture = Fixture::new();
+    let file = fixture.file("logs/errors.old", 4, 2 * HOUR);
+    let rule: SingleFileTarget = serde_json::from_str(&format!(
+        r#"{{"path": "{}", "subcategory": "Errors"}}"#,
+        file.display()
+    ))
+    .unwrap();
+    let run = run_later(&fixture, vec![RuleEntry::File(&rule)]);
+    let report = run.scan();
+    fs::remove_dir_all(fixture.path("logs")).unwrap();
+    assert_eq!(
+        results(&clean(&run, &report, &ids(&report))),
+        [(file, CleanResult::Gone)]
+    );
+}

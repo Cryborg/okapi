@@ -172,7 +172,7 @@ impl Sandbox {
             ..seams_never_scanning()
         };
         let screens = crate::wide_window(seams, crate::dashboard::tests::inert(), Language::French);
-        let window = screens.0.clone_strong();
+        let window = screens.window.clone_strong();
         button(&window, "Réglages").invoke_accessible_default_action();
         slint::platform::update_timers_and_animations();
         // The page is made, and reads, as the window is looked at, as the
@@ -216,7 +216,7 @@ fn rows(window: &ui::AppWindow) -> Vec<(String, ui::PathKind)> {
 /// Lets the lines shown be read, as the screen looks at them.
 fn examined(screens: &Screens) {
     let begun = Instant::now();
-    while screens.3.reads_lines() {
+    while screens.settings.reads_lines() {
         assert!(
             begun.elapsed() < Duration::from_secs(10),
             "lines never read"
@@ -240,7 +240,7 @@ fn badge(window: &ui::AppWindow, text: &str) -> String {
 /// does.
 fn written(screens: &Screens) {
     // What it says is the cleaner's to hear: the tests look at the screen.
-    let _ = screens.3.wait_for_writes();
+    let _ = screens.settings.wait_for_writes();
 }
 
 /// The segment `label` of the group `group`.
@@ -387,7 +387,7 @@ fn an_exclusion_written_by_hand_is_shown_as_the_engine_takes_it() {
     assert_eq!(badge(&window, "*.log"), "Extension");
     // Another setting changed: shown as read, never read again.
     preferences(&window).invoke_toggle_deletion_log();
-    assert!(!screens.3.reads_lines(), "nothing read again");
+    assert!(!screens.settings.reads_lines(), "nothing read again");
     assert_eq!(badge(&window, "*.log"), "Extension");
     // The one that stops every analysis can be removed here.
     button(&window, "Retirer relatif des exclusions").invoke_accessible_default_action();
@@ -790,7 +790,7 @@ fn the_cleaner_reads_the_exclusion_just_added() {
     let sandbox = Sandbox::writing_with(slow);
     let (window, screens, read_exclusions) = noting_reads(&sandbox);
     type_and_add(&window, "/data");
-    screens.1.refresh();
+    screens.cleaner.refresh();
     assert_eq!(*read_exclusions.borrow(), Some(vec!["/data".to_owned()]));
 }
 
@@ -800,7 +800,7 @@ fn the_cleaner_reads_nothing_while_a_change_is_stuck() {
     let (window, screens, read_exclusions) = noting_reads(&sandbox);
     type_and_add(&window, "/data");
     let begun = Instant::now();
-    screens.1.refresh();
+    screens.cleaner.refresh();
     assert!(begun.elapsed() >= LAST_WRITE_WAIT, "it waited first");
     assert_eq!(*read_exclusions.borrow(), None, "never the file without it");
     assert_eq!(
@@ -834,7 +834,7 @@ fn a_failure_seen_first_by_the_screen_is_still_told_to_the_cleaner() {
         ui::SetupProblem::SettingsUnsaved
     );
     // Told once: the next reading reads the file as it is.
-    screens.1.refresh();
+    screens.cleaner.refresh();
     assert_eq!(*read_exclusions.borrow(), Some(Vec::new()));
 }
 
@@ -843,7 +843,7 @@ fn the_cleaner_never_reads_past_a_change_that_failed() {
     let sandbox = Sandbox::writing_with(failing);
     let (window, screens, read_exclusions) = noting_reads(&sandbox);
     type_and_add(&window, "/data");
-    screens.1.refresh();
+    screens.cleaner.refresh();
     assert_eq!(*read_exclusions.borrow(), None, "refused once, and said");
     assert_eq!(
         window.global::<ui::Cleaner>().get_problem(),
@@ -858,7 +858,7 @@ fn the_cleaner_never_reads_past_a_change_that_failed() {
     ));
     assert_eq!(rows(&window), []);
     // Said once: the next reading reads the file as it is.
-    screens.1.refresh();
+    screens.cleaner.refresh();
     assert_eq!(*read_exclusions.borrow(), Some(Vec::new()));
 }
 
@@ -873,7 +873,7 @@ fn a_change_still_being_written_is_never_read_over() {
     // Once written, a change keeps it.
     let written_at_last = || {
         let begun = Instant::now();
-        while screens.3.wait_for_writes().is_err() {
+        while screens.settings.wait_for_writes().is_err() {
             assert!(begun.elapsed() < Duration::from_secs(20), "never written");
         }
     };
@@ -891,7 +891,7 @@ fn a_writer_gone_is_said_and_nothing_can_be_changed_any_more() {
     preferences(&window).invoke_toggle_deletion_log();
     // Said once, read again once: never a loop. The reader then is told
     // the change is lost; the next one has nothing to wait for.
-    assert_eq!(screens.3.wait_for_writes(), Err(Unsaved::Failed));
+    assert_eq!(screens.settings.wait_for_writes(), Err(Unsaved::Failed));
     assert!(save_refused(&window, ui::SaveRefusal::Failed));
     assert_eq!(
         preferences(&window).get_state(),
@@ -902,7 +902,7 @@ fn a_writer_gone_is_said_and_nothing_can_be_changed_any_more() {
         "Okapi ne peut pas enregistrer ses réglages : le détail est dans le journal."
     ));
     assert_eq!(
-        screens.3.wait_for_writes(),
+        screens.settings.wait_for_writes(),
         Ok(()),
         "said once, nothing to wait for"
     );
@@ -916,11 +916,11 @@ fn a_failure_looked_at_is_still_told_to_the_next_reader() {
     let sandbox = Sandbox::writing_with(failing);
     let (window, screens) = sandbox.window();
     preferences(&window).invoke_toggle_deletion_log();
-    assert_eq!(screens.3.look_at_writes(), Err(Unsaved::Failed));
-    assert_eq!(screens.3.look_at_writes(), Err(Unsaved::Failed));
-    assert_eq!(screens.3.wait_for_writes(), Err(Unsaved::Failed));
-    assert_eq!(screens.3.wait_for_writes(), Ok(()), "told once");
-    assert_eq!(screens.3.look_at_writes(), Ok(()));
+    assert_eq!(screens.settings.look_at_writes(), Err(Unsaved::Failed));
+    assert_eq!(screens.settings.look_at_writes(), Err(Unsaved::Failed));
+    assert_eq!(screens.settings.wait_for_writes(), Err(Unsaved::Failed));
+    assert_eq!(screens.settings.wait_for_writes(), Ok(()), "told once");
+    assert_eq!(screens.settings.look_at_writes(), Ok(()));
 }
 
 #[test]
@@ -1055,7 +1055,7 @@ fn without_a_settings_directory_nothing_can_be_changed() {
         settings: nowhere(),
         ..seams_never_scanning()
     };
-    let (window, ..) =
+    let crate::Screens { window, .. } =
         crate::wide_window(seams, crate::dashboard::tests::inert(), Language::French);
     button(&window, "Réglages").invoke_accessible_default_action();
     slint::platform::update_timers_and_animations();
@@ -1135,7 +1135,7 @@ fn an_exclusion_added_by_hand_is_never_written_over_and_said() {
     sandbox.write(by_hand);
     segment(&window, "Sombre").invoke_accessible_default_action();
     // Told to the next reader once, as a change that failed is.
-    assert_eq!(screens.3.wait_for_writes(), Err(Unsaved::Failed));
+    assert_eq!(screens.settings.wait_for_writes(), Err(Unsaved::Failed));
     assert_eq!(sandbox.text(), by_hand, "never written over");
     assert!(save_refused(&window, ui::SaveRefusal::ChangedElsewhere));
     assert!(shows(
@@ -1232,7 +1232,7 @@ fn changes_passed_by_a_newer_one_are_never_taken_for_a_change_elsewhere() {
     segment(&window, "Sombre").invoke_accessible_default_action();
     type_and_add(&window, "*.log");
     PASSING.let_go();
-    assert_eq!(screens.3.wait_for_writes(), Ok(()));
+    assert_eq!(screens.settings.wait_for_writes(), Ok(()));
     assert_eq!(
         PASSING.writes.load(Ordering::SeqCst),
         2,

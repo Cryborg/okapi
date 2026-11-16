@@ -334,7 +334,7 @@ fn the_arrows_choose_the_next_and_previous_operation() {
 
 #[test]
 fn the_sidebar_leads_to_the_history() {
-    let (window, ..) = crate::wide_window(
+    let crate::Screens { window, .. } = crate::wide_window(
         crate::cleaner::Seams {
             history: nowhere(),
             ..seams_never_scanning()

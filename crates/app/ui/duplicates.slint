@@ -9,10 +9,9 @@ import {
     ActionButton, Badge, Banner, ButtonKind, Card, CheckMark, Detail, Footer, FocusRing, Icon,
     ModalFrame, ProgressBar, ScrolledList, Title,
 } from "widgets.slint";
-import {
-    DuplicateRow, Duplicates, DuplicatesRefusal, DuplicatesStep, FoldersState, KeptShown, KeptWhy,
-    QuickRule, ReceiptWhy, SearchPhase, SearchStage,
-} from "duplicates-model.slint";
+import { DuplicateRow, Duplicates, KeptWhy, QuickRule, SearchStage } from "duplicates-model.slint";
+import { FoldersState, SearchPhase, ToolRefusal, ToolStep } from "user-files-model.slint";
+import { FolderPicker, KeptLine, ReceiptWords, RefusalBanner } from "user-files.slint";
 
 // What the screen says, the same for the eye and the ear.
 global DuplicateWords {
@@ -76,88 +75,20 @@ global DuplicateWords {
             : @tr("Une copie reste toujours");
     }
 
-    // Why a file asked for stayed, and what that means.
-    pure public function why(kept: KeptShown) -> string {
-        if kept.why == ReceiptWhy.changed {
-            return @tr("A changé depuis la recherche");
-        }
-        if kept.why == ReceiptWhy.gone {
-            return @tr("Introuvable");
-        }
-        if kept.why == ReceiptWhy.keeper-changed {
-            return @tr("La copie gardée a changé");
-        }
-        if kept.why == ReceiptWhy.no-sure-keeper {
-            return @tr("Pas d'autre copie sûre");
-        }
-        if kept.why == ReceiptWhy.other-device {
-            return @tr("Pas de corbeille sur ce disque");
-        }
-        if kept.why == ReceiptWhy.refused {
-            return @tr("Refusé par le système");
-        }
-        if kept.why == ReceiptWhy.excluded {
-            return @tr("Exclu dans les Réglages");
-        }
-        if kept.why == ReceiptWhy.unchecked {
-            return @tr("Parti à la corbeille sans vérification");
-        }
-        if kept.why == ReceiptWhy.unsupported {
-            return @tr("Système non pris en charge");
-        }
-        return @tr("Refusé par Okapi");
+    // What a refusal of Okapi means at the receipt.
+    pure public function okapi-refused() -> string {
+        return @tr("Okapi garde toujours une copie de chaque fichier.");
     }
 
-    pure public function why-more(kept: KeptShown) -> string {
-        if kept.why == ReceiptWhy.changed {
-            return @tr("Son contenu n'est plus celui de la recherche.");
-        }
-        if kept.why == ReceiptWhy.gone {
-            return @tr("Déplacé ou supprimé entre-temps.");
-        }
-        if kept.why == ReceiptWhy.keeper-changed {
-            return @tr("Sans copie identique à sa place, celle-ci reste.");
-        }
-        if kept.why == ReceiptWhy.no-sure-keeper {
-            return @tr("Aucune autre copie n'est sûre de rester : dans une corbeille, à un autre compte, sur un disque, une clé ou une carte au format FAT ou exFAT, ou peut-être ce même fichier vu ailleurs. Celle-ci reste.");
-        }
-        if kept.why == ReceiptWhy.other-device {
-            return @tr("Okapi ne supprime jamais sans corbeille.");
-        }
-        if kept.why == ReceiptWhy.refused {
-            return @tr("Le système n'a pas permis de le déplacer.");
-        }
-        if kept.why == ReceiptWhy.excluded {
-            return @tr("Exclu depuis la recherche, il reste à sa place.");
-        }
-        if kept.why == ReceiptWhy.unchecked {
-            return @tr("Un autre programme l'a changé pendant le déplacement : il reste restaurable depuis la corbeille.");
-        }
-        if kept.why == ReceiptWhy.unsupported {
-            return @tr("Ce système ne dit pas où sont ses montages : rien n'est déplacé sans le savoir.");
-        }
-        return @tr("Okapi garde toujours une copie de chaque fichier.");
+    // A move to the trash cut short.
+    pure public function interrupted() -> string {
+        return @tr("La mise à la corbeille s'est interrompue : certains fichiers y sont peut-être déjà. Recherchez à nouveau pour voir où en sont les doublons.");
     }
 
     // Where the search looks.
     pure public function searched() -> string {
         return Duplicates.searched-home ? @tr("Dans tout le dossier personnel") : @tr("Dans {}", Duplicates.searched-names);
     }
-}
-
-// Why nothing started, or nothing moved, as it concerns the settings and
-// the start.
-component RefusalBanner inherits Banner {
-    warning: true;
-    text: Duplicates.refused == DuplicatesRefusal.saving ? @tr("Votre dernier changement de réglages est en cours d'enregistrement : rien n'a été fait, réessayez dans un instant.")
-        : Duplicates.refused == DuplicatesRefusal.unsaved ? @tr("Votre dernier changement de réglages n'a pas pu être enregistré : rien n'a été fait, pour ne pas manquer une exclusion.")
-        : Duplicates.refused == DuplicatesRefusal.exclusion ? @tr("Une exclusion de vos réglages est refusée : rien n'a été fait. Corrigez-la dans les Réglages.")
-        : Duplicates.refused == DuplicatesRefusal.settings ? @tr("Vos réglages n'ont pas pu être lus : rien n'a été fait, pour ne pas manquer une exclusion.")
-        : Duplicates.refused == DuplicatesRefusal.folder ? @tr("Ces dossiers n'ont pas pu être ouverts : rien n'a été recherché.")
-        : Duplicates.refused == DuplicatesRefusal.trash ? @tr("La corbeille n'a pas pu être ouverte : rien n'a bougé. Le détail est dans le journal.")
-        : Duplicates.refused == DuplicatesRefusal.home ? @tr("Votre dossier personnel n'a pas pu être lu : rien n'a été recherché. Le détail est dans le journal.")
-        : Duplicates.refused == DuplicatesRefusal.interrupted ? @tr("La mise à la corbeille s'est interrompue : certains fichiers y sont peut-être déjà. Recherchez à nouveau pour voir où en sont les doublons.")
-        : @tr("Le système n'a pas donné de quoi travailler : rien n'a été fait. Le détail est dans le journal.");
 }
 
 // A step of the search: its dot (its number, or a check once done), what
@@ -208,96 +139,6 @@ component SearchStep inherits HorizontalLayout {
     }
 }
 
-// One folder to search in, checked or not.
-component PickLine inherits Rectangle {
-    in property <bool> checked;
-    in property <bool> enabled: true;
-    in property <string> name;
-    in property <string> note;
-    in property <string> path;
-    in property <image> icon;
-    callback toggled;
-
-    min-height: Theme.results-row-height;
-    background: touch.has-hover && root.enabled ? Theme.surface-hover : transparent;
-    accessible-role: checkbox;
-    accessible-checkable: true;
-    accessible-checked: root.checked;
-    accessible-enabled: root.enabled;
-    accessible-label: root.name;
-    accessible-description: root.note != "" ? @tr("{}, {}", root.path, root.note) : root.path;
-    accessible-action-default => {
-        if root.enabled {
-            root.toggled();
-        }
-    }
-    forward-focus: keys;
-    keys := FocusScope {
-        focus-on-tab-navigation: root.enabled;
-        key-pressed(event) => {
-            if root.enabled && !event.repeat && event.text == Key.Space {
-                root.toggled();
-                return accept;
-            }
-            reject
-        }
-    }
-    touch := TouchArea {
-        enabled: root.enabled;
-        clicked => {
-            root.toggled();
-        }
-    }
-    FocusRing {
-        shown: keys.has-focus;
-        border-radius: Theme.radius-medium;
-    }
-    Rectangle {
-        y: parent.height - self.height;
-        height: Theme.border-width;
-        background: Theme.border;
-    }
-    HorizontalLayout {
-        padding-left: Theme.spacing-l;
-        padding-right: Theme.spacing-l;
-        padding-top: Theme.spacing-s;
-        padding-bottom: Theme.spacing-s;
-        spacing: Theme.spacing-m;
-        CheckMark {
-            checked: root.checked;
-            enabled: root.enabled;
-            cross-axis-self-alignment: center;
-        }
-        Icon {
-            source: root.icon;
-            colorize: Theme.text-2;
-            cross-axis-self-alignment: center;
-        }
-        VerticalLayout {
-            horizontal-stretch: 1;
-            alignment: center;
-            spacing: Theme.spacing-xxs;
-            Text {
-                text: root.name;
-                accessible-role: none;
-                color: root.enabled ? Theme.text : Theme.text-3;
-                font-weight: Theme.weight-medium;
-                overflow: elide;
-            }
-            if root.note != "": Detail {
-                text: root.note;
-                accessible-role: none;
-            }
-        }
-        Detail {
-            vertical-alignment: center;
-            text: root.path;
-            accessible-role: none;
-            overflow: elide;
-        }
-    }
-}
-
 // Where to search: the personal folders, or the whole home folder.
 component DuplicateStart inherits VerticalLayout {
     padding: Screen.page-margin;
@@ -311,49 +152,20 @@ component DuplicateStart inherits VerticalLayout {
             text: @tr("Trouvez les fichiers identiques, contenu compris, et gardez-en une seule copie. Rien ne part sans votre accord, et tout passe par la corbeille.");
         }
     }
-    if Duplicates.refused != DuplicatesRefusal.none: RefusalBanner { }
-    Text {
-        text: @tr("Où chercher ?");
-        color: Theme.text;
-        font-size: Theme.font-heading;
-        font-weight: Theme.weight-semibold;
+    if Duplicates.refused != ToolRefusal.none: RefusalBanner {
+        refused: Duplicates.refused;
+        interrupted: DuplicateWords.interrupted();
     }
-    if Duplicates.folders-state == FoldersState.reading: Detail {
-        text: @tr("Lecture de vos dossiers personnels…");
-    }
-    if Duplicates.folders-state == FoldersState.none: Banner {
-        text: @tr("Aucun dossier personnel trouvé : cochez « Tout le dossier personnel » pour chercher. Rien n'y sera coché d'avance.");
-    }
-    if Duplicates.folders-state == FoldersState.homeless: Banner {
-        text: @tr("Votre dossier personnel n'a pas pu être lu : rien ne peut être recherché. Le détail est dans le journal.");
-        warning: true;
-    }
-    if Duplicates.folders-state == FoldersState.unread: Banner {
-        text: @tr("Vos dossiers personnels n'ont pas pu être lus : seul tout le dossier personnel peut être parcouru, et rien n'y est coché d'avance.");
-        warning: true;
-    }
-    Card {
-        VerticalLayout {
-            for folder[index] in Duplicates.folders: PickLine {
-                checked: folder.checked && !Duplicates.whole-home;
-                enabled: !Duplicates.whole-home;
-                name: folder.name;
-                path: folder.path;
-                icon: @image-url("../assets/icons/folder.svg");
-                toggled => {
-                    Duplicates.toggle-folder(index);
-                }
-            }
-            PickLine {
-                checked: Duplicates.whole-home;
-                name: @tr("Tout le dossier personnel");
-                note: Duplicates.folders.length > 0 ? @tr("Remplace les dossiers ci-dessus") : "";
-                path: Duplicates.home-path;
-                icon: @image-url("../assets/icons/home.svg");
-                toggled => {
-                    Duplicates.whole-home = !Duplicates.whole-home;
-                }
-            }
+    FolderPicker {
+        folders-state: Duplicates.folders-state;
+        folders: Duplicates.folders;
+        whole-home: Duplicates.whole-home;
+        home-path: Duplicates.home-path;
+        toggle-folder(index) => {
+            Duplicates.toggle-folder(index);
+        }
+        toggle-home => {
+            Duplicates.whole-home = !Duplicates.whole-home;
         }
     }
     HorizontalLayout {
@@ -1094,7 +906,10 @@ component DuplicateResult inherits VerticalLayout {
                 }
             }
         }
-        if Duplicates.refused != DuplicatesRefusal.none: RefusalBanner { }
+        if Duplicates.refused != ToolRefusal.none: RefusalBanner {
+            refused: Duplicates.refused;
+            interrupted: DuplicateWords.interrupted();
+        }
         if Duplicates.groups > 0: HorizontalLayout {
             spacing: Theme.spacing-m;
             ActionButton {
@@ -1224,78 +1039,6 @@ component DuplicateResult inherits VerticalLayout {
     }
 }
 
-// One file that stayed, and why.
-component KeptLine inherits Rectangle {
-    in property <KeptShown> kept;
-    min-height: Theme.duplicate-copy-height;
-    accessible-role: list-item;
-    accessible-label: @tr("{}, {}, {}", root.kept.name, DuplicateWords.why(root.kept), DuplicateWords.why-more(root.kept));
-    Rectangle {
-        y: parent.height - self.height;
-        height: Theme.border-width;
-        background: Theme.border;
-    }
-    HorizontalLayout {
-        padding-left: Theme.spacing-l;
-        padding-right: Theme.spacing-l;
-        padding-top: Theme.spacing-s;
-        padding-bottom: Theme.spacing-s;
-        spacing: Theme.spacing-m;
-        Icon {
-            source: root.kept.why == ReceiptWhy.unchecked ? @image-url("../assets/icons/triangle-alert.svg")
-                : root.kept.why == ReceiptWhy.gone ? @image-url("../assets/icons/search.svg")
-                : root.kept.why == ReceiptWhy.changed ? @image-url("../assets/icons/rotate-ccw.svg")
-                : root.kept.why == ReceiptWhy.other-device ? @image-url("../assets/icons/hard-drive.svg")
-                : root.kept.why == ReceiptWhy.refused ? @image-url("../assets/icons/lock.svg")
-                : @image-url("../assets/icons/shield.svg");
-            colorize: root.kept.why == ReceiptWhy.unchecked ? Theme.warning : Theme.text-2;
-            cross-axis-self-alignment: center;
-        }
-        VerticalLayout {
-            horizontal-stretch: 1;
-            alignment: center;
-            spacing: Theme.spacing-xxs;
-            Text {
-                text: root.kept.name;
-                accessible-role: none;
-                color: Theme.text;
-                font-weight: Theme.weight-medium;
-                overflow: elide;
-            }
-            Detail {
-                text: root.kept.folder;
-                accessible-role: none;
-                overflow: elide;
-            }
-        }
-        VerticalLayout {
-            width: Screen.narrow ? Theme.duplicate-why-width-narrow : Theme.duplicate-why-width;
-            alignment: center;
-            spacing: Theme.spacing-xxs;
-            Text {
-                text: DuplicateWords.why(root.kept);
-                accessible-role: none;
-                color: root.kept.why == ReceiptWhy.unchecked ? Theme.warning : Theme.text;
-                font-weight: Theme.weight-semibold;
-                wrap: word-wrap;
-            }
-            Detail {
-                text: DuplicateWords.why-more(root.kept);
-                accessible-role: none;
-                wrap: word-wrap;
-            }
-        }
-        Text {
-            width: Theme.disk-size-width;
-            text: Words.size(root.kept.size);
-            accessible-role: none;
-            color: Theme.text;
-            horizontal-alignment: right;
-            vertical-alignment: center;
-        }
-    }
-}
-
 // What the trash took, and what stayed.
 component DuplicateReceipt inherits VerticalLayout {
     VerticalLayout {
@@ -1373,6 +1116,8 @@ component DuplicateReceipt inherits VerticalLayout {
                         alignment: start;
                         for kept in Duplicates.kept: KeptLine {
                             kept: kept;
+                            why: ReceiptWords.why(kept);
+                            more: ReceiptWords.why-more(kept, DuplicateWords.okapi-refused());
                         }
                     }
                 }
@@ -1403,16 +1148,16 @@ component DuplicateReceipt inherits VerticalLayout {
 }
 
 export component DuplicatesPage inherits VerticalLayout {
-    if Duplicates.step == DuplicatesStep.start: DuplicateStart {
+    if Duplicates.step == ToolStep.start: DuplicateStart {
         vertical-stretch: 1;
     }
-    if Duplicates.step == DuplicatesStep.searching: DuplicateSearching {
+    if Duplicates.step == ToolStep.searching: DuplicateSearching {
         vertical-stretch: 1;
     }
-    if Duplicates.step == DuplicatesStep.result: DuplicateResult {
+    if Duplicates.step == ToolStep.result: DuplicateResult {
         vertical-stretch: 1;
     }
-    if Duplicates.step == DuplicatesStep.receipt: DuplicateReceipt {
+    if Duplicates.step == ToolStep.receipt: DuplicateReceipt {
         vertical-stretch: 1;
     }
 }

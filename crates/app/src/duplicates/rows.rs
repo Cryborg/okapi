@@ -11,45 +11,10 @@ use okapi_tools::duplicates::{
 };
 use slint::SharedString;
 
-use super::choice::{self, Chosen, Facts, Folder, Quick, Reason, Totals};
-use crate::shown::{from_home, shown, size};
+use super::choice::{self, Chosen, Facts, Quick, Reason, Totals};
+use crate::shown::{folder_shown, from_home, name_of, shown, size, truncated};
 use crate::ui;
-
-/// What stands for the folders left out at the start of a path.
-const ELLIPSIS: &str = "…";
-const SEPARATOR: char = '/';
-
-/// `shown` within `room` characters: whole when it fits, else `…/` and as
-/// many of its last folders, whole, as fit with its name; `…/` and the name
-/// alone when not even one folder fits (Slint elides its end).
-pub(crate) fn truncated(shown: &str, room: usize) -> String {
-    if shown.chars().count() <= room {
-        return shown.to_owned();
-    }
-    let mut parts = shown.rsplit(SEPARATOR);
-    let Some(name) = parts.next() else {
-        return shown.to_owned();
-    };
-    let lead = ELLIPSIS.chars().count() + 1;
-    let mut kept = name.to_owned();
-    let mut length = lead + name.chars().count();
-    for part in parts {
-        let longer = length + part.chars().count() + 1;
-        if longer > room {
-            break;
-        }
-        kept = format!("{part}{SEPARATOR}{kept}");
-        length = longer;
-    }
-    format!("{ELLIPSIS}{SEPARATOR}{kept}")
-}
-
-/// Whether the trash takes a copy on the filesystem `device`: on its own
-/// filesystem; any, when the trash could not be opened (the move will say
-/// why).
-pub(crate) fn trashable(trash_device: Option<u64>, device: u64) -> bool {
-    trash_device.is_none_or(|trash| trash == device)
-}
+use crate::user_files::{Folder, folder_of, trashable};
 
 /// Where a copy lies, as the rules need it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,7 +40,7 @@ impl GroupChoice {
             .copies()
             .iter()
             .map(|copy| Place {
-                folder: choice::folder_of(copy.path(), folders),
+                folder: folder_of(copy.path(), folders),
                 trashable: trashable(trash_device, copy.identity().device()),
             })
             .collect();
@@ -180,21 +145,6 @@ pub(crate) struct View<'a> {
     pub names: &'a [String],
     pub room: usize,
     pub moment: &'a dyn Fn(SystemTime) -> ui::Moment,
-}
-
-/// The name a file or a folder is shown by: its own, as on the disk.
-pub(crate) fn name_of(path: &Path) -> String {
-    path.file_name().map_or_else(
-        || path.display().to_string(),
-        |name| name.to_string_lossy().into_owned(),
-    )
-}
-
-/// The folder of `path`, as shown.
-fn folder_shown(path: &Path, home: Option<&Path>) -> String {
-    path.parent()
-        .map(|parent| from_home(parent, home))
-        .unwrap_or_default()
 }
 
 /// The lines of the tree, what each names, and what is checked: the
@@ -428,34 +378,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_long_path_loses_whole_folders_at_its_start() {
-        let path = "~/Vidéos/Mariage de Claire et Thomas/Exports définitifs/montage-final.mp4";
-        assert_eq!(truncated(path, 200), path);
-        assert_eq!(truncated(path, path.chars().count()), path);
-        assert_eq!(
-            truncated(path, 40),
-            "…/Exports définitifs/montage-final.mp4"
-        );
-        assert_eq!(
-            truncated(path, 38),
-            "…/Exports définitifs/montage-final.mp4"
-        );
-        assert_eq!(truncated(path, 37), "…/montage-final.mp4");
-        assert_eq!(truncated(path, 5), "…/montage-final.mp4");
-    }
-
-    #[test]
     fn the_groups_come_by_what_the_screen_frees_the_report_s_order_between_equals() {
         assert_eq!(order(&[10, 30, 20]), [1, 2, 0]);
         assert_eq!(order(&[5, 0, 5, 7]), [3, 0, 2, 1]);
         assert_eq!(order(&[]), Vec::<usize>::new());
-    }
-
-    #[test]
-    fn the_trash_takes_a_copy_of_its_own_disk_or_any_when_unknown() {
-        assert!(trashable(Some(1), 1));
-        assert!(!trashable(Some(1), 2));
-        assert!(trashable(None, 2));
     }
 
     #[test]

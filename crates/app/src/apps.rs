@@ -96,7 +96,7 @@ fn seen_app(app: &okapi_tools::apps::App, day: i64) -> okapi_store::SeenApp {
     }
 }
 
-pub use crate::duplicates::ReadExclusions;
+pub use crate::user_files::ReadExclusions;
 
 impl std::fmt::Debug for AppsSeams {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

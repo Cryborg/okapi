@@ -1,0 +1,39 @@
+import { Size } from "cleaner-model.slint";
+
+// What the screens that look through the user's files and move some to the
+// trash share (`crates/app/src/user_files.rs`).
+
+// Where such a screen stands.
+export enum ToolStep { start, searching, result, receipt }
+
+// How the search shown runs, or why it ended without a result.
+export enum SearchPhase { opening, running, stopped, failed }
+
+// Why nothing started, or nothing moved: the settings unreadable, their
+// last change still being written or not written, an exclusion refused, the
+// home folder unread, no folder that opens, the system gave no thread, the
+// trash cannot be opened, a move to the trash cut short.
+export enum ToolRefusal { none, settings, saving, unsaved, exclusion, home, folder, thread, trash, interrupted }
+
+// What the start knows of the personal folders: being read, read, none
+// named, or they could not be read; or the home folder itself is unknown.
+export enum FoldersState { reading, read, none, unread, homeless }
+
+// A personal folder offered at the start.
+export struct PersonalShown {
+    name: string,
+    path: string,
+    checked: bool,
+}
+
+// Why a file asked for stayed where it was, or went unchecked. The
+// duplicates' own: the copy kept changed, no other copy is sure to stay.
+export enum ReceiptWhy { changed, gone, keeper-changed, no-sure-keeper, other-device, refused, excluded, unsupported, okapi, unchecked }
+
+// A file that stayed where it was, or went to the trash unchecked.
+export struct KeptShown {
+    name: string,
+    folder: string,
+    size: Size,
+    why: ReceiptWhy,
+}

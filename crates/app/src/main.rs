@@ -30,6 +30,7 @@ mod settings;
 mod shown;
 mod sidebar;
 mod updates;
+mod user_files;
 
 use apps::AppsScreen;
 use cleaner::{CleanerEvent, CleanerScreen, Seams};
@@ -91,14 +92,14 @@ const APP_ID: &str = "io.github.cryborg.Okapi";
 const SPACE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The screens a window holds, beyond what Slint does alone.
-type Screens = (
-    AppWindow,
-    CleanerScreen,
-    DashboardScreen,
-    SettingsScreen,
-    AppsScreen,
-    DuplicatesScreen,
-);
+struct Screens {
+    window: AppWindow,
+    cleaner: CleanerScreen,
+    home: DashboardScreen,
+    settings: SettingsScreen,
+    apps: AppsScreen,
+    duplicates: DuplicatesScreen,
+}
 
 /// The window in `language`, filled with what it shows of Okapi itself, its
 /// cleaner reading, scanning and cleaning through `seams`, its settings
@@ -211,7 +212,14 @@ fn window(
         history,
     };
     let dashboard = attach_home(&window, &screen, followers, home);
-    Ok((window, screen, dashboard, settings, apps, duplicates))
+    Ok(Screens {
+        window,
+        cleaner: screen,
+        home: dashboard,
+        settings,
+        apps,
+        duplicates,
+    })
 }
 
 /// The screens that follow the page shown, beside the Home page.
@@ -340,15 +348,21 @@ fn main() -> ExitCode {
         session = ?SESSION_VARIABLES.map(|name| (name, std::env::var_os(name))),
         "app started"
     );
-    let (window, screen, home, settings, apps, duplicates) =
-        match window(Seams::system(), home_seams(language), language) {
-            Ok(window) => window,
-            Err(error) => {
-                tracing::error!(error = %error, detail = ?error, "window not created");
-                diagnostic(&format!("no window: {error}"));
-                return ExitCode::FAILURE;
-            }
-        };
+    let Screens {
+        window,
+        cleaner: screen,
+        home,
+        settings,
+        apps,
+        duplicates,
+    } = match window(Seams::system(), home_seams(language), language) {
+        Ok(window) => window,
+        Err(error) => {
+            tracing::error!(error = %error, detail = ?error, "window not created");
+            diagnostic(&format!("no window: {error}"));
+            return ExitCode::FAILURE;
+        }
+    };
     tracing::info!("window created");
     let fold = sidebar::KeptFold::attach(&window, okapi_platform::state_directory());
     screen.keep_selections(kept_selections::KeptSelections::start(
@@ -381,7 +395,7 @@ fn wide_window(seams: Seams, home: DashboardSeams, language: Language) -> Screen
     const MOCKUP: slint::PhysicalSize = slint::PhysicalSize::new(1280, 800);
     i_slint_backend_testing::init_no_event_loop();
     let built = window(seams, home, language).unwrap();
-    built.0.window().set_size(MOCKUP);
+    built.window.window().set_size(MOCKUP);
     // `changed` handlers run on the next turn of the event loop.
     slint::platform::update_timers_and_animations();
     built
@@ -434,7 +448,7 @@ mod tests {
             dashboard::tests::inert(),
             Language::French,
         )
-        .0
+        .window
     }
 
     #[test]
@@ -673,7 +687,7 @@ mod tests {
     fn each_change_of_the_sidebar_is_traced_once() {
         i_slint_backend_testing::init_no_event_loop();
         // Narrow from its creation, never sized yet.
-        let (window, ..) = window(
+        let Screens { window, .. } = window(
             cleaner::tests::seams_never_scanning(),
             dashboard::tests::inert(),
             Language::French,
@@ -703,7 +717,7 @@ mod tests {
     fn a_window_that_opens_narrow_opens_with_the_sidebar_folded() {
         i_slint_backend_testing::init_no_event_loop();
         // As wide as the testing backend makes it: never resized.
-        let (window, ..) = window(
+        let Screens { window, .. } = window(
             cleaner::tests::seams_never_scanning(),
             dashboard::tests::inert(),
             Language::French,
@@ -989,6 +1003,8 @@ mod tests {
         "DuplicateResult",
         "KeptLine",
         "DuplicateReceipt",
+        "ReceiptWords",
+        "FolderPicker",
         "HistoryWords",
         "OperationRow",
         "Operations",

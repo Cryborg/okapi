@@ -2844,8 +2844,11 @@ pub mod tests {
 
     /// The window on the cleaner, in `language`.
     pub fn on_cleaner_in(seams: Seams, language: Language) -> (ui::AppWindow, CleanerScreen) {
-        let (window, screen, _home, _settings, _apps, _duplicates) =
-            crate::wide_window(seams, crate::dashboard::tests::inert(), language);
+        let crate::Screens {
+            window,
+            cleaner: screen,
+            ..
+        } = crate::wide_window(seams, crate::dashboard::tests::inert(), language);
         let cleaner = match language {
             Language::French => "Nettoyeur",
             Language::English => "Cleaner",

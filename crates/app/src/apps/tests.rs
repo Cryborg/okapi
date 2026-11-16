@@ -256,8 +256,11 @@ fn on_apps_reading(
         },
         ..seams_never_scanning()
     };
-    let (window, _, _, _, screen, _) =
-        crate::wide_window(seams, crate::dashboard::tests::inert(), Language::French);
+    let crate::Screens {
+        window,
+        apps: screen,
+        ..
+    } = crate::wide_window(seams, crate::dashboard::tests::inert(), Language::French);
     button(&window, "Applications").invoke_accessible_default_action();
     slint::platform::update_timers_and_animations();
     read_once();
@@ -373,7 +376,7 @@ fn a_reading_stopped_by_leaving_the_page_is_read_again_on_return() {
         },
         ..seams_never_scanning()
     };
-    let (window, ..) =
+    let crate::Screens { window, .. } =
         crate::wide_window(seams, crate::dashboard::tests::inert(), Language::French);
     button(&window, "Applications").invoke_accessible_default_action();
     slint::platform::update_timers_and_animations();
@@ -1026,7 +1029,7 @@ fn a_source_busy_or_silent_is_said_and_the_others_shown() {
         },
         ..seams_never_scanning()
     };
-    let (window, ..) =
+    let crate::Screens { window, .. } =
         crate::wide_window(seams, crate::dashboard::tests::inert(), Language::French);
     button(&window, "Applications").invoke_accessible_default_action();
     slint::platform::update_timers_and_animations();
@@ -1362,7 +1365,7 @@ fn flatpaks_said(reading: SourceReading, said: &[&str], again: bool) {
         },
         ..seams_never_scanning()
     };
-    let (window, ..) =
+    let crate::Screens { window, .. } =
         crate::wide_window(seams, crate::dashboard::tests::inert(), Language::French);
     button(&window, "Applications").invoke_accessible_default_action();
     slint::platform::update_timers_and_animations();

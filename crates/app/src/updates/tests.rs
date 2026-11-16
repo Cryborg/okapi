@@ -348,7 +348,7 @@ fn on_updates(fake: &Arc<Fake>) -> ui::AppWindow {
         updates: seams_of(fake),
         ..seams_never_scanning()
     };
-    let (window, ..) =
+    let crate::Screens { window, .. } =
         crate::wide_window(seams, crate::dashboard::tests::inert(), Language::French);
     button(&window, "Mises à jour").invoke_accessible_default_action();
     slint::platform::update_timers_and_animations();

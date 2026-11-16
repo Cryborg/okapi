@@ -208,8 +208,11 @@ fn on_page_at(
         },
         ..cleaner
     };
-    let (window, _, _, _, screen, _) =
-        crate::wide_window(seams, crate::dashboard::tests::inert(), Language::French);
+    let crate::Screens {
+        window,
+        apps: screen,
+        ..
+    } = crate::wide_window(seams, crate::dashboard::tests::inert(), Language::French);
     button(&window, "Applications").invoke_accessible_default_action();
     slint::platform::update_timers_and_animations();
     analysed(&window);

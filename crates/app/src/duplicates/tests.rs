@@ -4,17 +4,24 @@
 
 use std::cell::RefCell;
 use std::fs;
+use std::io;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
+use std::time::Instant;
+
+use jiff::tz::TimeZone;
+use okapi_engine::Exclusions;
+use okapi_platform::{PersonalFolder, Trash};
 
 use okapi_platform::PersonalKind;
 use slint::Model as _;
 
 use super::*;
-use crate::cleaner::Seams;
 use crate::cleaner::tests::{button, defaults, press, seams_never_scanning, shows};
+use crate::cleaner::{Problem, Seams};
 use crate::dashboard::tests::inert;
+use crate::user_files::ReadFolders;
 
 /// How long a test waits for the screen: a fault fails, it never hangs.
 const WAIT: Duration = Duration::from_secs(20);
@@ -103,34 +110,36 @@ fn seams(
             })
         }),
         duplicates: DuplicateSeams {
-            home: Some(sandbox.root()),
-            folders: Arc::new(|home| {
-                Ok([
-                    (PersonalKind::Documents, "Documents"),
-                    (PersonalKind::Pictures, "Images"),
-                    (PersonalKind::Music, "Musique"),
-                    (PersonalKind::Download, "Téléchargements"),
-                ]
-                .into_iter()
-                .map(|(kind, name)| PersonalFolder {
-                    kind,
-                    path: home.join(name),
-                })
-                .collect())
-            }),
+            search: SearchSeams {
+                home: Some(sandbox.root()),
+                folders: Arc::new(|home| {
+                    Ok([
+                        (PersonalKind::Documents, "Documents"),
+                        (PersonalKind::Pictures, "Images"),
+                        (PersonalKind::Music, "Musique"),
+                        (PersonalKind::Download, "Téléchargements"),
+                    ]
+                    .into_iter()
+                    .map(|(kind, name)| PersonalFolder {
+                        kind,
+                        path: home.join(name),
+                    })
+                    .collect())
+                }),
+                trash: Arc::new(move || {
+                    if let Some(release) = &release {
+                        release.lock().unwrap().recv().ok();
+                    }
+                    Trash::in_folder(&data)
+                }),
+                open: Rc::new(move |request, done| {
+                    asked.opened.borrow_mut().push(request.clone());
+                    done(true);
+                }),
+                now: Timestamp::now,
+                zone: TimeZone::UTC,
+            },
             threads: Arc::new(|_| NonZeroUsize::MIN),
-            trash: Arc::new(move || {
-                if let Some(release) = &release {
-                    release.lock().unwrap().recv().ok();
-                }
-                Trash::in_folder(&data)
-            }),
-            open: Rc::new(move |request, done| {
-                asked.opened.borrow_mut().push(request.clone());
-                done(true);
-            }),
-            now: Timestamp::now,
-            zone: TimeZone::UTC,
         },
         ..seams_never_scanning()
     }
@@ -171,7 +180,11 @@ fn on_duplicates(seams: Seams) -> ui::AppWindow {
 
 /// The same, with the screen.
 fn on_duplicates_screen(seams: Seams) -> (ui::AppWindow, DuplicatesScreen) {
-    let (window, _, _, _, _, screen) = crate::wide_window(seams, inert(), Language::French);
+    let crate::Screens {
+        window,
+        duplicates: screen,
+        ..
+    } = crate::wide_window(seams, inert(), Language::French);
     button(&window, "Doublons").invoke_accessible_default_action();
     slint::platform::update_timers_and_animations();
     read_until(&window, |window| {
@@ -184,9 +197,9 @@ fn on_duplicates_screen(seams: Seams) -> (ui::AppWindow, DuplicatesScreen) {
 fn searched(window: &ui::AppWindow) {
     duplicates(window).invoke_search();
     read_until(window, |window| {
-        duplicates(window).get_step() != ui::DuplicatesStep::Searching
+        duplicates(window).get_step() != ui::ToolStep::Searching
     });
-    assert_eq!(duplicates(window).get_step(), ui::DuplicatesStep::Result);
+    assert_eq!(duplicates(window).get_step(), ui::ToolStep::Result);
 }
 
 fn rows(window: &ui::AppWindow) -> Vec<ui::DuplicateRow> {
@@ -302,10 +315,7 @@ fn a_search_stopped_while_opening_keeps_nothing() {
     assert_eq!(duplicates(&window).get_phase(), ui::SearchPhase::Opening);
     duplicates(&window).invoke_stop();
     assert_eq!(duplicates(&window).get_phase(), ui::SearchPhase::Stopped);
-    assert_eq!(
-        duplicates(&window).get_step(),
-        ui::DuplicatesStep::Searching
-    );
+    assert_eq!(duplicates(&window).get_step(), ui::ToolStep::Searching);
     assert_eq!(rows(&window), []);
 }
 
@@ -315,11 +325,8 @@ fn settings_that_cannot_be_read_start_nothing() {
     let exclusions = Rc::new(RefCell::new(Err(Problem::SettingsUnsaved)));
     let window = on_duplicates(seams(&sandbox, &Rc::default(), &exclusions, None));
     duplicates(&window).invoke_search();
-    assert_eq!(duplicates(&window).get_step(), ui::DuplicatesStep::Start);
-    assert_eq!(
-        duplicates(&window).get_refused(),
-        ui::DuplicatesRefusal::Unsaved
-    );
+    assert_eq!(duplicates(&window).get_step(), ui::ToolStep::Start);
+    assert_eq!(duplicates(&window).get_refused(), ui::ToolRefusal::Unsaved);
 }
 
 #[test]
@@ -345,7 +352,7 @@ fn confirmed_copies_go_to_the_trash_but_one_changed_since() {
     duplicates(&window).invoke_trash();
     duplicates(&window).invoke_confirm();
     read_until(&window, |window| {
-        duplicates(window).get_step() == ui::DuplicatesStep::Receipt
+        duplicates(window).get_step() == ui::ToolStep::Receipt
     });
     assert!(!first.exists());
     assert!(sandbox.data().join("Trash/files/a.mov").exists());
@@ -382,7 +389,7 @@ fn while_copies_move_nothing_else_can_be_done() {
     assert!(duplicates(&window).get_trashing());
     duplicates(&window).invoke_again();
     duplicates(&window).invoke_change();
-    assert_eq!(duplicates(&window).get_step(), ui::DuplicatesStep::Result);
+    assert_eq!(duplicates(&window).get_step(), ui::ToolStep::Result);
     // What goes is taken: the choices stay as they were.
     let (at, _) = copy_row(&window, "Téléchargements/a.iso");
     duplicates(&window).invoke_toggle(index(at));
@@ -394,7 +401,7 @@ fn while_copies_move_nothing_else_can_be_done() {
     assert!(!duplicates(&window).get_confirming());
     release.send(()).unwrap();
     read_until(&window, |window| {
-        duplicates(window).get_step() == ui::DuplicatesStep::Receipt
+        duplicates(window).get_step() == ui::ToolStep::Receipt
     });
     assert!(!duplicates(&window).get_trashing());
 }
@@ -426,7 +433,7 @@ fn a_file_manager_refusing_at_once_is_said() {
     sandbox.write("Téléchargements/e.png", 11, 1);
     sandbox.write("Documents/e.png", 11, 5);
     let mut seams = seams(&sandbox, &Rc::default(), &no_exclusion(), None);
-    seams.duplicates.open = Rc::new(|_, done| done(false));
+    seams.duplicates.search.open = Rc::new(|_, done| done(false));
     let window = on_duplicates(seams);
     searched(&window);
     let (at, _) = copy_row(&window, "Documents/e.png");
@@ -448,50 +455,6 @@ fn the_whole_home_reaches_a_personal_folder_the_home_walk_leaves() {
     searched(&window);
     assert_eq!(duplicates(&window).get_groups(), 1);
     assert!(copy_row(&window, "Images/f.ogg").1.checked);
-}
-
-#[test]
-fn the_folders_offered_are_where_they_really_are_and_never_hold_the_home() {
-    let sandbox = Sandbox::new();
-    let root = sandbox.root();
-    std::os::unix::fs::symlink(root.join("Images"), root.join("Photos")).unwrap();
-    fs::write(root.join("a-file"), "").unwrap();
-    let named = [
-        (PersonalKind::Documents, root.join("Documents")),
-        // Through a link: offered where it is, once.
-        (PersonalKind::Pictures, root.join("Photos")),
-        (PersonalKind::Videos, root.join("Images")),
-        (PersonalKind::Music, root.clone()),
-        (PersonalKind::Desktop, PathBuf::from("/")),
-        (PersonalKind::Download, root.join("absent")),
-        // A file, not a folder.
-        (PersonalKind::Download, root.join("a-file")),
-    ];
-    let folders: ReadFolders = Arc::new(move |_| {
-        Ok(named
-            .iter()
-            .map(|(kind, path)| PersonalFolder {
-                kind: *kind,
-                path: path.clone(),
-            })
-            .collect())
-    });
-    let trash: OpenTrash = Arc::new(|| Err(io::Error::other("no trash")));
-    let known = read_known(Some(&root), &folders, &trash);
-    assert_eq!(known.home.as_deref(), Some(root.as_path()));
-    let offered: Vec<(PersonalKind, PathBuf)> = known
-        .folders
-        .into_iter()
-        .map(|folder| (folder.kind, folder.path))
-        .collect();
-    assert_eq!(
-        offered,
-        [
-            (PersonalKind::Documents, root.join("Documents")),
-            (PersonalKind::Pictures, root.join("Images")),
-        ]
-    );
-    assert_eq!(known.trash_device, None);
 }
 
 #[test]
@@ -548,11 +511,8 @@ fn unchecked_folders_are_never_searched() {
     }
     assert_eq!(duplicates(&window).get_chosen_folders(), 0);
     duplicates(&window).invoke_search();
-    assert_eq!(duplicates(&window).get_step(), ui::DuplicatesStep::Start);
-    assert_eq!(
-        duplicates(&window).get_refused(),
-        ui::DuplicatesRefusal::Folder
-    );
+    assert_eq!(duplicates(&window).get_step(), ui::ToolStep::Start);
+    assert_eq!(duplicates(&window).get_refused(), ui::ToolRefusal::Folder);
 }
 
 #[test]
@@ -686,7 +646,7 @@ fn the_confirmation_waits_on_cancel_and_escape_closes_it() {
     slint::platform::update_timers_and_animations();
     assert!(!duplicates(&window).get_confirming());
     assert!(downloaded.exists());
-    assert_eq!(duplicates(&window).get_step(), ui::DuplicatesStep::Result);
+    assert_eq!(duplicates(&window).get_step(), ui::ToolStep::Result);
     // Nothing chosen: nothing to confirm.
     duplicates(&window).invoke_deselect_all();
     duplicates(&window).invoke_trash();
@@ -704,7 +664,7 @@ fn a_receipt_where_nothing_went_says_so() {
     fs::write(&downloaded, content(22)).unwrap();
     duplicates(&window).invoke_confirm();
     read_until(&window, |window| {
-        duplicates(window).get_step() == ui::DuplicatesStep::Receipt
+        duplicates(window).get_step() == ui::ToolStep::Receipt
     });
     assert_eq!(duplicates(&window).get_trashed_files(), 0);
     assert_eq!(duplicates(&window).get_moved_files(), 0);
@@ -719,7 +679,7 @@ fn a_receipt_where_nothing_went_says_so() {
     // Searched again: the pair is still there.
     duplicates(&window).invoke_again();
     read_until(&window, |window| {
-        duplicates(window).get_step() == ui::DuplicatesStep::Result
+        duplicates(window).get_step() == ui::ToolStep::Result
     });
     assert_eq!(duplicates(&window).get_groups(), 1);
 }
@@ -762,7 +722,7 @@ fn a_part_of_a_bar_stays_within_it() {
 fn the_whole_home_without_a_home_folder_searches_nothing_and_says_why() {
     let sandbox = Sandbox::new();
     let mut seams = seams(&sandbox, &Rc::default(), &no_exclusion(), None);
-    seams.duplicates.home = None;
+    seams.duplicates.search.home = None;
     let window = on_duplicates(seams);
     assert_eq!(
         duplicates(&window).get_folders_state(),
@@ -770,18 +730,15 @@ fn the_whole_home_without_a_home_folder_searches_nothing_and_says_why() {
     );
     duplicates(&window).set_whole_home(true);
     duplicates(&window).invoke_search();
-    assert_eq!(duplicates(&window).get_step(), ui::DuplicatesStep::Start);
-    assert_eq!(
-        duplicates(&window).get_refused(),
-        ui::DuplicatesRefusal::Home
-    );
+    assert_eq!(duplicates(&window).get_step(), ui::ToolStep::Start);
+    assert_eq!(duplicates(&window).get_refused(), ui::ToolRefusal::Home);
 }
 
 /// The state of the start's folders, the personal folders read by `folders`.
 fn folders_state(folders: ReadFolders) -> ui::FoldersState {
     let sandbox = Sandbox::new();
     let mut seams = seams(&sandbox, &Rc::default(), &no_exclusion(), None);
-    seams.duplicates.folders = folders;
+    seams.duplicates.search.folders = folders;
     duplicates(&on_duplicates(seams)).get_folders_state()
 }
 
@@ -811,11 +768,8 @@ fn a_result_stays_when_the_settings_are_refused_and_a_receipt_goes_back_to_the_s
     searched(&window);
     *exclusions.borrow_mut() = Err(Problem::SettingsUnsaved);
     duplicates(&window).invoke_again();
-    assert_eq!(duplicates(&window).get_step(), ui::DuplicatesStep::Result);
-    assert_eq!(
-        duplicates(&window).get_refused(),
-        ui::DuplicatesRefusal::Unsaved
-    );
+    assert_eq!(duplicates(&window).get_step(), ui::ToolStep::Result);
+    assert_eq!(duplicates(&window).get_refused(), ui::ToolRefusal::Unsaved);
     assert_eq!(duplicates(&window).get_chosen_files(), 1);
     duplicates(&window).invoke_confirm();
     assert!(!duplicates(&window).get_trashing());
@@ -823,16 +777,13 @@ fn a_result_stays_when_the_settings_are_refused_and_a_receipt_goes_back_to_the_s
     *exclusions.borrow_mut() = Ok(Vec::new());
     duplicates(&window).invoke_confirm();
     read_until(&window, |window| {
-        duplicates(window).get_step() == ui::DuplicatesStep::Receipt
+        duplicates(window).get_step() == ui::ToolStep::Receipt
     });
     // From the receipt, a refusal is said on the start.
     *exclusions.borrow_mut() = Err(Problem::SettingsSaving);
     duplicates(&window).invoke_again();
-    assert_eq!(duplicates(&window).get_step(), ui::DuplicatesStep::Start);
-    assert_eq!(
-        duplicates(&window).get_refused(),
-        ui::DuplicatesRefusal::Saving
-    );
+    assert_eq!(duplicates(&window).get_step(), ui::ToolStep::Start);
+    assert_eq!(duplicates(&window).get_refused(), ui::ToolRefusal::Saving);
 }
 
 const EXCLUSION_REFUSED: &str =
@@ -860,18 +811,12 @@ fn an_exclusion_refused_starts_no_search() {
     duplicates(&window).invoke_search();
     // Nothing resolved on the window's thread: the search starts, and its
     // own thread meets the refusal.
-    assert_eq!(
-        duplicates(&window).get_step(),
-        ui::DuplicatesStep::Searching
-    );
-    assert_eq!(
-        duplicates(&window).get_refused(),
-        ui::DuplicatesRefusal::None
-    );
+    assert_eq!(duplicates(&window).get_step(), ui::ToolStep::Searching);
+    assert_eq!(duplicates(&window).get_refused(), ui::ToolRefusal::None);
     read_until(&window, |window| {
-        duplicates(window).get_refused() == ui::DuplicatesRefusal::Exclusion
+        duplicates(window).get_refused() == ui::ToolRefusal::Exclusion
     });
-    assert_eq!(duplicates(&window).get_step(), ui::DuplicatesStep::Start);
+    assert_eq!(duplicates(&window).get_step(), ui::ToolStep::Start);
     assert!(shows(&window, EXCLUSION_REFUSED));
     assert_eq!(threads_asked.load(Ordering::SeqCst), 0, "nothing read");
     // Corrected, it searches.
@@ -890,7 +835,7 @@ fn an_exclusion_refused_moves_nothing_to_the_trash() {
     let mut seams = seams(&sandbox, &Rc::default(), &exclusions, None);
     let counter = Arc::clone(&opened);
     let data = sandbox.data();
-    seams.duplicates.trash = Arc::new(move || {
+    seams.duplicates.search.trash = Arc::new(move || {
         counter.fetch_add(1, Ordering::SeqCst);
         Trash::in_folder(&data)
     });
@@ -900,15 +845,12 @@ fn an_exclusion_refused_moves_nothing_to_the_trash() {
     *exclusions.borrow_mut() = Ok(refused_exclusion());
     duplicates(&window).invoke_confirm();
     assert!(duplicates(&window).get_trashing());
-    assert_eq!(
-        duplicates(&window).get_refused(),
-        ui::DuplicatesRefusal::None
-    );
+    assert_eq!(duplicates(&window).get_refused(), ui::ToolRefusal::None);
     read_until(&window, |window| !duplicates(window).get_trashing());
-    assert_eq!(duplicates(&window).get_step(), ui::DuplicatesStep::Result);
+    assert_eq!(duplicates(&window).get_step(), ui::ToolStep::Result);
     assert_eq!(
         duplicates(&window).get_refused(),
-        ui::DuplicatesRefusal::Exclusion
+        ui::ToolRefusal::Exclusion
     );
     assert!(shows(&window, EXCLUSION_REFUSED));
     assert_eq!(
@@ -921,18 +863,18 @@ fn an_exclusion_refused_moves_nothing_to_the_trash() {
     // start, the result let go as any new search does.
     duplicates(&window).invoke_again();
     read_until(&window, |window| {
-        duplicates(window).get_step() == ui::DuplicatesStep::Start
+        duplicates(window).get_step() == ui::ToolStep::Start
     });
     assert_eq!(
         duplicates(&window).get_refused(),
-        ui::DuplicatesRefusal::Exclusion
+        ui::ToolRefusal::Exclusion
     );
     // Corrected, the search and the move go.
     *exclusions.borrow_mut() = Ok(Vec::new());
     searched(&window);
     duplicates(&window).invoke_confirm();
     read_until(&window, |window| {
-        duplicates(window).get_step() == ui::DuplicatesStep::Receipt
+        duplicates(window).get_step() == ui::ToolStep::Receipt
     });
     assert!(!downloaded.exists());
 }
@@ -946,7 +888,7 @@ fn a_trash_that_does_not_open_is_said_and_moves_nothing() {
     let mut seams = seams(&sandbox, &Rc::default(), &no_exclusion(), None);
     let opening = Arc::clone(&opens);
     let data = sandbox.data();
-    seams.duplicates.trash = Arc::new(move || {
+    seams.duplicates.search.trash = Arc::new(move || {
         if opening.load(Ordering::SeqCst) {
             Trash::in_folder(&data)
         } else {
@@ -958,11 +900,8 @@ fn a_trash_that_does_not_open_is_said_and_moves_nothing() {
     opens.store(false, Ordering::SeqCst);
     duplicates(&window).invoke_confirm();
     read_until(&window, |window| !duplicates(window).get_trashing());
-    assert_eq!(duplicates(&window).get_step(), ui::DuplicatesStep::Result);
-    assert_eq!(
-        duplicates(&window).get_refused(),
-        ui::DuplicatesRefusal::Trash
-    );
+    assert_eq!(duplicates(&window).get_step(), ui::ToolStep::Result);
+    assert_eq!(duplicates(&window).get_refused(), ui::ToolRefusal::Trash);
     assert!(downloaded.exists());
 }
 
@@ -975,7 +914,7 @@ fn a_move_cut_short_says_so_and_shows_nothing_stale() {
     let data = sandbox.data();
     let mut seams = seams(&sandbox, &Rc::default(), &no_exclusion(), None);
     let count = Arc::clone(&opened);
-    seams.duplicates.trash = Arc::new(move || {
+    seams.duplicates.search.trash = Arc::new(move || {
         // The start opens it; the move dies.
         assert_eq!(
             count.fetch_add(1, Ordering::SeqCst),
@@ -988,11 +927,11 @@ fn a_move_cut_short_says_so_and_shows_nothing_stale() {
     searched(&window);
     duplicates(&window).invoke_confirm();
     read_until(&window, |window| {
-        duplicates(window).get_step() == ui::DuplicatesStep::Start
+        duplicates(window).get_step() == ui::ToolStep::Start
     });
     assert_eq!(
         duplicates(&window).get_refused(),
-        ui::DuplicatesRefusal::Interrupted
+        ui::ToolRefusal::Interrupted
     );
     assert!(!duplicates(&window).get_trashing());
     assert_eq!(rows(&window), []);
@@ -1013,9 +952,9 @@ fn a_second_confirmation_while_copies_move_moves_nothing_more() {
         &no_exclusion(),
         Some(Arc::new(Mutex::new(held))),
     );
-    let trash = Arc::clone(&seams.duplicates.trash);
+    let trash = Arc::clone(&seams.duplicates.search.trash);
     let count = Arc::clone(&opened);
-    seams.duplicates.trash = Arc::new(move || {
+    seams.duplicates.search.trash = Arc::new(move || {
         count.fetch_add(1, Ordering::SeqCst);
         trash()
     });
@@ -1025,7 +964,7 @@ fn a_second_confirmation_while_copies_move_moves_nothing_more() {
     duplicates(&window).invoke_confirm();
     release.send(()).unwrap();
     read_until(&window, |window| {
-        duplicates(window).get_step() == ui::DuplicatesStep::Receipt
+        duplicates(window).get_step() == ui::ToolStep::Receipt
     });
     // The start's, then one move's.
     assert_eq!(opened.load(Ordering::SeqCst), 2);
@@ -1086,7 +1025,7 @@ fn a_late_refusal_of_the_file_manager_is_never_said_on_another_copy() {
     let held: Rc<RefCell<Option<Answer>>> = Rc::default();
     let mut seams = seams(&sandbox, &Rc::default(), &no_exclusion(), None);
     let holding = Rc::clone(&held);
-    seams.duplicates.open = Rc::new(move |_, done| {
+    seams.duplicates.search.open = Rc::new(move |_, done| {
         *holding.borrow_mut() = Some(done);
     });
     let window = on_duplicates(seams);

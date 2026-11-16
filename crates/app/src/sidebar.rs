@@ -92,7 +92,7 @@ mod tests {
     /// before its first width, then wide. The testing platform is set up
     /// once per test.
     fn launched(directory: &Path) -> (AppWindow, KeptFold) {
-        let (window, ..) = crate::window(
+        let crate::Screens { window, .. } = crate::window(
             seams_never_scanning(),
             crate::dashboard::tests::inert(),
             Language::French,
@@ -198,7 +198,7 @@ mod tests {
     #[test]
     fn without_a_state_directory_the_sidebar_still_folds() {
         i_slint_backend_testing::init_no_event_loop();
-        let (window, ..) = crate::window(
+        let crate::Screens { window, .. } = crate::window(
             seams_never_scanning(),
             crate::dashboard::tests::inert(),
             Language::French,

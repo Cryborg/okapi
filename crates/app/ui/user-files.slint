@@ -1,0 +1,312 @@
+// What the screens that look through the user's files and move some to the
+// trash show the same way: the start's folders, why nothing started or
+// moved, and the files of a receipt that stayed.
+import { Theme, Screen } from "theme.slint";
+import { Words } from "cleaner-model.slint";
+import { Banner, Card, CheckMark, Detail, FocusRing, Icon } from "widgets.slint";
+import { FoldersState, KeptShown, PersonalShown, ReceiptWhy, ToolRefusal } from "user-files-model.slint";
+
+// What a receipt says of a file that stayed, the same for the eye and the
+// ear.
+export global ReceiptWords {
+    // Why a file asked for stayed, and what that means.
+    pure public function why(kept: KeptShown) -> string {
+        if kept.why == ReceiptWhy.changed {
+            return @tr("A changé depuis la recherche");
+        }
+        if kept.why == ReceiptWhy.gone {
+            return @tr("Introuvable");
+        }
+        if kept.why == ReceiptWhy.keeper-changed {
+            return @tr("La copie gardée a changé");
+        }
+        if kept.why == ReceiptWhy.no-sure-keeper {
+            return @tr("Pas d'autre copie sûre");
+        }
+        if kept.why == ReceiptWhy.other-device {
+            return @tr("Pas de corbeille sur ce disque");
+        }
+        if kept.why == ReceiptWhy.refused {
+            return @tr("Refusé par le système");
+        }
+        if kept.why == ReceiptWhy.excluded {
+            return @tr("Exclu dans les Réglages");
+        }
+        if kept.why == ReceiptWhy.unchecked {
+            return @tr("Parti à la corbeille sans vérification");
+        }
+        if kept.why == ReceiptWhy.unsupported {
+            return @tr("Système non pris en charge");
+        }
+        return @tr("Refusé par Okapi");
+    }
+
+    // `okapi`: what a refusal of Okapi means, the tool's own.
+    pure public function why-more(kept: KeptShown, okapi: string) -> string {
+        if kept.why == ReceiptWhy.changed {
+            return @tr("Son contenu n'est plus celui de la recherche.");
+        }
+        if kept.why == ReceiptWhy.gone {
+            return @tr("Déplacé ou supprimé entre-temps.");
+        }
+        if kept.why == ReceiptWhy.keeper-changed {
+            return @tr("Sans copie identique à sa place, celle-ci reste.");
+        }
+        if kept.why == ReceiptWhy.no-sure-keeper {
+            return @tr("Aucune autre copie n'est sûre de rester : dans une corbeille, à un autre compte, sur un disque, une clé ou une carte au format FAT ou exFAT, ou peut-être ce même fichier vu ailleurs. Celle-ci reste.");
+        }
+        if kept.why == ReceiptWhy.other-device {
+            return @tr("Okapi ne supprime jamais sans corbeille.");
+        }
+        if kept.why == ReceiptWhy.refused {
+            return @tr("Le système n'a pas permis de le déplacer.");
+        }
+        if kept.why == ReceiptWhy.excluded {
+            return @tr("Exclu depuis la recherche, il reste à sa place.");
+        }
+        if kept.why == ReceiptWhy.unchecked {
+            return @tr("Un autre programme l'a changé pendant le déplacement : il reste restaurable depuis la corbeille.");
+        }
+        if kept.why == ReceiptWhy.unsupported {
+            return @tr("Ce système ne dit pas où sont ses montages : rien n'est déplacé sans le savoir.");
+        }
+        return okapi;
+    }
+}
+
+// Why nothing started, or nothing moved, as it concerns the settings and
+// the start; a move cut short is said in the tool's own words.
+export component RefusalBanner inherits Banner {
+    in property <ToolRefusal> refused;
+    in property <string> interrupted;
+    warning: true;
+    text: root.refused == ToolRefusal.saving ? @tr("Votre dernier changement de réglages est en cours d'enregistrement : rien n'a été fait, réessayez dans un instant.")
+        : root.refused == ToolRefusal.unsaved ? @tr("Votre dernier changement de réglages n'a pas pu être enregistré : rien n'a été fait, pour ne pas manquer une exclusion.")
+        : root.refused == ToolRefusal.exclusion ? @tr("Une exclusion de vos réglages est refusée : rien n'a été fait. Corrigez-la dans les Réglages.")
+        : root.refused == ToolRefusal.settings ? @tr("Vos réglages n'ont pas pu être lus : rien n'a été fait, pour ne pas manquer une exclusion.")
+        : root.refused == ToolRefusal.folder ? @tr("Ces dossiers n'ont pas pu être ouverts : rien n'a été recherché.")
+        : root.refused == ToolRefusal.trash ? @tr("La corbeille n'a pas pu être ouverte : rien n'a bougé. Le détail est dans le journal.")
+        : root.refused == ToolRefusal.home ? @tr("Votre dossier personnel n'a pas pu être lu : rien n'a été recherché. Le détail est dans le journal.")
+        : root.refused == ToolRefusal.interrupted ? root.interrupted
+        : @tr("Le système n'a pas donné de quoi travailler : rien n'a été fait. Le détail est dans le journal.");
+}
+
+// One folder to search in, checked or not.
+component PickLine inherits Rectangle {
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    in property <string> name;
+    in property <string> note;
+    in property <string> path;
+    in property <image> icon;
+    callback toggled;
+
+    min-height: Theme.results-row-height;
+    background: touch.has-hover && root.enabled ? Theme.surface-hover : transparent;
+    accessible-role: checkbox;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-enabled: root.enabled;
+    accessible-label: root.name;
+    accessible-description: root.note != "" ? @tr("{}, {}", root.path, root.note) : root.path;
+    accessible-action-default => {
+        if root.enabled {
+            root.toggled();
+        }
+    }
+    forward-focus: keys;
+    keys := FocusScope {
+        focus-on-tab-navigation: root.enabled;
+        key-pressed(event) => {
+            if root.enabled && !event.repeat && event.text == Key.Space {
+                root.toggled();
+                return accept;
+            }
+            reject
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.toggled();
+        }
+    }
+    FocusRing {
+        shown: keys.has-focus;
+        border-radius: Theme.radius-medium;
+    }
+    Rectangle {
+        y: parent.height - self.height;
+        height: Theme.border-width;
+        background: Theme.border;
+    }
+    HorizontalLayout {
+        padding-left: Theme.spacing-l;
+        padding-right: Theme.spacing-l;
+        padding-top: Theme.spacing-s;
+        padding-bottom: Theme.spacing-s;
+        spacing: Theme.spacing-m;
+        CheckMark {
+            checked: root.checked;
+            enabled: root.enabled;
+            cross-axis-self-alignment: center;
+        }
+        Icon {
+            source: root.icon;
+            colorize: Theme.text-2;
+            cross-axis-self-alignment: center;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: Theme.spacing-xxs;
+            Text {
+                text: root.name;
+                accessible-role: none;
+                color: root.enabled ? Theme.text : Theme.text-3;
+                font-weight: Theme.weight-medium;
+                overflow: elide;
+            }
+            if root.note != "": Detail {
+                text: root.note;
+                accessible-role: none;
+            }
+        }
+        Detail {
+            vertical-alignment: center;
+            text: root.path;
+            accessible-role: none;
+            overflow: elide;
+        }
+    }
+}
+
+// Where to search: the personal folders, or the whole home folder.
+export component FolderPicker inherits VerticalLayout {
+    in property <FoldersState> folders-state;
+    in property <[PersonalShown]> folders;
+    in property <bool> whole-home;
+    in property <string> home-path;
+    callback toggle-folder(int);
+    callback toggle-home;
+
+    spacing: Theme.spacing-xl;
+    Text {
+        text: @tr("Où chercher ?");
+        color: Theme.text;
+        font-size: Theme.font-heading;
+        font-weight: Theme.weight-semibold;
+    }
+    if root.folders-state == FoldersState.reading: Detail {
+        text: @tr("Lecture de vos dossiers personnels…");
+    }
+    if root.folders-state == FoldersState.none: Banner {
+        text: @tr("Aucun dossier personnel trouvé : cochez « Tout le dossier personnel » pour chercher. Rien n'y sera coché d'avance.");
+    }
+    if root.folders-state == FoldersState.homeless: Banner {
+        text: @tr("Votre dossier personnel n'a pas pu être lu : rien ne peut être recherché. Le détail est dans le journal.");
+        warning: true;
+    }
+    if root.folders-state == FoldersState.unread: Banner {
+        text: @tr("Vos dossiers personnels n'ont pas pu être lus : seul tout le dossier personnel peut être parcouru, et rien n'y est coché d'avance.");
+        warning: true;
+    }
+    Card {
+        VerticalLayout {
+            for folder[index] in root.folders: PickLine {
+                checked: folder.checked && !root.whole-home;
+                enabled: !root.whole-home;
+                name: folder.name;
+                path: folder.path;
+                icon: @image-url("../assets/icons/folder.svg");
+                toggled => {
+                    root.toggle-folder(index);
+                }
+            }
+            PickLine {
+                checked: root.whole-home;
+                name: @tr("Tout le dossier personnel");
+                note: root.folders.length > 0 ? @tr("Remplace les dossiers ci-dessus") : "";
+                path: root.home-path;
+                icon: @image-url("../assets/icons/home.svg");
+                toggled => {
+                    root.toggle-home();
+                }
+            }
+        }
+    }
+}
+
+// One file that stayed, and why: `why` and `more` as the receipt says them.
+export component KeptLine inherits Rectangle {
+    in property <KeptShown> kept;
+    in property <string> why;
+    in property <string> more;
+    min-height: Theme.duplicate-copy-height;
+    accessible-role: list-item;
+    accessible-label: @tr("{}, {}, {}", root.kept.name, root.why, root.more);
+    Rectangle {
+        y: parent.height - self.height;
+        height: Theme.border-width;
+        background: Theme.border;
+    }
+    HorizontalLayout {
+        padding-left: Theme.spacing-l;
+        padding-right: Theme.spacing-l;
+        padding-top: Theme.spacing-s;
+        padding-bottom: Theme.spacing-s;
+        spacing: Theme.spacing-m;
+        Icon {
+            source: root.kept.why == ReceiptWhy.unchecked ? @image-url("../assets/icons/triangle-alert.svg")
+                : root.kept.why == ReceiptWhy.gone ? @image-url("../assets/icons/search.svg")
+                : root.kept.why == ReceiptWhy.changed ? @image-url("../assets/icons/rotate-ccw.svg")
+                : root.kept.why == ReceiptWhy.other-device ? @image-url("../assets/icons/hard-drive.svg")
+                : root.kept.why == ReceiptWhy.refused ? @image-url("../assets/icons/lock.svg")
+                : @image-url("../assets/icons/shield.svg");
+            colorize: root.kept.why == ReceiptWhy.unchecked ? Theme.warning : Theme.text-2;
+            cross-axis-self-alignment: center;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: Theme.spacing-xxs;
+            Text {
+                text: root.kept.name;
+                accessible-role: none;
+                color: Theme.text;
+                font-weight: Theme.weight-medium;
+                overflow: elide;
+            }
+            Detail {
+                text: root.kept.folder;
+                accessible-role: none;
+                overflow: elide;
+            }
+        }
+        VerticalLayout {
+            width: Screen.narrow ? Theme.duplicate-why-width-narrow : Theme.duplicate-why-width;
+            alignment: center;
+            spacing: Theme.spacing-xxs;
+            Text {
+                text: root.why;
+                accessible-role: none;
+                color: root.kept.why == ReceiptWhy.unchecked ? Theme.warning : Theme.text;
+                font-weight: Theme.weight-semibold;
+                wrap: word-wrap;
+            }
+            Detail {
+                text: root.more;
+                accessible-role: none;
+                wrap: word-wrap;
+            }
+        }
+        Text {
+            width: Theme.disk-size-width;
+            text: Words.size(root.kept.size);
+            accessible-role: none;
+            color: Theme.text;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+}

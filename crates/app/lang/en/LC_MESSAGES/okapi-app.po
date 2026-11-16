@@ -2885,82 +2885,6 @@ msgid "Une copie reste toujours"
 msgstr "One copy always stays"
 
 msgctxt "DuplicateWords"
-msgid "A changé depuis la recherche"
-msgstr "Changed since the search"
-
-msgctxt "DuplicateWords"
-msgid "Introuvable"
-msgstr "Not found"
-
-msgctxt "DuplicateWords"
-msgid "La copie gardée a changé"
-msgstr "The kept copy changed"
-
-msgctxt "DuplicateWords"
-msgid "Pas d'autre copie sûre"
-msgstr "No other safe copy"
-
-msgctxt "DuplicateWords"
-msgid "Pas de corbeille sur ce disque"
-msgstr "No trash on this disk"
-
-msgctxt "DuplicateWords"
-msgid "Refusé par le système"
-msgstr "Refused by the system"
-
-msgctxt "DuplicateWords"
-msgid "Exclu dans les Réglages"
-msgstr "Excluded in the Settings"
-
-msgctxt "DuplicateWords"
-msgid "Parti à la corbeille sans vérification"
-msgstr "Went to the trash unverified"
-
-msgctxt "DuplicateWords"
-msgid "Système non pris en charge"
-msgstr "System not supported"
-
-msgctxt "DuplicateWords"
-msgid "Refusé par Okapi"
-msgstr "Refused by Okapi"
-
-msgctxt "DuplicateWords"
-msgid "Son contenu n'est plus celui de la recherche."
-msgstr "Its content is no longer what the search found."
-
-msgctxt "DuplicateWords"
-msgid "Déplacé ou supprimé entre-temps."
-msgstr "Moved or deleted meanwhile."
-
-msgctxt "DuplicateWords"
-msgid "Sans copie identique à sa place, celle-ci reste."
-msgstr "With no identical copy in its place, this one stays."
-
-msgctxt "DuplicateWords"
-msgid "Aucune autre copie n'est sûre de rester : dans une corbeille, à un autre compte, sur un disque, une clé ou une carte au format FAT ou exFAT, ou peut-être ce même fichier vu ailleurs. Celle-ci reste."
-msgstr "No other copy is sure to stay: in a trash, another account's, on a FAT- or exFAT-formatted disk, drive or card, or maybe this very file seen elsewhere. This one stays."
-
-msgctxt "DuplicateWords"
-msgid "Okapi ne supprime jamais sans corbeille."
-msgstr "Okapi never deletes without a trash."
-
-msgctxt "DuplicateWords"
-msgid "Le système n'a pas permis de le déplacer."
-msgstr "The system did not allow moving it."
-
-msgctxt "DuplicateWords"
-msgid "Exclu depuis la recherche, il reste à sa place."
-msgstr "Excluded since the search, it stays where it is."
-
-msgctxt "DuplicateWords"
-msgid "Un autre programme l'a changé pendant le déplacement : il reste restaurable depuis la corbeille."
-msgstr "Another program changed it during the move: it can still be restored from the trash."
-
-msgctxt "DuplicateWords"
-msgid "Ce système ne dit pas où sont ses montages : rien n'est déplacé sans le savoir."
-msgstr "This system does not tell where its mounts are: nothing is moved without knowing."
-
-msgctxt "DuplicateWords"
 msgid "Okapi garde toujours une copie de chaque fichier."
 msgstr "Okapi always keeps one copy of each file."
 
@@ -3013,20 +2937,8 @@ msgid "Trouvez les fichiers identiques, contenu compris, et gardez-en une seule 
 msgstr "Find identical files, content included, and keep a single copy. Nothing goes without your consent, and everything goes through the trash."
 
 msgctxt "DuplicateStart"
-msgid "Où chercher ?"
-msgstr "Where to search?"
-
-msgctxt "DuplicateStart"
-msgid "Lecture de vos dossiers personnels…"
-msgstr "Reading your personal folders…"
-
-msgctxt "DuplicateStart"
 msgid "Tout le dossier personnel"
 msgstr "The whole home folder"
-
-msgctxt "DuplicateStart"
-msgid "Remplace les dossiers ci-dessus"
-msgstr "Replaces the folders above"
 
 msgctxt "DuplicateStart"
 msgid "Rechercher"
@@ -3284,14 +3196,6 @@ msgctxt "RefusalBanner"
 msgid "Votre dossier personnel n'a pas pu être lu : rien n'a été recherché. Le détail est dans le journal."
 msgstr "Your home folder could not be read: nothing was searched. The details are in the log."
 
-msgctxt "RefusalBanner"
-msgid "La mise à la corbeille s'est interrompue : certains fichiers y sont peut-être déjà. Recherchez à nouveau pour voir où en sont les doublons."
-msgstr "Moving to the trash was cut short: some files may be there already. Search again to see where the duplicates stand."
-
-msgctxt "DuplicateStart"
-msgid "Vos dossiers personnels n'ont pas pu être lus : seul tout le dossier personnel peut être parcouru, et rien n'y est coché d'avance."
-msgstr "Your personal folders could not be read: only the whole home folder can be searched, and nothing is checked beforehand."
-
 msgctxt "DuplicateStart"
 msgid "Les dossiers cachés (réglages, caches des applications), les dossiers de projet, ~/snap et vos exclusions ne sont jamais parcourus. Seuls les fichiers d'au moins {} sont comparés."
 msgstr "Hidden folders (settings, application caches), project folders, ~/snap and your exclusions are never searched. Only files of at least {} are compared."
@@ -3304,17 +3208,9 @@ msgctxt "DuplicateResult"
 msgid "Fichiers d'au moins {} examinés : {}. Chacun n'existe qu'une fois : il n'y a rien à faire ici."
 msgstr "Files of at least {} examined: {}. Each exists only once: there is nothing to do here."
 
-msgctxt "DuplicateStart"
-msgid "Aucun dossier personnel trouvé : cochez « Tout le dossier personnel » pour chercher. Rien n'y sera coché d'avance."
-msgstr "No personal folder found: check “The whole home folder” to search. Nothing will be checked beforehand."
-
 msgctxt "DuplicateReceipt"
 msgid "Mis à la corbeille sans vérification : voyez ci-dessous"
 msgstr "Moved to the trash unverified: see below"
-
-msgctxt "DuplicateStart"
-msgid "Votre dossier personnel n'a pas pu être lu : rien ne peut être recherché. Le détail est dans le journal."
-msgstr "Your home folder could not be read: nothing can be searched. The details are in the log."
 
 msgctxt "UpdatesWords"
 msgid "en attente d'une autre installation, qui doit finir d'abord"
@@ -4234,3 +4130,111 @@ msgstr "Unverifiable"
 msgctxt "PathListCard"
 msgid "Okapi ne sait pas lire la liste de vos dossiers personnels (user-dirs.dirs) : il ne peut vérifier aucun dossier à nettoyer."
 msgstr "Okapi cannot read the list of your personal folders (user-dirs.dirs): it cannot check any folder to clean."
+
+msgctxt "DuplicateWords"
+msgid "La mise à la corbeille s'est interrompue : certains fichiers y sont peut-être déjà. Recherchez à nouveau pour voir où en sont les doublons."
+msgstr "Moving to the trash was cut short: some files may be there already. Search again to see where the duplicates stand."
+
+msgctxt "ReceiptWords"
+msgid "A changé depuis la recherche"
+msgstr "Changed since the search"
+
+msgctxt "ReceiptWords"
+msgid "Introuvable"
+msgstr "Not found"
+
+msgctxt "ReceiptWords"
+msgid "La copie gardée a changé"
+msgstr "The kept copy changed"
+
+msgctxt "ReceiptWords"
+msgid "Pas d'autre copie sûre"
+msgstr "No other safe copy"
+
+msgctxt "ReceiptWords"
+msgid "Pas de corbeille sur ce disque"
+msgstr "No trash on this disk"
+
+msgctxt "ReceiptWords"
+msgid "Refusé par le système"
+msgstr "Refused by the system"
+
+msgctxt "ReceiptWords"
+msgid "Exclu dans les Réglages"
+msgstr "Excluded in the Settings"
+
+msgctxt "ReceiptWords"
+msgid "Parti à la corbeille sans vérification"
+msgstr "Went to the trash unverified"
+
+msgctxt "ReceiptWords"
+msgid "Système non pris en charge"
+msgstr "System not supported"
+
+msgctxt "ReceiptWords"
+msgid "Refusé par Okapi"
+msgstr "Refused by Okapi"
+
+msgctxt "ReceiptWords"
+msgid "Son contenu n'est plus celui de la recherche."
+msgstr "Its content is no longer what the search found."
+
+msgctxt "ReceiptWords"
+msgid "Déplacé ou supprimé entre-temps."
+msgstr "Moved or deleted meanwhile."
+
+msgctxt "ReceiptWords"
+msgid "Sans copie identique à sa place, celle-ci reste."
+msgstr "With no identical copy in its place, this one stays."
+
+msgctxt "ReceiptWords"
+msgid "Aucune autre copie n'est sûre de rester : dans une corbeille, à un autre compte, sur un disque, une clé ou une carte au format FAT ou exFAT, ou peut-être ce même fichier vu ailleurs. Celle-ci reste."
+msgstr "No other copy is sure to stay: in a trash, another account's, on a FAT- or exFAT-formatted disk, drive or card, or maybe this very file seen elsewhere. This one stays."
+
+msgctxt "ReceiptWords"
+msgid "Okapi ne supprime jamais sans corbeille."
+msgstr "Okapi never deletes without a trash."
+
+msgctxt "ReceiptWords"
+msgid "Le système n'a pas permis de le déplacer."
+msgstr "The system did not allow moving it."
+
+msgctxt "ReceiptWords"
+msgid "Exclu depuis la recherche, il reste à sa place."
+msgstr "Excluded since the search, it stays where it is."
+
+msgctxt "ReceiptWords"
+msgid "Un autre programme l'a changé pendant le déplacement : il reste restaurable depuis la corbeille."
+msgstr "Another program changed it during the move: it can still be restored from the trash."
+
+msgctxt "ReceiptWords"
+msgid "Ce système ne dit pas où sont ses montages : rien n'est déplacé sans le savoir."
+msgstr "This system does not tell where its mounts are: nothing is moved without knowing."
+
+msgctxt "FolderPicker"
+msgid "Où chercher ?"
+msgstr "Where to search?"
+
+msgctxt "FolderPicker"
+msgid "Lecture de vos dossiers personnels…"
+msgstr "Reading your personal folders…"
+
+msgctxt "FolderPicker"
+msgid "Aucun dossier personnel trouvé : cochez « Tout le dossier personnel » pour chercher. Rien n'y sera coché d'avance."
+msgstr "No personal folder found: check “The whole home folder” to search. Nothing will be checked beforehand."
+
+msgctxt "FolderPicker"
+msgid "Votre dossier personnel n'a pas pu être lu : rien ne peut être recherché. Le détail est dans le journal."
+msgstr "Your home folder could not be read: nothing can be searched. The details are in the log."
+
+msgctxt "FolderPicker"
+msgid "Vos dossiers personnels n'ont pas pu être lus : seul tout le dossier personnel peut être parcouru, et rien n'y est coché d'avance."
+msgstr "Your personal folders could not be read: only the whole home folder can be searched, and nothing is checked beforehand."
+
+msgctxt "FolderPicker"
+msgid "Tout le dossier personnel"
+msgstr "The whole home folder"
+
+msgctxt "FolderPicker"
+msgid "Remplace les dossiers ci-dessus"
+msgstr "Replaces the folders above"

@@ -10,19 +10,14 @@ mod choice;
 mod rows;
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
-use std::io;
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError};
-use std::time::{Duration, Instant, SystemTime};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::time::{Duration, SystemTime};
 
 use jiff::Timestamp;
-use jiff::tz::TimeZone;
-use okapi_engine::Exclusions;
-use okapi_platform::{PersonalFolder, Trash};
 use okapi_rules::Language;
 use okapi_tools::duplicates::{
     CopyId, DuplicateReport, DuplicateSearch, MIN_SIZE, Outcome, Progress, SearchError,
@@ -30,50 +25,32 @@ use okapi_tools::duplicates::{
 };
 use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 
-use crate::cleaner::Problem;
 use crate::dates::MINUTES_EVERY;
 use crate::disk_usage::READ_EVERY;
-use crate::file_manager::{Calls, Open, OpenRequest, open_in_file_manager};
-use crate::shown::{from_home, grouped, shown, size};
+use crate::file_manager::{Calls, OpenRequest};
+use crate::shown::{DEFAULT_ROOM, grouped, name_of, shown, size};
 use crate::ui;
-use choice::{Folder, Quick};
-use rows::{GroupChoice, Line, View, name_of};
+use crate::user_files::{
+    Asked, Folders, Known, OpenTrash, ReadExclusions, SearchSeams, exclusion_paths, resolve,
+};
+use choice::Quick;
+use rows::{GroupChoice, Line, View};
 
-/// Never searched: what snapd installs is no duplicate of the user's.
-const SNAP_FOLDER: &str = okapi_tools::apps::snap::SNAP_DATA;
-/// How long the window's closing waits for a move to the trash to end, of
-/// duplicates or of leftovers: hundreds of renames take less than a second.
-pub(crate) const TRASH_WAIT: Duration = Duration::from_secs(5);
-/// The characters a path takes before the page says how many it may.
-const DEFAULT_ROOM: usize = 60;
-
-/// Reads the exclusions of the settings, once the writes under way are
-/// done (the cleaner's own reading): the duplicates' and the leftovers'.
-pub type ReadExclusions = Rc<dyn Fn() -> Result<Vec<PathBuf>, Problem>>;
-/// The personal folders named below a home folder.
-pub type ReadFolders = Arc<dyn Fn(&Path) -> io::Result<Vec<PersonalFolder>> + Send + Sync>;
 /// The threads that read the copies of these roots.
 pub type Threads = Arc<dyn Fn(&[PathBuf]) -> NonZeroUsize + Send + Sync>;
-/// The trash copies go to.
-pub type OpenTrash = Arc<dyn Fn() -> io::Result<Trash> + Send + Sync>;
 
 /// What the screen reads and asks of the machine: the system's, or a test's.
 #[derive(Clone)]
 pub struct DuplicateSeams {
-    pub home: Option<PathBuf>,
-    pub folders: ReadFolders,
+    pub search: SearchSeams,
     pub threads: Threads,
-    pub trash: OpenTrash,
-    pub open: Open,
-    pub now: fn() -> Timestamp,
-    pub zone: TimeZone,
 }
 
 impl std::fmt::Debug for DuplicateSeams {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("DuplicateSeams")
-            .field("home", &self.home)
+            .field("search", &self.search)
             .finish_non_exhaustive()
     }
 }
@@ -83,51 +60,10 @@ impl DuplicateSeams {
     /// the portal.
     pub fn system(home: Option<PathBuf>) -> Self {
         Self {
-            home,
-            folders: Arc::new(okapi_platform::personal_folders),
+            search: SearchSeams::system(home),
             threads: Arc::new(okapi_tools::duplicates::threads_for_roots),
-            trash: Arc::new(Trash::home),
-            open: Rc::new(open_in_file_manager),
-            now: Timestamp::now,
-            zone: crate::dashboard::system_zone(),
         }
     }
-}
-
-/// What the start knows of the folders, read away from the interface's
-/// thread (a folder on a mount that stopped answering would hold it): the
-/// home folder and the personal folders where they really are, the
-/// filesystem of the trash, and whether the personal folders could be read.
-#[derive(Debug, Clone, Default)]
-struct Known {
-    home: Option<PathBuf>,
-    folders: Vec<Folder>,
-    trash_device: Option<u64>,
-    unread: bool,
-}
-
-impl Known {
-    /// Nothing known but the home folder: the folders unread.
-    fn unread(home: Option<PathBuf>) -> Self {
-        Self {
-            home,
-            unread: true,
-            ..Self::default()
-        }
-    }
-}
-
-/// The exclusions `paths`, resolved where each really lies: on the thread
-/// of a search or a move, as a mount that stopped answering may hold it.
-fn resolve(paths: Vec<PathBuf>) -> Result<Exclusions, ui::DuplicatesRefusal> {
-    tracing::debug!(exclusions = paths.len(), "resolving exclusions");
-    let started = Instant::now();
-    let resolved = Exclusions::new(paths).map_err(|error| {
-        tracing::warn!(?error, elapsed = ?started.elapsed(), "an exclusion refused: nothing done");
-        ui::DuplicatesRefusal::Exclusion
-    })?;
-    tracing::info!(elapsed = ?started.elapsed(), "exclusions resolved");
-    Ok(resolved)
 }
 
 /// Opens the search of `roots` on the start's thread: its exclusions
@@ -136,7 +72,7 @@ fn open_search(
     roots: &[PathBuf],
     exclusions: Vec<PathBuf>,
     threads: &Threads,
-) -> Result<DuplicateSearch, ui::DuplicatesRefusal> {
+) -> Result<DuplicateSearch, ui::ToolRefusal> {
     let exclusions = resolve(exclusions)?;
     let threads = threads(roots);
     tracing::info!(threads = threads.get(), "duplicate search threads");
@@ -148,8 +84,8 @@ fn open_search(
     DuplicateSearch::start(roots, options).map_err(|error| {
         tracing::warn!(%error, "duplicate search not opened");
         match error {
-            SearchError::Thread(_) => ui::DuplicatesRefusal::Thread,
-            SearchError::NoRoot | SearchError::Root { .. } => ui::DuplicatesRefusal::Folder,
+            SearchError::Thread(_) => ui::ToolRefusal::Thread,
+            SearchError::NoRoot | SearchError::Root { .. } => ui::ToolRefusal::Folder,
         }
     })
 }
@@ -162,15 +98,15 @@ fn move_to_trash(
     ids: &[CopyId],
     exclusions: Vec<PathBuf>,
     trash: &OpenTrash,
-) -> Result<TrashReceipt, ui::DuplicatesRefusal> {
+) -> Result<TrashReceipt, ui::ToolRefusal> {
     let exclusions = resolve(exclusions)?;
     let Some(report) = search.report() else {
         tracing::error!("no report to move copies of: nothing moved");
-        return Err(ui::DuplicatesRefusal::Trash);
+        return Err(ui::ToolRefusal::Trash);
     };
     let bin = trash().map_err(|error| {
         tracing::error!(%error, "trash not opened: nothing moved");
-        ui::DuplicatesRefusal::Trash
+        ui::ToolRefusal::Trash
     })?;
     Ok(okapi_tools::duplicates::trash(
         report,
@@ -180,78 +116,13 @@ fn move_to_trash(
     ))
 }
 
-/// Reads what the start knows.
-fn read_known(seams_home: Option<&Path>, folders: &ReadFolders, trash: &OpenTrash) -> Known {
-    let home = seams_home.and_then(|home| {
-        home.canonicalize()
-            .inspect_err(
-                |error| tracing::warn!(home = %home.display(), %error, "home folder unreadable"),
-            )
-            .ok()
-    });
-    let (named, unread) = match home.as_deref().map(|home| folders(home)) {
-        Some(Ok(named)) => (named, false),
-        Some(Err(error)) => {
-            tracing::warn!(%error, "personal folders unreadable");
-            (Vec::new(), true)
-        }
-        None => (Vec::new(), true),
-    };
-    let mut known: Vec<Folder> = Vec::new();
-    for folder in named {
-        match folder.path.canonicalize() {
-            // The home folder itself, or above it: no personal folder.
-            Ok(path) if home.as_deref().is_some_and(|home| home.starts_with(&path)) => {
-                tracing::warn!(path = %path.display(), kind = ?folder.kind, "personal folder holding the home folder: not offered");
-            }
-            Ok(path) if path.is_dir() => {
-                // The first kind in the screen's order names it.
-                if known.iter().any(|other| other.path == path) {
-                    tracing::info!(path = %path.display(), kind = ?folder.kind, "personal folder named twice: once offered");
-                } else {
-                    known.push(Folder {
-                        kind: folder.kind,
-                        path,
-                    });
-                }
-            }
-            Ok(path) => {
-                tracing::info!(path = %path.display(), "personal folder not a folder: not offered");
-            }
-            Err(error) => {
-                tracing::info!(path = %folder.path.display(), %error, "personal folder absent: not offered");
-            }
-        }
-    }
-    let trash_device = trash()
-        .inspect_err(|error| tracing::warn!(%error, "trash not opened: its disk unknown"))
-        .ok()
-        .map(|trash| trash.device());
-    Known {
-        home,
-        folders: known,
-        trash_device,
-        unread,
-    }
-}
-
-/// A search asked: where, how it is said, and what the start knew then (the
-/// rules' folders).
-#[derive(Debug, Clone)]
-struct Asked {
-    roots: Vec<PathBuf>,
-    whole_home: bool,
-    names: String,
-    known: Known,
-}
-
 /// The search shown, and what it holds.
 enum Search {
     /// None, or one stopped, failed or given up.
     Idle,
     /// Its exclusions being resolved and its roots opened on a thread: the
     /// search to come, or why it did not start, traced there.
-    Opening(Receiver<Result<DuplicateSearch, ui::DuplicatesRefusal>>),
+    Opening(Receiver<Result<DuplicateSearch, ui::ToolRefusal>>),
     Running(Arc<DuplicateSearch>),
     /// Complete: its report shown.
     Shown(Arc<DuplicateSearch>),
@@ -260,7 +131,7 @@ enum Search {
 /// A move to the trash on its way: its receipt to come, and the search
 /// whose report names its copies.
 struct Moving {
-    receiver: Receiver<Result<TrashReceipt, ui::DuplicatesRefusal>>,
+    receiver: Receiver<Result<TrashReceipt, ui::ToolRefusal>>,
     search: Arc<DuplicateSearch>,
 }
 
@@ -269,10 +140,7 @@ struct State {
     seams: DuplicateSeams,
     exclusions: ReadExclusions,
     language: Language,
-    known: Option<Known>,
-    known_reading: Option<Receiver<Known>>,
-    /// The personal folders left unchecked at the start, by where they are.
-    unchecked: BTreeSet<PathBuf>,
+    folders: Folders,
     asked: Option<Asked>,
     search: Search,
     listed: u64,
@@ -323,12 +191,10 @@ impl DuplicatesScreen {
     ) -> Self {
         let state = State {
             window: window.as_weak(),
+            folders: Folders::new(&seams.search),
             seams,
             exclusions,
             language,
-            known: None,
-            known_reading: None,
-            unchecked: BTreeSet::new(),
             asked: None,
             search: Search::Idle,
             listed: 0,
@@ -395,7 +261,7 @@ impl DuplicatesScreen {
             }
         });
         duplicates.set_min_size(size(MIN_SIZE));
-        duplicates.set_step(ui::DuplicatesStep::Start);
+        duplicates.set_step(ui::ToolStep::Start);
         screen
     }
 
@@ -411,48 +277,23 @@ impl DuplicatesScreen {
         window.map(|window| read(&window))
     }
 
-    fn step(&self) -> Option<ui::DuplicatesStep> {
+    fn step(&self) -> Option<ui::ToolStep> {
         self.read_window(|window| window.global::<ui::Duplicates>().get_step())
     }
 
     /// Follows the page shown: the folders are read when the start shows.
     pub fn page_shown(&self, page: ui::Page) {
-        if page == ui::Page::Duplicates && self.step() == Some(ui::DuplicatesStep::Start) {
+        if page == ui::Page::Duplicates && self.step() == Some(ui::ToolStep::Start) {
             self.read_folders();
         }
     }
 
     /// Reads the personal folders on a thread of its own.
     fn read_folders(&self) {
-        let (sender, receiver) = mpsc::channel();
-        let (home, folders, trash) = {
-            let state = self.0.borrow();
-            (
-                state.seams.home.clone(),
-                Arc::clone(&state.seams.folders),
-                Arc::clone(&state.seams.trash),
-            )
-        };
-        let spawned = std::thread::Builder::new()
-            .name("okapi-personal-folders".to_owned())
-            .spawn(move || {
-                // The screen gone: nobody waits.
-                let _ = sender.send(read_known(home.as_deref(), &folders, &trash));
-            });
-        match spawned {
-            Ok(_) => {
-                self.0.borrow_mut().known_reading = Some(receiver);
-                self.with_window(|duplicates| {
-                    duplicates.set_folders_state(ui::FoldersState::Reading);
-                });
-                self.watch();
-            }
-            Err(error) => {
-                tracing::error!(%error, "personal folders not read: no thread");
-                let home = self.0.borrow().seams.home.clone();
-                self.0.borrow_mut().known = Some(Known::unread(home));
-                self.show_start();
-            }
+        let waiting = self.0.borrow_mut().folders.read();
+        self.show_start();
+        if waiting {
+            self.watch();
         }
     }
 
@@ -476,7 +317,7 @@ impl DuplicatesScreen {
         self.follow_search();
         self.take_receipt();
         let state = self.0.borrow();
-        let waiting = state.known_reading.is_some()
+        let waiting = state.folders.reading()
             || matches!(state.search, Search::Opening(_) | Search::Running(_))
             || state.moving.is_some();
         if !waiting {
@@ -485,95 +326,29 @@ impl DuplicatesScreen {
     }
 
     fn take_known(&self) {
-        let taken = {
-            let state = self.0.borrow();
-            match state.known_reading.as_ref().map(Receiver::try_recv) {
-                Some(Ok(known)) => Some(known),
-                Some(Err(TryRecvError::Disconnected)) => {
-                    tracing::error!("personal folders thread ended without word");
-                    Some(Known::unread(state.seams.home.clone()))
-                }
-                _ => None,
-            }
-        };
-        if let Some(known) = taken {
-            tracing::info!(
-                home = ?known.home,
-                folders = known.folders.len(),
-                trash_device = ?known.trash_device,
-                unread = known.unread,
-                "personal folders known"
-            );
-            let mut state = self.0.borrow_mut();
-            state.known_reading = None;
-            state.known = Some(known);
-            drop(state);
+        let taken = self.0.borrow_mut().folders.take();
+        if taken {
             self.show_start();
         }
     }
 
     /// The start as it stands: the folders, which are checked.
     fn show_start(&self) {
-        let (rows, home, folders_state) = {
-            let state = self.0.borrow();
-            let known = state.known.clone().unwrap_or_default();
-            let rows: Vec<ui::PersonalShown> = known
-                .folders
-                .iter()
-                .map(|folder| ui::PersonalShown {
-                    name: name_of(&folder.path).into(),
-                    path: from_home(&folder.path, known.home.as_deref()).into(),
-                    checked: !state.unchecked.contains(&folder.path),
-                })
-                .collect();
-            let folders_state = if state.known.is_none() || state.known_reading.is_some() {
-                ui::FoldersState::Reading
-            } else if known.home.is_none() {
-                ui::FoldersState::Homeless
-            } else if known.unread {
-                ui::FoldersState::Unread
-            } else if rows.is_empty() {
-                ui::FoldersState::None
-            } else {
-                ui::FoldersState::Read
-            };
-            (
-                rows,
-                known
-                    .home
-                    .map(|home| home.display().to_string())
-                    .unwrap_or_default(),
-                folders_state,
-            )
-        };
-        let chosen = rows.iter().filter(|row| row.checked).count();
+        let start = self.0.borrow().folders.shown();
         let model = Rc::clone(&self.0.borrow().folder_model);
-        crate::shown::show(&model, rows);
+        crate::shown::show(&model, start.rows);
         self.with_window(|duplicates| {
-            duplicates.set_folders_state(folders_state);
-            duplicates.set_home_path(home.into());
-            duplicates.set_chosen_folders(shown(chosen));
+            duplicates.set_folders_state(start.state);
+            duplicates.set_home_path(start.home.into());
+            duplicates.set_chosen_folders(shown(start.chosen));
         });
     }
 
     fn toggle_folder(&self, index: usize) {
-        let path = self
-            .0
-            .borrow()
-            .known
-            .as_ref()
-            .and_then(|known| known.folders.get(index))
-            .map(|folder| folder.path.clone());
-        let Some(path) = path else {
-            return;
-        };
-        {
-            let mut state = self.0.borrow_mut();
-            if !state.unchecked.remove(&path) {
-                state.unchecked.insert(path);
-            }
+        let toggled = self.0.borrow_mut().folders.toggle(index);
+        if toggled {
+            self.show_start();
         }
-        self.show_start();
     }
 
     /// Searches where the start says.
@@ -584,87 +359,22 @@ impl DuplicatesScreen {
         let whole_home = self
             .read_window(|window| window.global::<ui::Duplicates>().get_whole_home())
             .unwrap_or(false);
-        let known = {
-            let state = self.0.borrow();
-            match &state.known {
-                Some(known) => known.clone(),
-                // The folders not read yet (one on a mount that stopped
-                // answering holds them): the whole home folder can be
-                // searched, nothing checked beforehand.
-                None if whole_home => {
-                    tracing::warn!("personal folders not read yet: the home folder searched alone");
-                    Known::unread(state.seams.home.clone())
-                }
-                None => {
-                    tracing::warn!("search asked before the folders were read: nothing searched");
-                    return;
-                }
-            }
-        };
-        let asked = if whole_home {
-            let Some(home) = known.home.clone() else {
-                tracing::warn!("home folder unknown: nothing searched");
-                self.refuse_start(ui::DuplicatesRefusal::Home);
-                return;
-            };
-            // Each personal folder is a root too: one elsewhere (a link, an
-            // absolute path), mounted apart or a project would not be
-            // reached from the home folder; the engine reads a folder given
-            // twice once.
-            let folders = known.folders.iter().map(|folder| folder.path.clone());
-            Asked {
-                roots: std::iter::once(home).chain(folders).collect(),
-                whole_home: true,
-                names: String::new(),
-                known,
-            }
-        } else {
-            let chosen: Vec<&Folder> = {
-                let state = self.0.borrow();
-                known
-                    .folders
-                    .iter()
-                    .filter(|folder| !state.unchecked.contains(&folder.path))
-                    .collect()
-            };
-            if chosen.is_empty() {
-                tracing::warn!("no folder chosen: nothing searched");
-                self.refuse_start(ui::DuplicatesRefusal::Folder);
-                return;
-            }
-            Asked {
-                roots: chosen.iter().map(|folder| folder.path.clone()).collect(),
-                whole_home: false,
-                // Names of folders, as on the disk: the same in both
-                // languages, as the separator.
-                names: chosen
-                    .iter()
-                    .map(|folder| name_of(&folder.path))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                known: known.clone(),
-            }
-        };
-        self.start(asked);
+        let asked = self.0.borrow().folders.asked(whole_home);
+        match asked {
+            Ok(Some(asked)) => self.start(asked),
+            Ok(None) => {}
+            Err(refusal) => self.refuse_start(refusal),
+        }
     }
 
-    /// The exclusions of the settings read now, `~/snap` with them, as they
-    /// are written: resolved on the thread that uses them ([`resolve`]);
-    /// why none can be had.
-    fn exclusion_paths(&self, home: Option<&Path>) -> Result<Vec<PathBuf>, ui::DuplicatesRefusal> {
+    /// The exclusions of the settings read now, `~/snap` with them; why
+    /// none can be had.
+    fn exclusion_paths(
+        &self,
+        home: Option<&std::path::Path>,
+    ) -> Result<Vec<PathBuf>, ui::ToolRefusal> {
         let read = Rc::clone(&self.0.borrow().exclusions);
-        let mut paths = read().map_err(|problem| {
-            tracing::warn!(?problem, "settings not read: nothing done");
-            match problem {
-                Problem::SettingsSaving => ui::DuplicatesRefusal::Saving,
-                Problem::SettingsUnsaved => ui::DuplicatesRefusal::Unsaved,
-                Problem::Exclusion => ui::DuplicatesRefusal::Exclusion,
-                _ => ui::DuplicatesRefusal::Settings,
-            }
-        })?;
-        tracing::info!(settings = paths.len(), "exclusions read");
-        paths.extend(home.map(|home| home.join(SNAP_FOLDER)));
-        Ok(paths)
+        exclusion_paths(&read, home)
     }
 
     /// Starts searching on a thread of its own: resolving the exclusions and
@@ -676,7 +386,7 @@ impl DuplicatesScreen {
             Ok(paths) => paths,
             // Settings not read: a result stays, the refusal said over it;
             // elsewhere (a receipt, a search stopped) the start says it.
-            Err(refusal) if self.step() == Some(ui::DuplicatesStep::Result) => {
+            Err(refusal) if self.step() == Some(ui::ToolStep::Result) => {
                 self.with_window(|duplicates| duplicates.set_refused(refusal));
                 return;
             }
@@ -705,7 +415,7 @@ impl DuplicatesScreen {
             });
         if let Err(error) = spawned {
             tracing::error!(%error, "duplicate search not started: no thread");
-            self.refuse_start(ui::DuplicatesRefusal::Thread);
+            self.refuse_start(ui::ToolRefusal::Thread);
             return;
         }
         let (whole_home, names) = (asked.whole_home, asked.names.clone());
@@ -716,24 +426,24 @@ impl DuplicatesScreen {
             state.asked = Some(asked);
         }
         self.with_window(|duplicates| {
-            duplicates.set_refused(ui::DuplicatesRefusal::None);
+            duplicates.set_refused(ui::ToolRefusal::None);
             duplicates.set_searched_home(whole_home);
             duplicates.set_searched_names(names.into());
             duplicates.set_phase(ui::SearchPhase::Opening);
             duplicates.set_stage(ui::SearchStage::Listing);
             duplicates.set_files_listed(SharedString::from("0"));
-            duplicates.set_step(ui::DuplicatesStep::Searching);
+            duplicates.set_step(ui::ToolStep::Searching);
         });
         self.watch();
     }
 
     /// Nothing started, or nothing can go on, for `refusal`: said on the
     /// start.
-    fn refuse_start(&self, refusal: ui::DuplicatesRefusal) {
+    fn refuse_start(&self, refusal: ui::ToolRefusal) {
         self.give_up();
         self.with_window(|duplicates| {
             duplicates.set_refused(refusal);
-            duplicates.set_step(ui::DuplicatesStep::Start);
+            duplicates.set_step(ui::ToolStep::Start);
         });
         self.show_start();
     }
@@ -762,7 +472,7 @@ impl DuplicatesScreen {
             Some(Err(refusal)) => self.refuse_start(refusal),
             None => {
                 tracing::error!("duplicate search start thread ended without word");
-                self.refuse_start(ui::DuplicatesRefusal::Thread);
+                self.refuse_start(ui::ToolRefusal::Thread);
             }
         }
     }
@@ -833,7 +543,7 @@ impl DuplicatesScreen {
                 .as_ref()
                 .map(|asked| asked.known.clone())
                 .unwrap_or_default();
-            (known, (state.seams.now)(), state.language)
+            (known, (state.seams.search.now)(), state.language)
         };
         let groups: Vec<GroupChoice> = report
             .groups()
@@ -899,8 +609,8 @@ impl DuplicatesScreen {
             duplicates.set_minutes(0);
             duplicates.set_current(0);
             duplicates.set_rule_said(rule_said);
-            duplicates.set_refused(ui::DuplicatesRefusal::None);
-            duplicates.set_step(ui::DuplicatesStep::Result);
+            duplicates.set_refused(ui::ToolRefusal::None);
+            duplicates.set_step(ui::ToolStep::Result);
         });
         self.show_rows();
         self.watch_minutes();
@@ -921,7 +631,7 @@ impl DuplicatesScreen {
     fn show_minutes(&self) {
         let (ended_at, now) = {
             let state = self.0.borrow();
-            (state.ended_at, (state.seams.now)())
+            (state.ended_at, (state.seams.search.now)())
         };
         if let Some(ended_at) = ended_at {
             let minutes = shown(crate::dates::minutes_since(ended_at, now));
@@ -940,20 +650,12 @@ impl DuplicatesScreen {
         let (rows, lines, totals) = {
             let state = self.0.borrow();
             let known = state.asked.as_ref().map(|asked| &asked.known);
-            let names: Vec<String> = known
-                .map(|known| {
-                    known
-                        .folders
-                        .iter()
-                        .map(|folder| name_of(&folder.path))
-                        .collect()
-                })
-                .unwrap_or_default();
+            let names: Vec<String> = known.map(Known::names).unwrap_or_default();
             // One instant for every line: none says today, another
             // yesterday.
-            let now = (state.seams.now)();
-            let zone = state.seams.zone.clone();
-            let moment = move |at: SystemTime| moment(at, now, &zone);
+            let now = (state.seams.search.now)();
+            let zone = state.seams.search.zone.clone();
+            let moment = move |at: SystemTime| crate::dashboard::moment_of_time(at, now, &zone);
             let view = View {
                 home: known.and_then(|known| known.home.as_deref()),
                 names: &names,
@@ -1107,7 +809,7 @@ impl DuplicatesScreen {
         };
         let (calls, open) = {
             let state = self.0.borrow();
-            (state.calls.clone(), Rc::clone(&state.seams.open))
+            (state.calls.clone(), Rc::clone(&state.seams.search.open))
         };
         if calls.awaiting() {
             tracing::debug!(
@@ -1199,7 +901,7 @@ impl DuplicatesScreen {
             return;
         }
         tracing::info!(copies = ids.len(), bytes, "move to the trash confirmed");
-        let trash = Arc::clone(&self.0.borrow().seams.trash);
+        let trash = Arc::clone(&self.0.borrow().seams.search.trash);
         let (sender, receiver) = mpsc::channel();
         let moved = Arc::clone(&search);
         let spawned = std::thread::Builder::new()
@@ -1215,7 +917,7 @@ impl DuplicatesScreen {
             Ok(_) => {
                 self.0.borrow_mut().moving = Some(Moving { receiver, search });
                 self.with_window(|duplicates| {
-                    duplicates.set_refused(ui::DuplicatesRefusal::None);
+                    duplicates.set_refused(ui::ToolRefusal::None);
                     duplicates.set_trashing(true);
                 });
                 self.watch();
@@ -1223,7 +925,7 @@ impl DuplicatesScreen {
             Err(error) => {
                 tracing::error!(%error, "no thread to move copies to the trash");
                 self.with_window(|duplicates| {
-                    duplicates.set_refused(ui::DuplicatesRefusal::Thread);
+                    duplicates.set_refused(ui::ToolRefusal::Thread);
                 });
             }
         }
@@ -1259,7 +961,7 @@ impl DuplicatesScreen {
             // says what is where.
             None => {
                 tracing::error!("the thread moving copies ended without word");
-                self.refuse_start(ui::DuplicatesRefusal::Interrupted);
+                self.refuse_start(ui::ToolRefusal::Interrupted);
             }
         }
     }
@@ -1267,7 +969,7 @@ impl DuplicatesScreen {
     fn show_receipt(&self, search: &DuplicateSearch, receipt: &TrashReceipt) {
         let Some(report) = search.report() else {
             tracing::error!("a receipt without its report: nothing said");
-            self.refuse_start(ui::DuplicatesRefusal::Interrupted);
+            self.refuse_start(ui::ToolRefusal::Interrupted);
             return;
         };
         let home = self
@@ -1279,8 +981,9 @@ impl DuplicatesScreen {
         let said = rows::receipt(report, receipt, home.as_deref());
         let at = {
             let state = self.0.borrow();
-            let now = (state.seams.now)();
-            crate::dashboard::moment(now.as_second(), now, &state.seams.zone).unwrap_or_default()
+            let now = (state.seams.search.now)();
+            crate::dashboard::moment(now.as_second(), now, &state.seams.search.zone)
+                .unwrap_or_default()
         };
         crate::shown::show(&self.0.borrow().kept_model, said.kept);
         self.with_window(|duplicates| {
@@ -1288,7 +991,7 @@ impl DuplicatesScreen {
             duplicates.set_moved_files(shown(said.trashed + said.unchecked));
             duplicates.set_moved(size(said.moved_bytes));
             duplicates.set_trashed_at(at);
-            duplicates.set_step(ui::DuplicatesStep::Receipt);
+            duplicates.set_step(ui::ToolStep::Receipt);
         });
         // What it found is no more: a new search starts from scratch.
         self.give_up();
@@ -1338,8 +1041,8 @@ impl DuplicatesScreen {
         }
         self.give_up();
         self.with_window(|duplicates| {
-            duplicates.set_refused(ui::DuplicatesRefusal::None);
-            duplicates.set_step(ui::DuplicatesStep::Start);
+            duplicates.set_refused(ui::ToolRefusal::None);
+            duplicates.set_step(ui::ToolStep::Start);
         });
         self.show_start();
         self.read_folders();
@@ -1370,35 +1073,10 @@ impl DuplicatesScreen {
             }
             state.moving.take()
         };
-        let Some(moving) = moving else {
-            return;
-        };
-        let started = Instant::now();
-        match moving.receiver.recv_timeout(TRASH_WAIT) {
-            Ok(_) => {
-                tracing::info!(waited = ?started.elapsed(), "move to the trash ended before closing");
-            }
-            Err(RecvTimeoutError::Disconnected) => {
-                tracing::error!(
-                    waited = ?started.elapsed(),
-                    "the thread moving copies ended without word: some may be in the trash"
-                );
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                tracing::warn!(waited = ?started.elapsed(), "move to the trash left running at closing");
-            }
+        if let Some(moving) = moving {
+            crate::user_files::wait_at_closing(&moving.receiver, "duplicates");
         }
     }
-}
-
-/// The instant `at` as the window says it at `now`: a date that cannot be
-/// said is a default moment.
-fn moment(at: SystemTime, now: Timestamp, zone: &TimeZone) -> ui::Moment {
-    Timestamp::try_from(at)
-        .inspect_err(|error| tracing::debug!(%error, "a date of a copy beyond what a date holds"))
-        .ok()
-        .and_then(|at| crate::dashboard::moment(at.as_second(), now, zone))
-        .unwrap_or_default()
 }
 
 /// The part `done` is of `total`, from 0 to 1.
@@ -1418,13 +1096,8 @@ fn part(done: u64, total: u64) -> f32 {
 #[cfg(test)]
 pub fn inert() -> DuplicateSeams {
     DuplicateSeams {
-        home: None,
-        folders: Arc::new(|_| Ok(Vec::new())),
+        search: crate::user_files::inert(),
         threads: Arc::new(|_| NonZeroUsize::MIN),
-        trash: Arc::new(|| Err(io::Error::from(io::ErrorKind::Unsupported))),
-        open: Rc::new(|_, done| done(false)),
-        now: Timestamp::now,
-        zone: TimeZone::UTC,
     }
 }
 

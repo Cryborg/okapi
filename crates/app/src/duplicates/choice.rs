@@ -9,6 +9,8 @@ use std::time::SystemTime;
 
 use okapi_platform::PersonalKind;
 
+use crate::user_files::Folder;
+
 /// What the rules read of a copy.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Facts<'a> {
@@ -28,14 +30,6 @@ impl Facts<'_> {
     const fn may_go(&self) -> bool {
         self.frees && self.trashable
     }
-}
-
-/// A personal folder, as the rules know it: its kind, its real path (a link
-/// on its way resolved, as the copies' paths are).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Folder {
-    pub kind: PersonalKind,
-    pub path: std::path::PathBuf,
 }
 
 /// Why a copy is kept.
@@ -370,23 +364,13 @@ pub(crate) fn totals<'a>(groups: impl IntoIterator<Item = (u64, &'a [Chosen])>) 
         })
 }
 
-/// The rank of the personal folder `path` lies in: the deepest that holds
-/// it.
-pub(crate) fn folder_of(path: &Path, folders: &[Folder]) -> Option<usize> {
-    folders
-        .iter()
-        .enumerate()
-        .filter(|(_, folder)| path.starts_with(&folder.path))
-        .max_by_key(|(_, folder)| folder.path.components().count())
-        .map(|(rank, _)| rank)
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
     use super::*;
+    use crate::user_files::folder_of;
 
     const DOCUMENTS: usize = 0;
     const PICTURES: usize = 1;
@@ -695,27 +679,6 @@ mod tests {
                 files: 3,
                 groups: 2,
             }
-        );
-    }
-
-    #[test]
-    fn a_copy_lies_in_the_deepest_personal_folder_that_holds_it() {
-        let mut folders = folders();
-        folders.push(Folder {
-            kind: PersonalKind::Music,
-            path: PathBuf::from("/home/ana/Documents/Musique"),
-        });
-        assert_eq!(
-            folder_of(Path::new("/home/ana/Documents/Musique/a"), &folders),
-            Some(4)
-        );
-        assert_eq!(
-            folder_of(Path::new("/home/ana/Documents/a"), &folders),
-            Some(DOCUMENTS)
-        );
-        assert_eq!(
-            folder_of(Path::new("/home/ana/Documentsx/a"), &folders),
-            None
         );
     }
 

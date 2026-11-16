@@ -559,23 +559,9 @@ impl AppsScreen {
         if self.0.borrow().leftovers.copies.forgetting.is_some() {
             tracing::warn!("a copy of snapd being forgotten left at closing: snapd ends it");
         }
-        let Some(moving) = self.0.borrow_mut().leftovers.moving.take() else {
-            return;
-        };
-        let started = std::time::Instant::now();
-        match moving.recv_timeout(crate::duplicates::TRASH_WAIT) {
-            Ok(_) => {
-                tracing::info!(waited = ?started.elapsed(), "move of leftovers ended before closing");
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                tracing::error!(
-                    waited = ?started.elapsed(),
-                    "the move of leftovers ended without a word: some may be in the trash"
-                );
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                tracing::warn!(waited = ?started.elapsed(), "move of leftovers left running at closing");
-            }
+        let moving = self.0.borrow_mut().leftovers.moving.take();
+        if let Some(moving) = moving {
+            crate::user_files::wait_at_closing(&moving, "leftovers");
         }
     }
 

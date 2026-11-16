@@ -1294,6 +1294,20 @@ const fn widget_size(size: WidgetSize) -> ui::WidgetSize {
     }
 }
 
+/// The instant `at` (a file's date) as the window says it at `now`: a date
+/// that cannot be said is a default moment.
+pub(crate) fn moment_of_time(
+    at: std::time::SystemTime,
+    now: Timestamp,
+    zone: &TimeZone,
+) -> ui::Moment {
+    Timestamp::try_from(at)
+        .inspect_err(|error| tracing::debug!(%error, "a date of a file beyond what a date holds"))
+        .ok()
+        .and_then(|at| moment(at.as_second(), now, zone))
+        .unwrap_or_default()
+}
+
 /// The instant `seconds` as the window says it at `now`; none, traced, for
 /// seconds no date holds.
 pub(crate) fn moment(seconds: i64, now: Timestamp, zone: &TimeZone) -> Option<ui::Moment> {
@@ -1823,7 +1837,7 @@ pub mod tests {
 
     /// The window on the Home page, and the page itself.
     fn home_screen(seams: DashboardSeams) -> (ui::AppWindow, DashboardScreen) {
-        let (window, _cleaner, home, _settings, _apps, _duplicates) =
+        let crate::Screens { window, home, .. } =
             crate::wide_window(seams_never_scanning(), seams, Language::French);
         (window, home)
     }
@@ -1831,8 +1845,7 @@ pub mod tests {
     /// The window on the Home page at the mockup's size (three columns,
     /// every widget in view), its cleaner working through `cleaner`.
     fn on_home_with(cleaner: Seams, seams: DashboardSeams) -> ui::AppWindow {
-        let (window, _cleaner, _home, _settings, _apps, _duplicates) =
-            crate::wide_window(cleaner, seams, Language::French);
+        let crate::Screens { window, .. } = crate::wide_window(cleaner, seams, Language::French);
         window
     }
 

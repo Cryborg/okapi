@@ -1,41 +1,16 @@
 import { Size } from "cleaner-model.slint";
 import { Moment } from "dashboard-model.slint";
-
-// Where the screen stands.
-export enum DuplicatesStep { start, searching, result, receipt }
-
-// How the search shown runs, or why it ended without a result.
-export enum SearchPhase { opening, running, stopped, failed }
+import { FoldersState, KeptShown, PersonalShown, SearchPhase, ToolRefusal, ToolStep } from "user-files-model.slint";
 
 // What the search is at: its folders listed, then the files of one size
 // read at their ends, then the files still alike read whole.
 export enum SearchStage { listing, ends, contents }
 
-// Why nothing started, or nothing moved: the settings unreadable, their
-// last change still being written or not written, an exclusion refused, the
-// home folder unread, no folder that opens, the system gave no thread, the
-// trash cannot be opened, a move to the trash cut short.
-export enum DuplicatesRefusal { none, settings, saving, unsaved, exclusion, home, folder, thread, trash, interrupted }
-
 // Why a copy is kept, said on its badge.
 export enum KeptWhy { none, other-names, other-device, outside, oldest, newest, shortest, in-folder, outside-personal }
 
-// Why a copy asked for stayed where it was, or went unchecked.
-export enum ReceiptWhy { changed, gone, keeper-changed, no-sure-keeper, other-device, refused, excluded, unsupported, okapi, unchecked }
-
 // A rule the user applies to every group at once.
 export enum QuickRule { oldest, newest, shortest, folder }
-
-// What the start knows of the personal folders: being read, read, none
-// named, or they could not be read; or the home folder itself is unknown.
-export enum FoldersState { reading, read, none, unread, homeless }
-
-// A personal folder offered at the start.
-export struct PersonalShown {
-    name: string,
-    path: string,
-    checked: bool,
-}
 
 // One line of the tree: a group's header, or one of its copies, all of one
 // height. A copy names its header's line (`head`).
@@ -68,19 +43,11 @@ export struct DuplicateRow {
     why-second: string,
 }
 
-// A file that stayed where it was, or went to the trash unchecked.
-export struct KeptShown {
-    name: string,
-    folder: string,
-    size: Size,
-    why: ReceiptWhy,
-}
-
 // The duplicates screen: Rust fills it, the page shows it and calls back.
 // What goes to the trash is named by the rows checked, never by a path.
 export global Duplicates {
-    in property <DuplicatesStep> step;
-    in property <DuplicatesRefusal> refused: DuplicatesRefusal.none;
+    in property <ToolStep> step;
+    in property <ToolRefusal> refused: ToolRefusal.none;
 
     // The start: the personal folders, being read or read; the whole home
     // folder instead.

@@ -41,8 +41,11 @@ pub use request::{
 };
 
 /// The version of the request and of the answer; a helper of another version
-/// refuses the request (`unsupportedVersion`).
-pub const PROTOCOL_VERSION: u32 = 3;
+/// refuses the request (`unsupportedVersion`), which the interface says as a
+/// helper to install again. Raised too when the same request is answered
+/// otherwise: since 4, the files of snapd's cache that installed snaps share
+/// are kept, which a helper installed before would remove.
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// How the helper ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -113,12 +113,12 @@ fn refuses_a_request_of_another_form_or_version() {
     let now = SystemTime::now();
     for line in [
         &b"not json"[..],
-        b"{\"version\": 3}",
+        b"{\"version\": 4}",
         b"",
         // The fields as an array, which serde accepts for a structure.
-        b"[3, \"clean\", [\"/var/crash\"], 60, []]",
+        b"[4, \"clean\", [\"/var/crash\"], 60, []]",
         // Complete but for its one byte that is not UTF-8.
-        b"{\"version\": 3, \"operation\": \"clean\", \"targets\": [\"/var/\xff\"], \"minAgeMinutes\": 60, \"exclusions\": []}",
+        b"{\"version\": 4, \"operation\": \"clean\", \"targets\": [\"/var/\xff\"], \"minAgeMinutes\": 60, \"exclusions\": []}",
     ] {
         assert!(
             matches!(

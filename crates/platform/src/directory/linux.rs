@@ -98,16 +98,18 @@ impl Directory {
     ///
     /// # Errors
     ///
-    /// [`io::ErrorKind::PermissionDenied`] when it may not, the system's error
-    /// while reading the directory, or [`io::ErrorKind::Unsupported`] were the
-    /// effective user unknown (never on Linux).
+    /// [`io::ErrorKind::PermissionDenied`] when it may not (`EPERM`, as
+    /// `unlinkat` would say it: its number crosses the helper's answer and
+    /// the history), the system's error while reading the directory, or
+    /// [`io::ErrorKind::Unsupported`] were the effective user unknown (never
+    /// on Linux).
     pub fn ensure_removable(&self, entry: &EntryStatus) -> io::Result<()> {
         self.ensure_modifiable()?;
         let user = crate::effective_user().ok_or(io::ErrorKind::Unsupported)?;
         if removal_allowed(user, &self.status()?, entry) {
             Ok(())
         } else {
-            Err(io::ErrorKind::PermissionDenied.into())
+            Err(Errno::PERM.into())
         }
     }
 

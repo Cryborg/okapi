@@ -34,7 +34,7 @@ pub enum Operation {
 }
 
 /// The request as written, one JSON object on one line:
-/// `{"version": 3, "operation": "clean", "targets": ["/var/crash"],
+/// `{"version": 4, "operation": "clean", "targets": ["/var/crash"],
 /// "minAgeMinutes": 60, "exclusions": ["/var/crash/keep"]}`, the exclusions
 /// as the caller resolved them. The caller writes it with the type the
 /// helper reads it with ([`request_line`]).

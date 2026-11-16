@@ -741,19 +741,28 @@ pub(crate) struct KeyGroup {
 }
 
 impl KeyGroup {
+    /// Every value `wanted` is given in this group, in their order.
+    pub(crate) fn values<'a, 'b>(
+        &'a self,
+        wanted: &'b str,
+    ) -> impl Iterator<Item = &'a str> + use<'a, 'b> {
+        self.keys
+            .iter()
+            .filter(move |(key, _)| key == wanted)
+            .map(|(_, value)| value.as_str())
+    }
+
     /// The value of `wanted`, the last one when it is written twice (as
     /// `GKeyFile` reads it).
     pub(crate) fn value(&self, wanted: &str) -> Option<&str> {
-        self.keys
-            .iter()
-            .rev()
-            .find(|(key, _)| key == wanted)
-            .map(|(_, value)| value.as_str())
+        self.values(wanted).last()
     }
 }
 
 /// The groups of the key file `text`, in their order: comments, blank
-/// lines and keys before any group are passed over.
+/// lines and keys before any group are passed over. A group named twice is
+/// two groups here, where `GKeyFile` would merge them: an extension named
+/// twice is two candidates, each checked by its own metadata.
 pub(crate) fn key_file_groups(text: &str) -> Vec<KeyGroup> {
     let mut groups: Vec<KeyGroup> = Vec::new();
     for line in text.lines().map(str::trim) {
@@ -782,7 +791,7 @@ pub(crate) fn key_file_groups(text: &str) -> Vec<KeyGroup> {
 /// branch is `branch`), as libflatpak tells them: marked `autodelete`, a
 /// subset of locales, or translations or debugging symbols by their name.
 /// Each is only a candidate: whether it is the application's is told by its
-/// own metadata ([`not_its_own`]).
+/// own metadata ([`Owner::not_its_own`]).
 fn extensions_deleted(metadata: &str, branch: &str) -> Vec<Extension> {
     key_file_groups(metadata)
         .into_iter()
@@ -854,7 +863,7 @@ fn runtime_ids(installation: &Path, app: &FlatpakRef) -> Result<Vec<String>, Why
 /// # Errors
 ///
 /// Its data cannot be read (traced by the caller).
-fn origin(deployment: &Path) -> io::Result<Option<String>> {
+fn deployment_origin(deployment: &Path) -> io::Result<Option<String>> {
     let bytes =
         match okapi_platform::read_regular_capped(&deployment.join(DEPLOY_DATA), DEPLOY_DATA_LIMIT)
         {
@@ -871,7 +880,8 @@ fn origin(deployment: &Path) -> io::Result<Option<String>> {
 }
 
 /// What a candidate needs to go with `app`: the application's origin, read
-/// once, when a candidate is first deployed.
+/// once, when first needed (an application with no candidate of its own
+/// never needs it).
 struct Owner<'a> {
     installation: &'a Path,
     app: &'a FlatpakRef,
@@ -887,22 +897,23 @@ impl Owner<'_> {
     /// [`Why::Unclear`] when it cannot be told (traced): what goes with it
     /// cannot either, as for libflatpak.
     fn origin(&mut self) -> Result<&str, Why> {
-        if self.origin.is_none() {
-            let read = origin(self.deployment);
+        let origin = if let Some(origin) = self.origin.take() {
+            origin
+        } else {
             let app = self.app;
-            self.origin = Some(match read {
+            match deployment_origin(self.deployment) {
                 Ok(Some(origin)) => origin,
                 Ok(None) => {
-                    tracing::warn!(%app, "its origin unknown: what goes unknown");
+                    tracing::warn!(%app, "its origin unknown (no data, or none naming a remote): what goes unknown");
                     return Err(Why::Unclear);
                 }
                 Err(error) => {
                     tracing::warn!(%app, %error, "its origin unreadable: what goes unknown");
                     return Err(Why::Unclear);
                 }
-            });
-        }
-        Ok(self.origin.as_deref().unwrap_or_default())
+            }
+        };
+        Ok(self.origin.insert(origin))
     }
 
     /// Why the extension `reference` deployed at `deployment` is not the
@@ -953,7 +964,7 @@ impl Owner<'_> {
         {
             return Ok(Some("of another branch still installed"));
         }
-        let own = match origin(deployment) {
+        let own = match deployment_origin(deployment) {
             Ok(Some(own)) => own,
             Ok(None) => return Ok(Some("no origin")),
             Err(error) => {
@@ -981,8 +992,8 @@ pub struct Related {
 /// installed there that go with it: named by its deployment's metadata now
 /// (none when it has no metadata), as libflatpak names them, and each, by
 /// its own metadata and data, the application's and from its remote. What
-/// goes is removed as root by flatpak's helper: an application never makes
-/// another's go.
+/// goes is removed as root by flatpak's helper: an application's metadata never
+/// makes another's go.
 ///
 /// # Errors
 ///

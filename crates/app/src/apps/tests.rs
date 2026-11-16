@@ -1487,6 +1487,8 @@ fn a_flatpak_alone_unmeasured_keeps_the_row_s_estimate() {
     let (window, ..) = on_apps_reading(fake, true, builder_of_the_system);
     ask(&window, "Builder");
     assert!(shows(&window, "Place libérée : 2,0 Mo."));
+    // Nothing goes with it: no list of one name.
+    assert!(!shows(&window, "Ce qui partirait : org.gnome.Builder"));
 }
 
 #[test]

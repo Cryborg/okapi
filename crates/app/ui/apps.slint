@@ -509,20 +509,16 @@ component Uninstall inherits ModalFrame {
             ? @tr("{} et un paquet qui en dépend partiront. Place libérée : {}.", Apps.target, Words.size(Apps.freed))
             : @tr("Place libérée : {}.", Words.size(Apps.freed));
     }
-    if (Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.deb && Apps.going.length > 1) || (Apps.step == UninstallStep.refused && Apps.going.length > 0): Detail {
+    if Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.flatpak: Detail {
+        text: Apps.freed-known ? @tr("Place libérée : {}.", Words.size(Apps.freed)) : @tr("Place libérée : inconnue.");
+    }
+    // A flatpak's named one by one too: flatpak's helper removes them as root.
+    if (Apps.step == UninstallStep.confirm && (Apps.target-source == AppSource.deb || Apps.target-source == AppSource.flatpak) && Apps.going.length > 1) || (Apps.step == UninstallStep.refused && Apps.going.length > 0): Detail {
         text: @tr("Ce qui partirait : {}", AppWords.names(Apps.going));
         wrap: word-wrap;
     }
     if Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.deb: Detail {
         text: @tr("Ses réglages dans votre dossier personnel restent en place : vous les retrouvez si vous la réinstallez.");
-    }
-    if Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.flatpak: Detail {
-        text: Apps.freed-known ? @tr("Place libérée : {}.", Words.size(Apps.freed)) : @tr("Place libérée : inconnue.");
-    }
-    // Named one by one: flatpak's helper removes them as root.
-    if Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.flatpak && Apps.going.length > 1: Detail {
-        text: @tr("Ce qui partirait : {}", AppWords.names(Apps.going));
-        wrap: word-wrap;
     }
     if Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.flatpak: Detail {
         text: @tr("Ses données dans votre dossier personnel restent en place, ainsi que les environnements qu'elle utilisait.");

@@ -833,8 +833,7 @@ fn going_with_gimp(system: &Path) -> Vec<String> {
 fn an_application_never_makes_another_s_extensions_or_a_shared_runtime_go() {
     // Catches the application's metadata trusted to say what is its own:
     // flatpak's helper would remove, as root, another application's
-    // translations, the graphics drivers, the codecs. Each extension below
-    // but the first and the last fails one check alone.
+    // translations, the graphics drivers, the codecs.
     let root = tempfile::tempdir().unwrap();
     let system = root.path().join("system");
     let deployment = deploy(&system, "org.gimp.GIMP", "abc123");
@@ -844,8 +843,7 @@ fn an_application_never_makes_another_s_extensions_or_a_shared_runtime_go() {
          [Extension org.gimp.GIMP.Locale]\n\n\
          [Extension org.mozilla.firefox.Locale]\n\n\
          [Extension org.freedesktop.Platform.GL]\nsubdirectories=true\nautodelete=true\nversions=24.08\n\n\
-         [Extension org.freedesktop.Platform.ffmpeg-full]\nautodelete=true\nversion=24.08\n\n\
-         [Extension org.gimp.GIMP.Plugin]\nautodelete=true\nsubdirectories=true\n",
+         [Extension org.freedesktop.Platform.ffmpeg-full]\nautodelete=true\nversion=24.08\n",
     );
     deploy_runtime(&system, "org.gimp.GIMP.Locale", "stable");
     deploy_extension(
@@ -877,20 +875,38 @@ fn an_application_never_makes_another_s_extensions_or_a_shared_runtime_go() {
         "[Runtime]\nname=org.freedesktop.Platform.ffmpeg-full\n",
         ORIGIN,
     );
+    assert_eq!(
+        going_with_gimp(&system),
+        ["runtime/org.gimp.GIMP.Locale/x86_64/stable"]
+    );
+}
+
+#[test]
+fn an_extension_goes_only_when_it_says_itself_the_application_s_and_came_from_its_remote() {
+    // Catches each check of an extension's own metadata and origin skipped:
+    // each plug-in below but `Beta` fails one alone, and would go, as root.
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    let deployment = deploy(&system, "org.gimp.GIMP", "abc123");
+    write(
+        &deployment.join("metadata"),
+        "[Extension org.gimp.GIMP.Plugin]\nautodelete=true\nsubdirectories=true\n",
+    );
+    let deployed = |name: &str, metadata: &str, origin: &str| {
+        let id = format!("org.gimp.GIMP.Plugin.{name}");
+        deploy_extension(&system, &id, "stable", metadata, origin);
+        system.join(format!("runtime/{id}/x86_64/stable/abc123"))
+    };
     let plugin = |name: &str, reference: &str, origin: &str| {
         let id = format!("org.gimp.GIMP.Plugin.{name}");
-        deploy_extension(
-            &system,
-            &id,
-            "stable",
-            &extension_of(&id, reference),
-            origin,
-        );
+        deployed(name, &extension_of(&id, reference), origin)
     };
     plugin("Evil", "app/org.gimp.GIMP/x86_64/stable", "evil-remote");
     plugin("Runtime", "runtime/org.gimp.GIMP/x86_64/stable", ORIGIN);
     plugin("Prefix", "app/org.gimp.GIMP.Evil/x86_64/stable", ORIGIN);
     plugin("Three", "app/org.gimp.GIMP/x86_64", ORIGIN);
+    plugin("Five", "app/org.gimp.GIMP/x86_64/stable/x", ORIGIN);
+    plugin("Empty", "app/org.gimp.GIMP/x86_64/", ORIGIN);
     plugin("Arm", "app/org.gimp.GIMP/aarch64/stable", ORIGIN);
     // Built against another branch, which is not installed: it goes.
     plugin("Beta", "app/org.gimp.GIMP/x86_64/beta", ORIGIN);
@@ -899,20 +915,33 @@ fn an_application_never_makes_another_s_extensions_or_a_shared_runtime_go() {
     let other_branch = system.join("app/org.gimp.GIMP/x86_64/2-40");
     fs::create_dir_all(other_branch.join("def456")).unwrap();
     std::os::unix::fs::symlink("def456", other_branch.join("active")).unwrap();
-    // `ref` outside its group says nothing.
-    deploy_extension(
-        &system,
-        "org.gimp.GIMP.Plugin.Misplaced",
-        "stable",
+    // `ref` outside its group says nothing; the last group says.
+    deployed(
+        "Misplaced",
         "[Runtime]\nref=app/org.gimp.GIMP/x86_64/stable\n",
         ORIGIN,
     );
+    deployed(
+        "Twice",
+        "[ExtensionOf]\nref=app/org.gimp.GIMP/x86_64/stable\nref=app/org.mozilla.firefox/x86_64/stable\n",
+        ORIGIN,
+    );
+    deployed(
+        "Last",
+        "[ExtensionOf]\nref=app/org.gimp.GIMP/x86_64/stable\n\n\
+         [ExtensionOf]\nref=app/org.mozilla.firefox/x86_64/stable\n",
+        ORIGIN,
+    );
+    // Its metadata or its origin missing, or naming no remote.
+    let no_metadata = plugin("NoMetadata", "app/org.gimp.GIMP/x86_64/stable", ORIGIN);
+    fs::remove_file(no_metadata.join("metadata")).unwrap();
+    let no_origin = plugin("NoOrigin", "app/org.gimp.GIMP/x86_64/stable", ORIGIN);
+    fs::remove_file(no_origin.join("deploy")).unwrap();
+    let no_nul = plugin("NoNul", "app/org.gimp.GIMP/x86_64/stable", ORIGIN);
+    fs::write(no_nul.join("deploy"), ORIGIN).unwrap();
     assert_eq!(
         going_with_gimp(&system),
-        [
-            "runtime/org.gimp.GIMP.Locale/x86_64/stable",
-            "runtime/org.gimp.GIMP.Plugin.Beta/x86_64/stable",
-        ]
+        ["runtime/org.gimp.GIMP.Plugin.Beta/x86_64/stable"]
     );
 }
 

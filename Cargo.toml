@@ -60,3 +60,9 @@ expect_used = "warn"
 dbg_macro = "warn"
 todo = "warn"
 allow_attributes_without_reason = "warn"
+
+# Full debug information makes `target/` much heavier, in every checkout.
+# Line tables keep each frame of a backtrace located (the journal traces one
+# at each panic); what goes is reading variables in a debugger.
+[profile.dev]
+debug = "line-tables-only"

@@ -6,8 +6,10 @@
 //! It reads one request on one line of its standard input ([`Request`]): the
 //! targets by the path the rules write them with, never a path to remove
 //! (invariant 1), an age no younger than [`HELPER_MIN_AGE_FLOOR`], and
-//! exclusions. It scans those targets itself and, for a cleaning, removes
-//! what that scan offers there, through the engine and its checks. It writes
+//! exclusions, each an extension or a path at, above or below one of its
+//! targets as written (it resolves none written elsewhere). It scans those
+//! targets itself and, for a cleaning, removes what that scan offers there,
+//! through the engine and its checks. It writes
 //! one JSON document on its standard output ([`Answer`], or [`RefusalAnswer`])
 //! and its traces on its standard error, never a file of its own (no
 //! journal). It runs no command (invariant 4).

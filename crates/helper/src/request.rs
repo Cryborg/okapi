@@ -3,8 +3,9 @@
 
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
+use std::fmt;
 use std::io::{self, BufRead, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use okapi_engine::{ExclusionError, Exclusions, Origin, ScanOptions, settings_min_age};
@@ -116,6 +117,9 @@ pub enum Refusal {
 
     #[error("an exclusion cannot be used: {error}")]
     Exclusion { error: ExclusionError },
+
+    #[error("`{}` lies neither at, above nor below a target of the helper", path.display())]
+    ExclusionElsewhere { path: PathBuf },
 }
 
 impl Refusal {
@@ -132,6 +136,7 @@ impl Refusal {
             Self::AgeBelowFloor { .. } => "ageBelowFloor",
             Self::AgeBeyondClock { .. } => "ageBeyondClock",
             Self::Exclusion { .. } => "exclusion",
+            Self::ExclusionElsewhere { .. } => "exclusionElsewhere",
         }
     }
 
@@ -146,7 +151,8 @@ impl Refusal {
             | Self::NoTarget
             | Self::AgeBelowFloor { .. }
             | Self::AgeBeyondClock { .. }
-            | Self::Exclusion { .. } => None,
+            | Self::Exclusion { .. }
+            | Self::ExclusionElsewhere { .. } => None,
         }
     }
 }
@@ -231,12 +237,31 @@ pub fn admin_targets(rules: &RuleSet) -> BTreeMap<String, Origin> {
 
 /// A request checked against the rules: what to do, on which targets, with
 /// which age and exclusions.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Request {
     operation: Operation,
     selection: Selection,
     min_age: Duration,
     exclusions: Exclusions,
+    /// How many exclusions were written ([`Exclusions`] keeps two forms of
+    /// a path).
+    exclusion_count: usize,
+}
+
+/// The exclusions by their number alone: their real locations and
+/// identities, read as root, would tell the caller (who reads the helper's
+/// traces) where a link it placed below a target leads, and the identity of
+/// what it leads to. Whether it leads somewhere still shows, as a refusal.
+impl fmt::Debug for Request {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Request")
+            .field("operation", &self.operation)
+            .field("selection", &self.selection)
+            .field("min_age", &self.min_age)
+            .field("exclusions", &self.exclusion_count)
+            .finish()
+    }
 }
 
 impl Request {
@@ -251,13 +276,23 @@ impl Request {
     }
 
     /// Reads the request `line` and checks it against `rules`, the ages
-    /// measured from `now`.
+    /// measured from `now`; traces it accepted, or why it is refused.
     ///
     /// # Errors
     ///
     /// [`Refusal`]: the request asks for anything but targets of the rules
-    /// that need the administrator, or for an age below the floor.
+    /// that need the administrator, for an age below the floor, or names an
+    /// exclusion that touches none of the helper's targets as written, or
+    /// that cannot be used (empty, holding `..`, or that cannot be located).
     pub fn read(line: &[u8], rules: &RuleSet, now: SystemTime) -> Result<Self, Refusal> {
+        Self::checked(line, rules, now)
+            .inspect(|request| tracing::info!(?request, "request accepted"))
+            .inspect_err(|refusal| {
+                tracing::warn!(refused = refusal.key(), target = ?refusal.target(), %refusal, "request refused");
+            })
+    }
+
+    fn checked(line: &[u8], rules: &RuleSet, now: SystemTime) -> Result<Self, Refusal> {
         if line.len() > MAX_REQUEST_BYTES {
             return Err(Refusal::TooLong);
         }
@@ -275,6 +310,20 @@ impl Request {
         if min_age < HELPER_MIN_AGE_FLOOR {
             return Err(Refusal::AgeBelowFloor { minutes });
         }
+        // Every one placed, as written, before any is read: root never
+        // resolves a path the caller names away from its targets (where a
+        // link leads, whether a file exists). Below a target, a link the
+        // caller made may still lead anywhere: root reads only whether it
+        // leads somewhere.
+        let targets = admin_targets(rules);
+        if let Some(path) = written.exclusions.iter().find(|exclusion| {
+            !targets
+                .keys()
+                .any(|target| Exclusions::touches_lexically(exclusion, Path::new(target)))
+        }) {
+            return Err(Refusal::ExclusionElsewhere { path: path.clone() });
+        }
+        let exclusion_count = written.exclusions.len();
         let exclusions =
             Exclusions::new(written.exclusions).map_err(|error| Refusal::Exclusion { error })?;
         Ok(Self {
@@ -282,6 +331,7 @@ impl Request {
             selection,
             min_age,
             exclusions,
+            exclusion_count,
         })
     }
 

@@ -73,22 +73,27 @@ impl Exclusions {
         Self::default()
     }
 
-    /// Whether the exclusion `entry`, as the user wrote it, may cover what
-    /// lies at or below `root`: an extension always; a path at, above or
-    /// below `root`, as written or at its real location, ignoring case. One
-    /// whose real location cannot be read may: in doubt, it counts.
+    /// Whether the exclusion `entry`, as written, may cover what lies at or
+    /// below `root`, without reading anything: an extension always; a path
+    /// at, above or below `root`, ignoring case.
     #[must_use]
-    pub fn may_touch(entry: &Path, root: &Path) -> bool {
-        if entry
+    pub fn touches_lexically(entry: &Path, root: &Path) -> bool {
+        entry
             .to_str()
             .is_some_and(|text| text.starts_with(EXTENSION_PATTERN_PREFIX))
-        {
-            return true;
-        }
-        let related = |path: &Path| {
-            starts_with_ignoring_case(path, root) || starts_with_ignoring_case(root, path)
-        };
-        related(entry) || canonicalize_longest_prefix(entry).map_or(true, |real| related(&real))
+            || starts_with_ignoring_case(entry, root)
+            || starts_with_ignoring_case(root, entry)
+    }
+
+    /// Where the exclusion path `entry` really lies, as [`Self::new`] reads
+    /// it: through its links, the part that does not exist yet kept as
+    /// written.
+    ///
+    /// # Errors
+    ///
+    /// Any error but absence, and a dangling link in the path.
+    pub fn real_location(entry: &Path) -> io::Result<PathBuf> {
+        canonicalize_longest_prefix(entry)
     }
 
     /// Reads the exclusions the user wrote. A path is kept as written and as
@@ -407,24 +412,37 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn an_exclusion_touches_a_root_at_above_or_below_it_by_any_spelling() {
+    fn an_exclusion_touches_a_root_at_above_or_below_it_as_written() {
+        let root = Path::new("/var/crash");
+        let touches = |entry: &str| Exclusions::touches_lexically(Path::new(entry), root);
+        assert!(touches("*.log"));
+        assert!(touches("/var/crash/keep"));
+        assert!(touches("/var"), "above it: excludes it whole");
+        assert!(touches("/VAR"), "above it, case ignored");
+        assert!(!touches("/va"), "whole components");
+        assert!(touches("/"));
+        assert!(touches("/VAR/Crash/keep"), "case ignored, as matching does");
+        assert!(touches("/var//crash/./keep/"), "spelled otherwise");
+        assert!(!touches("/var/crashes"), "a name beside it");
+        assert!(!touches("/home/ana/keep"));
+        assert!(!touches("/root/x"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_real_location_of_an_exclusion_is_read_through_its_links() {
         let directory = tempfile::tempdir().unwrap();
         let real = std::fs::canonicalize(directory.path()).unwrap();
-        let root = real.join("var/crash");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::create_dir(real.join("elsewhere")).unwrap();
-        std::os::unix::fs::symlink(&root, real.join("alias")).unwrap();
-        let touches = |entry: PathBuf| Exclusions::may_touch(&entry, &root);
-        assert!(touches(PathBuf::from("*.log")));
-        assert!(touches(root.join("keep")));
-        assert!(touches(real.join("var")), "above it: excludes it whole");
-        assert!(
-            touches(real.join("VAR/Crash/keep")),
-            "case ignored, as matching does"
+        let target = real.join("var/crash");
+        std::fs::create_dir_all(&target).unwrap();
+        std::os::unix::fs::symlink(&target, real.join("alias")).unwrap();
+        std::os::unix::fs::symlink(real.join("nowhere"), real.join("dangling")).unwrap();
+        assert_eq!(
+            Exclusions::real_location(&real.join("alias/keep")).unwrap(),
+            target.join("keep"),
+            "through a link, the rest as written"
         );
-        assert!(touches(real.join("alias/keep")), "through a link to it");
-        assert!(!touches(real.join("elsewhere/keep")));
-        assert!(!touches(real.join("var/crashes")), "a name beside it");
+        assert!(Exclusions::real_location(&real.join("dangling/keep")).is_err());
     }
 
     #[test]

@@ -6,6 +6,7 @@
 //! of the one scan that unlocked what is checked.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -18,7 +19,7 @@ use okapi_helper::{
 use okapi_rules::RuleSet;
 use slint::ComponentHandle as _;
 
-use super::{CANCEL_WAIT, CleanerScreen, Inputs, Running, Task, WATCH_EVERY};
+use super::{CANCEL_WAIT, CleanerScreen, Inputs, Problem, Running, Task, WATCH_EVERY};
 use crate::elevation::{ElevationFailure, ElevationStep};
 use crate::ui;
 
@@ -31,12 +32,18 @@ pub struct Granted {
 
 impl Granted {
     /// What the helper is sent for `targets`, from the settings `inputs`:
-    /// the settings' age, never below the helper's floor; and the exclusions
-    /// that may touch a target ([`Exclusions::may_touch`]), so that one
-    /// elsewhere (a mount root cannot read) never makes it refuse. Telling
-    /// which may touch one reads where each lies, which waits on a mount that
-    /// stopped answering: call it from a task's thread, not the window's.
-    pub fn of(inputs: &Inputs, targets: &BTreeSet<String>) -> Self {
+    /// the settings' age, never below the helper's floor; and each exclusion
+    /// that may touch a target, in the forms the helper accepts
+    /// ([`sent_forms`]), so that it never reads where something lies
+    /// elsewhere. Reading where each lies waits on a mount that stopped
+    /// answering: call it from a task's thread, not the window's.
+    ///
+    /// # Errors
+    ///
+    /// [`Problem::Exclusion`]: an exclusion is refused as the user's own scan
+    /// and cleaning refuse it (relative, holding `..`, or that cannot be
+    /// located: what it protects is unknown).
+    pub fn of(inputs: &Inputs, targets: &BTreeSet<String>) -> Result<Self, Problem> {
         let floor = HELPER_MIN_AGE_FLOOR
             .as_secs()
             .div_ceil(Duration::from_mins(1).as_secs());
@@ -49,24 +56,34 @@ impl Granted {
             "reading which exclusions may touch root's targets"
         );
         let started = Instant::now();
+        let resolved = Exclusions::new(inputs.exclusions.iter().cloned()).map_err(|error| {
+            tracing::warn!(?error, "settings exclusion refused: nothing asked of root");
+            Problem::Exclusion
+        })?;
+        let led_to = linked_targets(targets);
         // In order: settings that only reorder them are the same.
-        let exclusions: Vec<PathBuf> = inputs
-            .exclusions
-            .iter()
-            .filter(|exclusion| {
-                targets
-                    .iter()
-                    .any(|target| Exclusions::may_touch(exclusion, Path::new(target)))
-            })
-            .cloned()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        tracing::info!(elapsed = ?started.elapsed(), kept = exclusions.len(), "exclusions for root read");
-        Self {
+        let mut exclusions = BTreeSet::new();
+        let mut dropped = 0_usize;
+        for exclusion in &inputs.exclusions {
+            let sent = sent_forms(exclusion, targets, &led_to).map_err(|error| {
+                // Located a moment ago: it moved meanwhile.
+                tracing::warn!(exclusion = %exclusion.display(), kind = ?error.kind(), code = error.raw_os_error(), %error, "an exclusion can no longer be located: nothing asked of root");
+                Problem::Exclusion
+            })?;
+            if sent.is_empty() {
+                dropped += 1;
+                tracing::info!(exclusion = %exclusion.display(), "an exclusion that touches none of root's targets: not sent");
+            }
+            exclusions.extend(sent);
+        }
+        let whole = whole_by_identity(&resolved, targets, &led_to, &exclusions);
+        exclusions.extend(whole);
+        let exclusions: Vec<PathBuf> = exclusions.into_iter().collect();
+        tracing::info!(elapsed = ?started.elapsed(), kept = exclusions.len(), dropped, "exclusions for root read");
+        Ok(Self {
             minutes,
             exclusions,
-        }
+        })
     }
 
     /// The request line of `operation` on `targets`.
@@ -78,6 +95,96 @@ impl Granted {
             )
             .ok()
     }
+}
+
+/// The targets reached through a linked ancestor (`/var/cache` moved to
+/// another volume), each with where it leads: root's scan walks it there. One
+/// whose way the user cannot read is left out, traced: an exclusion where it
+/// leads would need a link the user cannot see, in a directory they cannot
+/// enter.
+fn linked_targets(targets: &BTreeSet<String>) -> Vec<(&Path, PathBuf)> {
+    targets
+        .iter()
+        .map(Path::new)
+        .filter_map(|target| match Exclusions::real_location(target) {
+            Ok(real) => (real != target).then_some((target, real)),
+            Err(error) => {
+                tracing::warn!(target = %target.display(), kind = ?error.kind(), %error, "where a target leads cannot be read: no exclusion is placed there");
+                None
+            }
+        })
+        .collect()
+}
+
+/// The targets excluded by identity alone (a bind mount of an excluded
+/// directory, or of one above the target or where it leads), that no form in
+/// `sent` covers already: sent whole, as the user's scan leaves them whole. A
+/// directory excluded by identity below a target cannot be named: never sent.
+fn whole_by_identity(
+    resolved: &Exclusions,
+    targets: &BTreeSet<String>,
+    led_to: &[(&Path, PathBuf)],
+    sent: &BTreeSet<PathBuf>,
+) -> Vec<PathBuf> {
+    targets
+        .iter()
+        .map(Path::new)
+        .filter(|target| !sent.iter().any(|form| target.starts_with(form)))
+        .filter(|target| {
+            let leads_to = led_to
+                .iter()
+                .find(|(linked, _)| linked == target)
+                .map(|(_, leads_to)| leads_to.as_path());
+            std::iter::once(*target)
+                .chain(leads_to)
+                .any(|place| resolved.excludes_through_identity(place))
+        })
+        .inspect(|target| tracing::info!(target = %target.display(), "a target excluded by identity: sent whole"))
+        .map(Path::to_path_buf)
+        .collect()
+}
+
+/// The forms of `exclusion` the helper is sent, each at, above or below one
+/// of `targets` as written ([`Exclusions::touches_lexically`]): itself when
+/// it is; else its real location when that is (root reads it again); else,
+/// for every target of `led_to` (a link) where it leads, the same place
+/// below that target as written when `exclusion` lies there, or the target
+/// itself when it lies above (root resolves either to where it lies); none
+/// when it touches no target. Where a target leads is compared to the real
+/// location as written, case included.
+///
+/// # Errors
+///
+/// Where `exclusion` lies cannot be read.
+fn sent_forms(
+    exclusion: &Path,
+    targets: &BTreeSet<String>,
+    led_to: &[(&Path, PathBuf)],
+) -> io::Result<Vec<PathBuf>> {
+    let touches = |path: &Path| {
+        targets
+            .iter()
+            .any(|target| Exclusions::touches_lexically(path, Path::new(target)))
+    };
+    if touches(exclusion) {
+        return Ok(vec![exclusion.to_path_buf()]);
+    }
+    let real = Exclusions::real_location(exclusion)?;
+    if touches(&real) {
+        return Ok(vec![real]);
+    }
+    Ok(led_to
+        .iter()
+        .filter_map(|(target, leads_to)| {
+            if let Ok(rest) = real.strip_prefix(leads_to) {
+                Some(target.join(rest).components().collect())
+            } else if leads_to.starts_with(&real) {
+                Some(target.to_path_buf())
+            } else {
+                None
+            }
+        })
+        .collect())
 }
 
 /// The path each rule of `rules` the privileged helper may be asked for is
@@ -237,7 +344,8 @@ impl CleanerScreen {
             "okapi-rights",
             tracing::info_span!("rights"),
             move |cancel, _progress| {
-                let granted = Granted::of(&inputs, &targets);
+                // Refused: traced where it was, the request is not sent.
+                let granted = Granted::of(&inputs, &targets).ok()?;
                 let line = granted.line(Operation::Scan, &targets)?;
                 tracing::info!(?targets, ?granted, "rights asked for: root's scan");
                 let reply = elevate(Operation::Scan, line, &cancel, &step_sender);
@@ -480,9 +588,10 @@ mod tests {
     #[test]
     fn the_helper_is_sent_the_settings_age_never_below_its_floor() {
         let crash = targets(&["/var/crash"]);
-        assert_eq!(Granted::of(&inputs(Some(10), &[]), &crash).minutes, 60);
-        assert_eq!(Granted::of(&inputs(Some(90), &[]), &crash).minutes, 90);
-        assert_eq!(Granted::of(&inputs(None, &[]), &crash).minutes, 60);
+        let minutes = |minutes| Granted::of(&inputs(minutes, &[]), &crash).unwrap().minutes;
+        assert_eq!(minutes(Some(10)), 60);
+        assert_eq!(minutes(Some(90)), 90);
+        assert_eq!(minutes(None), 60);
     }
 
     #[test]
@@ -494,18 +603,151 @@ mod tests {
                     "*.log",
                     "/var/crash/keep",
                     "/var",
-                    "/run/user/1000/gvfs",
+                    "/okapi-nowhere/keep",
                     "/var/crashes",
                     "/home/ana/keep",
                 ],
             ),
             &targets(&["/var/crash", "/var/cache/apt/archives"]),
-        );
+        )
+        .unwrap();
         assert_eq!(
             granted.exclusions,
             ["/var", "/var/crash/keep", "*.log"].map(PathBuf::from),
             "above a target, below one, an extension, in order; never a path beside them"
         );
+    }
+
+    /// An exclusion that touches a target only through a link is sent by
+    /// its real location, which the helper accepts; one that cannot be
+    /// located is refused, as the user's own scan refuses it.
+    #[test]
+    fn an_exclusion_through_a_link_is_sent_where_it_leads() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = |name: &str| directory.path().join(name);
+        std::fs::create_dir(path("elsewhere")).unwrap();
+        std::os::unix::fs::symlink("/var", path("system")).unwrap();
+        std::os::unix::fs::symlink(path("elsewhere"), path("other")).unwrap();
+        std::os::unix::fs::symlink(path("nowhere"), path("dangling")).unwrap();
+        let exclusions = [path("system/crash/keep"), path("other/keep")];
+        let exclusions: Vec<&str> = exclusions
+            .iter()
+            .map(|path| path.to_str().unwrap())
+            .collect();
+        let crash = targets(&["/var/crash"]);
+        let granted = Granted::of(&inputs(None, &exclusions), &crash).unwrap();
+        assert_eq!(
+            granted.exclusions,
+            [std::fs::canonicalize("/var").unwrap().join("crash/keep")],
+            "by its real location; a link that leads elsewhere is not sent"
+        );
+        let dangling = path("dangling/keep");
+        assert_eq!(
+            Granted::of(&inputs(None, &[dangling.to_str().unwrap()]), &crash),
+            Err(Problem::Exclusion)
+        );
+    }
+
+    /// Targets reached through a linked ancestor (`var` moved to `data/var`)
+    /// are walked where they lead: an exclusion there is sent at the same
+    /// place below each target as written, which the helper accepts and
+    /// resolves to where it lies.
+    #[test]
+    fn an_exclusion_where_a_linked_target_leads_is_sent_below_the_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(directory.path()).unwrap();
+        for moved in ["data/var/crash", "data/var/man", "data/other"] {
+            std::fs::create_dir_all(real.join(moved)).unwrap();
+        }
+        std::os::unix::fs::symlink(real.join("data/var"), real.join("var")).unwrap();
+        let (crash, man) = (real.join("var/crash"), real.join("var/man"));
+        let granted_for = |exclusion: PathBuf| {
+            Granted::of(
+                &inputs(None, &[exclusion.to_str().unwrap()]),
+                &targets(&[crash.to_str().unwrap(), man.to_str().unwrap()]),
+            )
+            .unwrap()
+            .exclusions
+        };
+        assert_eq!(
+            granted_for(real.join("data/var/crash/keep")),
+            [crash.join("keep")],
+            "below where it leads: the same place below the target"
+        );
+        assert_eq!(
+            granted_for(real.join("data/var")),
+            [crash.clone(), man.clone()],
+            "above where they lead: every such target whole"
+        );
+        assert!(
+            granted_for(real.join("data/other")).is_empty(),
+            "beside: nothing"
+        );
+    }
+
+    #[test]
+    fn an_exclusion_the_users_scan_refuses_asks_root_for_nothing() {
+        let crash = targets(&["/var/crash"]);
+        for refused in ["var/crash/keep", "/var/crash/../x", "*."] {
+            assert_eq!(
+                Granted::of(&inputs(None, &[refused]), &crash),
+                Err(Problem::Exclusion),
+                "{refused}"
+            );
+        }
+    }
+
+    /// What the interface sends, the helper accepts: its scan of every
+    /// target, and a cleaning of only some of them with the same exclusions.
+    #[test]
+    fn the_helper_accepts_every_request_built_from_the_settings() {
+        let rules = okapi_rules::RuleSet::embedded(okapi_rules::Os::Linux).unwrap();
+        let every: BTreeSet<String> = helper_targets(&rules).into_values().collect();
+        let directory = tempfile::tempdir().unwrap();
+        let alias = directory.path().join("system");
+        std::os::unix::fs::symlink("/var", &alias).unwrap();
+        let through_alias = alias.join("cache/apt/archives/kept");
+        let granted = Granted::of(
+            &inputs(
+                Some(90),
+                &[
+                    "*.log",
+                    "/var/cache/apt/archives/keep",
+                    "/",
+                    through_alias.to_str().unwrap(),
+                    "/home/ana/keep",
+                ],
+            ),
+            &every,
+        )
+        .unwrap();
+        let expected = [
+            PathBuf::from("/"),
+            PathBuf::from("/var/cache/apt/archives/keep"),
+            std::fs::canonicalize("/var")
+                .unwrap()
+                .join("cache/apt/archives/kept"),
+            PathBuf::from("*.log"),
+        ];
+        assert_eq!(
+            granted.exclusions.iter().collect::<BTreeSet<_>>(),
+            expected.iter().collect::<BTreeSet<_>>()
+        );
+        let now = std::time::SystemTime::now();
+        for (operation, asked) in [
+            (Operation::Scan, every.clone()),
+            (Operation::Clean, targets(&["/var/crash"])),
+        ] {
+            let line = granted.line(operation, &asked).unwrap();
+            let sent: serde_json::Value = serde_json::from_slice(&line).unwrap();
+            assert_eq!(
+                sent["exclusions"],
+                serde_json::json!(granted.exclusions),
+                "{operation:?}: every exclusion sent"
+            );
+            okapi_helper::Request::read(&line, &rules, now)
+                .unwrap_or_else(|refusal| panic!("{operation:?}: {refusal}"));
+        }
     }
 
     #[test]

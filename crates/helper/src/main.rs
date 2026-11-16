@@ -88,16 +88,8 @@ fn accepted_request(
         tracing::error!(kind = ?error.kind(), code = error.raw_os_error(), %error, "the request cannot be read");
         Exit::Failure
     })?;
-    match Request::read(&line, rules, now) {
-        Ok(request) => {
-            tracing::info!(?request, "request accepted");
-            Ok(request)
-        }
-        Err(refusal) => {
-            tracing::warn!(refused = refusal.key(), target = ?refusal.target(), %refusal, "request refused");
-            Err(written(&RefusalAnswer::of(&refusal), Exit::Refused))
-        }
-    }
+    Request::read(&line, rules, now)
+        .map_err(|refusal| written(&RefusalAnswer::of(&refusal), Exit::Refused))
 }
 
 /// Writes `document` on one line of standard output; `exit` once written,

@@ -388,11 +388,12 @@ struct RootPart {
 
 impl RootPart {
     /// Its request line, if the settings `inputs` read now still give the
-    /// age and exclusions its scan unlocked with: root never removes what
-    /// the settings came to protect since.
+    /// age and exclusions its scan unlocked with (and every exclusion can
+    /// still be located): root never removes what the settings came to
+    /// protect since.
     fn line(&self, inputs: &Inputs) -> Result<Vec<u8>, Problem> {
         let granted = &self.granted;
-        let now = rights::Granted::of(inputs, &self.targets);
+        let now = rights::Granted::of(inputs, &self.targets)?;
         if &now != granted {
             tracing::warn!(
                 ?granted,
@@ -3381,6 +3382,55 @@ mod tests {
         assert_eq!(asked.len(), 2);
         assert_eq!(asked[1].0, okapi_helper::Operation::Clean);
         assert!(!pip.exists());
+    }
+
+    /// An exclusion that cannot be located protects something unknown: root
+    /// is asked for nothing, neither its scan nor its cleaning.
+    #[test]
+    fn an_exclusion_that_cannot_be_located_asks_root_for_nothing() {
+        let sandbox = Sandbox::new();
+        sandbox.file("var/crash/core");
+        settle_files();
+        let rules = admin_rules(&sandbox);
+        let dangling = sandbox.root.join("dangling");
+        std::os::unix::fs::symlink(sandbox.root.join("nowhere"), &dangling).unwrap();
+        let read = Rc::new(std::cell::RefCell::new(
+            sandbox.inputs(Some(&sandbox.root.join("state"))),
+        ));
+        let asked = Asked::default();
+        let seams = {
+            let read = Rc::clone(&read);
+            Seams {
+                read: Rc::new(move || Ok(read.borrow().clone())),
+                ..admin_seams(&sandbox, &rules, &asked, |_, _| (0, String::new()))
+            }
+        };
+        let (window, _screen) = on_admin_results(seams, &rules);
+        // Lost since the user's own scan, which would have refused it.
+        read.borrow_mut().exclusions.push(dangling.join("keep"));
+        let inputs = read.borrow().clone();
+        obtain_rights(&window);
+        let cleaner = window.global::<ui::Cleaner>();
+        assert_eq!(cleaner.get_rights_problem(), ui::RightsProblem::Failed);
+        assert!(asked.lock().unwrap().is_empty(), "root's scan never asked");
+        let crash = std::collections::BTreeSet::from([sandbox
+            .root
+            .join("var/crash")
+            .display()
+            .to_string()]);
+        let part = super::RootPart {
+            granted: crate::cleaner::rights::Granted {
+                minutes: 60,
+                exclusions: Vec::new(),
+            },
+            targets: crash.clone(),
+            confirmed: crash,
+        };
+        assert_eq!(
+            part.line(&inputs),
+            Err(crate::cleaner::Problem::Exclusion),
+            "nor its cleaning"
+        );
     }
 
     #[test]

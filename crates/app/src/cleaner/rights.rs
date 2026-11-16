@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use okapi_engine::{DEFAULT_MIN_AGE_MINUTES, Exclusions, Origin, ScanReport};
 use okapi_helper::{
@@ -18,7 +18,7 @@ use okapi_helper::{
 use okapi_rules::RuleSet;
 use slint::ComponentHandle as _;
 
-use super::{CleanerScreen, Inputs, Running, Task};
+use super::{CANCEL_WAIT, CleanerScreen, Inputs, Running, Task, WATCH_EVERY};
 use crate::elevation::{ElevationFailure, ElevationStep};
 use crate::ui;
 
@@ -33,7 +33,9 @@ impl Granted {
     /// What the helper is sent for `targets`, from the settings `inputs`:
     /// the settings' age, never below the helper's floor; and the exclusions
     /// that may touch a target ([`Exclusions::may_touch`]), so that one
-    /// elsewhere (a mount root cannot read) never makes it refuse.
+    /// elsewhere (a mount root cannot read) never makes it refuse. Telling
+    /// which may touch one reads where each lies, which waits on a mount that
+    /// stopped answering: call it from a task's thread, not the window's.
     pub fn of(inputs: &Inputs, targets: &BTreeSet<String>) -> Self {
         let floor = HELPER_MIN_AGE_FLOOR
             .as_secs()
@@ -42,8 +44,13 @@ impl Granted {
             .min_age_minutes
             .unwrap_or(DEFAULT_MIN_AGE_MINUTES)
             .max(floor);
+        tracing::debug!(
+            exclusions = inputs.exclusions.len(),
+            "reading which exclusions may touch root's targets"
+        );
+        let started = Instant::now();
         // In order: settings that only reorder them are the same.
-        let exclusions = inputs
+        let exclusions: Vec<PathBuf> = inputs
             .exclusions
             .iter()
             .filter(|exclusion| {
@@ -55,6 +62,7 @@ impl Granted {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
+        tracing::info!(elapsed = ?started.elapsed(), kept = exclusions.len(), "exclusions for root read");
         Self {
             minutes,
             exclusions,
@@ -90,13 +98,36 @@ impl CleanerScreen {
     }
 }
 
-/// Root's scan under way.
+/// What root's scan gave, with the age and exclusions it was asked with.
+pub(super) struct RootScan {
+    granted: Granted,
+    reply: Result<Reply, ElevationFailure>,
+}
+
+/// Root's scan under way: its request built on its thread, then the helper.
 pub(super) struct Elevating {
-    pub(super) running: Running<Result<Reply, ElevationFailure>>,
+    /// None when the request was not sent (traced where it was built).
+    pub(super) running: Running<Option<RootScan>>,
     steps: Receiver<ElevationStep>,
     /// The report whose groups it unlocks.
     report: Arc<ScanReport>,
-    granted: Granted,
+    /// The helper was launched, as its steps said: pkexec asks, or has
+    /// asked. Never given up then.
+    pub(super) launched: bool,
+    /// None until it is cancelled before the helper was launched; then how
+    /// long it has been waited for, counted in looks at it, up to
+    /// [`CANCEL_WAIT`] (unless it is launched meanwhile).
+    cancelled_for: Option<Duration>,
+}
+
+/// How the rights cancelled are shown: their question open (`launched`)
+/// closes first; before it, the request is only withdrawn.
+const fn cancelling(launched: bool) -> ui::RightsStep {
+    if launched {
+        ui::RightsStep::Cancelling
+    } else {
+        ui::RightsStep::Withdrawing
+    }
 }
 
 /// Why the rights, or the administrator's part of a cleaning, gave nothing,
@@ -186,15 +217,9 @@ impl CleanerScreen {
             }
             // Every target, unlocked ones too: the answer sets every group.
             let targets = held.results.helper_targets();
-            (state.seams.read)().map(|inputs| {
-                (
-                    Arc::clone(&held.report),
-                    Granted::of(&inputs, &targets),
-                    targets,
-                )
-            })
+            (state.seams.read)().map(|inputs| (Arc::clone(&held.report), inputs, targets))
         };
-        let (report, granted, targets) = match prepared {
+        let (report, inputs, targets) = match prepared {
             Ok(prepared) => prepared,
             Err(found) => {
                 tracing::warn!(problem = ?found, "rights cannot be asked for");
@@ -206,17 +231,18 @@ impl CleanerScreen {
                 return;
             }
         };
-        let Some(line) = granted.line(Operation::Scan, &targets) else {
-            self.show_rights(ui::RightsStep::Idle, ui::RightsProblem::Failed);
-            return;
-        };
-        tracing::info!(?targets, ?granted, "rights asked for: root's scan");
         let elevate = Arc::clone(&self.0.borrow().seams.elevate);
         let (step_sender, steps) = mpsc::channel();
         let started = Running::start(
             "okapi-rights",
             tracing::info_span!("rights"),
-            move |cancel, _progress| elevate(Operation::Scan, line, &cancel, &step_sender),
+            move |cancel, _progress| {
+                let granted = Granted::of(&inputs, &targets);
+                let line = granted.line(Operation::Scan, &targets)?;
+                tracing::info!(?targets, ?granted, "rights asked for: root's scan");
+                let reply = elevate(Operation::Scan, line, &cancel, &step_sender);
+                Some(RootScan { granted, reply })
+            },
         );
         let running = match started {
             Ok(running) => running,
@@ -230,52 +256,88 @@ impl CleanerScreen {
             running,
             steps,
             report,
-            granted,
+            launched: false,
+            cancelled_for: None,
         }));
         self.settle();
-        self.show_rights(ui::RightsStep::Authenticating, ui::RightsProblem::None);
+        self.show_rights(ui::RightsStep::Preparing, ui::RightsProblem::None);
         self.watch_task();
     }
 
     /// Cancels root's scan: its input closes once pkexec's question is
-    /// answered.
+    /// answered. Not launched yet, the request is withdrawn: `Launcher::run`
+    /// launches nothing once cancelled, and the thread is given up after a
+    /// while if what it reads holds it. A launch already under way still
+    /// shows its question (see `watch_elevation`).
     pub(super) fn cancel_rights(&self) {
         if self.is_settling("cancellation of the rights") {
             return;
         }
-        {
-            let state = self.0.borrow();
-            let Some(Task::Elevating(elevating)) = &state.task else {
+        let launched = {
+            let mut state = self.0.borrow_mut();
+            let Some(Task::Elevating(elevating)) = state.task.as_mut() else {
                 return;
             };
+            if !elevating.launched && elevating.cancelled_for.is_none() {
+                elevating.cancelled_for = Some(Duration::ZERO);
+            }
             elevating.running.cancel.cancel();
-        }
-        tracing::info!("rights cancelled by the user");
-        self.show_rights(ui::RightsStep::Cancelling, ui::RightsProblem::None);
+            elevating.launched
+        };
+        tracing::info!(launched, "rights cancelled by the user");
+        self.show_rights(cancelling(launched), ui::RightsProblem::None);
     }
 
     /// Takes in where root's scan stands, then looks for its reply.
     pub(super) fn watch_elevation(&self) {
-        let (authenticated, received) = {
-            let state = self.0.borrow();
-            let Some(Task::Elevating(elevating)) = &state.task else {
+        let (step, received, given_up) = {
+            let mut state = self.0.borrow_mut();
+            let Some(Task::Elevating(elevating)) = state.task.as_mut() else {
                 return;
             };
-            let authenticated = elevating
-                .steps
-                .try_iter()
-                .any(|step| step == ElevationStep::Authenticated);
+            // In the order sent: the last says where it stands.
+            let step = elevating.steps.try_iter().last();
+            elevating.launched |= step.is_some();
+            if let Some(waited) = &mut elevating.cancelled_for {
+                *waited += WATCH_EVERY;
+            }
+            let given_up = !elevating.launched
+                && elevating
+                    .cancelled_for
+                    .is_some_and(|waited| waited >= CANCEL_WAIT);
             let cancelled = elevating.running.cancel.is_cancelled();
             (
-                authenticated && !cancelled,
+                step.map(|step| (step, cancelled)),
                 elevating.running.result.try_recv(),
+                given_up,
             )
         };
-        if authenticated {
-            self.show_rights(ui::RightsStep::Scanning, ui::RightsProblem::None);
+        let shown = match step {
+            // Launched after it was cancelled: pkexec asks all the same.
+            Some((_, true)) => Some(cancelling(true)),
+            Some((ElevationStep::Launched, false)) => Some(ui::RightsStep::Authenticating),
+            Some((ElevationStep::Authenticated, false)) => Some(ui::RightsStep::Scanning),
+            None => None,
+        };
+        if let Some(shown) = shown {
+            self.show_rights(shown, ui::RightsProblem::None);
         }
         match received {
-            Ok(reply) => self.end_elevation(Some(reply)),
+            Ok(scan) => self.end_elevation(scan),
+            Err(TryRecvError::Empty) if given_up => {
+                // Left to end alone: not launched in all that time, and
+                // cancelled, `Launcher::run` no longer launches the helper.
+                // Its input closes, should a launch already under way get
+                // through: the helper cancels itself once pkexec's question
+                // is answered.
+                tracing::warn!(
+                    looks_for = ?CANCEL_WAIT,
+                    "rights cancelled before the helper was launched: given up"
+                );
+                if self.take_elevating().is_some() {
+                    self.close_rights(problem_of(&ElevationFailure::Cancelled));
+                }
+            }
             Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => {
                 tracing::error!("rights thread ended without a reply");
@@ -284,17 +346,25 @@ impl CleanerScreen {
         }
     }
 
-    /// Takes in root's scan: the groups it offers are unlocked, if the
-    /// report it was asked for is still the one held.
-    fn end_elevation(&self, reply: Option<Result<Reply, ElevationFailure>>) {
+    /// Root's scan under way, taken: the screen no longer follows it.
+    fn take_elevating(&self) -> Option<Elevating> {
         if !matches!(self.0.borrow().task, Some(Task::Elevating(_))) {
             tracing::error!("rights ended that were not asked for");
-            return;
+            return None;
         }
         let Some(Task::Elevating(elevating)) = self.0.borrow_mut().task.take() else {
-            return;
+            return None;
         };
         self.0.borrow().timer.stop();
+        Some(elevating)
+    }
+
+    /// Takes in root's `scan`: the groups it offers are unlocked, if the
+    /// report it was asked for is still the one held.
+    fn end_elevation(&self, scan: Option<RootScan>) {
+        let Some(elevating) = self.take_elevating() else {
+            return;
+        };
         let cancelled = elevating.running.cancel.is_cancelled();
         let problem = {
             let mut state = self.0.borrow_mut();
@@ -302,14 +372,19 @@ impl CleanerScreen {
                 .held
                 .as_mut()
                 .filter(|held| Arc::ptr_eq(&held.report, &elevating.report));
-            match (held, reply) {
-                (None, _) => {
+            match held {
+                None => {
                     tracing::error!("root's scan of a report no longer held: nothing unlocked");
                     ui::RightsProblem::Failed
                 }
-                (Some(held), reply) => apply(held, reply, cancelled, elevating.granted),
+                Some(held) => apply(held, scan, cancelled),
             }
         };
+        self.close_rights(problem);
+    }
+
+    /// Shows the rights over, saying `problem`, and the results as they are.
+    fn close_rights(&self, problem: ui::RightsProblem) {
         self.settle();
         self.show_rights(ui::RightsStep::Idle, problem);
         self.show_results();
@@ -325,27 +400,25 @@ impl CleanerScreen {
     }
 }
 
-/// Takes root's scan `reply` into `held`: a complete answer sets every
-/// group that needs the administrator again, those it offers unlocked, and
-/// keeps `granted` for root's cleaning; anything else changes nothing. Gives
-/// what to say.
-fn apply(
-    held: &mut super::Held,
-    reply: Option<Result<Reply, ElevationFailure>>,
-    cancelled: bool,
-    granted: Granted,
-) -> ui::RightsProblem {
+/// Takes root's `scan` into `held`: a complete answer sets every group that
+/// needs the administrator again, those it offers unlocked, and keeps the
+/// age and exclusions it was asked with for root's cleaning; anything else
+/// changes nothing. None: the thread died, or the request was not sent.
+/// Gives what to say.
+fn apply(held: &mut super::Held, scan: Option<RootScan>, cancelled: bool) -> ui::RightsProblem {
+    let Some(RootScan { granted, reply }) = scan else {
+        return ui::RightsProblem::Failed;
+    };
     match reply {
-        None => ui::RightsProblem::Failed,
-        Some(Err(failure)) => {
+        Err(failure) => {
             tracing::warn!(?failure, "rights not obtained");
             problem_of(&failure)
         }
-        Some(Ok(Reply::Refused(refusal))) => {
+        Ok(Reply::Refused(refusal)) => {
             tracing::warn!(refused = refusal.refused(), helper = refusal.helper_version(), target = ?refusal.target(), "root's scan refused");
             refusal_problem(&refusal)
         }
-        Some(Ok(Reply::Answer(answer))) if !answer.stops().is_empty() => {
+        Ok(Reply::Answer(answer)) if !answer.stops().is_empty() => {
             tracing::warn!(stops = ?answer.stops(), cancelled, "root's scan stopped: nothing unlocked");
             if cancelled {
                 ui::RightsProblem::None
@@ -353,7 +426,7 @@ fn apply(
                 ui::RightsProblem::Stopped
             }
         }
-        Some(Ok(Reply::Answer(answer))) => {
+        Ok(Reply::Answer(answer)) => {
             let offered: Vec<_> = answer
                 .groups()
                 .iter()

@@ -371,23 +371,59 @@ struct PendingJob {
     report: Arc<ScanReport>,
     ids: Vec<ItemId>,
     rules: Arc<RuleSet>,
-    admin: Option<Vec<u8>>,
+    admin: Option<RootPart>,
     inputs: Inputs,
 }
 
+/// Root's part of a cleaning, as confirmed: its request is built on the
+/// cleaning's thread, which reads which exclusions may touch its targets.
+struct RootPart {
+    /// The age and exclusions root's scan unlocked the groups with.
+    granted: rights::Granted,
+    /// Every target of the report held, as root's scan was asked for them.
+    targets: BTreeSet<String>,
+    /// The targets of the groups confirmed.
+    confirmed: BTreeSet<String>,
+}
+
+impl RootPart {
+    /// Its request line, if the settings `inputs` read now still give the
+    /// age and exclusions its scan unlocked with: root never removes what
+    /// the settings came to protect since.
+    fn line(&self, inputs: &Inputs) -> Result<Vec<u8>, Problem> {
+        let granted = &self.granted;
+        let now = rights::Granted::of(inputs, &self.targets);
+        if &now != granted {
+            tracing::warn!(
+                ?granted,
+                ?now,
+                "settings changed since the rights were obtained: nothing removed"
+            );
+            return Err(Problem::RightsChanged);
+        }
+        let line = granted
+            .line(Operation::Clean, &self.confirmed)
+            .ok_or(Problem::Start)?;
+        tracing::info!(targets = ?self.confirmed, ?granted, "root's part of the cleaning");
+        Ok(line)
+    }
+}
+
 impl PendingJob {
-    /// The job, its options built now: on the cleaning's thread, before
-    /// anything is asked of root or removed.
+    /// The job, its options and root's request built now: on the cleaning's
+    /// thread, before anything is asked of root or removed. An exclusion
+    /// refused is said before settings changed since the rights.
     fn build(self) -> Result<CleanJob, Problem> {
         let options = options(&self.inputs, SystemTime::now(), BTreeSet::new())?;
         tracing::info!(?options, "cleaning options built");
+        let admin = self.admin.map(|part| part.line(&self.inputs)).transpose()?;
         Ok(CleanJob {
             report: self.report,
             ids: self.ids,
             rules: self.rules,
             variables: self.inputs.variables,
             options,
-            admin: self.admin,
+            admin,
         })
     }
 }
@@ -613,37 +649,25 @@ impl CleanerScreen {
             return Err(Problem::Start);
         }
         // Root's part, with the age and exclusions its scan unlocked with,
-        // which must still be those of the settings read now: root never
-        // removes what the settings came to protect since.
+        // checked on the cleaning's thread against the settings read now.
         let admin = if confirmed.admin_targets.is_empty() {
             None
         } else {
-            let held = state.held.as_ref();
-            let Some(granted) = held.and_then(|held| held.granted.as_ref()) else {
+            let Some((held, granted)) = state
+                .held
+                .as_ref()
+                .and_then(|held| Some((held, held.granted.clone()?)))
+            else {
                 tracing::error!(
                     "groups that need the administrator confirmed without the rights: nothing removed"
                 );
                 return Err(Problem::Start);
             };
-            let now = rights::Granted::of(
-                &inputs,
-                &held
-                    .map(|held| held.results.helper_targets())
-                    .unwrap_or_default(),
-            );
-            if &now != granted {
-                tracing::warn!(
-                    ?granted,
-                    ?now,
-                    "settings changed since the rights were obtained: nothing removed"
-                );
-                return Err(Problem::RightsChanged);
-            }
-            let Some(line) = granted.line(Operation::Clean, &confirmed.admin_targets) else {
-                return Err(Problem::Start);
-            };
-            tracing::info!(targets = ?confirmed.admin_targets, ?granted, "root's part of the cleaning");
-            Some(line)
+            Some(RootPart {
+                granted,
+                targets: held.results.helper_targets(),
+                confirmed: confirmed.admin_targets.clone(),
+            })
         };
         let deletion_log = inputs.deletion_log;
         Ok(Prepared {
@@ -703,15 +727,6 @@ impl CleanerScreen {
             .and_then(|prepared| self.start_cleaning(prepared));
         if let Err(found) = started {
             tracing::warn!(problem = ?found, "cleaning cannot start: nothing removed");
-            if found == Problem::RightsChanged {
-                // The groups root unlocked were measured with other settings:
-                // they must be unlocked again before they can be checked.
-                if let Some(held) = self.0.borrow_mut().held.as_mut() {
-                    held.results.relock();
-                    held.granted = None;
-                }
-                self.show_results();
-            }
             self.with_window(|window, _| {
                 window
                     .global::<ui::Cleaner>()
@@ -875,10 +890,38 @@ impl CleanerScreen {
         let close_when_done = cleaning.close_when_done;
         // Its cause is traced where it was met, on the thread.
         tracing::info!(problem = ?found, close_when_done, "cleaning refused on its thread: nothing removed");
+        let rights_changed = found == Problem::RightsChanged;
+        if rights_changed {
+            // The groups root unlocked were measured with other settings:
+            // they must be unlocked again before they can be checked.
+            let mut state = self.0.borrow_mut();
+            if let Some(held) = state
+                .held
+                .as_mut()
+                .filter(|held| Arc::ptr_eq(&held.report, &cleaning.report))
+            {
+                held.results.relock();
+                held.granted = None;
+            } else {
+                tracing::error!("rights changed for a report no longer held: nothing locked again");
+            }
+        }
         self.settle();
         self.set_step(ui::CleanerStep::Results);
         self.show_results();
-        self.say_refusal(found, cleaning.exclusions);
+        if rights_changed {
+            // Said whatever was said before: root was locked again.
+            self.with_window(|window, _| {
+                let cleaner = window.global::<ui::Cleaner>();
+                let shown = cleaner.get_problem();
+                if shown != ui::SetupProblem::None {
+                    tracing::warn!(replaced = ?shown, "rights changed said over another problem");
+                }
+                cleaner.set_problem(problem(Some(found)));
+            });
+        } else {
+            self.say_refusal(found, cleaning.exclusions);
+        }
         if close_when_done {
             self.close_as_asked();
         }
@@ -3115,6 +3158,13 @@ mod tests {
         changed.store(true, std::sync::atomic::Ordering::Relaxed);
         confirm(&window);
         let cleaner = window.global::<ui::Cleaner>();
+        // Root's exclusions are read on the cleaning's thread.
+        assert_eq!(step(&window), ui::CleanerStep::Cleaning);
+        assert_eq!(cleaner.get_problem(), ui::SetupProblem::None);
+        // A problem of the settings said meanwhile never hides it: root is
+        // locked again.
+        cleaner.set_problem(ui::SetupProblem::SettingsSaving);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
         assert_eq!(cleaner.get_problem(), ui::SetupProblem::RightsChanged);
         assert_eq!(asked.lock().unwrap().len(), 1, "root never asked to clean");
         assert!(pip.exists(), "nothing of the user's either");
@@ -3125,6 +3175,230 @@ mod tests {
             Some(false)
         );
         assert!(sandbox.history().is_empty(), "nothing done, nothing kept");
+    }
+
+    #[test]
+    fn an_exclusion_refused_is_said_before_the_rights_changed() {
+        let sandbox = Sandbox::new();
+        let pip = sandbox.file("home/.cache/pip/old");
+        let crash = sandbox.file("var/crash/core");
+        settle_files();
+        let rules = admin_rules(&sandbox);
+        let asked = Asked::default();
+        let answer = {
+            let scan = scan_answer(&sandbox);
+            move |operation, _: &serde_json::Value| match operation {
+                okapi_helper::Operation::Scan => (0, scan.clone()),
+                okapi_helper::Operation::Clean => (0, clean_answer(&[], &serde_json::json!([]))),
+            }
+        };
+        let refused = Rc::new(Cell::new(false));
+        let seams = {
+            let fine = sandbox.inputs(Some(&sandbox.root.join("state")));
+            // Refused by the engine, and one root would be sent: an
+            // extension may touch every target.
+            let mut wild = fine.clone();
+            wild.exclusions.push(PathBuf::from("*.t*"));
+            let refused = Rc::clone(&refused);
+            Seams {
+                read: Rc::new(move || {
+                    Ok(if refused.get() {
+                        wild.clone()
+                    } else {
+                        fine.clone()
+                    })
+                }),
+                ..admin_seams(&sandbox, &rules, &asked, answer)
+            }
+        };
+        let (window, _screen) = on_admin_results(seams, &rules);
+        obtain_rights(&window);
+        found(&window, "Rapports de plantage").invoke_accessible_default_action();
+        refused.set(true);
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
+        let cleaner = window.global::<ui::Cleaner>();
+        assert_eq!(cleaner.get_problem(), ui::SetupProblem::Exclusion);
+        assert_eq!(asked.lock().unwrap().len(), 1, "root never asked to clean");
+        assert!(pip.exists() && crash.exists());
+        assert_eq!(
+            cleaner.get_rights_waiting(),
+            0,
+            "the rights kept: nothing changed but an exclusion refused"
+        );
+        assert!(sandbox.history().is_empty(), "nothing done, nothing kept");
+        refused.set(false);
+        let_the_screen_settle();
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        let asked = asked.lock().unwrap();
+        assert_eq!(asked.len(), 2);
+        assert_eq!(asked[1].0, okapi_helper::Operation::Clean);
+        assert!(!pip.exists());
+    }
+
+    #[test]
+    fn a_request_root_would_refuse_is_never_sent() {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        sandbox.file("var/crash/core");
+        settle_files();
+        let rules = admin_rules(&sandbox);
+        let asked = Asked::default();
+        let seams = {
+            let mut inputs = sandbox.inputs(Some(&sandbox.root.join("state")));
+            // Below a target, so sent; not text, so not written.
+            inputs.exclusions.push(
+                sandbox
+                    .root
+                    .join("var/crash")
+                    .join(std::ffi::OsStr::from_bytes(b"keep\xff")),
+            );
+            Seams {
+                read: Rc::new(move || Ok(inputs.clone())),
+                // Sent, it would be noted, whatever it answers.
+                ..admin_seams(&sandbox, &rules, &asked, |_, _| (0, String::new()))
+            }
+        };
+        let (window, _screen) = on_admin_results(seams, &rules);
+        obtain_rights(&window);
+        let cleaner = window.global::<ui::Cleaner>();
+        assert_eq!(cleaner.get_rights_problem(), ui::RightsProblem::Failed);
+        assert!(asked.lock().unwrap().is_empty());
+        assert_eq!(cleaner.get_rights_waiting(), 1, "nothing unlocked");
+    }
+
+    #[test]
+    fn rights_cancelled_before_the_helper_is_launched_are_given_up() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        sandbox.file("var/crash/core");
+        settle_files();
+        let rules = admin_rules(&sandbox);
+        // Held before anything is launched, as reading where the
+        // exclusions lie on a mount that stopped answering would.
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let (told, cancelled) = std::sync::mpsc::channel::<bool>();
+        let held = std::sync::Mutex::new((held, told));
+        let seams = Seams {
+            elevate: Arc::new(move |_, _, cancel, _| {
+                let held = held.lock().unwrap();
+                let _ = held.0.recv();
+                // What `Launcher::run` looks at before it launches anything.
+                held.1.send(cancel.is_cancelled()).unwrap();
+                Err(crate::elevation::ElevationFailure::Cancelled)
+            }),
+            ..admin_seams(&sandbox, &rules, &Asked::default(), |_, _| {
+                unreachable!("never launched")
+            })
+        };
+        let (window, _screen) = on_admin_results(seams, &rules);
+        let cleaner = window.global::<ui::Cleaner>();
+        cleaner.invoke_obtain_rights();
+        assert_eq!(cleaner.get_rights_step(), ui::RightsStep::Preparing);
+        assert!(shows(&window, "Préparation de la demande des droits…"));
+        let_the_screen_settle();
+        button(&window, "Annuler").invoke_accessible_default_action();
+        assert_eq!(cleaner.get_rights_step(), ui::RightsStep::Withdrawing);
+        assert!(shows(&window, "Annulation de la demande des droits…"));
+        for _ in 1..looks_until_given_up() {
+            look_once();
+        }
+        assert_eq!(
+            cleaner.get_rights_step(),
+            ui::RightsStep::Withdrawing,
+            "waited for until then"
+        );
+        look_once();
+        assert_eq!(cleaner.get_rights_step(), ui::RightsStep::Idle);
+        assert_eq!(cleaner.get_rights_problem(), ui::RightsProblem::Cancelled);
+        assert_eq!(cleaner.get_rights_waiting(), 1, "nothing unlocked");
+        // The screen free again: a cleaning of the user's starts.
+        let_the_screen_settle();
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        drop(release);
+        assert!(
+            cancelled
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the helper asked"),
+            "the thread given up is cancelled: it launches nothing"
+        );
+    }
+
+    /// The looks at a task until rights cancelled before the helper was
+    /// launched are given up.
+    fn looks_until_given_up() -> u128 {
+        super::super::CANCEL_WAIT.as_millis() / super::super::WATCH_EVERY.as_millis()
+    }
+
+    /// One look at the task under way.
+    fn look_once() {
+        i_slint_backend_testing::mock_elapsed_time(super::super::WATCH_EVERY);
+        slint::platform::update_timers_and_animations();
+    }
+
+    #[test]
+    fn rights_launched_after_they_are_cancelled_wait_for_the_question() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        sandbox.file("var/crash/core");
+        settle_files();
+        let rules = admin_rules(&sandbox);
+        // Launched once told to (a launch already under way as the user
+        // cancels), then answering once `end` goes.
+        let (go, gate) = std::sync::mpsc::channel::<()>();
+        let (end, ended) = std::sync::mpsc::channel::<()>();
+        let (said, launched) = std::sync::mpsc::channel::<()>();
+        let gates = std::sync::Mutex::new((gate, ended, said));
+        let seams = Seams {
+            elevate: Arc::new(move |_, _, _, steps| {
+                let gates = gates.lock().unwrap();
+                let _ = gates.0.recv();
+                steps
+                    .send(crate::elevation::ElevationStep::Launched)
+                    .unwrap();
+                gates.2.send(()).unwrap();
+                let _ = gates.1.recv();
+                Err(crate::elevation::ElevationFailure::Cancelled)
+            }),
+            ..admin_seams(&sandbox, &rules, &Asked::default(), |_, _| {
+                unreachable!("never answered")
+            })
+        };
+        let (window, _screen) = on_admin_results(seams, &rules);
+        let cleaner = window.global::<ui::Cleaner>();
+        cleaner.invoke_obtain_rights();
+        let_the_screen_settle();
+        button(&window, "Annuler").invoke_accessible_default_action();
+        assert_eq!(cleaner.get_rights_step(), ui::RightsStep::Withdrawing);
+        go.send(()).unwrap();
+        // Launched before the next look, however slow the machine.
+        launched
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the helper launched");
+        watch_until(&window, |window| {
+            window.global::<ui::Cleaner>().get_rights_step() == ui::RightsStep::Cancelling
+        });
+        assert!(shows(
+            &window,
+            "Annulation de la demande des droits : elle prend effet une fois la fenêtre du système fermée."
+        ));
+        for _ in 0..looks_until_given_up() * 2 {
+            look_once();
+        }
+        assert_eq!(
+            cleaner.get_rights_step(),
+            ui::RightsStep::Cancelling,
+            "launched: never given up, pkexec asks"
+        );
+        drop(end);
+        watch_until(&window, |window| {
+            window.global::<ui::Cleaner>().get_rights_step() == ui::RightsStep::Idle
+        });
+        assert_eq!(cleaner.get_rights_problem(), ui::RightsProblem::Cancelled);
     }
 
     /// The window on results whose settings refuse an exclusion while

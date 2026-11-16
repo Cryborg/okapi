@@ -516,6 +516,14 @@ msgid "Demande les droits administrateur : « Obtenir les droits » ci-dessus."
 msgstr "Needs administrator rights: “Get the rights” above."
 
 msgctxt "RightsBanner"
+msgid "Préparation de la demande des droits…"
+msgstr "Preparing the request for the rights…"
+
+msgctxt "RightsBanner"
+msgid "Annulation de la demande des droits…"
+msgstr "Cancelling the request for the rights…"
+
+msgctxt "RightsBanner"
 msgid "Saisissez le mot de passe dans la fenêtre du système. Annuler n'agit qu'une fois cette fenêtre fermée."
 msgstr "Enter the password in the system's window. Cancel only acts once that window is closed."
 
@@ -1762,6 +1770,10 @@ msgstr "Extension"
 msgctxt "Exclusions"
 msgid "Absent"
 msgstr "Missing"
+
+msgctxt "Exclusions"
+msgid "Lecture…"
+msgstr "Reading…"
 
 msgctxt "Exclusions"
 msgid "Invalide"

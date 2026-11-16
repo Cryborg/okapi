@@ -34,10 +34,14 @@ component RightsBanner inherits Rectangle {
             color: Theme.text;
             vertical-alignment: center;
             wrap: word-wrap;
-            text: Cleaner.rights-step == RightsStep.authenticating
+            text: Cleaner.rights-step == RightsStep.preparing
+                ? @tr("Préparation de la demande des droits…")
+                : Cleaner.rights-step == RightsStep.authenticating
                 ? @tr("Saisissez le mot de passe dans la fenêtre du système. Annuler n'agit qu'une fois cette fenêtre fermée.")
                 : Cleaner.rights-step == RightsStep.scanning
                 ? @tr("Analyse avec les droits administrateur…")
+                : Cleaner.rights-step == RightsStep.withdrawing
+                ? @tr("Annulation de la demande des droits…")
                 : Cleaner.rights-step == RightsStep.cancelling
                 ? @tr("Annulation de la demande des droits : elle prend effet une fois la fenêtre du système fermée.")
                 : Cleaner.rights-problem != RightsProblem.none
@@ -52,7 +56,7 @@ component RightsBanner inherits Rectangle {
                 Cleaner.obtain-rights();
             }
         }
-        if Cleaner.rights-step == RightsStep.authenticating || Cleaner.rights-step == RightsStep.scanning: ActionButton {
+        if Cleaner.rights-step == RightsStep.preparing || Cleaner.rights-step == RightsStep.authenticating || Cleaner.rights-step == RightsStep.scanning: ActionButton {
             text: @tr("Annuler");
             kind: ButtonKind.ghost;
             cross-axis-self-alignment: center;

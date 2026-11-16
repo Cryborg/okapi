@@ -15,8 +15,8 @@ export enum SettingsState {
     no-writer,
 }
 
-// What an exclusion is, read on the disk as it shows.
-export enum ExclusionKind { folder, file, extension, absent, invalid }
+// What an exclusion is, read on the disk as it shows; until then, being read.
+export enum ExclusionKind { folder, file, extension, absent, invalid, reading }
 
 export struct ExclusionRow {
     // As written, a path below the home folder as `~/…`.

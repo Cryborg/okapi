@@ -66,9 +66,11 @@ export enum RowKind { category, browser, group }
 // clean; or unlocked by root's scan, to check by hand.
 export enum AdminRow { none, locked, unreachable, nothing, unlocked }
 
-// Where the rights asked for stand: their question open (the system asks for
-// the password), root's scan under way, or cancelled and awaited.
-export enum RightsStep { idle, authenticating, scanning, cancelling }
+// Where the rights asked for stand: their request being made (which
+// exclusions root is sent is read), their question open (the system asks
+// for the password), root's scan under way, or cancelled and awaited
+// (before the system was asked: withdrawing).
+export enum RightsStep { idle, preparing, authenticating, scanning, withdrawing, cancelling }
 
 // Why the rights, or the administrator's part of a cleaning, gave nothing.
 export enum RightsProblem {

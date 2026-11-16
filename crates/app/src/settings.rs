@@ -7,10 +7,18 @@
 //! (`wait_for_writes`), and is refused while one is stuck, or once after
 //! one failed: an exclusion just added is never missed by the next cleaning
 //! without a word.
+//!
+//! Where an exclusion lies is read on a thread of its own
+//! (a mount that stopped answering would hold the window): waited for a
+//! little as it is added, in the background for the lines shown.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
+use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError};
+use std::time::{Duration, Instant};
 
 use okapi_engine::{DEFAULT_MIN_AGE_MINUTES, ExclusionError, Exclusions};
 use okapi_rules::Language;
@@ -26,6 +34,23 @@ use crate::ui;
 const SAVER_NAME: &str = "okapi-settings-save";
 /// The minimum ages offered, in minutes.
 const MIN_AGE_CHOICES: [u64; 4] = [30, 60, 120, 1440];
+/// The thread that reads where one exclusion lies.
+const EXAMINER_NAME: &str = "okapi-exclusion-read";
+/// How long an exclusion added is waited for: one whose place does not
+/// answer by then cannot be read.
+const EXAMINE_WAIT: Duration = Duration::from_secs(1);
+/// How often the lines being read are looked at.
+const EXAMINE_EVERY: Duration = Duration::from_millis(100);
+/// How long the lines being read are looked at every [`EXAMINE_EVERY`]:
+/// beyond it (a mount slow to wake, or one that stopped answering), they
+/// are looked at every `EXAMINE_PATIENCE`.
+const EXAMINE_PATIENCE: Duration = Duration::from_secs(5);
+
+/// What an exclusion is, read where it lies; or why it is not added.
+pub type Examined = Result<ui::ExclusionKind, ui::EntryError>;
+/// Reads what an exclusion is, off the interface's thread: the engine and
+/// the disk, or a test's stand-in.
+pub type Examine = Arc<dyn Fn(&str) -> Examined + Send + Sync>;
 
 /// Why what reads the settings would miss the user's last change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,6 +90,7 @@ pub struct SettingsSeams {
     pub save: Save,
     pub choose_folder: ChooseFolder,
     pub desktop_theme: DesktopTheme,
+    pub examine: Examine,
 }
 
 impl std::fmt::Debug for SettingsSeams {
@@ -88,6 +114,7 @@ impl SettingsSeams {
             save: |settings, directory| settings.save(directory).is_ok(),
             choose_folder: Rc::new(portal::choose_folder),
             desktop_theme: Rc::new(portal::desktop_theme),
+            examine: Arc::new(examine),
         }
     }
 }
@@ -199,6 +226,13 @@ struct State {
     untold: bool,
     /// Told once the writes under way are done, whatever they said.
     when_written: Option<Rc<dyn Fn()>>,
+    /// What each exclusion was last read to be: one not read yet shows as
+    /// being read.
+    kinds: HashMap<String, ui::ExclusionKind>,
+    /// The lines being read, each on its thread: since when, and its answer.
+    examining: HashMap<String, (Instant, Receiver<Examined>)>,
+    /// Looks at the lines being read.
+    examine_check: slint::Timer,
 }
 
 /// The settings screen.
@@ -257,6 +291,9 @@ impl SettingsScreen {
             theme_shown: None,
             untold: false,
             when_written: None,
+            kinds: HashMap::new(),
+            examining: HashMap::new(),
+            examine_check: slint::Timer::default(),
         })));
         screen.bind(&preferences);
         screen.reload();
@@ -428,12 +465,113 @@ impl SettingsScreen {
             // A chooser that never answered no longer keeps "Parcourir" off.
             preferences.set_browsing(false);
         }
+        let entries = state.settings.exclusions.clone();
+        // As the file is read, only its lines are known or waited for: one
+        // written again is read again.
+        state.kinds.retain(|entry, _| entries.contains(entry));
+        state.examining.retain(|entry, _| entries.contains(entry));
         state.show();
         drop(state);
+        // What each line is, read again: answers come in first, then what is
+        // not being read any more is.
+        self.take_examined();
+        for entry in entries {
+            self.examine_line(entry);
+        }
+        if !self.0.borrow().examining.is_empty() {
+            self.watch_examined(EXAMINE_EVERY);
+        }
         // Settings that cannot be read say nothing of the theme: the one
         // shown stays.
         if readable {
             self.apply_theme();
+        }
+    }
+
+    /// Reads what the line `entry` is on a thread of its own, unless it is
+    /// being read already.
+    fn examine_line(&self, entry: String) {
+        if self.0.borrow().examining.contains_key(&entry) {
+            return;
+        }
+        let examine = Arc::clone(&self.0.borrow().seams.examine);
+        match examine_off(&examine, entry.clone()) {
+            Ok(answer) => {
+                self.0
+                    .borrow_mut()
+                    .examining
+                    .insert(entry, (Instant::now(), answer));
+            }
+            Err(error) => {
+                tracing::error!(%entry, %error, "exclusion not read: no thread, shown as invalid");
+                self.0
+                    .borrow_mut()
+                    .kinds
+                    .insert(entry, kind_shown(Err(ui::EntryError::Unreadable)));
+            }
+        }
+    }
+
+    /// Whether a line shown is still being read.
+    #[cfg(test)]
+    fn reads_lines(&self) -> bool {
+        !self.0.borrow().examining.is_empty()
+    }
+
+    /// Looks at the lines being read `every` so often.
+    fn watch_examined(&self, every: Duration) {
+        let screen = Rc::downgrade(&self.0);
+        self.0
+            .borrow()
+            .examine_check
+            .start(slint::TimerMode::Repeated, every, move || {
+                if let Some(screen) = Weak::upgrade(&screen).map(Self) {
+                    screen.take_examined();
+                }
+            });
+    }
+
+    /// Shows what the lines read since the last look are. The looks slow
+    /// down once every line still being read has waited longer than
+    /// [`EXAMINE_PATIENCE`], and stop once none is.
+    fn take_examined(&self) {
+        let mut state = self.0.borrow_mut();
+        let mut answered = Vec::new();
+        state.examining.retain(|entry, (_, answer)| {
+            let examined = match answer.try_recv() {
+                Ok(examined) => examined,
+                Err(TryRecvError::Empty) => return true,
+                Err(TryRecvError::Disconnected) => {
+                    tracing::error!(%entry, "exclusion reader ended without word: shown as invalid");
+                    Err(ui::EntryError::Unreadable)
+                }
+            };
+            answered.push((entry.clone(), examined));
+            false
+        });
+        let any_answered = !answered.is_empty();
+        for (entry, examined) in answered {
+            state.kinds.insert(entry, kind_shown(examined));
+        }
+        if any_answered {
+            state.show();
+        }
+        let waited = || state.examining.values().map(|(since, _)| since.elapsed());
+        let Some(youngest) = waited().min() else {
+            state.examine_check.stop();
+            return;
+        };
+        let every = if youngest < EXAMINE_PATIENCE {
+            EXAMINE_EVERY
+        } else {
+            EXAMINE_PATIENCE
+        };
+        if state.examine_check.interval() != every {
+            if every == EXAMINE_PATIENCE {
+                tracing::info!(entries = ?state.examining.keys().collect::<Vec<_>>(), oldest = ?waited().max(), "exclusions still being read: shown as such, looked at less often");
+            }
+            drop(state);
+            self.watch_examined(every);
         }
     }
 
@@ -590,25 +728,34 @@ impl SettingsScreen {
 
     /// Adds `entry` to the exclusions, as it is, if the engine takes it and
     /// it is not there yet; says why not otherwise. Whether it is added.
+    /// Where it lies is read on a thread of its own, waited for
+    /// [`EXAMINE_WAIT`] at most: a place that does not answer by then
+    /// cannot be read (its thread is left to end alone, if it ever does).
     fn add_entry(&self, entry: String) -> bool {
         if entry.is_empty() || !self.editable("exclusion added") {
             return false;
         }
-        let refused = match Exclusions::new([PathBuf::from(&entry)]) {
-            Err(ExclusionError::Unresolvable { .. }) => Some(ui::EntryError::Unreadable),
-            Err(_) => Some(ui::EntryError::Invalid),
-            Ok(_)
-                if self
-                    .0
-                    .borrow()
-                    .settings
-                    .exclusions
-                    .iter()
-                    .any(|kept| same(kept, &entry)) =>
-            {
-                Some(ui::EntryError::Duplicate)
+        let duplicate = self
+            .0
+            .borrow()
+            .settings
+            .exclusions
+            .iter()
+            .any(|kept| same(kept, &entry));
+        let refused = if duplicate {
+            Some(ui::EntryError::Duplicate)
+        } else {
+            match self.examine_added(&entry) {
+                Err(refused) => Some(refused),
+                Ok(kind) => {
+                    // Never shown as being read: it was, now. An older
+                    // reading of it (removed, then added again) is stale.
+                    let mut state = self.0.borrow_mut();
+                    state.kinds.insert(entry.clone(), kind);
+                    state.examining.remove(&entry);
+                    None
+                }
             }
-            Ok(_) => None,
         };
         if let Some(refused) = refused {
             tracing::warn!(%entry, ?refused, "exclusion not added");
@@ -618,6 +765,25 @@ impl SettingsScreen {
         self.change("exclusion added", |settings| {
             settings.exclusions.push(entry);
         })
+    }
+
+    /// What `entry`, being added, is: read on a thread of its own, waited
+    /// for [`EXAMINE_WAIT`] at most.
+    fn examine_added(&self, entry: &str) -> Examined {
+        let examine = Arc::clone(&self.0.borrow().seams.examine);
+        let answer = examine_off(&examine, entry.to_owned()).map_err(|error| {
+            tracing::error!(%entry, %error, "exclusion not read: no thread");
+            ui::EntryError::Unreadable
+        })?;
+        answer
+            .recv_timeout(EXAMINE_WAIT)
+            .unwrap_or_else(|error| {
+                match error {
+                    RecvTimeoutError::Timeout => tracing::warn!(%entry, waited = ?EXAMINE_WAIT, "exclusion not read in time: its place does not answer"),
+                    RecvTimeoutError::Disconnected => tracing::error!(%entry, "exclusion reader ended without word"),
+                }
+                Err(ui::EntryError::Unreadable)
+            })
     }
 
     fn refuse(&self, error: ui::EntryError) {
@@ -699,7 +865,11 @@ impl State {
             .iter()
             .map(|entry| ui::ExclusionRow {
                 text: from_home(Path::new(entry), home).into(),
-                kind: kind_of(entry),
+                kind: self
+                    .kinds
+                    .get(entry)
+                    .copied()
+                    .unwrap_or(ui::ExclusionKind::Reading),
             })
             .collect();
         // In place: the line that keeps the focus after a removal stays.
@@ -777,20 +947,28 @@ fn same(one: &str, other: &str) -> bool {
     Path::new(&one.to_lowercase()) == Path::new(&other.to_lowercase())
 }
 
-/// What an exclusion written in the settings is: refused by the engine
-/// (then it stops every analysis, which says why), an extension, or a path
-/// read on the disk now, through a link as the engine compares it.
-fn kind_of(entry: &str) -> ui::ExclusionKind {
+/// What an exclusion is: refused by the engine (its place unreadable, or
+/// invalid), an extension, or a path read on the disk now, through a link
+/// as the engine compares it. Reading where it lies waits on a mount that
+/// stopped answering: called on a thread of its own ([`examine_off`]).
+fn examine(entry: &str) -> Examined {
     let path = Path::new(entry);
-    if let Err(error) = Exclusions::new([path.to_path_buf()]) {
-        tracing::debug!(%entry, %error, "settings exclusion the engine refuses: shown as invalid");
-        return ui::ExclusionKind::Invalid;
+    match Exclusions::new([path.to_path_buf()]) {
+        Err(error @ ExclusionError::Unresolvable { .. }) => {
+            tracing::debug!(%entry, %error, "exclusion whose place cannot be read");
+            return Err(ui::EntryError::Unreadable);
+        }
+        Err(error) => {
+            tracing::debug!(%entry, %error, "exclusion the engine refuses");
+            return Err(ui::EntryError::Invalid);
+        }
+        Ok(_) => {}
     }
     // Taken by the engine and not absolute: an extension (`*.log`).
     if !path.is_absolute() {
-        return ui::ExclusionKind::Extension;
+        return Ok(ui::ExclusionKind::Extension);
     }
-    match std::fs::metadata(path) {
+    Ok(match std::fs::metadata(path) {
         Ok(metadata) if metadata.is_dir() => ui::ExclusionKind::Folder,
         Ok(_) => ui::ExclusionKind::File,
         Err(error) => {
@@ -799,6 +977,37 @@ fn kind_of(entry: &str) -> ui::ExclusionKind {
             }
             ui::ExclusionKind::Absent
         }
+    })
+}
+
+/// Runs `examine` on `entry` on a thread of its own; its answer comes on
+/// the receiver returned, or never when the place does not answer.
+fn examine_off(examine: &Examine, entry: String) -> std::io::Result<Receiver<Examined>> {
+    let (sender, answer) = mpsc::channel();
+    let examine = Arc::clone(examine);
+    let span = tracing::Span::current();
+    std::thread::Builder::new()
+        .name(EXAMINER_NAME.to_owned())
+        .spawn(move || {
+            span.in_scope(|| {
+                tracing::debug!(%entry, "exclusion being read");
+                let started = Instant::now();
+                let examined = examine(&entry);
+                tracing::debug!(%entry, ?examined, elapsed = ?started.elapsed(), "exclusion read");
+                if sender.send(examined).is_err() {
+                    tracing::info!(%entry, elapsed = ?started.elapsed(), "exclusion read too late: no one waits for it");
+                }
+            });
+        })?;
+    Ok(answer)
+}
+
+/// How a line read is shown: one the engine refuses, whatever why, stops
+/// every analysis, which says why.
+const fn kind_shown(examined: Examined) -> ui::ExclusionKind {
+    match examined {
+        Ok(kind) => kind,
+        Err(_) => ui::ExclusionKind::Invalid,
     }
 }
 

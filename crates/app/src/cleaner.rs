@@ -1707,11 +1707,14 @@ impl CleanerScreen {
                 path = ?analysis.view.path,
                 "analysis left running on closing"
             ),
-            // Its input closes with the window: the helper cancels itself
-            // once the question of pkexec is answered.
-            (Task::Elevating(_), false) => tracing::warn!(
+            // Launched, its input closes with the window: the helper cancels
+            // itself once the question of pkexec is answered. Not launched
+            // as last seen, the thread cancelled no longer launches it,
+            // short of a launch already under way.
+            (Task::Elevating(elevating), false) => tracing::warn!(
                 waited = ?started.elapsed(),
-                "root's scan left running on closing: pkexec still asks, the helper will cancel itself"
+                launched = elevating.launched,
+                "root's scan left running on closing: the helper, if launched, cancels itself once pkexec's question is answered"
             ),
             (Task::Cleaning(_), false) => tracing::error!(
                 waited = ?started.elapsed(),

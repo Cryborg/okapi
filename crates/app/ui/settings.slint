@@ -255,6 +255,9 @@ component Exclusions inherits Card {
         if kind == ExclusionKind.absent {
             return @tr("Absent");
         }
+        if kind == ExclusionKind.reading {
+            return @tr("Lecture…");
+        }
         @tr("Invalide")
     }
 

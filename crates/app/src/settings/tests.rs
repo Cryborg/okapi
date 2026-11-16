@@ -28,6 +28,7 @@ pub fn nowhere() -> SettingsSeams {
         save: |_, _| false,
         choose_folder: Rc::new(|_, done| done(Chosen::Unavailable)),
         desktop_theme: Rc::new(|done| done(None)),
+        examine: Arc::new(examine),
     }
 }
 
@@ -151,6 +152,7 @@ impl Sandbox {
                     done(theme.get());
                 }
             }),
+            examine: Arc::new(examine),
         }
     }
 
@@ -208,6 +210,29 @@ fn rows(window: &ui::AppWindow) -> Vec<(String, ui::ExclusionKind)> {
         .collect()
 }
 
+/// Lets the lines shown be read, as the screen looks at them.
+fn examined(screens: &Screens) {
+    let begun = Instant::now();
+    while screens.3.reads_lines() {
+        assert!(
+            begun.elapsed() < Duration::from_secs(10),
+            "lines never read"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+        i_slint_backend_testing::mock_elapsed_time(EXAMINE_EVERY);
+        slint::platform::update_timers_and_animations();
+    }
+}
+
+/// The badge of the line `text`, as it is read with it.
+fn badge(window: &ui::AppWindow, text: &str) -> String {
+    ElementHandle::find_by_accessible_label(window, text)
+        .find(|element| element.accessible_role() == Some(AccessibleRole::ListItem))
+        .and_then(|line| line.accessible_description())
+        .unwrap_or_else(|| panic!("no line {text}"))
+        .to_string()
+}
+
 /// Lets the changes asked for be written, as what reads the settings next
 /// does.
 fn written(screens: &Screens) {
@@ -252,6 +277,7 @@ fn an_exclusion_typed_is_written_absolute_and_shown_from_home() {
     // Made since: a folder, once read again.
     fs::create_dir(&projets).unwrap();
     preferences(&window).invoke_reload();
+    examined(&screens);
     assert_eq!(
         rows(&window),
         [("~/Projets".to_owned(), ui::ExclusionKind::Folder)]
@@ -338,7 +364,8 @@ fn an_exclusion_written_by_hand_is_shown_as_the_engine_takes_it() {
         r#"{{"version": 1, "exclusions": ["relatif", "*.", "*.a*b", "*.log", "{}"]}}"#,
         file.display()
     ));
-    let (window, _screens) = sandbox.window();
+    let (window, screens) = sandbox.window();
+    examined(&screens);
     assert_eq!(
         rows(&window)
             .into_iter()
@@ -353,17 +380,93 @@ fn an_exclusion_written_by_hand_is_shown_as_the_engine_takes_it() {
         ]
     );
     // Read with its line, as its badge shows it.
-    let read_kind = |text: &str| {
-        ElementHandle::find_by_accessible_label(&window, text)
-            .find(|element| element.accessible_role() == Some(AccessibleRole::ListItem))
-            .and_then(|line| line.accessible_description())
-            .unwrap()
-    };
-    assert_eq!(read_kind("relatif"), "Invalide");
-    assert_eq!(read_kind("*.log"), "Extension");
+    assert_eq!(badge(&window, "relatif"), "Invalide");
+    assert_eq!(badge(&window, "*.log"), "Extension");
+    // Another setting changed: shown as read, never read again.
+    preferences(&window).invoke_toggle_deletion_log();
+    assert!(!screens.3.reads_lines(), "nothing read again");
+    assert_eq!(badge(&window, "*.log"), "Extension");
     // The one that stops every analysis can be removed here.
     button(&window, "Retirer relatif des exclusions").invoke_accessible_default_action();
     assert_eq!(rows(&window).len(), 4);
+}
+
+#[test]
+fn a_place_that_never_answers_never_holds_the_window() {
+    let sandbox = Sandbox::new();
+    sandbox.write(r#"{"version": 1, "exclusions": ["/mort/a", "*.log"]}"#);
+    // Below `/mort`, held until `release` goes, as a mount that stopped
+    // answering holds what reads where it lies.
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let held = std::sync::Mutex::new(held);
+    let seams = SettingsSeams {
+        examine: Arc::new(move |entry| {
+            if entry.starts_with("/mort") {
+                // Bounded: waited for on the window's thread, it would fail
+                // the test rather than hold it.
+                let _ = held.lock().unwrap().recv_timeout(EXAMINE_WAIT * 10);
+            }
+            examine(entry)
+        }),
+        ..sandbox.seams()
+    };
+    let (window, screens) = Sandbox::window_from(Rc::new(|| Ok(defaults())), seams);
+    let begun = Instant::now();
+    while badge(&window, "*.log") != "Extension" {
+        assert!(begun.elapsed() < Duration::from_secs(10), "never read");
+        std::thread::sleep(Duration::from_millis(5));
+        i_slint_backend_testing::mock_elapsed_time(EXAMINE_EVERY);
+        slint::platform::update_timers_and_animations();
+    }
+    assert_eq!(badge(&window, "/mort/a"), "Lecture…", "the other one read");
+    // Added below it: waited for a little, then said unreadable.
+    let begun = Instant::now();
+    type_and_add(&window, "/mort/b");
+    let waited = begun.elapsed();
+    assert!(
+        waited >= EXAMINE_WAIT && waited < EXAMINE_WAIT * 3,
+        "{waited:?}"
+    );
+    assert_eq!(
+        preferences(&window).get_entry_error(),
+        ui::EntryError::Unreadable
+    );
+    assert_eq!(preferences(&window).get_entry(), "/mort/b", "kept to fix");
+    // One already there is said so at once, never read.
+    let begun = Instant::now();
+    type_and_add(&window, "/mort/a");
+    assert!(begun.elapsed() < EXAMINE_WAIT);
+    assert_eq!(
+        preferences(&window).get_entry_error(),
+        ui::EntryError::Duplicate
+    );
+    // Another place is added at once.
+    type_and_add(&window, "/ici");
+    assert_eq!(preferences(&window).get_entry_error(), ui::EntryError::None);
+    written(&screens);
+    assert_eq!(sandbox.settings().exclusions, ["/mort/a", "*.log", "/ici"]);
+    // The mount answers again: the line is read once the file is.
+    drop(release);
+    preferences(&window).invoke_reload();
+    examined(&screens);
+    assert_eq!(badge(&window, "/mort/a"), "Absent");
+}
+
+#[test]
+fn a_line_whose_reader_dies_is_shown_invalid() {
+    let sandbox = Sandbox::new();
+    sandbox.write(r#"{"version": 1, "exclusions": ["/boom", "*.log"]}"#);
+    let seams = SettingsSeams {
+        examine: Arc::new(|entry| {
+            assert_ne!(entry, "/boom", "the reader dies");
+            examine(entry)
+        }),
+        ..sandbox.seams()
+    };
+    let (window, screens) = Sandbox::window_from(Rc::new(|| Ok(defaults())), seams);
+    examined(&screens);
+    assert_eq!(badge(&window, "/boom"), "Invalide");
+    assert_eq!(badge(&window, "*.log"), "Extension");
 }
 
 #[test]

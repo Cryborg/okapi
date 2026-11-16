@@ -12,6 +12,8 @@ pub mod monitor;
 mod mounts;
 #[cfg(feature = "packages")]
 pub mod packages;
+#[cfg(any(feature = "duplicates", feature = "apps"))]
+mod trashing;
 // Its sources are Linux's daemons.
 #[cfg(all(feature = "updates", target_os = "linux"))]
 pub mod updates;

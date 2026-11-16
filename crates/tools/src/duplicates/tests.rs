@@ -1007,7 +1007,7 @@ mod moving {
         let sandbox = Arc::new(sandbox());
         sandbox.copies(&["a", "b"], 30);
         let search = Arc::new(sandbox.search());
-        let held = crate::duplicates::trash::MOVING.lock().unwrap();
+        let held = crate::trashing::one_at_a_time();
         let mover = {
             let (sandbox, search) = (Arc::clone(&sandbox), Arc::clone(&search));
             std::thread::spawn(move || moved(&search, &sandbox, &["a"]))

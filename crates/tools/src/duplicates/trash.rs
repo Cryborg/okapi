@@ -6,21 +6,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::io;
-use std::sync::{Mutex, PoisonError};
 
 use okapi_engine::Exclusions;
 use okapi_platform::{Directory, EntryStatus, Trash, TrashError, Unreached, tells_mount_roots};
 
 use super::compare::parent_of;
 use super::report::{CopyId, DuplicateReport, FileCopy, Group};
-
-/// Held while copies are moved: two movings at once, of one report or of
-/// two, could each keep the copy the other moves.
-pub(crate) static MOVING: Mutex<()> = Mutex::new(());
-
-/// The format of a trashed file's date, as the trash specification wants
-/// it: local time, without zone.
-const DELETION_DATE: &str = "%Y-%m-%dT%H:%M:%S";
+pub use crate::trashing::Refusal;
+use crate::trashing::{Moved, deleted_now, moved, one_at_a_time};
 
 /// Why a copy stayed where it was.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,23 +61,6 @@ impl KeepReason {
             Self::OtherDevice => "otherDevice",
             Self::UnsupportedSystem => "unsupportedSystem",
             Self::Refused(_) => "refused",
-        }
-    }
-}
-
-/// What the system refused with: the kind of its error, and its own code
-/// when it gave one (`EIO`, `EINVAL`... that no kind tells apart).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Refusal {
-    pub kind: io::ErrorKind,
-    pub code: Option<i32>,
-}
-
-impl From<&io::Error> for Refusal {
-    fn from(error: &io::Error) -> Self {
-        Self {
-            kind: error.kind(),
-            code: error.raw_os_error(),
         }
     }
 }
@@ -162,11 +138,6 @@ pub fn trash(
     trash_dated(report, ids, bin, exclusions, &deleted_now())
 }
 
-/// The local time now, as a trashed file is dated.
-fn deleted_now() -> String {
-    jiff::Zoned::now().strftime(DELETION_DATE).to_string()
-}
-
 pub(crate) fn trash_dated(
     report: &DuplicateReport,
     ids: &[CopyId],
@@ -175,7 +146,7 @@ pub(crate) fn trash_dated(
     deleted_at: &str,
 ) -> TrashReceipt {
     let _span = tracing::info_span!("trash", requested = ids.len()).entered();
-    let _one_at_a_time = MOVING.lock().unwrap_or_else(PoisonError::into_inner);
+    let _one_at_a_time = one_at_a_time();
     let mut seen = BTreeSet::new();
     let ids: Vec<CopyId> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
     let asked: BTreeSet<CopyId> = ids.iter().copied().collect();
@@ -288,16 +259,14 @@ pub(crate) const TRASH_FOLDER: &str = "Trash";
 const HIDDEN_TRASH: &str = ".Trash";
 
 /// What the trash's answer to moving `copy` makes of it.
-fn result_of(copy: &FileCopy, moved: Result<OsString, TrashError>) -> TrashResult {
+fn result_of(copy: &FileCopy, answer: Result<OsString, TrashError>) -> TrashResult {
     let kept = TrashResult::Kept;
-    match moved {
-        Ok(_) => TrashResult::Trashed { bytes: copy.size() },
-        Err(TrashError::OtherDevice) => kept(KeepReason::OtherDevice),
-        Err(TrashError::Changed) => kept(KeepReason::Changed),
-        Err(TrashError::Unchecked(_)) => TrashResult::Unchecked,
-        // The trash's own folder gone is a refusal, not the copy gone: the
-        // copy was read just before.
-        Err(TrashError::Io(error)) => kept(KeepReason::Refused((&error).into())),
+    match moved(answer) {
+        Moved::Trashed => TrashResult::Trashed { bytes: copy.size() },
+        Moved::OtherDevice => kept(KeepReason::OtherDevice),
+        Moved::Changed => kept(KeepReason::Changed),
+        Moved::Unchecked(_) => TrashResult::Unchecked,
+        Moved::Refused(refusal) => kept(KeepReason::Refused(refusal)),
     }
 }
 

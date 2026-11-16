@@ -33,6 +33,8 @@ tempfile = { workspace = true }
 # A fake flatpak helper on a socket pair, for the tests of its client.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 zbus = { workspace = true, features = ["p2p"] }
+# A test lowers its own limit of open files.
+rustix = { workspace = true }
 
 [features]
 # What the dashboard reads of the system, and the thread that reads it.
@@ -58,6 +60,8 @@ updates = ["packages", "dep:jiff", "dep:okapi-rules"]
 apps = [
     "disk-usage",
     "packages",
+    "dep:jiff",
+    "dep:okapi-engine",
     "dep:okapi-rules",
     "dep:png",
     "dep:resvg",

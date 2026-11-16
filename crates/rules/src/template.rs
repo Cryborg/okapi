@@ -386,7 +386,9 @@ impl TemplateVariables {
         }
     }
 
-    fn value_of(&self, variable: Variable) -> Option<&Path> {
+    /// The value of `variable`, if it has one.
+    #[must_use]
+    pub fn value_of(&self, variable: Variable) -> Option<&Path> {
         self.0.get(&variable).map(PathBuf::as_path)
     }
 

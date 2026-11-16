@@ -68,6 +68,13 @@ pub(crate) fn parse_desktop_name(text: &str, languages: &[&str]) -> Option<Strin
 pub struct DesktopEntry {
     /// In the language asked when the file has it, else its plain `Name`.
     pub name: Option<String>,
+    /// Its plain `Name`, in no language.
+    pub plain_name: Option<String>,
+    /// `StartupWMClass`: the class its windows say.
+    pub wm_class: Option<String>,
+    /// `X-Flatpak-RenamedFrom`: the launchers' names it had before being
+    /// renamed (`<old-id>.desktop`), as flatpak writes them.
+    pub renamed_from: Vec<String>,
     /// A name in the icon theme, or a path.
     pub icon: Option<String>,
     /// `Type=Application`.
@@ -130,6 +137,10 @@ pub(crate) fn parse_desktop_entry(text: &str, languages: &[&str]) -> DesktopEntr
         let (key, value) = (key.trim(), value.trim());
         match key {
             "Name" => plain = Some(value),
+            "StartupWMClass" => {
+                entry.wm_class = Some(value.to_owned()).filter(|class| !class.is_empty());
+            }
+            "X-Flatpak-RenamedFrom" => entry.renamed_from = list(value),
             "Icon" => entry.icon = Some(value.to_owned()).filter(|icon| !icon.is_empty()),
             "Type" => entry.application = value == "Application",
             "NoDisplay" => entry.no_display = value == "true",
@@ -153,6 +164,7 @@ pub(crate) fn parse_desktop_entry(text: &str, languages: &[&str]) -> DesktopEntr
         .chain(plain)
         .find(|name| !name.is_empty())
         .map(str::to_owned);
+    entry.plain_name = plain.filter(|name| !name.is_empty()).map(str::to_owned);
     entry
 }
 
@@ -257,6 +269,26 @@ Name[fr]=Nouvelle fenêtre de navigation privée
         assert!(!only_gnome.shown_in(&[]), "a session that names no desktop");
         let empty_icon = parse_desktop_entry("[Desktop Entry]\nIcon=\n", &[]);
         assert_eq!(empty_icon.icon, None);
+    }
+
+    #[test]
+    fn an_entry_says_its_plain_name_its_window_class_and_its_former_names() {
+        // Catches an action's keys taken for the application's, and a
+        // translated name taken for the plain one.
+        let entry = parse_desktop_entry(
+            "[Desktop Entry]\nName=Text Editor\nName[fr]=Éditeur de texte\n\
+             StartupWMClass=gnome-text-editor\n\
+             X-Flatpak-RenamedFrom=org.gnome.gedit.desktop;gedit.desktop;\n\n\
+             [Desktop Action new]\nName=New\nStartupWMClass=other\nX-Flatpak-RenamedFrom=x.desktop;\n",
+            &["fr"],
+        );
+        assert_eq!(entry.name.as_deref(), Some("Éditeur de texte"));
+        assert_eq!(entry.plain_name.as_deref(), Some("Text Editor"));
+        assert_eq!(entry.wm_class.as_deref(), Some("gnome-text-editor"));
+        assert_eq!(
+            entry.renamed_from,
+            ["org.gnome.gedit.desktop", "gedit.desktop"]
+        );
     }
 
     #[test]

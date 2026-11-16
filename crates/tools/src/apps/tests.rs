@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use okapi_rules::Language;
 
-use super::flatpak::{FlatpakRef, Installation, installations, read_flatpaks, related};
+use super::flatpak::{FlatpakRef, Installation, read_flatpaks, related};
 use super::icons::IconRoots;
 use super::snap::read_snaps;
 use super::uninstall::{Target, Why};
@@ -251,17 +251,15 @@ fn deploy(installation: &Path, id: &str, target: &str) -> PathBuf {
 }
 
 fn system_installation(path: &Path) -> Installation {
-    Installation {
-        path: path.to_path_buf(),
-        system: true,
-    }
+    Installation::at(path.to_path_buf(), true, false)
 }
 
 fn user_installation(path: &Path) -> Installation {
-    Installation {
-        path: path.to_path_buf(),
-        system: false,
-    }
+    Installation::at(path.to_path_buf(), false, false)
+}
+
+fn declared_installation(path: &Path) -> Installation {
+    Installation::at(path.to_path_buf(), false, true)
 }
 
 fn both(system: &Path, user: &Path) -> [Installation; 2] {
@@ -315,6 +313,7 @@ fn app(source: Source, id: &str, data: Option<PathBuf>) -> App {
         id: id.to_owned(),
         package: id.to_owned(),
         name: id.to_owned(),
+        aliases: Vec::new(),
         version: String::new(),
         publisher: None,
         origin: None,
@@ -605,12 +604,15 @@ fn a_flatpak_installation_unreadable_is_a_failure_never_none() {
 fn only_the_system_s_installation_gives_a_flatpak_its_target() {
     // Catches a button for an installation the helper cannot change, and
     // installations whose kinds were swapped.
-    let home = Path::new("/home/f");
+    let config = tempfile::tempdir().unwrap();
+    let data = Path::new("/home/f/.local/share");
+    let none = config.path().join("none");
+    let environment = |name: &str| (name == "FLATPAK_CONFIG_DIR").then(|| none.clone().into());
     assert_eq!(
-        installations(Some(home)),
+        flatpak::installations_from(&environment, Some(data)),
         [
             system_installation(Path::new(flatpak::SYSTEM_INSTALLATION)),
-            user_installation(&home.join(flatpak::USER_INSTALLATION)),
+            user_installation(&data.join(flatpak::USER_INSTALLATION)),
         ]
     );
     let root = tempfile::tempdir().unwrap();
@@ -961,4 +963,172 @@ fn a_subextension_unreadable_is_never_told_nothing() {
     fs::write(branch.join("active"), "").unwrap();
     let app = FlatpakRef::app("org.gimp.GIMP", "x86_64", "stable").unwrap();
     assert_eq!(related(&system, &app), Err(Why::Unclear));
+}
+
+#[test]
+fn installations_are_placed_as_flatpak_places_them() {
+    // Catches the user's installation fixed under the home folder when the
+    // data folder moved, the variables flatpak reads ignored, and the
+    // installations declared in `installations.d` forgotten.
+    let config = tempfile::tempdir().unwrap();
+    let declarations = config.path().join("installations.d");
+    fs::create_dir(&declarations).unwrap();
+    write(
+        &declarations.join("sd.conf"),
+        "[Installation \"sd\"]\nPath=/media/sd/flatpak\nDisplayName=SD\n",
+    );
+    write(
+        &declarations.join("broken.conf"),
+        "[Installation \"x\"]\nDisplayName=No path\n",
+    );
+    write(&declarations.join("ignored.txt"), "Path=/elsewhere\n");
+    let folder = config.path().to_path_buf();
+    let environment = move |name: &str| match name {
+        "FLATPAK_CONFIG_DIR" => Some(folder.clone().into()),
+        "FLATPAK_USER_DIR" => Some("/custom/user".into()),
+        "FLATPAK_SYSTEM_DIR" => Some("/custom/system".into()),
+        _ => None,
+    };
+    let broken = declarations.join("broken.conf");
+    assert_eq!(
+        flatpak::installations_from(&environment, Some(Path::new("/data"))),
+        [
+            // Moved, the system's is no longer the helper's.
+            user_installation(Path::new("/custom/system")),
+            user_installation(Path::new("/custom/user")),
+            Installation::unplaced(broken, "a path missing or relative".to_owned()),
+            declared_installation(Path::new("/media/sd/flatpak")),
+        ]
+    );
+}
+
+#[test]
+fn an_installation_that_cannot_be_placed_is_unread_never_none() {
+    // Catches the user's installation dropped without a data folder, and a
+    // declaration folder that cannot be listed taken for an empty
+    // installation: either way the ids there would be said uninstalled.
+    let config = tempfile::tempdir().unwrap();
+    let declarations = config.path().join("installations.d");
+    fs::create_dir(&declarations).unwrap();
+    let folder = config.path().to_path_buf();
+    let environment =
+        move |name: &str| (name == "FLATPAK_CONFIG_DIR").then(|| folder.clone().into());
+    let found = closed(&declarations, || {
+        flatpak::installations_from(&environment, None)
+    });
+    let unplaced: Vec<&Installation> = found
+        .iter()
+        .filter(|installation| installation.unplaced.is_some())
+        .collect();
+    // Root lists through anything: then only the user's is unplaced.
+    let expected = if as_root() { 1 } else { 2 };
+    assert_eq!(unplaced.len(), expected, "{found:?}");
+    for installation in unplaced {
+        assert!(flatpak::app_ids(installation).is_err());
+    }
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    deploy(&system, "org.gimp.GIMP", "abc123");
+    let read = read_flatpaks(
+        &[
+            system_installation(&system),
+            Installation::unplaced(PathBuf::new(), "no data folder".to_owned()),
+        ],
+        None,
+        &reading(root.path()),
+    );
+    assert!(
+        matches!(&read, SourceReading::Read { partial: true, .. }),
+        "{read:?}"
+    );
+}
+
+#[test]
+fn a_declared_installation_missing_or_unreadable_is_unread_never_none() {
+    // Catches a disk unplugged, or a declaration without its path, taken
+    // for no flatpak installed there.
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    deploy(&system, "org.gimp.GIMP", "abc123");
+    for declared in [root.path().join("unplugged"), {
+        let file = root.path().join("broken.conf");
+        fs::write(&file, "").unwrap();
+        file
+    }] {
+        let read = read_flatpaks(
+            &[
+                system_installation(&system),
+                declared_installation(&declared),
+            ],
+            None,
+            &reading(root.path()),
+        );
+        assert!(
+            matches!(&read, SourceReading::Read { partial: true, .. }),
+            "{}: {read:?}",
+            declared.display()
+        );
+    }
+}
+
+#[test]
+fn a_place_written_relative_is_unread_and_a_declaration_named_out_of_utf_8_is_read() {
+    // Catches a relative place read from Okapi's own folder (said absent),
+    // the system's default named by the variable losing its helper, and a
+    // declaration dropped for its name.
+    use std::os::unix::ffi::OsStrExt as _;
+    let config = tempfile::tempdir().unwrap();
+    let declarations = config.path().join("installations.d");
+    fs::create_dir(&declarations).unwrap();
+    write(
+        &declarations.join(std::ffi::OsStr::from_bytes(b"carte-\xff.conf")),
+        "[Installation \"sd\"]\nPath=/media/sd/flatpak\n",
+    );
+    let folder = config.path().to_path_buf();
+    let environment = move |name: &str| match name {
+        "FLATPAK_CONFIG_DIR" => Some(folder.clone().into()),
+        "FLATPAK_USER_DIR" => Some("relative/user".into()),
+        "FLATPAK_SYSTEM_DIR" => Some(flatpak::SYSTEM_INSTALLATION.into()),
+        _ => None,
+    };
+    assert_eq!(
+        flatpak::installations_from(&environment, None),
+        [
+            system_installation(Path::new(flatpak::SYSTEM_INSTALLATION)),
+            Installation::unplaced("relative/user".into(), "placed relative".to_owned()),
+            declared_installation(Path::new("/media/sd/flatpak")),
+        ]
+    );
+    let relative = |name: &str| (name == "FLATPAK_CONFIG_DIR").then(|| "etc".into());
+    let found = flatpak::installations_from(&relative, Some(Path::new("/data")));
+    assert_eq!(
+        found.last(),
+        Some(&Installation::unplaced(
+            "etc".into(),
+            "placed relative".to_owned()
+        ))
+    );
+}
+
+#[test]
+fn a_launcher_gives_its_file_s_name_its_window_class_and_its_plain_name() {
+    // Catches the names a folder of the application may bear lost: what
+    // the leftovers of an application uninstalled are told by.
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("org.gnome.TextEditor.desktop");
+    write(
+        &path,
+        &launcher(
+            "Text Editor",
+            "Name[fr]=Éditeur de texte\nStartupWMClass=gnome-text-editor",
+        ),
+    );
+    let read = reading(root.path())
+        .launcher(&path, &reading(root.path()).icons)
+        .unwrap();
+    assert_eq!(read.name, "Éditeur de texte");
+    assert_eq!(
+        read.aliases,
+        ["org.gnome.TextEditor", "gnome-text-editor", "Text Editor"]
+    );
 }

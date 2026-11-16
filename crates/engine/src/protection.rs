@@ -11,8 +11,9 @@ use crate::walk::IdentityReader;
 
 /// A variable's directory, or one of its ancestors, could not be read: what it
 /// protects cannot be vouched for, so nothing is scanned.
-#[derive(Debug)]
-pub(crate) struct UnreadableVariable {
+#[derive(Debug, thiserror::Error)]
+#[error("the folder of {variable:?}, `{}`, or one of its ancestors cannot be read: {error}", path.display())]
+pub struct UnreadableVariable {
     pub(crate) variable: Variable,
     pub(crate) path: PathBuf,
     pub(crate) error: io::ErrorKind,
@@ -28,7 +29,7 @@ pub(crate) struct UnreadableVariable {
 /// prefix); identity sees through case-insensitive spellings, Unicode
 /// normalization and bind mounts, which a path comparison would miss.
 #[derive(Debug)]
-pub(crate) struct ProtectedRoots {
+pub struct ProtectedRoots {
     /// The identity of each existing value and of all its ancestors, with the
     /// variable it protects. `${TMPDIR}`'s own directory is not in it.
     ancestors: BTreeMap<FileIdentity, Variable>,
@@ -37,6 +38,15 @@ pub(crate) struct ProtectedRoots {
 }
 
 impl ProtectedRoots {
+    /// The directories of `variables`, by the system's identities.
+    ///
+    /// # Errors
+    ///
+    /// A variable whose directory, or an ancestor of it, cannot be read.
+    pub fn of(variables: &TemplateVariables) -> Result<Self, UnreadableVariable> {
+        Self::new(variables, okapi_platform::file_identity)
+    }
+
     pub(crate) fn new(
         variables: &TemplateVariables,
         identity_of: IdentityReader,
@@ -86,7 +96,8 @@ impl ProtectedRoots {
 
     /// Whether a directory met below a root is a variable's directory or one of
     /// their ancestors, reached through a bind mount: it is never entered.
-    pub(crate) fn is_protected_directory(&self, identity: FileIdentity) -> bool {
+    #[must_use]
+    pub fn is_protected_directory(&self, identity: FileIdentity) -> bool {
         self.directories.contains(&identity) || self.ancestors.contains_key(&identity)
     }
 }

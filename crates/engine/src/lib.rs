@@ -28,6 +28,7 @@ pub use options::{
     duration_of_minutes, settings_min_age,
 };
 pub use preconditions::Stop;
+pub use protection::{ProtectedRoots, UnreadableVariable};
 pub use report::{
     AppFile, BrowserLock, Category, EntryKind, ItemId, Limit, Origin, OriginKey, ScanGroup,
     ScanIssue, ScanItem, ScanReport, ScanStats, UnsafeReason, checked_by_default, report_nonce,

@@ -19,6 +19,8 @@ const LAUNCHER_SUFFIX: &str = ".desktop";
 const KIBIBYTE: u64 = 1024;
 /// The states of a package whose files are all there.
 const INSTALLED: [&str; 3] = ["installed", "triggers-pending", "triggers-awaited"];
+/// The state of a package removed whose settings stay (`rc`).
+const RESIDUAL: &str = "config-files";
 
 /// One package installed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +53,9 @@ impl DebPackage {
 pub struct Status {
     pub installed: Vec<DebPackage>,
     pub unreadable: usize,
+    /// Packages removed whose settings stay (`rc`: `config-files`), which
+    /// only dpkg itself can purge.
+    pub residual: usize,
 }
 
 /// The fields of one paragraph, a field continued on the next lines kept to
@@ -89,11 +94,11 @@ pub fn parse_status(text: &str) -> Status {
         };
         // `want flag state`: only the state says it is there, its triggers
         // run or not.
-        if !state
-            .split_whitespace()
-            .nth(2)
-            .is_some_and(|state| INSTALLED.contains(&state))
-        {
+        let state = state.split_whitespace().nth(2);
+        if state == Some(RESIDUAL) {
+            status.residual += 1;
+        }
+        if !state.is_some_and(|state| INSTALLED.contains(&state)) {
             continue;
         }
         let installed_bytes = fields.get("Installed-Size").and_then(|size| {
@@ -324,6 +329,8 @@ Installed-Size: 1
             (None, "i386")
         );
         assert!(status.installed[4].metapackage, "in an archive area");
+        // Catches an `rc` package counted installed, or not counted.
+        assert_eq!(status.residual, 1, "removed-app only");
     }
 
     #[test]

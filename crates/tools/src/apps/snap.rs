@@ -8,7 +8,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use super::uninstall::Target;
-use super::{App, AppSize, Reading, Rest, Source, SourceReading};
+use super::{App, AppSize, Launcher, Reading, Rest, Source, SourceReading};
 use crate::packages::snapd::is_snap_name;
 
 /// What snapd says of one revision.
@@ -40,6 +40,30 @@ struct Publisher {
 struct SnapApp {
     #[serde(rename = "desktop-file", default)]
     desktop_file: Option<String>,
+}
+
+/// Where snaps keep each one's data, under the home folder.
+pub const SNAP_DATA: &str = "snap";
+
+/// The first launcher of the application `active` the menu shows, its files
+/// read under `root`; none for a snap that is no application.
+fn shown_launcher(active: &Revision, root: &Path, reading: &Reading) -> Option<Launcher> {
+    if active.kind != "app" {
+        return None;
+    }
+    let mut files: Vec<&str> = active
+        .apps
+        .iter()
+        .filter_map(|app| app.desktop_file.as_deref())
+        .collect();
+    files.sort_unstable();
+    files.into_iter().find_map(|file| {
+        let path = Path::new(file);
+        reading.launcher(
+            &root.join(path.strip_prefix("/").unwrap_or(path)),
+            &reading.icons,
+        )
+    })
 }
 
 /// The snaps of `result` (snapd's list of every revision), their launchers
@@ -92,25 +116,14 @@ pub fn read_snaps(
             rest.bytes = rest.bytes.saturating_add(old_bytes);
             continue;
         };
-        let launcher = (active.kind == "app")
-            .then(|| {
-                let mut files: Vec<&str> = active
-                    .apps
-                    .iter()
-                    .filter_map(|app| app.desktop_file.as_deref())
-                    .collect();
-                files.sort_unstable();
-                files.into_iter().find_map(|file| {
-                    let path = Path::new(file);
-                    reading.launcher(
-                        &root.join(path.strip_prefix("/").unwrap_or(path)),
-                        &reading.icons,
-                    )
-                })
-            })
-            .flatten();
+        let launcher = shown_launcher(&active, root, reading);
         without_size += usize::from(active.installed_size.is_none());
-        let Some((shown_name, icon)) = launcher else {
+        let Some(Launcher {
+            name: shown_name,
+            icon,
+            aliases,
+        }) = launcher
+        else {
             rest.count += 1;
             rest.bytes = rest
                 .bytes
@@ -123,6 +136,7 @@ pub fn read_snaps(
             id: name.clone(),
             package: name.clone(),
             name: shown_name,
+            aliases,
             version: active.version,
             publisher: active.publisher.map(|publisher| publisher.display_name),
             origin: None,
@@ -132,7 +146,7 @@ pub fn read_snaps(
                 .map_or(AppSize::Unknown, AppSize::Known),
             old_bytes,
             old_versions: old.len(),
-            data: home.map(|home| home.join("snap").join(&name)),
+            data: home.map(|home| home.join(SNAP_DATA).join(&name)),
             system: false,
             target: Some(Target::Snap {
                 name: name.clone(),

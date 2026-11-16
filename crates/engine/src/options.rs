@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -148,6 +149,12 @@ impl Exclusions {
         self.identities.contains(&identity)
     }
 
+    /// [`Self::excludes_by_identity`], identities read by the system.
+    #[must_use]
+    pub fn excludes_through_identity(&self, path: &Path) -> bool {
+        self.excludes_by_identity(path, file_identity)
+    }
+
     /// Whether `path` or one of its ancestors is an excluded directory by
     /// identity: the same directory shown at another path by a bind mount.
     pub(crate) fn excludes_by_identity(&self, path: &Path, identity_of: IdentityReader) -> bool {
@@ -164,20 +171,33 @@ impl Exclusions {
     /// its components: an excluded directory covers what lies below it.
     #[must_use]
     pub fn excludes(&self, path: &Path) -> bool {
-        let by_extension = path.components().any(|component| {
-            let Component::Normal(name) = component else {
-                return false;
-            };
-            let name = lowercase(&name.to_string_lossy());
-            self.extensions
-                .iter()
-                .any(|extension| name.ends_with(extension.as_str()))
+        let by_extension = path.components().any(|component| match component {
+            Component::Normal(name) => self.excludes_name(name),
+            _ => false,
         });
         by_extension
             || self
                 .prefixes
                 .iter()
                 .any(|prefix| starts_with_ignoring_case(path, prefix))
+    }
+
+    /// Whether an entry named `name` is excluded by its extension.
+    #[must_use]
+    pub fn excludes_name(&self, name: &OsStr) -> bool {
+        let name = lowercase(&name.to_string_lossy());
+        self.extensions
+            .iter()
+            .any(|extension| name.ends_with(extension.as_str()))
+    }
+
+    /// Whether an excluded path lies below `root`: moving `root` whole would
+    /// take it along.
+    #[must_use]
+    pub fn excludes_below(&self, root: &Path) -> bool {
+        self.prefixes
+            .iter()
+            .any(|prefix| starts_with_ignoring_case(prefix, root))
     }
 }
 
@@ -330,6 +350,19 @@ mod tests {
         assert!(!exclusions.excludes(Path::new("/tmp/catalog")));
         assert!(!exclusions.excludes(Path::new("/tmp/catalog/x")));
         assert!(!Exclusions::none().excludes(Path::new("/data/keep")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_exclusion_below_a_root_or_an_entry_by_its_name_is_seen() {
+        // Catches a folder moved whole with what the user excludes inside.
+        let exclusions = exclusions(&["/data/Keep/vault", "*.kdbx"]).unwrap();
+        assert!(exclusions.excludes_below(Path::new("/data/keep")));
+        assert!(exclusions.excludes_below(Path::new("/data")));
+        assert!(!exclusions.excludes_below(Path::new("/data/other")));
+        assert!(exclusions.excludes_name(OsStr::new("Secrets.KDBX")));
+        assert!(!exclusions.excludes_name(OsStr::new("kdbx.txt")));
+        assert!(!exclusions.excludes_name(OsStr::new("x.kdbx.bak")));
     }
 
     #[cfg(unix)]

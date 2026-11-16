@@ -13,12 +13,31 @@ use std::path::{Path, PathBuf};
 
 use super::icons::IconRoots;
 use super::uninstall::{Target, Why};
-use super::{App, AppSize, Reading, Rest, Source, SourceReading, names_a_folder};
+use super::{App, AppSize, Launcher, Reading, Rest, Source, SourceReading, names_a_folder};
 
-/// The system's installation.
+/// The system's installation, unless `FLATPAK_SYSTEM_DIR` says another.
 pub const SYSTEM_INSTALLATION: &str = "/var/lib/flatpak";
-/// The user's, under the home folder.
-pub const USER_INSTALLATION: &str = ".local/share/flatpak";
+/// The user's, under the data folder (`$XDG_DATA_HOME`), unless
+/// `FLATPAK_USER_DIR` says another.
+pub const USER_INSTALLATION: &str = "flatpak";
+/// What flatpak reads to place its installations, as it does.
+const SYSTEM_DIR_VARIABLE: &str = "FLATPAK_SYSTEM_DIR";
+const USER_DIR_VARIABLE: &str = "FLATPAK_USER_DIR";
+const CONFIG_DIR_VARIABLE: &str = "FLATPAK_CONFIG_DIR";
+/// Where flatpak's configuration is, unless `FLATPAK_CONFIG_DIR` says.
+const CONFIG_DIRECTORY: &str = "/etc/flatpak";
+/// The folder of the configuration declaring other installations, each in
+/// a `*.conf` key file whose groups say their `Path=`.
+const DECLARATIONS: &str = "installations.d";
+const DECLARATION_SUFFIX: &str = ".conf";
+const KEY_PATH: &str = "Path";
+/// The most of a declaration read.
+const DECLARATION_LIMIT: usize = 64 * 1024;
+/// Where flatpaks keep each one's data, under the home folder.
+pub const FLATPAK_DATA: &str = ".var/app";
+/// What flatpak makes with each installation: none there, it may be a disk
+/// not mounted.
+const REPOSITORY: &str = "repo";
 /// What describes a deployment: its runtime, its extensions...
 const METADATA: &str = "metadata";
 /// The most of a deployment's metadata read: such files are small, the cap
@@ -38,26 +57,225 @@ const KEY_SUBDIRECTORIES: &str = "subdirectories";
 /// What separates the items of a list, in a key file.
 const LIST_SEPARATOR: char = ';';
 
-/// One installation of flatpaks.
+/// One installation of flatpaks. Whether it is there is said by
+/// [`presence`] alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Installation {
-    pub path: PathBuf,
-    /// The system's: its helper uninstalls from it.
-    pub system: bool,
+    /// Where it is; for one unplaced, what could not be read.
+    pub(crate) path: PathBuf,
+    /// The system's default (no `FLATPAK_SYSTEM_DIR`): the only one its
+    /// helper uninstalls from.
+    pub(crate) system: bool,
+    /// Declared in `installations.d`: when it cannot be found (a disk
+    /// unplugged) it is unread, never none.
+    pub(crate) declared: bool,
+    /// Why it could not even be placed (a declaration unreadable, no data
+    /// folder for the user's, a place written relative): it is then always
+    /// unread, never none.
+    pub(crate) unplaced: Option<String>,
 }
 
-/// The installations of this system: the system's, then `home`'s.
+impl Installation {
+    pub(crate) fn at(path: PathBuf, system: bool, declared: bool) -> Self {
+        Self {
+            path,
+            system,
+            declared,
+            unplaced: None,
+        }
+    }
+
+    /// One that could not be placed, for `why`, `path` being what could not
+    /// be read.
+    pub(crate) fn unplaced(path: PathBuf, why: String) -> Self {
+        Self {
+            path,
+            system: false,
+            declared: false,
+            unplaced: Some(why),
+        }
+    }
+}
+
+/// The installations of this system, placed as flatpak places them: the
+/// system's, the user's under the data folder `data_home`, then those
+/// declared in `installations.d`.
 #[must_use]
-pub fn installations(home: Option<&Path>) -> Vec<Installation> {
-    std::iter::once(Installation {
-        path: PathBuf::from(SYSTEM_INSTALLATION),
-        system: true,
-    })
-    .chain(home.map(|home| Installation {
-        path: home.join(USER_INSTALLATION),
-        system: false,
-    }))
-    .collect()
+pub fn installations(data_home: Option<&Path>) -> Vec<Installation> {
+    installations_from(&|name| std::env::var_os(name), data_home)
+}
+
+/// [`installations`], the environment read through `variable`. A place a
+/// variable writes relative is unplaced: read from Okapi's own folder, it
+/// would be said absent.
+pub(crate) fn installations_from(
+    variable: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+    data_home: Option<&Path>,
+) -> Vec<Installation> {
+    let placed = |name: &str| {
+        variable(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    let at = |path: PathBuf, system: bool| {
+        if path.is_absolute() {
+            Installation::at(path, system, false)
+        } else {
+            tracing::warn!(path = %path.display(), "a flatpak installation placed relative: unread");
+            Installation::unplaced(path, "placed relative".to_owned())
+        }
+    };
+    let user = match (placed(USER_DIR_VARIABLE), data_home) {
+        (Some(path), _) => at(path, false),
+        (None, Some(data)) => at(data.join(USER_INSTALLATION), false),
+        (None, None) => {
+            tracing::warn!("no data folder: the user's flatpak installation unread");
+            Installation::unplaced(PathBuf::new(), "no data folder".to_owned())
+        }
+    };
+    let config = placed(CONFIG_DIR_VARIABLE).unwrap_or_else(|| PathBuf::from(CONFIG_DIRECTORY));
+    // The helper, root with its own environment, only changes its default.
+    let system = match placed(SYSTEM_DIR_VARIABLE) {
+        Some(path) => {
+            let default = path == Path::new(SYSTEM_INSTALLATION);
+            at(path, default)
+        }
+        None => at(PathBuf::from(SYSTEM_INSTALLATION), true),
+    };
+    let declarations = if config.is_absolute() {
+        declared(&config.join(DECLARATIONS))
+    } else {
+        tracing::warn!(path = %config.display(), "flatpak's configuration placed relative: its installations unread");
+        vec![Installation::unplaced(config, "placed relative".to_owned())]
+    };
+    let installations: Vec<Installation> = [system, user].into_iter().chain(declarations).collect();
+    for installation in &installations {
+        tracing::info!(
+            path = %installation.path.display(),
+            system = installation.system,
+            declared = installation.declared,
+            unplaced = installation.unplaced.as_deref(),
+            "flatpak installation placed"
+        );
+    }
+    installations
+}
+
+/// Whether `path`, found missing, is surely absent: the first of its
+/// ancestors there is no link leading nowhere (one to a disk not mounted
+/// would hide what is installed) and could be read.
+///
+/// # Errors
+///
+/// Why its absence is not sure.
+fn surely_absent(path: &Path) -> Result<(), String> {
+    for ancestor in path.ancestors().skip(1) {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(metadata)
+                if metadata.file_type().is_symlink() && std::fs::metadata(ancestor).is_err() =>
+            {
+                return Err(format!("{} leads nowhere", ancestor.display()));
+            }
+            Ok(_) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("{}: {error}", ancestor.display())),
+        }
+    }
+    Ok(())
+}
+
+/// Whether `path`, found missing by a reading that follows links, is
+/// surely absent: itself no link, then [`surely_absent`].
+///
+/// # Errors
+///
+/// Why its absence is not sure.
+pub(crate) fn missing_for_sure(path: &Path) -> Result<(), String> {
+    if std::fs::symlink_metadata(path).is_ok() {
+        return Err(format!("{} is a link leading nowhere", path.display()));
+    }
+    surely_absent(path)
+}
+
+/// Whether `installation` is there: absent only when it is not declared
+/// and surely absent; one unplaced, no folder or unreadable says why it is
+/// unread.
+///
+/// # Errors
+///
+/// Why it is unread.
+pub(crate) fn presence(installation: &Installation) -> Result<bool, String> {
+    if let Some(why) = &installation.unplaced {
+        return Err(why.clone());
+    }
+    match std::fs::metadata(&installation.path) {
+        Ok(metadata) if metadata.is_dir() => Ok(true),
+        Ok(_) => Err(format!("{} is not a folder", installation.path.display())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound && !installation.declared => {
+            missing_for_sure(&installation.path)?;
+            tracing::debug!(path = %installation.path.display(), "no flatpak installation there");
+            Ok(false)
+        }
+        Err(error) => Err(format!("{}: {error}", installation.path.display())),
+    }
+}
+
+/// The installations `folder` declares, each `Path=` of its `*.conf`; a
+/// declaration that cannot be read is an installation unplaced.
+fn declared(folder: &Path) -> Vec<Installation> {
+    let unreadable = |path: &Path, why: String| {
+        tracing::warn!(path = %path.display(), why, "a flatpak declaration unreadable: flatpaks unread");
+        Installation::unplaced(path.to_path_buf(), why)
+    };
+    let entries = match std::fs::read_dir(folder) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => return vec![unreadable(folder, error.to_string())],
+    };
+    let mut found = Vec::new();
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(|entry| match entry {
+            Ok(entry) => Some(entry.path()),
+            Err(error) => {
+                found.push(unreadable(folder, error.to_string()));
+                None
+            }
+        })
+        // Told by the bytes of its name, as flatpak does: one not in UTF-8
+        // is read all the same.
+        .filter(|path| {
+            path.file_name().is_some_and(|name| {
+                name.as_encoded_bytes()
+                    .ends_with(DECLARATION_SUFFIX.as_bytes())
+            })
+        })
+        .collect();
+    files.sort();
+    for file in files {
+        let text = match okapi_platform::read_regular_capped(&file, DECLARATION_LIMIT) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(error) => {
+                found.push(unreadable(&file, error.to_string()));
+                continue;
+            }
+        };
+        let paths: Vec<PathBuf> = text
+            .lines()
+            .filter_map(|line| line.trim().split_once('='))
+            .filter(|(key, _)| key.trim() == KEY_PATH)
+            .map(|(_, value)| PathBuf::from(value.trim()))
+            .collect();
+        if paths.is_empty() || paths.iter().any(|path| !path.is_absolute()) {
+            found.push(unreadable(&file, "a path missing or relative".to_owned()));
+        }
+        found.extend(
+            paths
+                .into_iter()
+                .filter(|path| path.is_absolute())
+                .map(|path| Installation::at(path, false, true)),
+        );
+    }
+    found
 }
 
 /// What a reference names.
@@ -231,6 +449,66 @@ fn deployment(branch: &Path) -> io::Result<Option<PathBuf>> {
     Ok(Some(deployment))
 }
 
+/// The ids of the applications `installation` holds, each `app/<id>`,
+/// deployed or not, shown in the menu or not.
+///
+/// # Errors
+///
+/// Why the installation could not be read whole: one unplaced, one absent
+/// that is declared, one unreadable, a part of its listing unreadable.
+pub(crate) fn app_ids(installation: &Installation) -> Result<Vec<String>, String> {
+    if !presence(installation)? {
+        return Ok(Vec::new());
+    }
+    let app_folder = installation.path.join(RefKind::App.folder());
+    match subfolders(&app_folder) {
+        Ok(Listed { names, whole: true }) => Ok(names),
+        Ok(Listed { whole: false, .. }) => {
+            Err(format!("{} not listed whole", app_folder.display()))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            missing_for_sure(&app_folder)?;
+            // flatpak makes its repository with the installation: a folder
+            // without it is a disk not mounted there, maybe.
+            let repository = installation.path.join(REPOSITORY);
+            if std::fs::symlink_metadata(&repository).is_ok_and(|metadata| metadata.is_dir()) {
+                Ok(Vec::new())
+            } else {
+                Err(format!(
+                    "{} holds no repository",
+                    installation.path.display()
+                ))
+            }
+        }
+        Err(error) => Err(format!("{}: {error}", app_folder.display())),
+    }
+}
+
+/// The deployments in use of the application `id` in `installation`, of
+/// every architecture and branch.
+///
+/// # Errors
+///
+/// A folder of it, or an `active`, that cannot be read.
+pub(crate) fn deployments(installation: &Path, id: &str) -> io::Result<Vec<PathBuf>> {
+    let folder = installation.join(RefKind::App.folder()).join(id);
+    let mut found = Vec::new();
+    let listed = |folder: &Path| match subfolders(folder) {
+        Ok(Listed { names, whole: true }) => Ok(names),
+        Ok(Listed { whole: false, .. }) => Err(io::Error::other("not listed whole")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error),
+    };
+    for arch in listed(&folder)? {
+        for branch in listed(&folder.join(&arch))? {
+            if let Some(deployment) = deployment(&folder.join(&arch).join(&branch))? {
+                found.push(deployment);
+            }
+        }
+    }
+    Ok(found)
+}
+
 /// The flatpaks of `installations`, their data under `home`. An
 /// installation, or a folder of one, that cannot be read is passed over and
 /// the reading said partial; it failed only when no installation there gave
@@ -245,17 +523,14 @@ pub fn read_flatpaks(
     let mut found = Found::default();
     let mut present = Vec::new();
     for installation in installations {
-        match std::fs::metadata(&installation.path) {
-            Ok(metadata) if metadata.is_dir() => present.push(installation),
-            Ok(_) => {
-                tracing::warn!(path = %installation.path.display(), "a flatpak installation that is no folder");
-                found.unread("not a folder".to_owned());
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => {
-                // There, maybe: never said absent.
-                tracing::warn!(path = %installation.path.display(), %error, "flatpak installation unreadable");
-                found.unread(error.to_string());
+        match presence(installation) {
+            Ok(true) => present.push(installation),
+            Ok(false) => {}
+            // There, maybe (a declared one on a disk unplugged): never said
+            // absent.
+            Err(why) => {
+                tracing::warn!(path = %installation.path.display(), why, "flatpak installation unread");
+                found.unread(why);
             }
         }
     }
@@ -391,8 +666,13 @@ fn app_of(
     };
     let id = reference.id.clone();
     let launcher = export.join("applications").join(format!("{id}.desktop"));
-    let (name, icon) = reading.launcher(&launcher, &roots)?;
+    let Launcher {
+        name,
+        icon,
+        aliases,
+    } = reading.launcher(&launcher, &roots)?;
     Some(App {
+        aliases,
         source: Source::Flatpak,
         package: id.clone(),
         name,
@@ -403,7 +683,7 @@ fn app_of(
         size: AppSize::ToMeasure(deployment),
         old_bytes: 0,
         old_versions: 0,
-        data: home.map(|home| home.join(".var/app").join(&id)),
+        data: home.map(|home| home.join(FLATPAK_DATA).join(&id)),
         system: false,
         target: installation.system.then_some(Target::Flatpak(reference)),
         id,

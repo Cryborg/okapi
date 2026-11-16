@@ -7,6 +7,7 @@
 pub mod dpkg;
 pub mod flatpak;
 pub mod icons;
+pub mod leftovers;
 pub mod measure;
 pub mod snap;
 #[cfg(target_os = "linux")]
@@ -65,6 +66,9 @@ pub struct App {
     pub package: String,
     /// As the menu shows it.
     pub name: String,
+    /// The other names its launcher goes by: its file's name, its windows'
+    /// class, its name in no language.
+    pub aliases: Vec<String>,
     pub version: String,
     pub publisher: Option<String>,
     /// How a deb came; `None` for another source, or when apt cannot say.
@@ -240,9 +244,9 @@ impl Reading {
         }
     }
 
-    /// The launcher at `path`, if the menu shows it: its name and its icon,
-    /// looked for in `roots`.
-    fn launcher(&self, path: &Path, roots: &IconRoots) -> Option<(String, Option<PathBuf>)> {
+    /// The launcher at `path`, if the menu shows it: its name, its icon
+    /// looked for in `roots`, and the other names it goes by.
+    fn launcher(&self, path: &Path, roots: &IconRoots) -> Option<Launcher> {
         let entry = okapi_platform::desktop_entry(path, self.language)
             .inspect_err(
                 |error| tracing::debug!(path = %path.display(), %error, "launcher unreadable"),
@@ -260,8 +264,33 @@ impl Reading {
             .icon
             .as_deref()
             .and_then(|icon| icons::find(icon, roots));
-        Some((name, icon))
+        let mut aliases: Vec<String> = Vec::new();
+        let file = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(str::to_owned);
+        for alias in [file, entry.wm_class, entry.plain_name]
+            .into_iter()
+            .flatten()
+        {
+            if alias != name && !aliases.contains(&alias) {
+                aliases.push(alias);
+            }
+        }
+        Some(Launcher {
+            name,
+            icon,
+            aliases,
+        })
     }
+}
+
+/// A launcher the menu shows.
+struct Launcher {
+    name: String,
+    icon: Option<PathBuf>,
+    /// Its file's name, its windows' class, its name in no language.
+    aliases: Vec<String>,
 }
 
 /// Where dpkg and apt keep their state, and the root launchers are read
@@ -382,7 +411,12 @@ pub fn read_debs(places: &DebPlaces, reading: &Reading) -> SourceReading {
                 &reading.icons,
             )
         });
-        let Some((name, icon)) = shown else {
+        let Some(Launcher {
+            name,
+            icon,
+            aliases,
+        }) = shown
+        else {
             rest.count += 1;
             match package.installed_bytes {
                 Some(bytes) => rest.bytes = rest.bytes.saturating_add(bytes),
@@ -406,6 +440,7 @@ pub fn read_debs(places: &DebPlaces, reading: &Reading) -> SourceReading {
             id: format!("{}:{}", package.name, package.architecture),
             package: package.name.clone(),
             name,
+            aliases,
             version: package.version.clone(),
             publisher: None,
             origin,

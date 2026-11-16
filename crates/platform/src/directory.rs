@@ -130,9 +130,11 @@ fn enter(
     }
 }
 
-/// An entry gone, or no longer a folder (a link fails to open as one), has
-/// changed; any other error is the system's.
-fn gone_or_failed(error: std::io::Error) -> Unreached {
+/// What an error reading an entry inside a folder means: an entry gone, or
+/// no longer a folder (a link fails to open as one), has changed; any other
+/// error is the system's.
+#[must_use]
+pub fn gone_or_failed(error: std::io::Error) -> Unreached {
     use std::io::ErrorKind;
 
     match error.kind() {

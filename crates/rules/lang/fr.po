@@ -580,6 +580,10 @@ msgid "Kernel and application crash dump files collected by apport or similar"
 msgstr "Rapports de plantage du noyau et des applications, recueillis par apport ou un outil semblable."
 
 msgctxt "description"
+msgid "Archived journals of systemd whose first entry is more than {days} days old, then the oldest ones while the journal takes more than {gigabytes} GB, as journalctl --vacuum-time and --vacuum-size do. The journal being written is never touched"
+msgstr "Journaux archivés de systemd dont la première entrée a plus de {days} jours, puis les plus anciens tant que le journal occupe plus de {gigabytes} Go, comme journalctl --vacuum-time et --vacuum-size. Le journal en cours n'est jamais touché."
+
+msgctxt "description"
 msgid "Downloaded .deb packages cached by APT (Debian/Ubuntu); equivalent to apt clean"
 msgstr "Paquets .deb téléchargés et gardés par APT (Debian, Ubuntu) : comme apt clean."
 

@@ -387,26 +387,28 @@ impl RuleSet {
     }
 
     /// The privileged helper is asked for its targets by their path, and
-    /// cleans the rules it was asked for: the path a target that needs the
-    /// administrator deletes is the path no other target deletes, ordinary
-    /// ones included (with the same subcategory, theirs would be the same
-    /// rule to it). A maintenance operation deletes nothing: it may share it.
+    /// cleans the rules it was asked for: the path of a target that needs
+    /// the administrator, deleted or maintained (the journal's vacuum), is
+    /// the path of no other target that deletes, ordinary ones included
+    /// (with the same subcategory, theirs would be the same rule to it), nor
+    /// of another that needs the administrator. A maintenance of the user's
+    /// is never asked for: it may share it.
     fn check_unique_admin_targets(&self) -> Result<(), RulesError> {
-        fn deleted(target: &CleanTarget) -> Option<&TemplatePath> {
+        fn asked_by(target: &CleanTarget) -> Option<&TemplatePath> {
             match target.effect() {
                 Effect::Delete(deletion) => Some(deletion.path()),
-                Effect::Maintenance { .. } => None,
+                Effect::Maintenance { affected, .. } => target.needs_admin().then_some(affected),
             }
         }
         let targets = self.system.clean_targets();
         let shared = targets
             .iter()
             .filter(|target| target.needs_admin())
-            .filter_map(deleted)
+            .filter_map(asked_by)
             .find(|path| {
                 targets
                     .iter()
-                    .filter_map(deleted)
+                    .filter_map(asked_by)
                     .filter(|other| other == path)
                     .count()
                     > 1
@@ -421,18 +423,16 @@ impl RuleSet {
     }
 
     /// The user's choices remember a target by its subcategory and the path
-    /// it deletes (`okapi_engine::Origin::key`): no two targets that delete
+    /// it deletes or maintains (`okapi_engine::Origin::key`): no two targets
     /// share both, nor two single files. Told apart by `childSubdir` alone,
-    /// they would be two groups the same choice stands for.
+    /// or by deleting where the other maintains, they would be two lines the
+    /// same choice stands for.
     fn check_unique_targets(&self) -> Result<(), RulesError> {
-        let targets =
-            self.system
-                .clean_targets()
-                .iter()
-                .filter_map(|target| match target.effect() {
-                    Effect::Delete(deletion) => Some((target.subcategory(), deletion.path())),
-                    Effect::Maintenance { .. } => None,
-                });
+        let targets = self
+            .system
+            .clean_targets()
+            .iter()
+            .map(|target| (target.subcategory(), target.template_path()));
         let files = self
             .system
             .single_file_targets()
@@ -1102,10 +1102,35 @@ mod tests {
                 "{error}"
             );
         }
-        let maintenance = r#"{"path": "/var/crash", "subcategory": "Crash", "needsAdmin": true, "cleanupAction": "journal-vacuum"}"#;
-        let beside = format!(r#"{{"type": "system", "cleanTargets": [{admin}, {maintenance}]}}"#);
-        load_minimal_with(RuleFileKind::System, &beside)
-            .expect("a maintenance operation deletes nothing: no rule to the helper");
+        // The helper is asked for a maintenance of the administrator by its
+        // path too; one of the user's is never asked for.
+        let maintenance = |admin_flag: bool| {
+            format!(
+                r#"{{"path": "/var/crash", "subcategory": "Vacuum", "needsAdmin": {admin_flag}, "cleanupAction": "journal-vacuum"}}"#
+            )
+        };
+        for beside in [admin, ordinary] {
+            let error = load_minimal_with(
+                RuleFileKind::System,
+                &format!(
+                    r#"{{"type": "system", "cleanTargets": [{beside}, {}]}}"#,
+                    maintenance(true)
+                ),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(&error, RulesError::DuplicateAdminTarget { path, .. } if path == "/var/crash"),
+                "{error}"
+            );
+        }
+        load_minimal_with(
+            RuleFileKind::System,
+            &format!(
+                r#"{{"type": "system", "cleanTargets": [{admin}, {}]}}"#,
+                maintenance(false)
+            ),
+        )
+        .expect("a maintenance of the user's is never asked of the helper");
     }
 
     #[test]
@@ -1132,7 +1157,11 @@ mod tests {
         targets([whole, elsewhere]).expect("another subcategory: another rule");
         let maintenance =
             r#"{"path": "/var/tmp", "subcategory": "Temp", "cleanupAction": "journal-vacuum"}"#;
-        targets([whole, maintenance]).expect("a maintenance operation deletes nothing");
+        let error = targets([whole, maintenance]).unwrap_err();
+        assert!(
+            matches!(&error, RulesError::DuplicateTarget { subcategory, .. } if subcategory == "Temp"),
+            "a maintenance is a line remembered by the same key: {error}"
+        );
         let single = r#"{"path": "/var/tmp", "subcategory": "Temp"}"#;
         load_minimal_with(
             RuleFileKind::System,

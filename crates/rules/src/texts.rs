@@ -237,6 +237,19 @@ pub fn description(language: Language, english: &str) -> &str {
     translated(language, |texts| &texts.descriptions, DESCRIPTION, english)
 }
 
+/// `text` with each placeholder `{name}` of `values` replaced by its value:
+/// a rule's text that shows a number its operation's code holds (the
+/// privileged helper's limits), never written twice. A placeholder without
+/// a value stays as written, for the caller's test to see.
+#[must_use]
+pub fn filled(text: &str, values: &[(&str, u64)]) -> String {
+    values
+        .iter()
+        .fold(text.to_owned(), |filled, (name, value)| {
+            filled.replace(&format!("{{{name}}}"), &value.to_string())
+        })
+}
+
 /// The label of a group as shown: a browser's cache by the browser's name
 /// and the directory's label (`Chrome : Cache du code`), any other by its
 /// label alone, in `language`.
@@ -255,23 +268,48 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::{Effect, Label, Os, RuleSet};
+    use crate::{CleanupAction, Effect, Label, Os, RuleSet};
 
-    /// A rule as a cleaning shows it: its label, whether it offers anything
-    /// to remove (a maintenance offers no group, so no description is shown
-    /// for it), and its description.
+    /// A rule as a cleaning shows it: its label, whether its line is shown
+    /// with its description, and its description.
     struct ShownRule {
         label: String,
-        deletes: bool,
+        offered: bool,
         description: Option<String>,
+    }
+
+    /// Whether a rule of `effect` is a line of the results, its description
+    /// shown: one that deletes, or a maintenance the interface offers (the
+    /// journal's vacuum, by the privileged helper; not the others).
+    fn is_offered<D, A>(effect: &Effect<D, A>) -> bool {
+        matches!(
+            effect,
+            Effect::Delete(_)
+                | Effect::Maintenance {
+                    action: CleanupAction::JournalVacuum,
+                    ..
+                }
+        )
+    }
+
+    /// The placeholders `{name}` of `text`, sorted: a translation may move
+    /// them.
+    fn placeholders(text: &str) -> Vec<&str> {
+        let mut names: Vec<&str> = text
+            .split('{')
+            .skip(1)
+            .filter_map(|after| after.split_once('}').map(|(name, _)| name))
+            .collect();
+        names.sort_unstable();
+        names
     }
 
     /// Every rule a cleaning shows on Linux: the system targets and files,
     /// the application rules and the browsers' cache directories.
     fn rules_on_linux() -> Vec<ShownRule> {
-        let shown = |label: &Label, deletes, description: Option<&Label>| ShownRule {
+        let shown = |label: &Label, offered, description: Option<&Label>| ShownRule {
             label: label.to_string(),
-            deletes,
+            offered,
             description: description.map(Label::to_string),
         };
         let rules = RuleSet::embedded(Os::Linux).unwrap();
@@ -282,8 +320,8 @@ mod tests {
             .clean_targets()
             .iter()
             .map(|target| {
-                let deletes = matches!(target.effect(), Effect::Delete(_));
-                shown(target.subcategory(), deletes, target.description())
+                let offered = is_offered(target.effect());
+                shown(target.subcategory(), offered, target.description())
             })
             .chain(
                 system
@@ -298,8 +336,8 @@ mod tests {
                     .chain(rules.gaming())
                     .chain(rules.gpu_cache())
                     .map(|rule| {
-                        let deletes = matches!(rule.effect(), Effect::Delete(_));
-                        shown(rule.name(), deletes, rule.description())
+                        let offered = is_offered(rule.effect());
+                        shown(rule.name(), offered, rule.description())
                     }),
             )
             .chain(
@@ -373,7 +411,7 @@ mod tests {
         check_context(&entries, LABEL, &labels);
         let descriptions: BTreeSet<String> = rules
             .iter()
-            .filter(|rule| rule.deletes)
+            .filter(|rule| rule.offered)
             .filter_map(|rule| rule.description.clone())
             .collect();
         check_context(&entries, DESCRIPTION, &descriptions);
@@ -397,10 +435,40 @@ mod tests {
     }
 
     #[test]
+    fn a_text_and_its_french_hold_the_same_placeholders() {
+        let entries = entries(FRENCH).unwrap();
+        for entry in &entries {
+            assert_eq!(
+                placeholders(&entry.key),
+                placeholders(&entry.text),
+                "{entry:?}"
+            );
+        }
+        let journal = rules_on_linux()
+            .into_iter()
+            .find(|rule| rule.label == "Journal Logs")
+            .and_then(|rule| rule.description)
+            .unwrap();
+        assert_eq!(placeholders(&journal), ["days", "gigabytes"]);
+    }
+
+    #[test]
+    fn a_placeholder_is_filled_wherever_it_is() {
+        assert_eq!(
+            filled(
+                "{days} days, {gigabytes} GB, {days} again, {unknown}",
+                &[("days", 30), ("gigabytes", 1)]
+            ),
+            "30 days, 1 GB, 30 again, {unknown}"
+        );
+        assert_eq!(filled("no placeholder", &[("days", 30)]), "no placeholder");
+    }
+
+    #[test]
     fn every_rule_shown_says_why_it_is_safe() {
         let undescribed: Vec<String> = rules_on_linux()
             .into_iter()
-            .filter(|rule| rule.deletes && rule.description.is_none())
+            .filter(|rule| rule.offered && rule.description.is_none())
             .map(|rule| rule.label)
             .collect();
         assert!(

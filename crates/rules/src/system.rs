@@ -102,9 +102,10 @@ impl CleanTarget {
         self.description.as_ref()
     }
 
-    /// The target's path, deleted or only affected, for checks that do not
-    /// delete anything.
-    pub(crate) const fn template_path(&self) -> &TemplatePath {
+    /// The target's path, deleted or only affected (a maintenance's), for
+    /// what does not delete anything: checks, keys.
+    #[must_use]
+    pub const fn template_path(&self) -> &TemplatePath {
         match &self.effect {
             Effect::Delete(deletion) => &deletion.path,
             Effect::Maintenance { affected, .. } => affected,

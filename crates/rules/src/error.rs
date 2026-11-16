@@ -126,7 +126,7 @@ pub enum RulesError {
 
     /// A target is remembered by its subcategory and its path.
     #[error(
-        "{os} rules, system.json: two targets of the subcategory `{subcategory}` delete `{path}`"
+        "{os} rules, system.json: two targets of the subcategory `{subcategory}` work on `{path}`"
     )]
     DuplicateTarget {
         os: Os,

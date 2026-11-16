@@ -623,7 +623,7 @@ mod system {
         std::fs::read_to_string(dpkg.join("status"))
             .inspect_err(|error| tracing::warn!(%error, "dpkg's status unreadable"))
             .ok()
-            .map(|text| okapi_tools::apps::dpkg::parse_status(&text).residual)
+            .map(|text| okapi_tools::apps::dpkg::parse_status(&text).residual.len())
     }
 
     pub(crate) fn analyse(exclusions: Result<Vec<PathBuf>, Blocked>) -> Analysis {

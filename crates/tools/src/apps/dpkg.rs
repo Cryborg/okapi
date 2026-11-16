@@ -21,6 +21,10 @@ const KIBIBYTE: u64 = 1024;
 const INSTALLED: [&str; 3] = ["installed", "triggers-pending", "triggers-awaited"];
 /// The state of a package removed whose settings stay (`rc`).
 const RESIDUAL: &str = "config-files";
+/// The state of a package gone, settings and all.
+const NOT_INSTALLED: &str = "not-installed";
+/// What `dpkg.log` says of a package removed.
+const REMOVALS: [&str; 2] = ["remove", "purge"];
 
 /// One package installed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,8 +58,11 @@ pub struct Status {
     pub installed: Vec<DebPackage>,
     pub unreadable: usize,
     /// Packages removed whose settings stay (`rc`: `config-files`), which
-    /// only dpkg itself can purge.
-    pub residual: usize,
+    /// only dpkg itself can purge, by name.
+    pub residual: Vec<String>,
+    /// Packages neither installed nor gone (unpacked, half-configured,
+    /// half-installed...): their files may be there, by name.
+    pub unsettled: Vec<String>,
 }
 
 /// The fields of one paragraph, a field continued on the next lines kept to
@@ -95,8 +102,11 @@ pub fn parse_status(text: &str) -> Status {
         // `want flag state`: only the state says it is there, its triggers
         // run or not.
         let state = state.split_whitespace().nth(2);
-        if state == Some(RESIDUAL) {
-            status.residual += 1;
+        match state {
+            Some(RESIDUAL) => status.residual.push((*name).to_owned()),
+            Some(NOT_INSTALLED) => {}
+            Some(state) if INSTALLED.contains(&state) => {}
+            _ => status.unsettled.push((*name).to_owned()),
         }
         if !state.is_some_and(|state| INSTALLED.contains(&state)) {
             continue;
@@ -131,6 +141,28 @@ pub fn parse_status(text: &str) -> Status {
         });
     }
     status
+}
+
+/// The packages `text` (a `dpkg.log`) says were removed or purged, by name
+/// (`gimp:amd64` gives `gimp`), each once, in their order.
+#[must_use]
+pub fn parse_removals(text: &str) -> Vec<String> {
+    let mut removed: Vec<String> = Vec::new();
+    for line in text.lines() {
+        // `<date> <time> <action> <package> <version> <version>`.
+        let mut words = line.split_whitespace().skip(2);
+        let (Some(action), Some(package)) = (words.next(), words.next()) else {
+            continue;
+        };
+        if !REMOVALS.contains(&action) {
+            continue;
+        }
+        let name = package.split(':').next().unwrap_or(package);
+        if !removed.iter().any(|known| known == name) {
+            removed.push(name.to_owned());
+        }
+    }
+    removed
 }
 
 /// The packages apt says came as dependencies (`extended_states`).
@@ -329,8 +361,24 @@ Installed-Size: 1
             (None, "i386")
         );
         assert!(status.installed[4].metapackage, "in an archive area");
-        // Catches an `rc` package counted installed, or not counted.
-        assert_eq!(status.residual, 1, "removed-app only");
+        // Catches an `rc` package counted installed, or not counted, and
+        // one half there taken for gone (its files may be there).
+        assert_eq!(status.residual, ["removed-app"]);
+        assert_eq!(status.unsettled, ["half"]);
+    }
+
+    #[test]
+    fn the_packages_removed_or_purged_are_read_from_dpkg_s_log_once_each() {
+        let log = "\
+2026-11-01 10:00:00 startup packages remove
+2026-11-01 10:00:01 remove gimp:amd64 3.0.4-1 <none>
+2026-11-01 10:00:02 status half-configured gimp:amd64 3.0.4-1
+2026-11-02 09:00:00 install vlc:amd64 <none> 3.0
+2026-11-03 09:00:00 purge Solaar:all 1.1 <none>
+2026-11-04 09:00:00 remove gimp:amd64 3.0.4-1 <none>
+truncated
+";
+        assert_eq!(parse_removals(log), ["gimp", "Solaar"]);
     }
 
     #[test]

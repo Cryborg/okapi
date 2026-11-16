@@ -644,6 +644,48 @@ fn flatpaks_installed_are_those_of_every_installation_their_former_ids_and_those
 }
 
 #[test]
+fn one_launcher_not_in_utf8_never_hides_every_flatpak_s_leftovers() {
+    // Catches a byte not in UTF-8 in one launcher's value taken for an
+    // unreadable source (no flatpak's leftover proposed while it is
+    // installed), and, read anyway, damage where the former ids are said
+    // passed over: a renamed application's data would be proposed.
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    deployed(&system, "org.new.App", "");
+    let launcher = system
+        .join("app/org.new.App/x86_64/stable/abc123/export/share/applications/org.new.App.desktop");
+    let runtime = root.path().join("run");
+    let with = |bytes: &[u8]| {
+        fs::write(&launcher, bytes).unwrap();
+        installed::flatpaks(&[installation(&system, false)], Some(&runtime))
+    };
+    assert_eq!(
+        with(b"[Desktop Entry]\nName=Caf\xe9\nX-Flatpak-RenamedFrom=org.old.App.desktop;\n"),
+        read(&["org.new.App", "org.old.App"])
+    );
+    for damaged in [
+        &b"[Desktop Entr\xff]\nX-Flatpak-RenamedFrom=org.old.App.desktop;\n"[..],
+        b"[Desktop Entry]\nX-Flatpak-Renamed\xffFrom=org.old.App.desktop;\n",
+        b"[Desktop Entry]\nX-Flatpak-RenamedFrom=org.ol\xff.App.desktop;\n",
+    ] {
+        let Known::Unread(why) = with(damaged) else {
+            panic!("{damaged:?} read");
+        };
+        assert!(
+            why.contains("org.new.App.desktop"),
+            "the launcher named: {why}"
+        );
+    }
+    // Far too long, as only a launcher made so is: unread, named.
+    let mut long = b"[Desktop Entry]\nName=x\n".to_vec();
+    long.resize(2 * 1024 * 1024, b'#');
+    let Known::Unread(why) = with(&long) else {
+        panic!("a launcher too long read");
+    };
+    assert!(why.contains("org.new.App.desktop"), "{why}");
+}
+
+#[test]
 fn an_installation_behind_a_link_leading_nowhere_or_without_its_repository_is_unread() {
     // Catches a disk not mounted taken for no flatpak installed: every
     // application's data there would be proposed, then moved.

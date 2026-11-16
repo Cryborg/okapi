@@ -1,9 +1,10 @@
+use std::borrow::Cow;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use okapi_rules::Language;
 
-use super::capped::read_capped;
+use super::capped::{read_capped, read_capped_bytes};
 
 /// Far beyond any `.desktop` file.
 const DESKTOP_LIMIT: usize = 1024 * 1024;
@@ -109,6 +110,36 @@ impl DesktopEntry {
 /// not UTF-8 or far too long for one.
 pub fn desktop_entry(path: &Path, language: Language) -> io::Result<DesktopEntry> {
     read_capped(path, DESKTOP_LIMIT).map(|text| parse_desktop_entry(&text, names_in(language)))
+}
+
+/// [`desktop_entry`], a byte not in UTF-8 in a value read as
+/// [`char::REPLACEMENT_CHARACTER`]: for a launcher read for what it says of
+/// its application, not for a menu (which would refuse its value).
+///
+/// # Errors
+///
+/// Those of [`desktop_entry`] but UTF-8 in values: a group's header or a
+/// key's name holding such a byte is refused
+/// ([`io::ErrorKind::InvalidData`]), the group or the key it is being lost
+/// unseen.
+pub fn desktop_entry_lossy(path: &Path, language: Language) -> io::Result<DesktopEntry> {
+    let bytes = read_capped_bytes(path, DESKTOP_LIMIT)?;
+    let text = String::from_utf8_lossy(&bytes);
+    if let Cow::Owned(text) = &text
+        && text.lines().map(str::trim).any(|line| {
+            line.contains(char::REPLACEMENT_CHARACTER)
+                && (line.starts_with('[')
+                    || line
+                        .split_once('=')
+                        .is_some_and(|(key, _)| key.contains(char::REPLACEMENT_CHARACTER)))
+        })
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "a group's header or a key's name not in UTF-8",
+        ));
+    }
+    Ok(parse_desktop_entry(&text, names_in(language)))
 }
 
 pub(crate) fn parse_desktop_entry(text: &str, languages: &[&str]) -> DesktopEntry {
@@ -289,6 +320,41 @@ Name[fr]=Nouvelle fenêtre de navigation privée
             entry.renamed_from,
             ["org.gnome.gedit.desktop", "gedit.desktop"]
         );
+    }
+
+    #[test]
+    fn a_byte_not_in_utf8_is_read_in_a_value_only() {
+        // Catches a launcher refused whole for one byte of a value, and,
+        // read anyway, a group's header or a key's name damaged so that what
+        // it held would be lost unseen.
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("app.desktop");
+        let with = |bytes: &[u8]| {
+            std::fs::write(&path, bytes).unwrap();
+            desktop_entry_lossy(&path, Language::English)
+        };
+        let entry =
+            with(b"[Desktop Entry]\nName=Caf\xe9\n# \xff\nX-Flatpak-RenamedFrom=old.desktop;\n")
+                .unwrap();
+        assert_eq!(entry.name.as_deref(), Some("Caf\u{FFFD}"));
+        assert_eq!(entry.renamed_from, ["old.desktop"]);
+        assert_eq!(
+            desktop_entry(&path, Language::English).unwrap_err().kind(),
+            io::ErrorKind::InvalidData,
+            "the menu's reading stays strict"
+        );
+        for damaged in [
+            &b"[Desktop Entr\xff]\nX-Flatpak-RenamedFrom=old.desktop;\n"[..],
+            b"[Desktop Entry]\nX-Flatpak-Renamed\xffFrom=old.desktop;\n",
+        ] {
+            assert_eq!(
+                with(damaged).unwrap_err().kind(),
+                io::ErrorKind::InvalidData,
+                "{damaged:?}"
+            );
+        }
+        // A replacement character written as such is no damage.
+        assert!(with("[Desktop Entry \u{FFFD}]\nName=x\n".as_bytes()).is_ok());
     }
 
     #[test]

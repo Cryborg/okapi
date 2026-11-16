@@ -251,7 +251,14 @@ pub(crate) fn flatpaks(installations: &[Installation], runtime: Option<&Path>) -
 
 /// The ids the application `id` was renamed from, as its exported launchers
 /// say (`X-Flatpak-RenamedFrom`, each `<former-id><suffix>`, the suffix being
-/// the launcher's own after its id).
+/// the launcher's own after its id). A byte not in UTF-8 elsewhere in a
+/// launcher never keeps them unread: one application would hide every
+/// flatpak's leftovers.
+///
+/// # Errors
+///
+/// A folder or a launcher unreadable, too long, or damaged where it names
+/// its groups, its keys or the former ids: the launcher is named.
 fn renamed_from(installation: &Path, id: &str) -> io::Result<Vec<String>> {
     let mut former = Vec::new();
     for deployment in deployments(installation, id)? {
@@ -271,7 +278,22 @@ fn renamed_from(installation: &Path, id: &str) -> io::Result<Vec<String>> {
             else {
                 continue;
             };
-            let launcher = okapi_platform::desktop_entry(&entry.path(), Language::English)?;
+            let path = entry.path();
+            let named = |error: io::Error| {
+                io::Error::new(error.kind(), format!("{}: {error}", path.display()))
+            };
+            let launcher =
+                okapi_platform::desktop_entry_lossy(&path, Language::English).map_err(named)?;
+            if launcher
+                .renamed_from
+                .iter()
+                .any(|name| name.contains(char::REPLACEMENT_CHARACTER))
+            {
+                return Err(named(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "its former ids not in UTF-8",
+                )));
+            }
             former.extend(
                 launcher
                     .renamed_from

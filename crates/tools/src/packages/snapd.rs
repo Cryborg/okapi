@@ -298,7 +298,8 @@ fn checked_change(id: &str) -> Result<&str, SnapdError> {
 /// The change an asynchronous answer of snapd started.
 ///
 /// # Errors
-/// The answer names none, or one that is not a number.
+/// The answer names none, or one that is not a number: snapd may have
+/// started it all the same, never followed then.
 fn started(envelope: Envelope) -> Result<String, SnapdError> {
     let change = envelope.change.ok_or(SnapdError::Malformed(
         "an asynchronous answer without its change",

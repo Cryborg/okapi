@@ -18,7 +18,7 @@ use okapi_engine::{
     Exclusions, Limit, Origin, Progress, ScanIssue, ScanOptions, ScanReport, Stop, Watch,
     clean_watched, scan_watched, settings_min_age,
 };
-use okapi_rules::{Language, Os, RuleSet, TemplateVariables};
+use okapi_rules::{CleanupAction, Language, Os, RuleSet, TemplateVariables};
 use okapi_store::{LastAnalysis, Settings};
 use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 
@@ -26,7 +26,7 @@ use okapi_helper::{Operation, Reply};
 
 use crate::elevation::{ElevationFailure, ElevationStep, Launcher};
 use crate::kept_selections::{KeptSelections, Unkept};
-use crate::results::{AdminState, CheckState, GroupFacts, Line, Results};
+use crate::results::{AdminState, CheckState, GroupFacts, Line, Preselection, Results, Seen};
 use crate::shown::{show, shown, size};
 use crate::ui;
 use cleaning::CleanJob;
@@ -447,8 +447,8 @@ pub enum Outcome {
     Failed,
 }
 
-/// How a scan that noted `issues` and shows `groups` (those of its report,
-/// and those only root may read) of `bytes` ended: a
+/// How a scan that noted `issues` and shows `groups` lines (every line of
+/// its results) of `bytes` ended: a
 /// stop means nothing was looked at, the other notes are counted; none when
 /// it was cancelled, which is no ending: the user goes back to choosing.
 #[must_use]
@@ -645,7 +645,7 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
             folded: *folded,
             hidden: false,
             badge: ui::ResultBadge::Preselected,
-            admin: ui::AdminRow::None,
+            note: ui::RowNote::None,
             entries: shown(*entries),
             size: size(*bytes),
         },
@@ -670,7 +670,7 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
             folded: *folded,
             hidden: *hidden,
             badge: ui::ResultBadge::Preselected,
-            admin: ui::AdminRow::None,
+            note: ui::RowNote::None,
             entries: shown(*entries),
             size: size(*bytes),
         },
@@ -712,7 +712,7 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
                 folded: false,
                 hidden: *hidden,
                 badge: badge_of(group),
-                admin: admin_row_of(group),
+                note: note_of(group),
                 entries: shown(group.numbers().0),
                 size: size(group.numbers().1),
             }
@@ -732,15 +732,24 @@ fn badge_of(group: &GroupFacts) -> ui::ResultBadge {
     }
 }
 
-/// Where a group that needs the administrator stands, as its note says it.
-fn admin_row_of(group: &GroupFacts) -> ui::AdminRow {
-    match (group.needs_admin, group.admin, &group.targets) {
-        (false, ..) => ui::AdminRow::None,
-        (true, AdminState::Locked, None) => ui::AdminRow::Unreachable,
-        (true, AdminState::Locked, Some(_)) if group.seen.is_none() => ui::AdminRow::Unseen,
-        (true, AdminState::Locked, Some(_)) => ui::AdminRow::Locked,
-        (true, AdminState::NothingToClean, _) => ui::AdminRow::Nothing,
-        (true, AdminState::Unlocked { .. }, _) => ui::AdminRow::Unlocked,
+/// What the note under a group says: why it is left to the user, or where
+/// it stands while out of reach; nothing for a group preselected.
+fn note_of(group: &GroupFacts) -> ui::RowNote {
+    match badge_of(group) {
+        ui::ResultBadge::Preselected => ui::RowNote::None,
+        ui::ResultBadge::ToChoose if group.preselection == Preselection::CacheReset => {
+            ui::RowNote::CacheReset
+        }
+        ui::ResultBadge::ToChoose if group.seen == Seen::Operation => ui::RowNote::Operation,
+        ui::ResultBadge::ToChoose if group.needs_admin => ui::RowNote::RightsObtained,
+        ui::ResultBadge::ToChoose => ui::RowNote::ToChoose,
+        ui::ResultBadge::Admin => match (group.admin, &group.targets, group.seen) {
+            (AdminState::NothingToClean, ..) => ui::RowNote::Nothing,
+            (_, None, _) => ui::RowNote::Unreachable,
+            (_, Some(_), Seen::Unreadable) => ui::RowNote::Unseen,
+            (_, Some(_), Seen::Operation) => ui::RowNote::Unmeasured,
+            (_, Some(_), Seen::Counted { .. }) => ui::RowNote::Locked,
+        },
     }
 }
 
@@ -1329,16 +1338,17 @@ impl CleanerScreen {
                     "analysis report received"
                 );
                 // Built here, where the helper's targets are known: what
-                // only root may read is found too, though no group of the
-                // report holds it.
-                let unseen = self.unseen_of(&report);
+                // only root may read, and the maintenances root runs, are
+                // found too, though no group of the report holds them.
+                let mut lines = self.unseen_of(&report);
+                lines.extend(self.maintenances_of(&report));
                 let outcome = ending(
                     report.issues(),
-                    report.groups().len() + unseen.len(),
+                    report.groups().len() + lines.len(),
                     report.total_size(),
                 );
                 if matches!(outcome, Some(Outcome::Found { .. })) {
-                    self.hold(report, unseen);
+                    self.hold(report, lines);
                 }
                 self.end(outcome);
                 if let Some(summary) = summary {
@@ -1528,11 +1538,36 @@ impl CleanerScreen {
         )
     }
 
-    /// Keeps the report of an analysis that found something, with `unseen`,
-    /// the groups only root may read; its results checked as the engine
-    /// says, less the groups the user unchecked before (choices kept only
-    /// ever uncheck).
-    fn hold(&self, report: ScanReport, unseen: Vec<GroupFacts>) {
+    /// The lines of the maintenances `report` found that root runs
+    /// ([`GroupFacts::maintenance`]).
+    /// Never one whose operation would refuse whatever the rights: its line
+    /// would wait for them for ever.
+    fn maintenances_of(&self, report: &ScanReport) -> Vec<GroupFacts> {
+        let state = self.0.borrow();
+        report
+            .maintenances()
+            .iter()
+            .filter(|found| {
+                let unfit = (found.action() == CleanupAction::JournalVacuum)
+                    .then(|| found.paths().iter().find_map(|path| okapi_helper::unfit(path)))
+                    .flatten();
+                if let Some(unfit) = unfit {
+                    tracing::info!(origin = ?found.origin(), ?unfit, "a maintenance root would refuse: no line");
+                }
+                unfit.is_none()
+            })
+            .filter_map(|found| {
+                GroupFacts::maintenance(found, state.language, &state.helper_targets)
+            })
+            .collect()
+    }
+
+    /// Keeps the report of an analysis that found something, with `lines`
+    /// that root's scan alone sets (the groups only root may read, the
+    /// maintenances root runs); its results checked as the engine says, less
+    /// the groups the user unchecked before (choices kept only ever
+    /// uncheck).
+    fn hold(&self, report: ScanReport, lines: Vec<GroupFacts>) {
         let mut state = self.0.borrow_mut();
         let chosen = state
             .task
@@ -1549,7 +1584,7 @@ impl CleanerScreen {
             .groups()
             .iter()
             .map(|group| GroupFacts::of(group, language, &state.helper_targets))
-            .chain(unseen)
+            .chain(lines)
             .collect();
         let notes: Vec<_> = report
             .issues()
@@ -1845,70 +1880,135 @@ pub mod tests {
 
     use super::*;
 
-    #[test]
-    fn an_administrators_group_is_to_choose_once_unlocked() {
-        let mut group = GroupFacts {
+    /// A group of the administrator's, locked, its rule preselected, which
+    /// the user's own scan counted.
+    fn locked() -> GroupFacts {
+        GroupFacts {
             label: String::new(),
             label_alone: String::new(),
             description: String::new(),
             browser: None,
             categories: BTreeSet::new(),
-            preselected: true,
+            preselection: Preselection::Preselected,
             needs_admin: true,
             targets: Some(BTreeSet::from(["/var/crash".to_owned()])),
             admin: AdminState::Locked,
             checked_by_default: false,
             keys: BTreeSet::new(),
-            seen: Some((1, 1)),
+            seen: Seen::Counted {
+                entries: 1,
+                bytes: 1,
+            },
+        }
+    }
+
+    /// The journal's vacuum, locked.
+    fn journal() -> GroupFacts {
+        GroupFacts {
+            preselection: Preselection::ToChoose,
+            targets: Some(BTreeSet::from(["/var/log/journal".to_owned()])),
+            seen: Seen::Operation,
+            ..locked()
+        }
+    }
+
+    fn with(base: GroupFacts, change: fn(&mut GroupFacts)) -> GroupFacts {
+        let mut group = base;
+        change(&mut group);
+        group
+    }
+
+    fn assert_notes(cases: Vec<(GroupFacts, ui::ResultBadge, ui::RowNote)>) {
+        for (group, badge, note) in cases {
+            assert_eq!(
+                (badge_of(&group), note_of(&group)),
+                (badge, note),
+                "{group:?}"
+            );
+        }
+    }
+
+    /// Why a group is left to the user, unlocked ones included: never
+    /// preselected (invariant 5), and a preselected rule says nothing of a
+    /// cache.
+    #[test]
+    fn a_note_says_why_a_group_is_left_to_the_user() {
+        let ordinary = GroupFacts {
+            needs_admin: false,
+            targets: None,
+            checked_by_default: true,
+            ..locked()
         };
-        assert_eq!(badge_of(&group), ui::ResultBadge::Admin);
-        assert_eq!(admin_row_of(&group), ui::AdminRow::Locked);
-        let unseen = GroupFacts {
-            seen: None,
-            ..group.clone()
+        let unlocked = |group: &mut GroupFacts| {
+            group.admin = AdminState::Unlocked {
+                entries: 1,
+                bytes: 1,
+            };
         };
-        assert_eq!(
-            admin_row_of(&unseen),
-            ui::AdminRow::Unseen,
-            "what it holds unknown: no numbers shown"
-        );
-        group.admin = AdminState::Unlocked {
-            entries: 1,
-            bytes: 1,
-        };
-        assert_eq!(
-            badge_of(&group),
-            ui::ResultBadge::ToChoose,
-            "never preselected (invariant 5)"
-        );
-        assert_eq!(
-            admin_row_of(&GroupFacts {
-                admin: group.admin,
-                ..unseen.clone()
-            }),
-            ui::AdminRow::Unlocked
-        );
-        assert_eq!(
-            admin_row_of(&GroupFacts {
-                admin: AdminState::NothingToClean,
-                ..unseen.clone()
-            }),
-            ui::AdminRow::Nothing
-        );
-        assert_eq!(
-            admin_row_of(&GroupFacts {
-                targets: None,
-                ..unseen.clone()
-            }),
-            ui::AdminRow::Unreachable
-        );
-        assert_eq!(
-            admin_row_of(&GroupFacts {
-                needs_admin: false,
-                ..unseen
-            }),
-            ui::AdminRow::None
-        );
+        assert_notes(vec![
+            (
+                ordinary.clone(),
+                ui::ResultBadge::Preselected,
+                ui::RowNote::None,
+            ),
+            (
+                with(ordinary.clone(), |group| {
+                    group.preselection = Preselection::CacheReset;
+                    group.checked_by_default = false;
+                }),
+                ui::ResultBadge::ToChoose,
+                ui::RowNote::CacheReset,
+            ),
+            (
+                with(ordinary, |group| {
+                    group.preselection = Preselection::ToChoose;
+                    group.checked_by_default = false;
+                }),
+                ui::ResultBadge::ToChoose,
+                ui::RowNote::ToChoose,
+            ),
+            (
+                with(locked(), unlocked),
+                ui::ResultBadge::ToChoose,
+                ui::RowNote::RightsObtained,
+            ),
+            (
+                with(with(locked(), unlocked), |group| {
+                    group.preselection = Preselection::CacheReset;
+                }),
+                ui::ResultBadge::ToChoose,
+                ui::RowNote::CacheReset,
+            ),
+            (
+                with(journal(), unlocked),
+                ui::ResultBadge::ToChoose,
+                ui::RowNote::Operation,
+            ),
+        ]);
+    }
+
+    /// Where a group out of reach stands until root's scan.
+    #[test]
+    fn a_note_says_where_a_group_out_of_reach_stands() {
+        assert_notes(vec![
+            (locked(), ui::ResultBadge::Admin, ui::RowNote::Locked),
+            (
+                with(locked(), |group| group.seen = Seen::Unreadable),
+                ui::ResultBadge::Admin,
+                ui::RowNote::Unseen,
+            ),
+            (journal(), ui::ResultBadge::Admin, ui::RowNote::Unmeasured),
+            (
+                with(locked(), |group| group.targets = None),
+                ui::ResultBadge::Admin,
+                ui::RowNote::Unreachable,
+            ),
+            (
+                with(journal(), |group| group.admin = AdminState::NothingToClean),
+                ui::ResultBadge::Admin,
+                ui::RowNote::Nothing,
+            ),
+        ]);
     }
 
     pub fn defaults() -> Inputs {

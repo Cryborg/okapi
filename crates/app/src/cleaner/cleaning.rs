@@ -2907,6 +2907,11 @@ mod tests {
     /// The embedded rules, the system's targets two that need the
     /// administrator in the sandbox: crash reports and core dumps.
     fn admin_rules(sandbox: &Sandbox) -> RuleSet {
+        admin_rules_with(sandbox, &[])
+    }
+
+    /// [`admin_rules`], and the targets `more`.
+    fn admin_rules_with(sandbox: &Sandbox, more: &[serde_json::Value]) -> RuleSet {
         let target = |relative: &str, subcategory: &str| {
             serde_json::json!({
                 "path": sandbox.root.join(relative),
@@ -2914,9 +2919,14 @@ mod tests {
                 "needsAdmin": true,
             })
         };
+        let mut targets = vec![
+            target("var/crash", "Crash Reports"),
+            target("var/dumps", "Core Dumps"),
+        ];
+        targets.extend_from_slice(more);
         let system = serde_json::json!({
             "type": "system",
-            "cleanTargets": [target("var/crash", "Crash Reports"), target("var/dumps", "Core Dumps")],
+            "cleanTargets": targets,
         });
         RuleSet::embedded_with(
             Os::Linux,
@@ -3230,6 +3240,157 @@ mod tests {
             (&history[0]["removed"], &history[0]["kept"]),
             (&serde_json::json!(2), &serde_json::json!(0)),
             "the user's file and root's answer, merged in one line"
+        );
+    }
+
+    /// The description of the line of the results labelled `label`.
+    fn description_of(window: &ui::AppWindow, label: &str) -> slint::SharedString {
+        let results = window.global::<ui::Cleaner>().get_results();
+        (0..slint::Model::row_count(&results))
+            .filter_map(|row| slint::Model::row_data(&results, row))
+            .find(|row| row.label == label)
+            .unwrap()
+            .description
+    }
+
+    /// [`admin_rules`], and the journal's vacuum at `journal`, described as
+    /// the embedded rule.
+    fn journal_rules(sandbox: &Sandbox, journal: &Path) -> RuleSet {
+        let embedded = RuleSet::embedded(Os::Linux).unwrap();
+        let description = embedded
+            .system()
+            .clean_targets()
+            .iter()
+            .find(|target| target.subcategory().as_str() == "Journal Logs")
+            .and_then(|target| target.description())
+            .unwrap()
+            .to_string();
+        admin_rules_with(
+            sandbox,
+            &[serde_json::json!({
+                "path": journal,
+                "subcategory": "Journal Logs",
+                "needsAdmin": true,
+                "cleanupAction": "journal-vacuum",
+                "description": description,
+            })],
+        )
+    }
+
+    /// A journal behind a link, which root never follows: no line waits for
+    /// rights that would change nothing.
+    #[test]
+    fn a_journal_root_would_refuse_is_no_line() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        let real = sandbox.root.join("srv/journal");
+        fs::create_dir_all(&real).unwrap();
+        fs::create_dir_all(sandbox.root.join("var")).unwrap();
+        std::os::unix::fs::symlink(sandbox.root.join("srv"), sandbox.root.join("var/log")).unwrap();
+        settle_files();
+        let rules = journal_rules(&sandbox, &sandbox.root.join("var/log/journal"));
+        let seams = admin_seams(
+            &sandbox,
+            &rules,
+            &Asked::default(),
+            |_, _: &serde_json::Value| panic!("no rights asked for"),
+        );
+        let (window, _screen) = on_admin_results(seams, &rules);
+        assert!(!shows(&window, "Journaux de systemd"));
+    }
+
+    /// The journal's vacuum: a line locked until root's scan measures it,
+    /// never checked for the user; checked, only its path goes to the helper
+    /// beside the user's own cleaning (invariants 1 and 5), and the receipt
+    /// and the history count what root removed.
+    #[test]
+    fn the_journal_is_measured_and_vacuumed_by_root_alone() {
+        let sandbox = Sandbox::new();
+        let pip = sandbox.file("home/.cache/pip/old");
+        let journal = sandbox.root.join("var/log/journal");
+        fs::create_dir_all(&journal).unwrap();
+        settle_files();
+        let rules = journal_rules(&sandbox, &journal);
+        let asked = Asked::default();
+        let journal_name = journal.display().to_string();
+        let archive = journal.join("machine/system@old.journal");
+        let answer = {
+            let scan = serde_json::json!({
+                "version": okapi_helper::PROTOCOL_VERSION,
+                "operation": "scan",
+                "stops": [],
+                "groups": [{ "targets": [journal_name], "entries": 3, "bytes": 7_000 }],
+                "issues": [],
+            })
+            .to_string();
+            let clean = serde_json::json!({
+                "version": okapi_helper::PROTOCOL_VERSION,
+                "operation": "clean",
+                "stops": [],
+                "groups": [],
+                "issues": [],
+                "outcomes": [{ "outcome": { "path": archive, "result": "removed", "bytes": 7_000 }, "scannedBytes": 7_000 }],
+            })
+            .to_string();
+            move |operation, _: &serde_json::Value| match operation {
+                okapi_helper::Operation::Scan => (0, scan.clone()),
+                okapi_helper::Operation::Clean => (0, clean.clone()),
+            }
+        };
+        let seams = admin_seams(&sandbox, &rules, &asked, answer);
+        let (window, _screen) = on_admin_results(seams, &rules);
+        let line = found(&window, "Journaux de systemd");
+        assert_eq!(line.accessible_enabled(), Some(false), "locked");
+        // Docker's and uv's places (the home folder) are there: neither is a
+        // maintenance root runs, so no line offers them.
+        for other in ["Cache de construction Docker", "Paquets uv inutilisés"] {
+            assert!(!shows(&window, other), "{other}");
+        }
+        let description = description_of(&window, "Journaux de systemd");
+        assert!(
+            description.contains("plus de 30 jours")
+                && description.contains("plus de 1 Go")
+                && !description.contains('{'),
+            "the helper's limits shown: {description}"
+        );
+        assert!(shows(
+            &window,
+            "Se mesure avec les droits administrateur : « Obtenir les droits » ci-dessus."
+        ));
+
+        obtain_rights(&window);
+        let (_, request) = asked.lock().unwrap()[0].clone();
+        assert!(
+            request["targets"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(journal_name)),
+            "root is asked to measure it"
+        );
+        let unlocked = found(&window, "Journaux de systemd");
+        assert_eq!(unlocked.accessible_enabled(), Some(true));
+        assert_eq!(
+            unlocked.accessible_checked(),
+            Some(false),
+            "never checked for the user (invariant 5)"
+        );
+        assert!(shows(&window, "Opération du système : à cocher vous-même."));
+        unlocked.invoke_accessible_default_action();
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        let (operation, request) = asked.lock().unwrap()[1].clone();
+        assert_eq!(operation, okapi_helper::Operation::Clean);
+        assert_eq!(
+            request["targets"],
+            serde_json::json!([journal_name]),
+            "its path alone, never a file to remove"
+        );
+        assert!(!pip.exists(), "the user's part removed");
+        let history = sandbox.history();
+        assert_eq!(
+            (&history[0]["removed"], &history[0]["kept"]),
+            (&serde_json::json!(2), &serde_json::json!(0)),
+            "the user's file and root's archive, in one line"
         );
     }
 

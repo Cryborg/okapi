@@ -7,8 +7,8 @@ import {
     IconButton, IconNote, Line, ModalFrame, Title,
 } from "widgets.slint";
 import {
-    AdminRow, BrowserStep, CheckState, Cleaner, IssueKind, IssueShown, ProblemBanner, ResultBadge,
-    ResultRow, RightsProblem, RightsStep, RowKind, SetupProblem, Words,
+    BrowserStep, CheckState, Cleaner, IssueKind, IssueShown, ProblemBanner, ResultBadge,
+    ResultRow, RightsProblem, RightsStep, RowKind, RowNote, SetupProblem, Words,
 } from "cleaner-model.slint";
 
 // What waits for the administrator's rights, and the button that asks for
@@ -126,19 +126,25 @@ component ResultLine inherits VerticalLayout {
     property <bool> explainable: is-group && line.description != "";
     property <string> name: line.kind == RowKind.category ? Words.category(line.category) : line.label;
     // Why a group is left to the user, or out of reach.
-    property <string> note: line.badge == ResultBadge.to-choose
+    property <string> note: line.note == RowNote.cache-reset
         ? @tr("Le prochain démarrage sera plus lent, le temps de recréer ce cache.")
-        : line.admin == AdminRow.nothing
-        ? @tr("Rien à nettoyer avec les droits administrateur.")
-        : line.admin == AdminRow.unlocked
+        : line.note == RowNote.operation
+        ? @tr("Opération du système : à cocher vous-même.")
+        : line.note == RowNote.rights-obtained
         ? @tr("Droits obtenus : à cocher vous-même.")
-        : line.admin == AdminRow.unreachable
+        : line.note == RowNote.to-choose
+        ? @tr("Dossier temporaire hors de /tmp et /var/tmp : à cocher vous-même.")
+        : line.note == RowNote.nothing
+        ? @tr("Rien à nettoyer avec les droits administrateur.")
+        : line.note == RowNote.unreachable
         ? @tr("Hors de portée de l'assistant administrateur.")
-        : line.admin == AdminRow.unseen
+        : line.note == RowNote.unseen
         ? @tr("Illisible sans les droits administrateur : « Obtenir les droits » ci-dessus.")
+        : line.note == RowNote.unmeasured
+        ? @tr("Se mesure avec les droits administrateur : « Obtenir les droits » ci-dessus.")
         : @tr("Demande les droits administrateur : « Obtenir les droits » ci-dessus.");
     // What it holds is unknown until root's scan.
-    property <bool> unmeasured: line.admin == AdminRow.unseen;
+    property <bool> unmeasured: line.note == RowNote.unseen || line.note == RowNote.unmeasured;
 
     if !line.hidden: Rectangle {
         min-height: Theme.results-row-height;

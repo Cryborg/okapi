@@ -528,6 +528,18 @@ msgctxt "ResultLine"
 msgid "Illisible sans les droits administrateur : « Obtenir les droits » ci-dessus."
 msgstr "Unreadable without administrator rights: “Get the rights” above."
 
+msgctxt "ResultLine"
+msgid "Se mesure avec les droits administrateur : « Obtenir les droits » ci-dessus."
+msgstr "Measured with administrator rights: “Get the rights” above."
+
+msgctxt "ResultLine"
+msgid "Opération du système : à cocher vous-même."
+msgstr "A system operation: check it yourself."
+
+msgctxt "ResultLine"
+msgid "Dossier temporaire hors de /tmp et /var/tmp : à cocher vous-même."
+msgstr "A temporary folder outside /tmp and /var/tmp: check it yourself."
+
 msgctxt "Words"
 msgid "L'assistant administrateur s'est interrompu : des éléments ont pu être supprimés. Le détail est dans le journal."
 msgstr "The administrator's helper was interrupted: items may have been deleted. The detail is in the log."

@@ -96,7 +96,10 @@ fn description_of(label: &str, language: Language) -> slint::SharedString {
         .find_map(|(name, description)| (name.as_str() == label).then_some(description))
         .flatten()
         .unwrap();
-    okapi_rules::description(language, english.as_str()).into()
+    // The journal rule's description shows its vacuum's limits; another
+    // has no placeholder to fill.
+    let values = okapi_helper::description_values(okapi_rules::CleanupAction::JournalVacuum);
+    okapi_rules::filled(okapi_rules::description(language, english.as_str()), values).into()
 }
 
 fn row(
@@ -123,10 +126,10 @@ fn row(
         folded: false,
         hidden: false,
         badge,
-        admin: if badge == ui::ResultBadge::Admin {
-            ui::AdminRow::Locked
-        } else {
-            ui::AdminRow::None
+        note: match badge {
+            ui::ResultBadge::Admin => ui::RowNote::Locked,
+            ui::ResultBadge::ToChoose => ui::RowNote::CacheReset,
+            ui::ResultBadge::Preselected => ui::RowNote::None,
         },
         entries: 1528,
         size: size(936, 7, ui::SizeUnit::Megabyte),
@@ -147,7 +150,7 @@ fn header(category: ui::CategoryKind, folded: bool) -> ui::ResultRow {
         folded,
         hidden: false,
         badge: ui::ResultBadge::Preselected,
-        admin: ui::AdminRow::None,
+        note: ui::RowNote::None,
         entries: 86_300,
         size: size(10, 8, ui::SizeUnit::Gigabyte),
     }
@@ -178,6 +181,7 @@ fn results(window: &ui::AppWindow, folded: bool, language: Language) {
     let system = [
         ("Thumbnail Cache", Preselected, true),
         ("Crash Reports", Admin, false),
+        ("Journal Logs", Admin, false),
         ("APT Package Cache", Admin, false),
         ("Snap Cache", Admin, false),
         ("Snap App Cache", Preselected, true),
@@ -197,7 +201,12 @@ fn results(window: &ui::AppWindow, folded: bool, language: Language) {
         line.explained = matches!(*label, "Thumbnail Cache" | "Man Page Cache");
         // A target only root may read: what it holds unknown.
         if *label == "Snap Cache" {
-            line.admin = ui::AdminRow::Unseen;
+            line.note = ui::RowNote::Unseen;
+            line.explained = true;
+        }
+        // The journal's vacuum: measured by root's scan only.
+        if *label == "Journal Logs" {
+            line.note = ui::RowNote::Unmeasured;
             line.explained = true;
         }
         line

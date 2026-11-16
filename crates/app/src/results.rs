@@ -5,8 +5,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use okapi_engine::{Category, Origin, OriginKey, ScanGroup};
-use okapi_rules::{BrowserKind, Label, Language, RuleSet};
+use okapi_engine::{Category, MaintenanceFound, Origin, OriginKey, ScanGroup};
+use okapi_rules::{BrowserKind, Effect, Label, Language, RuleSet};
 
 /// What sets the description of one rule apart from the next, in a group
 /// that joins several.
@@ -23,8 +23,9 @@ fn described(language: Language, descriptions: &[Label]) -> String {
         .join(PARAGRAPH)
 }
 
-/// What the results need of one group of the report, or of a target only
-/// root may read ([`GroupFacts::unseen`]).
+/// What the results need of one group of the report, of a target only root
+/// may read ([`GroupFacts::unseen`]), or of a maintenance root runs
+/// ([`GroupFacts::maintenance`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupFacts {
     /// Its label: under its browser's line, a browser's cache needs no more.
@@ -37,8 +38,7 @@ pub struct GroupFacts {
     /// The browser whose cache it is.
     pub browser: Option<BrowserKind>,
     pub categories: BTreeSet<Category>,
-    /// Never a cache reset nor a maintenance (invariant 5).
-    pub preselected: bool,
+    pub preselection: Preselection,
     pub needs_admin: bool,
     /// The targets the privileged helper is asked for to clean the group,
     /// by the path the rules write them with: only when every rule of the
@@ -53,10 +53,49 @@ pub struct GroupFacts {
     /// only when it is checked by default: a group left to choose or the
     /// administrator's always starts unchecked (D-13).
     pub keys: BTreeSet<OriginKey>,
-    /// What the user's own scan saw of it, entries and bytes; none when it
-    /// could not read it (a root only root may open): only root's scan says
-    /// what it holds. [`Self::numbers`] are shown.
-    pub seen: Option<(usize, u64)>,
+    /// What the user's own scan saw of it. [`Self::numbers`] are shown.
+    pub seen: Seen,
+}
+
+/// Whether the rules of a line preselect it, and why not (invariant 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preselection {
+    Preselected,
+    /// A performance cache: emptying it slows the next launch.
+    CacheReset,
+    /// Left to the user for another reason: a maintenance, a temporary
+    /// directory outside `/tmp`.
+    ToChoose,
+}
+
+impl Preselection {
+    /// What rules preselected or not, cache resets or not, say.
+    #[must_use]
+    pub const fn of(preselected: bool, cache_reset: bool) -> Self {
+        match (preselected, cache_reset) {
+            (true, _) => Self::Preselected,
+            (false, true) => Self::CacheReset,
+            (false, false) => Self::ToChoose,
+        }
+    }
+
+    #[must_use]
+    pub fn is_preselected(self) -> bool {
+        self == Self::Preselected
+    }
+}
+
+/// What the user's own scan saw of a line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Seen {
+    /// It counted it.
+    Counted { entries: usize, bytes: u64 },
+    /// It could not read it (a root only root may open): only root's scan
+    /// says what it holds.
+    Unreadable,
+    /// A maintenance, never scanned: its operation says what it would
+    /// remove (root's scan, for the journal's vacuum).
+    Operation,
 }
 
 /// Where a group that needs the administrator stands.
@@ -86,7 +125,10 @@ impl GroupFacts {
             description: described(language, group.descriptions()),
             browser: group.browser(),
             categories: Category::of_group(group.origins()),
-            preselected: group.is_selected_by_default(),
+            preselection: Preselection::of(
+                group.is_selected_by_default(),
+                group.is_cache_reset(),
+            ),
             needs_admin,
             targets: needs_admin
                 .then(|| {
@@ -107,17 +149,19 @@ impl GroupFacts {
             admin: AdminState::Locked,
             checked_by_default,
             keys: group.origins().iter().map(Origin::key).collect(),
-            seen: Some((group.items().len(), group.total_size())),
+            seen: Seen::Counted {
+                entries: group.items().len(),
+                bytes: group.total_size(),
+            },
         }
     }
 
     /// What the results need of the target of `origin`, whose root the
-    /// user's own scan could not read: a group that needs the administrator,
-    /// what it holds unknown until root's scan, never checked before the user
-    /// chooses (invariant 5). `None` unless it is a target the privileged
-    /// helper may be asked for (`targets`, by the path it is asked by), of
-    /// the system rules of `rules`: root's scan could not tell more of
-    /// another.
+    /// user's own scan could not read: a line root's scan alone sets
+    /// ([`Self::waiting_for_root`]). `None` unless it is a target the
+    /// privileged helper may be asked for (`targets`, by the path it is asked
+    /// by), of the system rules of `rules`: root's scan could not tell more
+    /// of another.
     #[must_use]
     pub fn unseen(
         origin: &Origin,
@@ -131,24 +175,94 @@ impl GroupFacts {
             .clean_targets()
             .iter()
             .find(|target| Origin::of_target(target) == *origin)?;
-        let english = target.subcategory().as_str();
-        let preselected = target.is_selected_by_default();
-        let needs_admin = target.needs_admin();
         let descriptions: Vec<Label> = target.description().cloned().into_iter().collect();
-        Some(Self {
-            label: okapi_rules::label(language, english).to_owned(),
-            label_alone: okapi_rules::group_label(language, None, english),
-            description: described(language, &descriptions),
+        let preselection = Preselection::of(
+            target.is_selected_by_default(),
+            matches!(target.effect(), Effect::Delete(deletion) if deletion.is_cache_reset()),
+        );
+        Some(Self::waiting_for_root(
+            origin,
+            name,
+            okapi_rules::label(language, target.subcategory().as_str()),
+            described(language, &descriptions),
+            preselection,
+            Seen::Unreadable,
+        ))
+    }
+
+    /// What the results need of the maintenance `found`, its texts in
+    /// `language`, its description showing the helper's limits: a line root's
+    /// scan alone sets ([`Self::waiting_for_root`]), what it would remove
+    /// unknown until then. `None` for a maintenance the privileged helper
+    /// does not run (`targets`, by the path it is asked by): no line offers
+    /// it.
+    #[must_use]
+    pub fn maintenance(
+        found: &MaintenanceFound,
+        language: Language,
+        targets: &BTreeMap<Origin, String>,
+    ) -> Option<Self> {
+        let origin = found.origin();
+        let Some(name) = targets.get(origin) else {
+            tracing::debug!(?origin, action = ?found.action(), "a maintenance found that no line offers");
+            return None;
+        };
+        let description = found
+            .description()
+            .map(|description| {
+                okapi_rules::filled(
+                    okapi_rules::description(language, description.as_str()),
+                    okapi_helper::description_values(found.action()),
+                )
+            })
+            .unwrap_or_default();
+        if description.contains('{') {
+            tracing::warn!(?origin, %description, "a placeholder of a maintenance's description left unfilled");
+        }
+        tracing::info!(
+            ?origin,
+            target = name,
+            "a maintenance root runs: waits for the rights"
+        );
+        Some(Self::waiting_for_root(
+            origin,
+            name,
+            okapi_rules::label(language, found.label().as_str()),
+            description,
+            Preselection::ToChoose,
+            Seen::Operation,
+        ))
+    }
+
+    /// The line of the rule `origin` that root's scan alone sets, asked of
+    /// the helper by `name`: the administrator's, locked until then, never
+    /// checked before the user chooses (invariant 5).
+    fn waiting_for_root(
+        origin: &Origin,
+        name: &str,
+        label: &str,
+        description: String,
+        preselection: Preselection,
+        seen: Seen,
+    ) -> Self {
+        let needs_admin = true;
+        Self {
+            label: label.to_owned(),
+            label_alone: label.to_owned(),
+            description,
             browser: None,
             categories: Category::of_group(std::slice::from_ref(origin)),
-            preselected,
+            preselection,
             needs_admin,
-            targets: Some(BTreeSet::from([name.clone()])),
+            targets: Some(BTreeSet::from([name.to_owned()])),
             admin: AdminState::Locked,
-            checked_by_default: okapi_engine::checked_by_default(preselected, needs_admin),
+            checked_by_default: okapi_engine::checked_by_default(
+                preselection.is_preselected(),
+                needs_admin,
+            ),
             keys: BTreeSet::from([origin.key()]),
-            seen: None,
-        })
+            seen,
+        }
     }
 
     /// Whether its checkbox may be checked: a group the user removes, or
@@ -160,13 +274,17 @@ impl GroupFacts {
 
     /// Its entries and size as shown: root's once its scan set the group
     /// (none when it offers nothing of it), the user's own scan's otherwise
-    /// (none when it could not read it).
+    /// (none when it could not read it, nor for a maintenance it never
+    /// scans).
     #[must_use]
     pub fn numbers(&self) -> (usize, u64) {
         match self.admin {
             AdminState::Unlocked { entries, bytes } => (entries, bytes),
             AdminState::NothingToClean => (0, 0),
-            AdminState::Locked => self.seen.unwrap_or_default(),
+            AdminState::Locked => match self.seen {
+                Seen::Counted { entries, bytes } => (entries, bytes),
+                Seen::Unreadable | Seen::Operation => (0, 0),
+            },
         }
     }
 }
@@ -228,8 +346,9 @@ pub struct Results {
 
 impl Results {
     /// The groups of an analysis of `chosen`: those of its report, by their
-    /// index there, then those only root may read ([`GroupFacts::unseen`]),
-    /// which no index of the report names (invariant 1);
+    /// index there, then those root's scan alone sets
+    /// ([`GroupFacts::unseen`], [`GroupFacts::maintenance`]), which no index
+    /// of the report names (invariant 1);
     /// those the engine checks by default are checked.
     #[must_use]
     pub fn new(groups: Vec<GroupFacts>, chosen: BTreeSet<Category>) -> Self {
@@ -708,13 +827,16 @@ mod tests {
             description: String::new(),
             browser: None,
             categories: categories.iter().copied().collect(),
-            preselected,
+            preselection: Preselection::of(preselected, !preselected),
             needs_admin,
             targets: None,
             admin: AdminState::Locked,
             checked_by_default: okapi_engine::checked_by_default(preselected, needs_admin),
             keys: BTreeSet::new(),
-            seen: Some((2, 10)),
+            seen: Seen::Counted {
+                entries: 2,
+                bytes: 10,
+            },
         }
     }
 
@@ -736,7 +858,7 @@ mod tests {
     /// A group only root may read, through `target`, its rule preselected.
     fn unseen(target: &str) -> GroupFacts {
         GroupFacts {
-            seen: None,
+            seen: Seen::Unreadable,
             ..admin(&[target], true)
         }
     }
@@ -792,7 +914,10 @@ mod tests {
     #[test]
     fn the_size_found_adds_what_is_shown_without_overflowing() {
         let big = GroupFacts {
-            seen: Some((1, u64::MAX)),
+            seen: Seen::Counted {
+                entries: 1,
+                bytes: u64::MAX,
+            },
             ..group(&[Category::System], true, false)
         };
         let results = Results::new(
@@ -894,7 +1019,10 @@ mod tests {
             .unwrap();
         results.toggle_row(row);
         assert_eq!(results.admin_checked().0, BTreeSet::from([3]));
-        let own = results.group(3).unwrap().seen.unwrap();
+        let Seen::Counted { entries, bytes } = results.group(3).unwrap().seen else {
+            panic!("a group the user's scan counted");
+        };
+        let own = (entries, bytes);
         assert_ne!(results.group(3).unwrap().numbers(), own);
         results.relock();
         assert_eq!(

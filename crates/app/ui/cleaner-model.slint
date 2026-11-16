@@ -61,11 +61,17 @@ export enum ResultBadge { preselected, to-choose, admin }
 // category, or a group.
 export enum RowKind { category, browser, group }
 
-// Where a group that needs the administrator stands: none for another;
-// waiting for the rights; waiting for them, unreadable to the user, what it
-// holds unknown; never the helper's to clean; nothing for root to clean; or
-// unlocked by root's scan, to check by hand.
-export enum AdminRow { none, locked, unseen, unreachable, nothing, unlocked }
+// What the note under a group says. Left to the user: a cache reset; a
+// maintenance of the system; one of the administrator's that root's scan
+// unlocked; or a temporary folder outside /tmp. Out of reach without the
+// administrator: waiting for the rights; waiting for them, unreadable to the
+// user, or a maintenance measured by root only, what it holds unknown; never
+// the helper's to clean; nothing for root to clean. None for a group
+// preselected.
+export enum RowNote {
+    none, cache-reset, operation, rights-obtained, to-choose,
+    locked, unseen, unmeasured, unreachable, nothing,
+}
 
 // Where the rights asked for stand: their request being made (which
 // exclusions root is sent is read), their question open (the system asks
@@ -114,7 +120,7 @@ export struct ResultRow {
     folded: bool,
     hidden: bool,
     badge: ResultBadge,
-    admin: AdminRow,
+    note: RowNote,
     entries: int,
     size: Size,
 }

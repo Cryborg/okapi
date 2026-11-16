@@ -22,7 +22,7 @@ use slint::ComponentHandle as _;
 
 use super::{CANCEL_WAIT, CleanerScreen, Inputs, Problem, Running, Task, WATCH_EVERY};
 use crate::elevation::{ElevationFailure, ElevationStep};
-use crate::results::GroupFacts;
+use crate::results::{GroupFacts, Seen};
 use crate::ui;
 
 /// The age and exclusions root's scan unlocked the groups with.
@@ -274,7 +274,7 @@ pub(super) fn said_by(issue: &ScanIssue, groups: &[GroupFacts]) -> bool {
         } => match origins.as_slice() {
             [origin] => groups
                 .iter()
-                .any(|group| group.seen.is_none() && group.keys.contains(&origin.key())),
+                .any(|group| group.seen == Seen::Unreadable && group.keys.contains(&origin.key())),
             _ => false,
         },
         _ => false,
@@ -774,12 +774,16 @@ mod tests {
             okapi_rules::label(Language::French, "Snap Cache")
         );
         assert!(group.needs_admin);
-        assert!(group.preselected, "as its rule");
+        assert!(group.preselection.is_preselected(), "as its rule");
         assert!(
             !group.checked_by_default,
             "never for the user (invariant 5)"
         );
-        assert_eq!(group.seen, None, "what it holds is root's to say");
+        assert_eq!(
+            group.seen,
+            Seen::Unreadable,
+            "what it holds is root's to say"
+        );
         assert_eq!(group.numbers(), (0, 0));
         assert_eq!(group.keys, BTreeSet::from([snap.key()]));
         assert_eq!(group.categories, BTreeSet::from([Category::System]));
@@ -956,7 +960,7 @@ mod tests {
         let [group] = unseen(&[issue], &[], &[Category::System], &[])
             .try_into()
             .unwrap();
-        assert!(!group.preselected);
+        assert!(!group.preselection.is_preselected());
         assert!(!group.checked_by_default);
         assert_eq!(
             group.label_alone,
@@ -980,7 +984,10 @@ mod tests {
             "another error on its root is no refusal its group says"
         );
         let read = GroupFacts {
-            seen: Some((1, 1)),
+            seen: Seen::Counted {
+                entries: 1,
+                bytes: 1,
+            },
             ..groups[0].clone()
         };
         assert!(

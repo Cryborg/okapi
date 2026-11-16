@@ -5,7 +5,9 @@
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
 use std::rc::Rc;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use i_slint_backend_testing::ElementHandle;
@@ -98,6 +100,7 @@ fn seams_with(
                     manager.answers.borrow_mut().push(done);
                 }
             }),
+            files: Arc::new(UsageScan::files),
             now: Timestamp::now,
             threads: NonZeroUsize::MIN,
         },
@@ -365,25 +368,136 @@ fn a_folder_changed_since_the_analysis_says_so() {
     assert_eq!(disk(&window).get_files_state(), ui::DiskFiles::Listed);
 }
 
+/// Analyzed, then back at the top from `small`, the list without the focus:
+/// its folders shown at once, its files on their way.
+fn back_at_the_top_its_files_coming(window: &ui::AppWindow) {
+    analyzed(window);
+    disk(window).invoke_enter(index_of(window, "small"));
+    read_until(window, |window| names(window) == ["data"]);
+    disk(window).invoke_list_focus(false);
+    disk(window).invoke_up();
+    disk(window).set_current(0);
+    assert_eq!(names(window), ["large", "small"]);
+}
+
 #[test]
 fn a_line_held_keeps_its_rank_when_the_files_come() {
     let home = home();
     let manager = Rc::default();
     let (window, _sampler) = on_disk(seams(&home, &manager));
-    analyzed(&window);
-    disk(&window).invoke_enter(index_of(&window, "small"));
-    read_until(&window, |window| names(window) == ["data"]);
-    // Back at the top: its folders shown at once, its files on their way.
-    disk(&window).invoke_list_focus(false);
-    disk(&window).invoke_up();
-    disk(&window).set_current(0);
-    assert_eq!(names(&window), ["large", "small"]);
+    back_at_the_top_its_files_coming(&window);
     disk(&window).invoke_point(1);
     read_until(&window, |window| names(window).len() == 3);
     assert_eq!(
         names(&window),
         ["large", "small", "note"],
         "small pointed at"
+    );
+}
+
+#[test]
+fn the_sort_put_off_by_the_pointer_is_made_once_it_leaves() {
+    let home = home();
+    let manager = Rc::default();
+    let (window, _sampler) = on_disk(seams(&home, &manager));
+    back_at_the_top_its_files_coming(&window);
+    disk(&window).invoke_point(1);
+    read_until(&window, |window| names(window).len() == 3);
+    assert_eq!(names(&window), ["large", "small", "note"]);
+    disk(&window).invoke_point(-1);
+    read_once();
+    assert_eq!(
+        names(&window),
+        ["large", "note", "small"],
+        "sorted at the next reading, not two seconds later"
+    );
+}
+
+#[test]
+fn a_line_pointed_at_that_cannot_be_held_leaves_the_focus_line_held() {
+    let home = home();
+    let closed = home.path().join("closed");
+    fs::create_dir(&closed).unwrap();
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read_dir(&closed).is_ok() {
+        fs::set_permissions(&closed, fs::Permissions::from_mode(0o700)).unwrap();
+        eprintln!("skipped: root reads every folder");
+        return;
+    }
+    let manager = Rc::default();
+    let (window, _sampler) = on_disk(seams(&home, &manager));
+    analyzed(&window);
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(names(&window), ["large", "note", "small", "closed"]);
+    disk(&window).invoke_list_focus(true);
+    disk(&window).invoke_enter(index_of(&window, "small"));
+    read_until(&window, |window| names(window) == ["data"]);
+    disk(&window).invoke_up();
+    assert_eq!(names(&window), ["large", "small", "closed"]);
+    // Unreadable, without a size: never held, the focus holds `small`.
+    disk(&window).invoke_point(index_of(&window, "closed"));
+    read_until(&window, |window| names(window).len() == 4);
+    assert_eq!(names(&window), ["large", "small", "note", "closed"]);
+}
+
+/// The screen alone on a window, kept: what it holds can be looked at.
+fn screen_alone(seams: DiskSeams) -> (ui::AppWindow, DiskUsageScreen) {
+    i_slint_backend_testing::init_no_event_loop();
+    let window = ui::AppWindow::new().unwrap();
+    let screen = DiskUsageScreen::attach(&window, seams, Language::French);
+    (window, screen)
+}
+
+#[test]
+fn a_refusal_at_the_start_lets_the_analysis_running_go() {
+    let home = home();
+    let manager = Rc::default();
+    let (window, screen) = screen_alone(seams(&home, &manager).disk);
+    disk(&window).invoke_analyze_home();
+    read_until(&window, |window| step(window) != ui::DiskStep::Opening);
+    assert!(screen.0.borrow().scan.is_some());
+    // « Analyser ce disque » on a line that is no disk offered.
+    disk(&window).invoke_analyze_mount(0);
+    assert_eq!(step(&window), ui::DiskStep::Start);
+    assert_eq!(disk(&window).get_start_refused(), ui::DiskRefusal::Volume);
+    assert!(
+        screen.0.borrow().scan.is_none(),
+        "the analysis given up, stopped"
+    );
+}
+
+#[test]
+fn files_that_never_come_are_given_up_after_their_wait_not_before() {
+    let home = home();
+    let mut seams = seams(&home, &Rc::default());
+    // The files of `small` come only once the test is over.
+    let (_over, stuck) = mpsc::channel::<()>();
+    let stuck = Mutex::new(stuck);
+    seams.disk.files = Arc::new(move |scan: &UsageScan, folder: NodeId| {
+        if scan
+            .path(folder)
+            .is_some_and(|path| path.ends_with("small"))
+        {
+            let _ = stuck.lock().unwrap().recv();
+        }
+        scan.files(folder)
+    });
+    let (window, _sampler) = on_disk(seams);
+    analyzed(&window);
+    disk(&window).invoke_enter(index_of(&window, "small"));
+    for _ in 1..FILES_WAIT.as_millis() / READ_EVERY.as_millis() {
+        read_once();
+    }
+    assert_eq!(
+        disk(&window).get_files_state(),
+        ui::DiskFiles::Listed,
+        "still awaited"
+    );
+    read_once();
+    assert_eq!(
+        disk(&window).get_files_state(),
+        ui::DiskFiles::Unreadable,
+        "given up"
     );
 }
 

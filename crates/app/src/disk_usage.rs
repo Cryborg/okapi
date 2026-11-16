@@ -49,6 +49,10 @@ const VOLUMES_READINGS: u32 = 20;
 /// The volumes the system has, as last read; `None` before a first reading.
 pub type Volumes = Rc<dyn Fn() -> Option<Result<Vec<Volume>, Unavailable>>>;
 
+/// Reads the files of a folder of an analysis again, on a thread of its
+/// own.
+pub type ReadFiles = Arc<dyn Fn(&UsageScan, NodeId) -> FilesRead + Send + Sync>;
+
 /// What the screen reads and asks of the machine: the system's, or a
 /// test's.
 #[derive(Clone)]
@@ -58,6 +62,7 @@ pub struct DiskSeams {
     pub cache: Option<PathBuf>,
     pub mounts: Rc<dyn Fn() -> Option<MountList>>,
     pub open: Open,
+    pub files: ReadFiles,
     pub now: fn() -> Timestamp,
     pub threads: NonZeroUsize,
 }
@@ -94,6 +99,7 @@ impl DiskSeams {
                     .ok()
             }),
             open: Rc::new(open_in_file_manager),
+            files: Arc::new(UsageScan::files),
             now: Timestamp::now,
             threads: default_threads(),
         }
@@ -127,14 +133,13 @@ enum Phase {
 }
 
 /// The files of a folder, read again away from the interface's thread.
-type FilesRead = Result<(Vec<FileEntry>, usize), FilesError>;
+pub type FilesRead = Result<(Vec<FileEntry>, usize), FilesError>;
 
-/// The files of `folder` on their way, asked at `asked`.
-#[derive(Debug)]
+/// The files of `folder` on their way, given up once `wait` has run out.
 struct FilesReading {
     folder: NodeId,
     receiver: Receiver<FilesRead>,
-    asked: std::time::Instant,
+    wait: slint::Timer,
 }
 
 /// The files of a folder, as read again: a failure is kept, never read
@@ -1191,18 +1196,22 @@ impl DiskUsageScreen {
             return;
         }
         let (sender, receiver) = mpsc::channel();
+        let read = Arc::clone(&self.0.borrow().seams.files);
         let spawned = std::thread::Builder::new()
             .name("okapi-disk-usage-files".into())
             .spawn(move || {
                 // Given up, or the screen gone: then nobody waits.
-                let _ = sender.send(scan.files(folder));
+                let _ = sender.send(read(&scan, folder));
             });
         match spawned {
             Ok(_) => {
+                // In time, not in readings: they may slow down.
+                let wait = slint::Timer::default();
+                wait.start(slint::TimerMode::SingleShot, FILES_WAIT, || {});
                 self.0.borrow_mut().files_reading = Some(FilesReading {
                     folder,
                     receiver,
-                    asked: std::time::Instant::now(),
+                    wait,
                 });
                 // Read on the next readings, the analysis ended or not.
                 self.watch();
@@ -1226,7 +1235,7 @@ impl DiskUsageScreen {
                     tracing::error!(folder = ?reading.folder, "files thread ended without word");
                     Some((reading.folder, None))
                 }
-                Err(TryRecvError::Empty) => (reading.asked.elapsed() >= FILES_WAIT).then(|| {
+                Err(TryRecvError::Empty) => (!reading.wait.running()).then(|| {
                     tracing::warn!(folder = ?reading.folder, "files of a folder never came");
                     (reading.folder, None)
                 }),

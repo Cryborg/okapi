@@ -1788,6 +1788,7 @@ pub mod tests {
                 cache: None,
                 mounts: Rc::new(|| None),
                 open: Rc::new(|_, done| done(false)),
+                files: std::sync::Arc::new(okapi_tools::disk_usage::UsageScan::files),
                 now: jiff::Timestamp::now,
                 threads: std::num::NonZeroUsize::MIN,
             },

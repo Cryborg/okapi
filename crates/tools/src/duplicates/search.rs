@@ -12,12 +12,12 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use okapi_engine::Exclusions;
-use okapi_platform::Directory;
+use okapi_platform::{Directory, filesystem_may_alias, filesystem_undated, mount_of};
 
 use super::compare::{self, Comparing, Pass};
 use super::report::{DuplicateReport, Found, Root, SearchStats};
 use super::walk::{self, Cancelled, Listing};
-use crate::mounts::{mount_of, mounts_below};
+use crate::mounts::mounts_below;
 use crate::panic_message;
 
 /// The smallest file the screen compares: below, many small groups for
@@ -446,8 +446,8 @@ fn list(
         below.extend(points);
         // An unknown filesystem (the table of mounts unreadable) may be
         // either: no copy found there keeps another.
-        root.may_alias = filesystem.as_deref().is_none_or(may_alias);
-        root.undated = filesystem.as_deref().is_none_or(undated);
+        root.may_alias = filesystem.as_deref().is_none_or(filesystem_may_alias);
+        root.undated = filesystem.as_deref().is_none_or(filesystem_undated);
         tracing::info!(
             path = %root.path.display(),
             filesystem = filesystem.as_deref(),
@@ -482,33 +482,6 @@ fn list(
     }
     Ok(found)
 }
-
-/// Whether the filesystem `filesystem` (as `mountinfo` names it) may show
-/// a file under another identity than its own: FUSE (a bind of a folder, a
-/// desktop's share), network and stacked filesystems.
-pub(crate) fn may_alias(filesystem: &str) -> bool {
-    filesystem.starts_with(FUSE_PREFIX)
-        || NETWORK_FILESYSTEMS.contains(&filesystem)
-        || STACKED_FILESYSTEMS.contains(&filesystem)
-}
-
-/// Whether the filesystem `filesystem` keeps no change date of its own.
-pub(crate) fn undated(filesystem: &str) -> bool {
-    UNDATED_FILESYSTEMS.contains(&filesystem)
-}
-
-/// What every FUSE filesystem's type starts with (`fuse.bindfs`).
-const FUSE_PREFIX: &str = "fuse";
-/// Filesystems reached over the network.
-const NETWORK_FILESYSTEMS: &[&str] = &["nfs", "nfs4", "cifs", "smb3", "smbfs", "9p", "ceph"];
-/// Filesystems stacked over another folder, whose files they show again.
-const STACKED_FILESYSTEMS: &[&str] = &["overlay", "aufs"];
-/// Filesystems whose inode change date is the modification date (Linux,
-/// `fs/fat`: `fat_fill_inode`, `fat_truncate_time`): setting the latter back
-/// sets both back, and a file rewritten then dated back looks unchanged.
-/// exFAT is not one: a date set there moves the change date to the present
-/// (`setattr_copy`).
-const UNDATED_FILESYSTEMS: &[&str] = &["vfat", "msdos"];
 
 /// Groups `found` by size, then by the key of their ends, then of their
 /// whole content.

@@ -623,33 +623,6 @@ fn small_files_are_compared_at_every_size_and_empty_ones_never() {
     assert_eq!(groups(&search, root), expected);
 }
 
-#[test]
-fn a_filesystem_that_may_show_a_file_twice_is_known() {
-    for filesystem in [
-        "fuse.bindfs",
-        "fuse.gvfsd-fuse",
-        "fuseblk",
-        "nfs4",
-        "cifs",
-        "overlay",
-    ] {
-        assert!(search::may_alias(filesystem), "{filesystem}");
-    }
-    for filesystem in ["ext4", "btrfs", "xfs", "vfat", "zfs"] {
-        assert!(!search::may_alias(filesystem), "{filesystem}");
-    }
-}
-
-#[test]
-fn a_filesystem_without_a_change_date_of_its_own_is_known() {
-    for filesystem in ["vfat", "msdos"] {
-        assert!(search::undated(filesystem), "{filesystem}");
-    }
-    for filesystem in ["ext4", "btrfs", "xfs", "exfat", "ntfs3", "fuseblk"] {
-        assert!(!search::undated(filesystem), "{filesystem}");
-    }
-}
-
 /// The filesystem of each root, by its name: `fat`, `ext`, or unknown.
 fn filesystem_by_name(root: &Path) -> (BTreeSet<PathBuf>, Option<String>) {
     let filesystem = match root.file_name().and_then(|name| name.to_str()) {

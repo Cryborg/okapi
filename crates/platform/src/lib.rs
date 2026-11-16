@@ -4,6 +4,7 @@ mod browser;
 mod directory;
 #[cfg(target_os = "linux")]
 mod elevation;
+mod filesystems;
 mod identity;
 mod probe;
 mod session;
@@ -25,6 +26,9 @@ pub use directory::{
 };
 #[cfg(target_os = "linux")]
 pub use elevation::{HELPER_PATH, PKEXEC_PATH};
+pub use filesystems::{
+    filesystem_is_network, filesystem_may_alias, filesystem_of, filesystem_undated, mount_of,
+};
 pub use identity::{
     FileIdentity, IDENTITY_SUPPORTED, file_identity, last_change, link_count, ownership,
 };
@@ -42,6 +46,22 @@ pub use session::{
 };
 pub use trash::{Trash, TrashError};
 #[cfg(target_os = "linux")]
+pub use user_dirs::guarded_personal_folders;
+#[cfg(target_os = "linux")]
 pub use user_dirs::{PersonalFolder, PersonalKind, personal_folders};
 #[cfg(target_os = "linux")]
 pub use variables::{VariablesError, config_directory, state_directory, template_variables};
+
+/// The personal folders to guard: unknown outside Linux yet, so none can be
+/// told apart (a guard refuses then).
+///
+/// # Errors
+///
+/// Always [`std::io::ErrorKind::Unsupported`].
+#[cfg(not(target_os = "linux"))]
+pub fn guarded_personal_folders(
+    _config: &std::path::Path,
+    _home: &std::path::Path,
+) -> std::io::Result<Vec<std::path::PathBuf>> {
+    Err(std::io::ErrorKind::Unsupported.into())
+}

@@ -11,8 +11,6 @@ const MOUNTINFO: &str = "/proc/self/mountinfo";
 /// is said cut, never read in part.
 #[cfg(target_os = "linux")]
 const MOUNTINFO_LIMIT: usize = 16 * 1024 * 1024;
-/// The filesystems reached over the network.
-const NETWORK_FILESYSTEMS: [&str; 5] = ["nfs", "nfs4", "cifs", "smb3", "fuse.sshfs"];
 /// Where the boot partitions are mounted.
 const BOOT: &str = "/boot";
 
@@ -156,7 +154,7 @@ fn parse_line(line: &[u8]) -> Option<Mount> {
 fn classify(source: &str, mount_point: &std::path::Path, filesystem: &str) -> MountClass {
     if mount_point.starts_with(BOOT) {
         MountClass::Boot
-    } else if NETWORK_FILESYSTEMS.contains(&filesystem) {
+    } else if crate::filesystem_is_network(filesystem) {
         MountClass::Network
     } else if filesystem == "zfs" && source.contains('@') {
         // A snapshot shows what its dataset already counts.

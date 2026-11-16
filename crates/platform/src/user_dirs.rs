@@ -78,6 +78,58 @@ pub fn personal_folders(home: &Path) -> io::Result<Vec<PersonalFolder>> {
     read_personal_folders(&configuration.join(USER_DIRS), home)
 }
 
+/// The folders xdg-user-dirs creates below the home folder when nothing
+/// names them otherwise.
+const DEFAULT_FOLDERS: [&str; 8] = [
+    "Desktop",
+    "Documents",
+    "Downloads",
+    "Music",
+    "Pictures",
+    "Videos",
+    "Templates",
+    "Public",
+];
+
+/// The personal folders that must be guarded (a folder to empty never is
+/// one): the default names below `home`, and those the `user-dirs.dirs` of
+/// the configuration folder `config` names, read through a link (dotfiles
+/// keep it as one; reading writes nothing). Guarding more than is named
+/// never costs a file; guarding less would.
+///
+/// # Errors
+///
+/// The system's error when the file, or a link to it, cannot be read;
+/// [`io::ErrorKind::InvalidData`] when a line of it is not understood
+/// (which may name one of them).
+pub fn guarded_personal_folders(config: &Path, home: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut guarded: Vec<PathBuf> = DEFAULT_FOLDERS.iter().map(|name| home.join(name)).collect();
+    let file = config.join(USER_DIRS);
+    let real = match std::fs::canonicalize(&file) {
+        Ok(real) => real,
+        // A link that leads nowhere says nothing of the folders.
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound
+                && std::fs::symlink_metadata(&file).is_err() =>
+        {
+            tracing::info!(file = %file.display(), "no personal folders named: their default names guarded");
+            return Ok(guarded);
+        }
+        Err(error) => return Err(error),
+    };
+    let bytes = read_regular_capped(&real, USER_DIRS_LIMIT)?;
+    let (folders, ignored) = parse_user_dirs(&bytes, home);
+    if ignored > 0 {
+        tracing::warn!(file = %real.display(), folders = folders.len(), ignored, "personal folders not all understood: none can be guarded for sure");
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "lines of the personal folders not understood",
+        ));
+    }
+    guarded.extend(folders.into_iter().map(|folder| folder.path));
+    Ok(guarded)
+}
+
 /// [`personal_folders`], named by the file `file`, below `home`.
 fn read_personal_folders(file: &Path, home: &Path) -> io::Result<Vec<PersonalFolder>> {
     let bytes = match read_regular_capped(file, USER_DIRS_LIMIT) {
@@ -311,6 +363,59 @@ mod tests {
                 kind: PersonalKind::Music,
                 path: home.join("Musique"),
             }]
+        );
+    }
+
+    #[test]
+    fn guarded_folders_are_read_through_a_link_or_are_the_default_names() {
+        let folder = tempfile::tempdir().unwrap();
+        let home = folder.path();
+        let config = home.join(".config");
+        std::fs::create_dir(&config).unwrap();
+        let defaults = [
+            "Desktop",
+            "Documents",
+            "Downloads",
+            "Music",
+            "Pictures",
+            "Videos",
+            "Templates",
+            "Public",
+        ]
+        .map(|name| home.join(name));
+        assert_eq!(
+            guarded_personal_folders(&config, home).unwrap(),
+            defaults,
+            "none named: the default names"
+        );
+        let file = config.join(USER_DIRS);
+        std::os::unix::fs::symlink(home.join("dotfiles/user-dirs.dirs"), &file).unwrap();
+        assert!(
+            guarded_personal_folders(&config, home).is_err(),
+            "a link that leads nowhere is no file absent"
+        );
+        std::fs::create_dir(home.join("dotfiles")).unwrap();
+        std::fs::write(
+            home.join("dotfiles/user-dirs.dirs"),
+            "XDG_MUSIC_DIR=\"$HOME/Musique\"\nXDG_DOCUMENTS_DIR=\"/data/Docs\"\n",
+        )
+        .unwrap();
+        let mut named = defaults.to_vec();
+        named.extend([PathBuf::from("/data/Docs"), home.join("Musique")]);
+        assert_eq!(
+            guarded_personal_folders(&config, home).unwrap(),
+            named,
+            "through the link, the default names besides"
+        );
+        // A line not understood may name one: none is guarded for sure.
+        std::fs::write(
+            home.join("dotfiles/user-dirs.dirs"),
+            "XDG_DOCUMENTS_DIR=$HOME/Docs\n",
+        )
+        .unwrap();
+        assert_eq!(
+            guarded_personal_folders(&config, home).map_err(|error| error.kind()),
+            Err(io::ErrorKind::InvalidData)
         );
     }
 }

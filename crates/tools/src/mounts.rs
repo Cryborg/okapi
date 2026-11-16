@@ -1,19 +1,10 @@
 //! The mount points below a folder, read in the table of mounts once: a
-//! walk never even reads one (`EntryStatus::other_mount` judges the rest);
-//! and the mount a path lies on.
+//! walk never even reads one (`EntryStatus::other_mount` judges the rest).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use okapi_platform::Mount;
-
-/// The mount `path` lies on: the deepest whose mount point holds it.
-pub(crate) fn mount_of<'a>(path: &Path, mounts: &'a [Mount]) -> Option<&'a Mount> {
-    mounts
-        .iter()
-        .filter(|mount| path.starts_with(&mount.mount_point))
-        .max_by_key(|mount| mount.mount_point.components().count())
-}
+use okapi_platform::mount_of;
 
 /// The mount points strictly below `root`, and the filesystem `root` is on.
 pub(crate) fn mounts_below(root: &Path) -> (BTreeSet<PathBuf>, Option<String>) {

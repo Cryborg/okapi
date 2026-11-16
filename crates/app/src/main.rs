@@ -79,6 +79,11 @@ fn license_paragraphs() -> Vec<SharedString> {
         .collect()
 }
 
+/// The application id the window carries under Wayland and X11. GNOME under
+/// Wayland ignores the window's icon and takes the one of the desktop entry
+/// of this name (`packaging/linux/`).
+const APP_ID: &str = "io.github.cryborg.Okapi";
+
 /// How long the dashboard waits for a filesystem to tell its space: a share
 /// that does not answer within it is said to.
 const SPACE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -102,6 +107,11 @@ fn window(
     language: Language,
 ) -> Result<Screens, slint::PlatformError> {
     let window = AppWindow::new()?;
+    // Refused while no component exists (no platform yet), and read only when
+    // the window is shown: between the two.
+    if let Err(error) = slint::set_xdg_app_id(APP_ID) {
+        tracing::error!(%error, app_id = APP_ID, "application id not set");
+    }
     // Slint's own texts in the language of the rules' labels: the French
     // source is the bundle's empty language. Known once a component exists.
     let bundle = match language {
@@ -787,6 +797,34 @@ mod tests {
         texts
     }
 
+    /// Where the desktop entry of `APP_ID` lies: named after it, as GNOME
+    /// looks it up.
+    fn desktop_entry() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packaging/linux")
+            .join(format!("{APP_ID}.desktop"))
+    }
+
+    /// The desktop entry names the application id as its icon and its
+    /// window class, and the script that installs it the same id.
+    #[test]
+    fn the_desktop_entry_and_its_script_carry_the_application_id() {
+        let entry = fs::read_to_string(desktop_entry()).unwrap();
+        for key in ["Icon", "StartupWMClass"] {
+            let values: Vec<&str> = entry
+                .lines()
+                .filter_map(|line| line.strip_prefix(key)?.strip_prefix('='))
+                .collect();
+            assert_eq!(values, [APP_ID], "{key}");
+        }
+        let script = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../packaging/linux/install-desktop-entry.sh"),
+        )
+        .unwrap();
+        assert!(script.contains(&format!("\nreadonly APP_ID={APP_ID}\n")));
+    }
+
     /// Texts the same in both languages.
     const SAME_IN_ENGLISH: [&str; 22] = [
         "{}, {}",
@@ -816,7 +854,10 @@ mod tests {
     #[test]
     fn no_text_shown_has_an_em_dash() {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let mut files = vec![manifest.join("lang/en/LC_MESSAGES/okapi-app.po")];
+        let mut files = vec![
+            manifest.join("lang/en/LC_MESSAGES/okapi-app.po"),
+            desktop_entry(),
+        ];
         files.extend(
             fs::read_dir(manifest.join("ui"))
                 .unwrap()

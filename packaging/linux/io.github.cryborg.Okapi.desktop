@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Okapi
+GenericName=System Cleaner
+GenericName[fr]=Nettoyeur système
+Comment=Clean up and maintain your computer
+Comment[fr]=Nettoyer et entretenir votre ordinateur
+Keywords=clean;cleaner;cache;disk;duplicates;maintenance;
+Keywords[fr]=nettoyer;nettoyeur;cache;disque;doublons;entretien;
+Exec=okapi-app
+Icon=io.github.cryborg.Okapi
+StartupWMClass=io.github.cryborg.Okapi
+StartupNotify=true
+Terminal=false
+Categories=System;

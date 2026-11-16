@@ -206,8 +206,14 @@ pub fn text(language: Language, message: &Message<'_>) -> String {
             blocked,
         } => not_removed_text(language, path, *result, *blocked),
         Message::Journal(path) => pick(
-            format!("Journal : {}", shown(path)),
-            format!("Journal: {}", shown(path)),
+            format!(
+                "Journal (avec les chemins, à relire avant de le partager) : {}",
+                shown(path)
+            ),
+            format!(
+                "Journal (paths included, read it before sharing it): {}",
+                shown(path)
+            ),
         ),
         Message::JournalUnavailable(path, error) => journal_unavailable(language, path, error),
         Message::StateDirectoryUnknown => pick(

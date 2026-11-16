@@ -232,6 +232,22 @@ component SettingRow inherits HorizontalLayout {
     }
 }
 
+// A row that only tells: no control names it, its name is read.
+component InfoRow inherits VerticalLayout {
+    in property <string> name;
+    in property <string> description;
+    padding: Theme.spacing-l;
+    padding-left: Theme.setting-row-padding;
+    padding-right: Theme.setting-row-padding;
+    spacing: Theme.spacing-xxs;
+    Line {
+        text: root.name;
+    }
+    Detail {
+        text: root.description;
+    }
+}
+
 component Separator inherits Rectangle {
     height: Theme.border-width;
     background: Theme.border;
@@ -425,8 +441,8 @@ component General inherits Card {
         SettingRow {
             name: @tr("Journal des suppressions");
             description: Preferences.state-directory == ""
-                ? @tr("Garde, pour chaque nettoyage, la liste des chemins retirés.")
-                : @tr("Garde, pour chaque nettoyage, la liste des chemins retirés dans {}.", Preferences.state-directory);
+                ? @tr("Garde dans l'historique, pour chaque nettoyage, la liste des chemins retirés.")
+                : @tr("Garde dans l'historique ({}), pour chaque nettoyage, la liste des chemins retirés.", Preferences.state-directory);
             HorizontalLayout {
                 spacing: Theme.spacing-m;
                 Detail {
@@ -445,6 +461,13 @@ component General inherits Card {
                     }
                 }
             }
+        }
+        Separator { }
+        InfoRow {
+            name: @tr("Journal technique");
+            description: Preferences.state-directory == ""
+                ? @tr("{} et leurs copies .1 gardent quelques semaines le détail de chaque lancement, dont les chemins analysés, supprimés ou mis à la corbeille, les applis et vos exclusions. Relisez-les avant de les partager. Le réglage « Journal des suppressions » n'y change rien.", Preferences.journal-files)
+                : @tr("{} et leurs copies .1, dans {}, gardent quelques semaines le détail de chaque lancement, dont les chemins analysés, supprimés ou mis à la corbeille, les applis et vos exclusions. Relisez-les avant de les partager. Le réglage « Journal des suppressions » n'y change rien.", Preferences.journal-files, Preferences.state-directory);
         }
         Separator { }
         SettingRow {

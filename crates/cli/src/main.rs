@@ -78,8 +78,8 @@ fn main() -> ExitCode {
     let on_write_failure: journal::WriteFailure = Box::new(move |error| {
         error_line(&text(language, &Message::JournalWriteFailed(error)));
     });
-    let (journal, rotation) = match journal::start(journal::CLI_FILE, verbose, on_write_failure) {
-        Ok((path, rotation)) => (Some(path), Some(rotation)),
+    let (journal, opening) = match journal::start(journal::CLI_FILE, verbose, on_write_failure) {
+        Ok((path, opening)) => (Some(path), Some(opening)),
         Err(journal::Unavailable::NoStateDirectory) => {
             error_line(&say(&Message::StateDirectoryUnknown));
             (None, None)
@@ -90,9 +90,9 @@ fn main() -> ExitCode {
         }
     };
     let _run = tracing::info_span!("run", pid = std::process::id()).entered();
-    if let Some(rotation) = &rotation {
-        rotation.trace();
-        if let journal::Rotation::Failed(error) = rotation {
+    if let Some(opening) = &opening {
+        opening.trace();
+        if let journal::Rotation::Failed(error) = &opening.rotation {
             error_line(&say(&Message::JournalRotationFailed(error)));
         }
     }

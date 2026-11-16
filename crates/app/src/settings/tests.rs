@@ -514,7 +514,12 @@ fn the_deletion_log_is_switched_and_says_where_it_goes() {
     let (window, screens) = sandbox.window();
     assert!(shows(
         &window,
-        "Garde, pour chaque nettoyage, la liste des chemins retirés dans ~/.local/state/okapi."
+        "Garde dans l'historique (~/.local/state/okapi), pour chaque nettoyage, la liste des chemins retirés."
+    ));
+    // The journal is not it, and says what it holds.
+    assert!(shows(
+        &window,
+        "okapi-app.log, okapi.log et leurs copies .1, dans ~/.local/state/okapi, gardent quelques semaines le détail de chaque lancement, dont les chemins analysés, supprimés ou mis à la corbeille, les applis et vos exclusions. Relisez-les avant de les partager. Le réglage « Journal des suppressions » n'y change rien."
     ));
     let switch = || {
         ElementHandle::find_by_accessible_label(&window, "Journal des suppressions")

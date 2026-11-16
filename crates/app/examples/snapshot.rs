@@ -1057,6 +1057,25 @@ fn apps_flatpak(app: &ui::AppWindow) {
     apps.set_step(ui::UninstallStep::Confirm);
 }
 
+/// The settings screen, after a change refused over a file changed
+/// elsewhere.
+fn settings(window: &ui::AppWindow) {
+    window.set_page(ui::Page::Settings);
+    let preferences = window.global::<ui::Preferences>();
+    preferences.set_state(ui::SettingsState::Editable);
+    preferences.set_save_refused(ui::SaveRefusal::ChangedElsewhere);
+    preferences.set_state_directory("~/.local/state/okapi".into());
+    preferences.set_settings_file("~/.config/okapi/settings.json".into());
+    preferences.set_journal_files("okapi-app.log, okapi.log".into());
+    preferences.set_min_age_options(ModelRc::new(VecModel::from(vec![
+        "30 min".into(),
+        "1 h".into(),
+        "2 h".into(),
+        "24 h".into(),
+    ])));
+    preferences.set_min_age_chosen(1);
+}
+
 fn main() {
     let mut arguments = std::env::args().skip(1);
     let asked = arguments.next().unwrap_or_else(|| String::from("results"));
@@ -1137,8 +1156,9 @@ fn main() {
         "apps-uninstall-flatpak" => apps_flatpak(&app),
         "apps-leftovers" => apps_leftovers(&app, false),
         "apps-leftovers-empty" => apps_leftovers(&app, true),
+        "settings" => settings(&app),
         other => panic!(
-            "no screen {other} (any one dark with -dark): results, results-small, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty"
+            "no screen {other} (any one dark with -dark): results, results-small, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

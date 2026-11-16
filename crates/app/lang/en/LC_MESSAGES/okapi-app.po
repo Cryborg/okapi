@@ -1871,12 +1871,24 @@ msgid "Journal des suppressions"
 msgstr "Deletion log"
 
 msgctxt "General"
-msgid "Garde, pour chaque nettoyage, la liste des chemins retirés."
-msgstr "Keeps, for each cleaning, the list of the paths removed."
+msgid "Garde dans l'historique, pour chaque nettoyage, la liste des chemins retirés."
+msgstr "Keeps in the history, for each cleaning, the list of the paths removed."
 
 msgctxt "General"
-msgid "Garde, pour chaque nettoyage, la liste des chemins retirés dans {}."
-msgstr "Keeps, for each cleaning, the list of the paths removed in {}."
+msgid "Garde dans l'historique ({}), pour chaque nettoyage, la liste des chemins retirés."
+msgstr "Keeps in the history ({}), for each cleaning, the list of the paths removed."
+
+msgctxt "General"
+msgid "Journal technique"
+msgstr "Technical log"
+
+msgctxt "General"
+msgid "{} et leurs copies .1 gardent quelques semaines le détail de chaque lancement, dont les chemins analysés, supprimés ou mis à la corbeille, les applis et vos exclusions. Relisez-les avant de les partager. Le réglage « Journal des suppressions » n'y change rien."
+msgstr "{} and their .1 copies keep for a few weeks the detail of each launch, including the paths analysed, deleted or moved to the trash, the apps and your exclusions. Read them before sharing them. The “Deletion log” setting does not change them."
+
+msgctxt "General"
+msgid "{} et leurs copies .1, dans {}, gardent quelques semaines le détail de chaque lancement, dont les chemins analysés, supprimés ou mis à la corbeille, les applis et vos exclusions. Relisez-les avant de les partager. Le réglage « Journal des suppressions » n'y change rien."
+msgstr "{} and their .1 copies, in {}, keep for a few weeks the detail of each launch, including the paths analysed, deleted or moved to the trash, the apps and your exclusions. Read them before sharing them. The “Deletion log” setting does not change them."
 
 msgctxt "General"
 msgid "Activé"

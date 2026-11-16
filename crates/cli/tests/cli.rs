@@ -342,6 +342,8 @@ fn a_journal_that_grows_too_large_during_a_run_is_set_aside() {
     fs::create_dir_all(journal.parent().unwrap()).unwrap();
     let full = fs::File::create(&journal).unwrap();
     full.set_len(okapi_store::journal::ROTATION_SIZE).unwrap();
+    // One set aside just now, as after any launch: the journal is written on.
+    fs::File::create(journal.with_file_name("okapi.log.1")).unwrap();
     let output = sandbox.run(&["--exclude", "relative/path"]);
     assert_eq!(output.status.code(), Some(2));
     let rotated = journal.with_file_name("okapi.log.1");
@@ -384,7 +386,7 @@ fn the_text_output_says_what_was_found_and_cleaned() {
         "pip Cache: 2 entries",
         "Found: 2 entries",
         "Cleaned:",
-        "Journal:",
+        "Journal (paths included, read it before sharing it):",
     ] {
         assert!(text.contains(expected), "{expected} missing in:\n{text}");
     }

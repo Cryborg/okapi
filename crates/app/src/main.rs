@@ -294,16 +294,16 @@ fn main() -> ExitCode {
     let on_write_failure: journal::WriteFailure = Box::new(|error| {
         diagnostic(&format!("the journal can no longer be written: {error}"));
     });
-    let rotation = match journal::start(journal::APP_FILE, false, on_write_failure) {
-        Ok((_, rotation)) => Some(rotation),
+    let opening = match journal::start(journal::APP_FILE, false, on_write_failure) {
+        Ok((_, opening)) => Some(opening),
         Err(unavailable) => {
             diagnostic(&format!("running without a journal: {unavailable}"));
             None
         }
     };
     let _app = tracing::info_span!("app", pid = std::process::id()).entered();
-    if let Some(rotation) = &rotation {
-        rotation.trace();
+    if let Some(opening) = &opening {
+        opening.trace();
     }
     journal::trace_panics();
     let session = Language::of_session(|name| std::env::var_os(name));

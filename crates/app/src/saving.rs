@@ -1,7 +1,8 @@
 //! Keeps what the window keeps, off the interface's thread: a write syncs
 //! the disk, which the window must never wait for. One thread per kind of
 //! value writes them in order, only the latest of those waiting (the others
-//! are passed by it), and says whether each write kept it.
+//! are passed by it), and says what became of each write (whether it kept
+//! its value, or more when the writer says more).
 
 use std::cell::Cell;
 use std::io;
@@ -18,26 +19,27 @@ const LAST_WRITE_POLL: Duration = Duration::from_millis(10);
 /// write is done well within it.
 pub(crate) const WRITE_CHECK: Duration = Duration::from_millis(300);
 
-/// Writes a value; whether it is kept (the write traces why not).
-pub type Write<T> = Box<dyn Fn(&T) -> bool + Send>;
+/// Writes a value; what became of it, by default whether it is kept (the
+/// write traces why not).
+pub type Write<T, O = bool> = Box<dyn Fn(&T) -> O + Send>;
 
 /// What the writes done since the last look said.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LastWrite {
+pub(crate) enum LastWrite<O = bool> {
     /// None was done.
     Nothing,
-    /// The last one kept its value, or not.
-    Kept(bool),
+    /// What the last one said: by default, whether it kept its value.
+    Kept(O),
     /// The thread is gone: no write will be done any more.
     Gone,
 }
 
 /// The thread that writes the values.
-pub(crate) struct Saver<T> {
+pub(crate) struct Saver<T, O = bool> {
     values: Option<Sender<T>>,
-    /// Whether each write kept its value, and how many values handed it
-    /// covered (those it passed, and its own).
-    kept: Receiver<(bool, usize)>,
+    /// What each write said, and how many values handed it covered (those
+    /// it passed, and its own).
+    kept: Receiver<(O, usize)>,
     /// The values handed whose write has not been said yet.
     unsaid: Cell<usize>,
     thread: Option<JoinHandle<()>>,
@@ -45,10 +47,10 @@ pub(crate) struct Saver<T> {
     name: &'static str,
 }
 
-impl<T: Send + 'static> Saver<T> {
+impl<T: Send + 'static, O: Copy + PartialEq + std::fmt::Debug + Send + 'static> Saver<T, O> {
     /// Starts the thread `name`, writing through `write`, in the span it is
     /// started in.
-    pub(crate) fn start(name: &'static str, write: Write<T>) -> io::Result<Self> {
+    pub(crate) fn start(name: &'static str, write: Write<T, O>) -> io::Result<Self> {
         let (values, waiting) = mpsc::channel();
         let (said, kept) = mpsc::channel();
         let span = tracing::Span::current();
@@ -77,7 +79,7 @@ impl<T: Send + 'static> Saver<T> {
     }
 
     /// What the writes done since the last look said.
-    pub(crate) fn last_write(&self) -> LastWrite {
+    pub(crate) fn last_write(&self) -> LastWrite<O> {
         let mut last = LastWrite::Nothing;
         loop {
             match self.kept.try_recv() {
@@ -102,7 +104,7 @@ impl<T: Send + 'static> Saver<T> {
     /// Waits a little for every value handed to be written, then what
     /// those writes said ([`Self::last_write`]): what reads the file next
     /// reads them, unless a write is stuck beyond the wait (traced).
-    pub(crate) fn settle(&self) -> LastWrite {
+    pub(crate) fn settle(&self) -> LastWrite<O> {
         let started = Instant::now();
         let mut last = LastWrite::Nothing;
         loop {
@@ -145,11 +147,11 @@ impl<T: Send + 'static> Saver<T> {
 
 /// Writes the latest of the values waiting, until no one can hand one any
 /// more; the last one handed is written even then.
-fn run<T>(
+fn run<T, O: std::fmt::Debug>(
     name: &'static str,
     waiting: &Receiver<T>,
-    said: &Sender<(bool, usize)>,
-    write: &Write<T>,
+    said: &Sender<(O, usize)>,
+    write: &Write<T, O>,
 ) {
     while let Ok(mut value) = waiting.recv() {
         let mut passed = 0_usize;
@@ -161,7 +163,7 @@ fn run<T>(
             tracing::debug!(writer = name, passed, "values passed by a newer one");
         }
         let kept = write(&value);
-        tracing::debug!(writer = name, kept, "write done");
+        tracing::debug!(writer = name, ?kept, "write done");
         // The window gone, there is no one to tell.
         let _ = said.send((kept, passed + 1));
     }

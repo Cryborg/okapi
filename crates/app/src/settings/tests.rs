@@ -25,43 +25,38 @@ pub fn nowhere() -> SettingsSeams {
         directory: None,
         home: None,
         state_directory: None,
-        save: |_, _| false,
+        save: |_, _, _| Written::Failed,
         choose_folder: Rc::new(|_, done| done(Chosen::Unavailable)),
         desktop_theme: Rc::new(|done| done(None)),
         examine: Arc::new(examine),
     }
 }
 
-/// The store's write, as the system's.
-fn stored(settings: &Settings, directory: &Path) -> bool {
-    settings.save(directory).is_ok()
-}
-
 /// A write that takes a while, then is done.
-fn slow(settings: &Settings, directory: &Path) -> bool {
+fn slow(settings: &Settings, over: &Settings, directory: &Path) -> Written {
     std::thread::sleep(Duration::from_millis(150));
-    stored(settings, directory)
+    stored(settings, over, directory)
 }
 
 /// A write stuck beyond what the screen waits for.
-fn stuck(settings: &Settings, directory: &Path) -> bool {
+fn stuck(settings: &Settings, over: &Settings, directory: &Path) -> Written {
     std::thread::sleep(LAST_WRITE_WAIT * 2);
-    stored(settings, directory)
+    stored(settings, over, directory)
 }
 
 /// A write that takes longer than the first look, then fails.
-fn slow_failing(_: &Settings, _: &Path) -> bool {
+fn slow_failing(_: &Settings, _: &Settings, _: &Path) -> Written {
     std::thread::sleep(Duration::from_millis(500));
-    false
+    Written::Failed
 }
 
 /// A write that fails at once (a full disk).
-fn failing(_: &Settings, _: &Path) -> bool {
-    false
+fn failing(_: &Settings, _: &Settings, _: &Path) -> Written {
+    Written::Failed
 }
 
 /// A write whose thread dies.
-fn dying(_: &Settings, _: &Path) -> bool {
+fn dying(_: &Settings, _: &Settings, _: &Path) -> Written {
     panic!("the settings writer dies");
 }
 
@@ -193,6 +188,11 @@ impl Sandbox {
 
 fn preferences(window: &ui::AppWindow) -> ui::Preferences<'_> {
     window.global::<ui::Preferences>()
+}
+
+/// Whether the screen says `refusal` of the last change.
+fn save_refused(window: &ui::AppWindow, refusal: ui::SaveRefusal) -> bool {
+    preferences(window).get_save_refused() == refusal
 }
 
 /// Types `text` in the field, and presses "Ajouter".
@@ -621,7 +621,7 @@ fn settings_that_are_a_link_are_shown_and_never_written() {
     preferences(&window).invoke_browse();
     written(&screens);
     assert!(
-        !preferences(&window).get_saving_failed(),
+        save_refused(&window, ui::SaveRefusal::None),
         "never even tried: nothing failed"
     );
     assert!(preferences(&window).get_deletion_log());
@@ -676,7 +676,7 @@ fn settings_broken_behind_the_screen_are_not_replaced_and_said() {
     sandbox.write(r#"{"version": 1, "exclusion": []}"#);
     preferences(&window).invoke_toggle_deletion_log();
     written(&screens);
-    assert!(preferences(&window).get_saving_failed());
+    assert!(save_refused(&window, ui::SaveRefusal::Failed));
     assert!(shows(
         &window,
         "Ce réglage n'a pas pu être enregistré (le détail est dans le journal)."
@@ -881,7 +881,7 @@ fn a_writer_gone_is_said_and_nothing_can_be_changed_any_more() {
     // Said once, read again once: never a loop. The reader then is told
     // the change is lost; the next one has nothing to wait for.
     assert_eq!(screens.3.wait_for_writes(), Err(Unsaved::Failed));
-    assert!(preferences(&window).get_saving_failed());
+    assert!(save_refused(&window, ui::SaveRefusal::Failed));
     assert_eq!(
         preferences(&window).get_state(),
         ui::SettingsState::NoWriter
@@ -920,9 +920,12 @@ fn a_failed_write_is_said_by_the_screen_alone() {
     preferences(&window).invoke_toggle_deletion_log();
     i_slint_backend_testing::mock_elapsed_time(WRITE_CHECK);
     slint::platform::update_timers_and_animations();
-    assert!(!preferences(&window).get_saving_failed(), "not done yet");
+    assert!(
+        !save_refused(&window, ui::SaveRefusal::Failed),
+        "not done yet"
+    );
     let mut looked = 0;
-    while !preferences(&window).get_saving_failed() {
+    while !save_refused(&window, ui::SaveRefusal::Failed) {
         std::thread::sleep(Duration::from_millis(10));
         i_slint_backend_testing::mock_elapsed_time(WRITE_CHECK);
         slint::platform::update_timers_and_animations();
@@ -939,10 +942,10 @@ fn a_failure_is_said_until_a_write_keeps_the_settings_or_they_are_read_again() {
     sandbox.write(r#"{"version": 1, "exclusion": []}"#);
     preferences(&window).invoke_toggle_deletion_log();
     written(&screens);
-    assert!(preferences(&window).get_saving_failed());
+    assert!(save_refused(&window, ui::SaveRefusal::Failed));
     // The page shown again says it still.
     preferences(&window).invoke_reload();
-    assert!(preferences(&window).get_saving_failed());
+    assert!(save_refused(&window, ui::SaveRefusal::Failed));
     // Fixed, then read again on asking.
     assert!(shows(
         &window,
@@ -954,23 +957,26 @@ fn a_failure_is_said_until_a_write_keeps_the_settings_or_they_are_read_again() {
         preferences(&window).get_state(),
         ui::SettingsState::Editable
     );
-    assert!(!preferences(&window).get_saving_failed(), "said no longer");
+    assert!(
+        !save_refused(&window, ui::SaveRefusal::Failed),
+        "said no longer"
+    );
     // A write that keeps them clears it too, read again or not.
     sandbox.write(r#"{"version": 1, "exclusion": []}"#);
     preferences(&window).invoke_toggle_deletion_log();
     written(&screens);
-    assert!(preferences(&window).get_saving_failed());
+    assert!(save_refused(&window, ui::SaveRefusal::Failed));
     sandbox.write(r#"{"version": 1}"#);
     preferences(&window).invoke_reload();
     assert_eq!(
         preferences(&window).get_state(),
         ui::SettingsState::Editable
     );
-    assert!(preferences(&window).get_saving_failed(), "said still");
+    assert!(save_refused(&window, ui::SaveRefusal::Failed), "said still");
     preferences(&window).invoke_toggle_deletion_log();
     written(&screens);
     assert!(sandbox.settings().deletion_log);
-    assert!(!preferences(&window).get_saving_failed());
+    assert!(!save_refused(&window, ui::SaveRefusal::Failed));
 }
 
 #[test]
@@ -1053,7 +1059,7 @@ fn without_a_settings_directory_nothing_can_be_changed() {
     preferences(&window).invoke_toggle_deletion_log();
     assert_eq!(rows(&window), []);
     assert!(!preferences(&window).get_deletion_log());
-    assert!(!preferences(&window).get_saving_failed());
+    assert!(!save_refused(&window, ui::SaveRefusal::Failed));
 }
 
 #[cfg(unix)]
@@ -1105,6 +1111,70 @@ fn settings_changed_by_hand_are_read_when_the_screen_shows() {
 }
 
 #[test]
+fn an_exclusion_added_by_hand_is_never_written_over_and_said() {
+    let sandbox = Sandbox::new();
+    let (window, screens) = sandbox.window();
+    let by_hand = r#"{"version": 1, "exclusions": ["/data/keep"]}"#;
+    sandbox.write(by_hand);
+    segment(&window, "Sombre").invoke_accessible_default_action();
+    // Told to the next reader once, as a change that failed is.
+    assert_eq!(screens.3.wait_for_writes(), Err(Unsaved::Failed));
+    assert_eq!(sandbox.text(), by_hand, "never written over");
+    assert!(save_refused(&window, ui::SaveRefusal::ChangedElsewhere));
+    assert!(shows(
+        &window,
+        "Vos réglages ont été modifiés hors de cet écran : ils viennent d'être relus, et vos derniers changements n'ont pas été enregistrés."
+    ));
+    assert_eq!(rows(&window).len(), 1, "the file read again is shown");
+    // The next change comes from that reading: written, and said no longer.
+    segment(&window, "Sombre").invoke_accessible_default_action();
+    written(&screens);
+    assert_eq!(sandbox.settings().exclusions, ["/data/keep"]);
+    assert_eq!(sandbox.settings().theme, Some(Theme::Dark));
+    assert!(save_refused(&window, ui::SaveRefusal::None));
+}
+
+#[test]
+fn changes_passed_by_a_newer_one_are_never_taken_for_a_change_elsewhere() {
+    let sandbox = Sandbox::writing_with(slow);
+    let (window, screens) = sandbox.window();
+    // The first is being written while the second waits, passed by the third.
+    preferences(&window).invoke_toggle_deletion_log();
+    std::thread::sleep(Duration::from_millis(50));
+    preferences(&window).invoke_toggle_deletion_log();
+    preferences(&window).invoke_toggle_deletion_log();
+    assert_eq!(screens.3.wait_for_writes(), Ok(()));
+    assert!(sandbox.settings().deletion_log);
+    assert!(save_refused(&window, ui::SaveRefusal::None));
+}
+
+/// Fails its first write (after a while, so that the next change waits),
+/// then writes as the store does.
+fn failing_once(settings: &Settings, over: &Settings, directory: &Path) -> Written {
+    static FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !FAILED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_millis(150));
+        return Written::Failed;
+    }
+    stored(settings, over, directory)
+}
+
+#[test]
+fn a_write_that_failed_never_makes_the_next_one_refused() {
+    let sandbox = Sandbox::writing_with(failing_once);
+    let (window, screens) = sandbox.window();
+    preferences(&window).invoke_toggle_deletion_log();
+    // Handed while the first is being written.
+    std::thread::sleep(Duration::from_millis(50));
+    segment(&window, "Sombre").invoke_accessible_default_action();
+    // The second holds the first: written over what was read, the file
+    // untouched by the failure.
+    written(&screens);
+    assert!(sandbox.settings().deletion_log);
+    assert_eq!(sandbox.settings().theme, Some(Theme::Dark));
+}
+
+#[test]
 fn the_settings_entry_leads_to_the_screen() {
     let sandbox = Sandbox::new();
     let (window, _screens) = sandbox.window();
@@ -1152,7 +1222,7 @@ fn an_exclusion_whose_write_cannot_start_stays_typed() {
         preferences(&window).get_state(),
         ui::SettingsState::NoWriter
     );
-    assert!(preferences(&window).get_saving_failed());
+    assert!(save_refused(&window, ui::SaveRefusal::Failed));
 }
 
 #[test]

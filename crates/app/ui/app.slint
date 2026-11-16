@@ -5,7 +5,7 @@ import { CleanerPage } from "cleaner.slint";
 import { DashboardPage } from "dashboard.slint";
 import { DiskUsagePage } from "disk-usage.slint";
 import { SettingsPage } from "settings.slint";
-import { EntryError, ExclusionKind, ExclusionRow, LanguageChoice, Preferences, SettingsState, ThemeChoice } from "settings-model.slint";
+import { EntryError, ExclusionKind, ExclusionRow, LanguageChoice, Preferences, SaveRefusal, SettingsState, ThemeChoice } from "settings-model.slint";
 import { AppsPage } from "apps.slint";
 import { AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, AppsTab, CopyLine, ForgetOutcome, LeftoverLine, Leftovers, LeftoversBlock, SourceShown, UninstallStep, UninstallWhy } from "apps-model.slint";
 import { DuplicatesPage } from "duplicates.slint";
@@ -38,7 +38,7 @@ export {
     DiskVolumes,
     DuplicateRow, Duplicates, DuplicatesRefusal, DuplicatesStep, KeptShown, KeptWhy, PersonalShown, QuickRule,
     ReceiptWhy, SearchPhase, SearchStage,
-    EntryError, ExclusionKind, ExclusionRow, LanguageChoice, Preferences, SettingsState, ThemeChoice,
+    EntryError, ExclusionKind, ExclusionRow, LanguageChoice, Preferences, SaveRefusal, SettingsState, ThemeChoice,
     // Read by the tests, to see the theme applied.
     Theme,
     SnapLine, SourceFailure, SourceState, SystemLine, UpdateKind, Updates, UpdatesStep,

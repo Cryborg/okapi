@@ -159,13 +159,13 @@ pub(crate) fn write_versioned<T: Serialize>(
 /// Whether the file whose reading is `read` may be replaced: one that cannot
 /// be read never is (D-10: replacing it would lose what the user had set,
 /// theirs to repair), which is traced. Judged just before the write: one
-/// damaged in that very instant may still be replaced.
+/// damaged in that very instant may still be replaced. Gives what was read.
 ///
 /// # Errors
 ///
 /// That of `read`.
-pub(crate) fn replaceable<T>(read: Result<T, StoreError>) -> Result<(), StoreError> {
-    read.map(drop).inspect_err(|error| {
+pub(crate) fn replaceable<T>(read: Result<T, StoreError>) -> Result<T, StoreError> {
+    read.inspect_err(|error| {
         tracing::warn!(%error, "file unreadable: left as it is, not replaced");
     })
 }

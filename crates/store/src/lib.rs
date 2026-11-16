@@ -33,7 +33,7 @@ pub use interface_state::InterfaceState;
 pub use last_analysis::LastAnalysis;
 pub use seen_apps::{SeenApp, SeenApps};
 pub use selections::Selections;
-pub use settings::{Settings, Theme};
+pub use settings::{Replaced, Settings, Theme};
 
 /// A file Okapi keeps could not be used.
 #[derive(Debug, Error)]

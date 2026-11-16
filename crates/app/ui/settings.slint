@@ -5,7 +5,7 @@ import {
     ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, IconButton, Line,
     ScrolledList, Title,
 } from "widgets.slint";
-import { EntryError, ExclusionKind, LanguageChoice, Preferences, SettingsState, ThemeChoice } from "settings-model.slint";
+import { EntryError, ExclusionKind, LanguageChoice, Preferences, SaveRefusal, SettingsState, ThemeChoice } from "settings-model.slint";
 
 // One choice among a few, its segments side by side, the one chosen raised.
 // Each segment is a radio button; Tab reaches each, Enter or Space chooses.
@@ -527,9 +527,11 @@ export component SettingsPage inherits VerticalLayout {
             }
         }
     }
-    if Preferences.saving-failed: Banner {
+    if Preferences.save-refused != SaveRefusal.none: Banner {
         warning: true;
-        text: @tr("Ce réglage n'a pas pu être enregistré (le détail est dans le journal).");
+        text: Preferences.save-refused == SaveRefusal.changed-elsewhere
+            ? @tr("Vos réglages ont été modifiés hors de cet écran : ils viennent d'être relus, et vos derniers changements n'ont pas été enregistrés.")
+            : @tr("Ce réglage n'a pas pu être enregistré (le détail est dans le journal).");
     }
 
     HorizontalLayout {

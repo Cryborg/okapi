@@ -2,7 +2,9 @@
 //! (`okapi_store::Settings`), shown and changed there, each change written
 //! at once off the interface's thread. Read again each time the screen shows
 //! (the page asks, `Preferences.reload`): they may have been changed by hand.
-//! Never written when the file is a link (D-9) or cannot be read (D-10).
+//! Never written when the file is a link (D-9) or cannot be read (D-10),
+//! nor over a file changed elsewhere since the screen read it (by hand, by
+//! another window): it is read again then, and that is said.
 //! What reads the settings elsewhere waits for the writes under way first
 //! (`wait_for_writes`), and is refused while one is stuck, or once after
 //! one failed: an exclusion just added is never missed by the next cleaning
@@ -22,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use okapi_engine::{DEFAULT_MIN_AGE_MINUTES, ExclusionError, Exclusions};
 use okapi_rules::Language;
-use okapi_store::{Settings, Theme};
+use okapi_store::{Replaced, Settings, Theme};
 use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 
 use crate::saving::{LastWrite, Saver, WRITE_CHECK};
@@ -74,9 +76,37 @@ pub enum Chosen {
 pub type ChooseFolder = Rc<dyn Fn(String, Box<dyn FnOnce(Chosen)>)>;
 /// Asks the desktop for its theme; answers once, none when it cannot say.
 pub type DesktopTheme = Rc<dyn Fn(Box<dyn FnOnce(Option<Theme>)>)>;
-/// Writes the settings in their directory, off the interface's thread;
-/// whether they are kept (the store traces why not).
-pub type Save = fn(&Settings, &Path) -> bool;
+/// Writes the settings (first) in their directory (last), off the
+/// interface's thread, if the file still holds those given second (the
+/// store traces why not).
+pub type Save = fn(&Settings, &Settings, &Path) -> Written;
+
+/// What became of a write of the settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Written {
+    Kept,
+    /// The file holds what it held.
+    Failed,
+    /// The file no longer held what the screen read or wrote last (changed
+    /// by hand, or by another window): left as it is.
+    ChangedElsewhere,
+}
+
+impl Written {
+    /// Whether the change was not kept.
+    const fn refused(self) -> bool {
+        !matches!(self, Self::Kept)
+    }
+}
+
+/// A change handed to the writer: the settings wanted, and the reading of
+/// the file they come from (its number, and what it read).
+#[derive(Debug, Clone)]
+struct Change {
+    reading: u64,
+    read: Settings,
+    settings: Settings,
+}
 
 /// What the settings screen reads and asks of the machine.
 #[derive(Clone)]
@@ -111,11 +141,21 @@ impl SettingsSeams {
             directory: okapi_platform::config_directory(),
             home,
             state_directory: okapi_platform::state_directory(),
-            save: |settings, directory| settings.save(directory).is_ok(),
+            save: stored,
             choose_folder: Rc::new(portal::choose_folder),
             desktop_theme: Rc::new(portal::desktop_theme),
             examine: Arc::new(examine),
         }
+    }
+}
+
+/// Writes `settings` in `directory` through the store, over `over`.
+fn stored(settings: &Settings, over: &Settings, directory: &Path) -> Written {
+    match settings.save(directory, over) {
+        Ok(Replaced::Written) => Written::Kept,
+        Ok(Replaced::ChangedElsewhere) => Written::ChangedElsewhere,
+        // Traced by the store, with the step that failed.
+        Err(_) => Written::Failed,
     }
 }
 
@@ -212,10 +252,15 @@ struct State {
     seams: SettingsSeams,
     /// As shown: as last read, with the changes made since.
     settings: Settings,
+    /// The number of the last reading of the file, and what it read: the
+    /// changes made since are written over it, never over a file changed
+    /// elsewhere meanwhile.
+    reading: u64,
+    read: Settings,
     /// Whether the settings can be changed here, and why not.
     status: ui::SettingsState,
     /// None when it did not start, or is gone: nothing can be kept then.
-    saver: Option<Saver<Settings>>,
+    saver: Option<Saver<Change, Written>>,
     check: slint::Timer,
     exclusions: Rc<VecModel<ui::ExclusionRow>>,
     /// The theme the interface shows: none while it follows the desktop,
@@ -253,14 +298,28 @@ impl SettingsScreen {
     pub fn attach(window: &ui::AppWindow, seams: SettingsSeams) -> Self {
         let saver = seams.directory.clone().and_then(|directory| {
             let save = seams.save;
-            Saver::start(
-                SAVER_NAME,
-                Box::new(move |settings: &Settings| save(settings, &directory)),
-            )
-            .inspect_err(|error| {
-                tracing::error!(%error, "settings writer not started: nothing can be changed");
-            })
-            .ok()
+            // What this writer wrote last, and the reading it followed: the
+            // next change of that reading is written over it, not over what
+            // was read (the changes passed by a newer one were never
+            // written). Only a write kept moves it.
+            let written: RefCell<Option<(u64, Settings)>> = RefCell::new(None);
+            let write = move |change: &Change| {
+                let mut written = written.borrow_mut();
+                let over = match &*written {
+                    Some((reading, settings)) if *reading == change.reading => settings,
+                    _ => &change.read,
+                };
+                let result = save(&change.settings, over, &directory);
+                if result == Written::Kept {
+                    *written = Some((change.reading, change.settings.clone()));
+                }
+                result
+            };
+            Saver::start(SAVER_NAME, Box::new(write))
+                .inspect_err(|error| {
+                    tracing::error!(%error, "settings writer not started: nothing can be changed");
+                })
+                .ok()
         });
         let exclusions = Rc::new(VecModel::default());
         let preferences = window.global::<ui::Preferences>();
@@ -284,6 +343,8 @@ impl SettingsScreen {
             window: window.as_weak(),
             seams,
             settings: Settings::default(),
+            reading: 0,
+            read: Settings::default(),
             status: ui::SettingsState::NoDirectory,
             saver,
             check: slint::Timer::default(),
@@ -346,7 +407,7 @@ impl SettingsScreen {
             if screen.editable("read again") {
                 // The user saw the failure, and reads the file again.
                 screen.0.borrow_mut().untold = false;
-                screen.set_saving_failed(false);
+                screen.set_save_refused(ui::SaveRefusal::None);
             }
         });
     }
@@ -398,7 +459,7 @@ impl SettingsScreen {
 
     /// What the writes said once those under way are done, waiting a little;
     /// and whether one still is.
-    fn settled(&self) -> (LastWrite, bool) {
+    fn settled(&self) -> (LastWrite<Written>, bool) {
         match &self.0.borrow().saver {
             Some(saver) => (saver.settle(), saver.writing()),
             None => (LastWrite::Nothing, false),
@@ -419,7 +480,11 @@ impl SettingsScreen {
     fn reload(&self) {
         let (last, writing) = self.settled();
         // A failure reads the file itself, when nothing else is under way.
-        let failed = matches!(last, LastWrite::Kept(false) | LastWrite::Gone);
+        let failed = match last {
+            LastWrite::Kept(written) => written.refused(),
+            LastWrite::Gone => true,
+            LastWrite::Nothing => false,
+        };
         self.said(last);
         if writing {
             tracing::warn!(
@@ -457,6 +522,10 @@ impl SettingsScreen {
                 Ok(settings) => (settings, ui::SettingsState::Editable, true),
             },
         };
+        // Every reading of the file goes through here: a change made after
+        // it is written over what it read.
+        state.reading += 1;
+        state.read.clone_from(&settings);
         state.settings = settings;
         state.status = status;
         if let Some(window) = state.window.upgrade() {
@@ -620,10 +689,12 @@ impl SettingsScreen {
         }
         tracing::info!(what, ?before, after = ?state.settings, "setting changed");
         state.show();
-        let handed = state
-            .saver
-            .as_ref()
-            .is_some_and(|saver| saver.save(state.settings.clone()));
+        let change = Change {
+            reading: state.reading,
+            read: state.read.clone(),
+            settings: state.settings.clone(),
+        };
+        let handed = state.saver.as_ref().is_some_and(|saver| saver.save(change));
         drop(state);
         if handed {
             self.check_write();
@@ -661,21 +732,22 @@ impl SettingsScreen {
     }
 
     /// Says what the writes done said. One that did not keep the settings
-    /// is said on the screen, and to the next reader (`untold`); the file
-    /// is shown as it is unless another write is under way. A writer gone
-    /// keeps nothing any more, which the screen says from then on.
-    fn said(&self, last: LastWrite) {
+    /// (failed, or refused over a file changed elsewhere) is said on the
+    /// screen, and to the next reader (`untold`); the file is shown as it is
+    /// unless another write is under way. A writer gone keeps nothing any
+    /// more, which the screen says from then on.
+    fn said(&self, last: LastWrite<Written>) {
         match last {
             LastWrite::Nothing => {}
-            LastWrite::Kept(true) => {
+            LastWrite::Kept(Written::Kept) => {
                 // Each write holds every change made: none is missing now.
                 self.0.borrow_mut().untold = false;
-                self.set_saving_failed(false);
+                self.set_save_refused(refusal_shown(Written::Kept));
             }
-            LastWrite::Kept(false) => {
-                tracing::warn!(writer = SAVER_NAME, "settings not written: said");
+            LastWrite::Kept(refused) => {
+                tracing::warn!(writer = SAVER_NAME, ?refused, "settings not written: said");
                 self.0.borrow_mut().untold = true;
-                self.set_saving_failed(true);
+                self.set_save_refused(refusal_shown(refused));
                 let writing = self.0.borrow().saver.as_ref().is_some_and(Saver::writing);
                 if !writing {
                     self.read_file();
@@ -691,15 +763,15 @@ impl SettingsScreen {
                     state.saver = None;
                     state.untold = true;
                 }
-                self.set_saving_failed(true);
+                self.set_save_refused(ui::SaveRefusal::Failed);
                 self.read_file();
             }
         }
     }
 
-    fn set_saving_failed(&self, failed: bool) {
+    fn set_save_refused(&self, refusal: ui::SaveRefusal) {
         if let Some(window) = self.0.borrow().window.upgrade() {
-            window.global::<ui::Preferences>().set_saving_failed(failed);
+            window.global::<ui::Preferences>().set_save_refused(refusal);
         }
     }
 
@@ -903,6 +975,15 @@ fn show_theme(window: &slint::Weak<ui::AppWindow>, theme: Theme) {
         window
             .global::<ui::Preferences>()
             .invoke_show_theme(theme == Theme::Dark);
+    }
+}
+
+/// What the screen says of a write.
+const fn refusal_shown(written: Written) -> ui::SaveRefusal {
+    match written {
+        Written::Kept => ui::SaveRefusal::None,
+        Written::Failed => ui::SaveRefusal::Failed,
+        Written::ChangedElsewhere => ui::SaveRefusal::ChangedElsewhere,
     }
 }
 

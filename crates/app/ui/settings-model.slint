@@ -31,11 +31,20 @@ export enum ThemeChoice { system, light, dark }
 // Why what was typed is not added.
 export enum EntryError { none, invalid, unreadable, duplicate, not-text, chooser }
 
+// Why the last change was not written.
+export enum SaveRefusal {
+    none,
+    failed,
+    // The file was changed elsewhere (by hand, another window) since the
+    // screen read it: read again, never replaced.
+    changed-elsewhere,
+}
+
 export global Preferences {
     in property <SettingsState> state;
     // A change could not be written: said until one is, or until the
     // user reads the file again.
-    in property <bool> saving-failed;
+    in property <SaveRefusal> save-refused;
     in property <[ExclusionRow]> exclusions;
     // The ages offered, as `age` says them; the one chosen (-1: the file
     // holds another); the one the file holds, and the engine's default.

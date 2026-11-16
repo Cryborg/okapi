@@ -43,6 +43,15 @@ pub struct Settings {
     pub theme: Option<Theme>,
 }
 
+/// What [`Settings::save`] did with settings it could read.
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Replaced {
+    Written,
+    /// They no longer held what the caller expected: left as they are.
+    ChangedElsewhere,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct RawSettings {
@@ -72,8 +81,14 @@ impl Settings {
         fs::symlink_metadata(Self::path(directory)).is_ok_and(|metadata| metadata.is_symlink())
     }
 
-    /// Replaces the settings of `directory` by these, unless those there
-    /// cannot be read (D-10: they are the user's to repair).
+    /// Replaces the settings of `directory` by these, if they still hold
+    /// `over` (what the caller read or wrote there last), and unless they
+    /// cannot be read (D-10: they are the user's to repair). Settings
+    /// changed elsewhere since (by hand, by another window) are never
+    /// replaced: the caller reads them again. Their values are compared, not
+    /// their bytes: a file laid out again by hand is no change; none there
+    /// holds the defaults. A change made between that reading and the
+    /// replacement (a few milliseconds) is still lost.
     ///
     /// # Errors
     ///
@@ -81,9 +96,13 @@ impl Settings {
     /// and those of an atomic write: [`StoreError::BrokenLink`],
     /// [`StoreError::NotAFile`] (a link there is never written through,
     /// D-9) or [`StoreError::Unwritable`].
-    pub fn save(&self, directory: &Path) -> Result<(), StoreError> {
-        file::replaceable(Self::load(directory))?;
-        file::write_versioned(directory, SETTINGS_FILE, SETTINGS_VERSION, self)
+    pub fn save(&self, directory: &Path, over: &Self) -> Result<Replaced, StoreError> {
+        if file::replaceable(Self::load(directory))? != *over {
+            tracing::warn!(path = %Self::path(directory).display(), "settings changed elsewhere: not written");
+            return Ok(Replaced::ChangedElsewhere);
+        }
+        file::write_versioned(directory, SETTINGS_FILE, SETTINGS_VERSION, self)?;
+        Ok(Replaced::Written)
     }
 
     /// Reads the settings in `directory`; the defaults when there are none.
@@ -176,14 +195,18 @@ mod tests {
     #[test]
     fn saved_settings_are_read_back_whole() {
         let directory = tempfile::tempdir().unwrap();
-        every_field().save(directory.path()).unwrap();
+        let written = every_field()
+            .save(directory.path(), &Settings::default())
+            .unwrap();
+        assert_eq!(written, Replaced::Written);
         assert_eq!(Settings::load(directory.path()).unwrap(), every_field());
         let light = Settings {
             theme: Some(Theme::Light),
             language: Some(Language::French),
             ..Settings::default()
         };
-        light.save(directory.path()).unwrap();
+        let written = light.save(directory.path(), &every_field()).unwrap();
+        assert_eq!(written, Replaced::Written);
         assert_eq!(Settings::load(directory.path()).unwrap(), light);
     }
 
@@ -220,9 +243,52 @@ mod tests {
     }
 
     #[test]
+    fn settings_changed_elsewhere_are_never_replaced() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join(SETTINGS_FILE);
+        let by_hand = r#"{"version": 1, "exclusions": ["/data/keep"]}"#;
+        fs::write(&file, by_hand).unwrap();
+        // Read before the exclusion was added by hand: the defaults.
+        let written = every_field()
+            .save(directory.path(), &Settings::default())
+            .unwrap();
+        assert_eq!(written, Replaced::ChangedElsewhere);
+        assert_eq!(fs::read_to_string(&file).unwrap(), by_hand);
+        // Removed by hand since it was read: none there is the defaults.
+        fs::remove_file(&file).unwrap();
+        let written = Settings::default()
+            .save(directory.path(), &every_field())
+            .unwrap();
+        assert_eq!(written, Replaced::ChangedElsewhere);
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn settings_laid_out_again_by_hand_are_no_change() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(
+            directory.path().join(SETTINGS_FILE),
+            r#"{"theme":"dark","exclusions":["/data/keep","*.log"],"version":1,
+                "language":"en","deletionLog":true,"minAgeMinutes":90}"#,
+        )
+        .unwrap();
+        let written = Settings::default()
+            .save(directory.path(), &every_field())
+            .unwrap();
+        assert_eq!(written, Replaced::Written);
+        assert_eq!(
+            Settings::load(directory.path()).unwrap(),
+            Settings::default()
+        );
+    }
+
+    #[test]
     fn a_default_is_written_absent() {
         let directory = tempfile::tempdir().unwrap();
-        Settings::default().save(directory.path()).unwrap();
+        let written = Settings::default()
+            .save(directory.path(), &Settings::default())
+            .unwrap();
+        assert_eq!(written, Replaced::Written);
         assert_eq!(
             fs::read_to_string(directory.path().join(SETTINGS_FILE)).unwrap(),
             "{\n  \"version\": 1,\n  \"exclusions\": [],\n  \"deletionLog\": false\n}\n"
@@ -240,7 +306,7 @@ mod tests {
             fs::write(directory.path().join(SETTINGS_FILE), text).unwrap();
             assert!(
                 matches!(
-                    every_field().save(directory.path()),
+                    every_field().save(directory.path(), &Settings::default()),
                     Err(StoreError::Invalid { .. } | StoreError::UnsupportedVersion { .. })
                 ),
                 "{text}: the error of reading them"
@@ -264,12 +330,15 @@ mod tests {
         std::os::unix::fs::symlink(&dotfiles, okapi.join(SETTINGS_FILE)).unwrap();
         assert!(Settings::is_link(&okapi));
         assert!(matches!(
-            every_field().save(&okapi),
+            every_field().save(&okapi, &Settings::default()),
             Err(StoreError::NotAFile { .. })
         ));
         assert_eq!(fs::read_to_string(&dotfiles).unwrap(), r#"{"version": 1}"#);
         let plain = directory.path().join("plain");
-        Settings::default().save(&plain).unwrap();
+        let written = Settings::default()
+            .save(&plain, &Settings::default())
+            .unwrap();
+        assert_eq!(written, Replaced::Written);
         assert!(!Settings::is_link(&plain), "a file");
     }
 

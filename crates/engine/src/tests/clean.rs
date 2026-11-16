@@ -697,14 +697,16 @@ fn a_file_given_another_name_since_the_scan_stays_below_a_root_that_keeps_them()
     fixture.directory("snaps");
     let named_since = fixture.file("cache/named-since", 3, Duration::ZERO);
     fixture.file("cache/alone", 5, Duration::ZERO);
+    let inner = fixture.file("cache/folder/inner", 7, Duration::ZERO);
     let rule = target(&format!(
         r#"{{"path": "{}", "subcategory": "Snap", "keepHardLinked": true}}"#,
         root.display()
     ));
     let run = run_later(&fixture, vec![RuleEntry::Target(&rule)]);
     let report = run.scan();
-    assert_eq!(report.total_size(), 3 + 5);
+    assert_eq!(report.total_size(), 3 + 5 + 7);
     fs::hard_link(&named_since, fixture.path("snaps/installed.snap")).unwrap();
+    fs::hard_link(&inner, fixture.path("snaps/inner.snap")).unwrap();
     let receipt = clean(&run, &report, &ids(&report));
     assert_eq!(
         results(&receipt),
@@ -714,12 +716,17 @@ fn a_file_given_another_name_since_the_scan_stays_below_a_root_that_keeps_them()
                 CleanResult::Removed { bytes: 5 }
             ),
             (
+                fixture.path("cache/folder"),
+                CleanResult::Kept(KeepReason::Changed)
+            ),
+            (
                 fixture.path("cache/named-since"),
                 CleanResult::Kept(KeepReason::Changed)
             ),
         ]
     );
     assert!(named_since.exists());
+    assert!(inner.exists(), "a directory offered whole stays whole");
 }
 
 #[test]

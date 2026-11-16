@@ -717,8 +717,8 @@ fn a_shared_root_is_walked_once_and_never_preselected_if_one_rule_resets_a_cache
 }
 
 /// A root shaped like snapd's cache: a file only it names, another that an
-/// installed snap names too (outside the root), and a settled directory
-/// holding one of each.
+/// installed snap names too (outside the root), a settled directory holding
+/// one of each, and a settled directory of files of one name.
 fn snap_cache(fixture: &Fixture) -> PathBuf {
     let root = fixture.directory("cache");
     fixture.directory("snaps");
@@ -729,12 +729,16 @@ fn snap_cache(fixture: &Fixture) -> PathBuf {
     let shared = fixture.file("cache/folder/shared", 11, 2 * HOUR);
     fs::hard_link(&shared, fixture.path("snaps/shared.snap")).unwrap();
     fixture.age(&fixture.path("cache/folder"), 2 * HOUR);
+    fixture.file("cache/whole/a", 13, 2 * HOUR);
+    fixture.file("cache/whole/b", 17, 2 * HOUR);
+    fixture.age(&fixture.path("cache/whole"), 2 * HOUR);
     root
 }
 
 /// snapd's cache holds a name of each snap installed: removing it frees
 /// nothing. Below a root that keeps them, a file with other names is never
-/// offered, nor a directory that holds one whole.
+/// offered, nor a directory that holds one whole; a directory of files of
+/// one name is (a directory always has several names).
 #[test]
 fn a_root_that_keeps_hard_linked_files_offers_only_files_of_one_name() {
     let fixture = Fixture::new();
@@ -748,10 +752,11 @@ fn a_root_that_keeps_hard_linked_files_offers_only_files_of_one_name() {
         offered_paths(&report),
         [
             fixture.path("cache/downloaded"),
-            fixture.path("cache/folder/single")
+            fixture.path("cache/folder/single"),
+            fixture.path("cache/whole")
         ]
     );
-    assert_eq!(report.total_size(), 3 + 7);
+    assert_eq!(report.total_size(), 3 + 7 + 13 + 17);
     assert_eq!(report.stats().hard_linked(), 2);
 
     let plain = target_at(&root);
@@ -761,7 +766,8 @@ fn a_root_that_keeps_hard_linked_files_offers_only_files_of_one_name() {
         [
             fixture.path("cache/downloaded"),
             fixture.path("cache/folder"),
-            fixture.path("cache/installed")
+            fixture.path("cache/installed"),
+            fixture.path("cache/whole")
         ],
         "any other root offers them"
     );
@@ -784,7 +790,8 @@ fn a_shared_root_keeps_hard_linked_files_if_one_of_its_rules_does() {
             offered_paths(&report),
             [
                 fixture.path("cache/downloaded"),
-                fixture.path("cache/folder/single")
+                fixture.path("cache/folder/single"),
+                fixture.path("cache/whole")
             ],
             "{:?}",
             order.map(|rule| rule.subcategory().as_str())

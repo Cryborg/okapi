@@ -29,7 +29,8 @@ pub enum KeepReason {
     Recent,
     /// A directory whose contents are no longer all removable, for another
     /// reason than age: a link, a special file, a mount, an exclusion, a
-    /// protected name or a limit appeared in it.
+    /// protected name or a limit appeared in it; or, below a root that keeps
+    /// them, a file (or one in it) given another name since the scan.
     Changed,
     /// An exclusion in force covers it, or a directory on the way to it.
     Excluded,

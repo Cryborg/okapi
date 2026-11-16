@@ -301,7 +301,7 @@ pub fn out_of_descriptors(error: &io::Error) -> bool {
 /// when the filesystem root cannot be read.
 #[must_use]
 pub fn tells_mount_roots() -> bool {
-    Directory::open(Path::new("/"))
+    Directory::open(Path::new(super::FILESYSTEM_ROOT))
         .and_then(|root| root.status())
         .is_ok_and(|status| status.mount_root.is_some())
 }

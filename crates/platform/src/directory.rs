@@ -1,3 +1,6 @@
+use std::ffi::OsStr;
+use std::io;
+use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::FileIdentity;
@@ -61,81 +64,225 @@ pub struct EntryStatus {
     pub mount_root: Option<bool>,
 }
 
-/// Why [`reach`] did not reach a folder.
+/// Where every absolute path starts.
+const FILESYSTEM_ROOT: &str = "/";
+
+/// Why a folder was not reached ([`reach`], [`reach_with`], [`reach_path`]).
 #[derive(Debug, thiserror::Error)]
 pub enum Unreached {
-    /// Something on the way is no longer what it was: gone, a link or a
-    /// file in a folder's place, another folder, another filesystem.
+    /// Something on the way is no longer what it was: a link or a file in a
+    /// folder's place, another folder, another filesystem; for [`reach`] and
+    /// [`gone_or_failed`], also a folder gone ([`reach_with`] and
+    /// [`reach_path`] tell it apart).
     #[error("a folder on the way changed")]
     Changed,
     #[error(transparent)]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
+}
+
+/// What [`reach_with`] reached.
+#[derive(Debug)]
+pub struct Reached {
+    /// The folder asked for.
+    pub directory: Directory,
+    /// The root's status, read once opened; its identity is the one asked
+    /// for.
+    pub root: EntryStatus,
 }
 
 /// Opens the folder `below` names under the folder `root` (an absolute,
 /// canonical path), never through a link: `root` is reached from the
 /// filesystem root one name at a time and must still be `root_identity`;
 /// each folder below it must be a plain folder of its mount
-/// ([`EntryStatus::other_mount`]). Each folder opened is checked to be the one read before opening.
+/// ([`EntryStatus::other_mount`]). Each folder opened is checked to be the
+/// one read before opening.
 ///
 /// # Errors
 ///
 /// [`Unreached::Changed`] when anything on the way is no longer what it was,
-/// [`Unreached::Io`] for the system's refusal.
+/// gone included; [`Unreached::Io`] for the system's refusal.
 pub fn reach(
-    root: &std::path::Path,
+    root: &Path,
     root_identity: FileIdentity,
-    below: &[&std::ffi::OsStr],
+    below: &[&OsStr],
 ) -> Result<Directory, Unreached> {
-    use std::path::Component;
+    reach_with(root, root_identity, below, |_, _| true)?
+        .map(|reached| reached.directory)
+        .ok_or(Unreached::Changed)
+}
 
-    let mut directory = Directory::open(std::path::Path::new("/"))?;
-    for component in root.components() {
-        match component {
-            Component::RootDir => {}
-            Component::Normal(name) => directory = enter(&directory, name, |_| true)?,
-            // A canonical path holds none of these.
-            Component::Prefix(_) | Component::CurDir | Component::ParentDir => {
-                return Err(Unreached::Changed);
-            }
-        }
-    }
-    if directory.status()?.identity != root_identity {
+/// [`reach`], each folder below the root also accepted by `accepts`, given
+/// its place in `below` and its status read before it is opened: the caller's
+/// own rule, on top of [`reach`]'s. `Ok(None)` when a folder on the way, the
+/// root included, is gone.
+///
+/// # Errors
+///
+/// [`Unreached::Changed`] when anything on the way is no longer what it was
+/// or `accepts` refuses it, never for a folder gone; [`Unreached::Io`] for the
+/// system's refusal.
+pub fn reach_with(
+    root: &Path,
+    root_identity: FileIdentity,
+    below: &[&OsStr],
+    accepts: impl Fn(usize, &EntryStatus) -> bool,
+) -> Result<Option<Reached>, Unreached> {
+    let Some(mut directory) = reach_path(root)? else {
+        return Ok(None);
+    };
+    let root_status = directory.status().map_err(|error| failed(root, error))?;
+    if root_status.identity != root_identity {
+        tracing::debug!(
+            path = ?root,
+            expected = ?root_identity,
+            found = ?root_status.identity,
+            "the root on the way is another folder"
+        );
         return Err(Unreached::Changed);
     }
     let device = root_identity.device();
-    for name in below {
-        directory = enter(&directory, name, |status| !status.other_mount(device))?;
+    let mut path = root.to_path_buf();
+    for (index, name) in below.iter().enumerate() {
+        path.push(name);
+        let allowed = |status: &EntryStatus| !status.other_mount(device) && accepts(index, status);
+        let Some(entered) = enter(&directory, name, &path, allowed)? else {
+            return Ok(None);
+        };
+        directory = entered;
     }
-    Ok(directory)
+    Ok(Some(Reached {
+        directory,
+        root: root_status,
+    }))
 }
 
-/// Opens the folder `name` of `parent`, read first and accepted by `allowed`,
-/// and checked to be the one read once opened.
+/// Opens the folder at `path` (absolute, canonical) from the filesystem root,
+/// one name at a time, never through a link, each folder checked to be the
+/// one read before opening; `Ok(None)` when one is gone. No identity vouches
+/// for the folder reached: the caller checks what it opens in it.
+///
+/// # Errors
+///
+/// [`Unreached::Changed`] when `path` is not absolute or holds `..`, or
+/// anything on the way is no longer a folder, never for a folder gone;
+/// [`Unreached::Io`] for the system's refusal.
+pub fn reach_path(path: &Path) -> Result<Option<Directory>, Unreached> {
+    let mut components = path.components();
+    if components.next() != Some(Component::RootDir) {
+        tracing::debug!(path = ?path, "not an absolute path: not reached");
+        return Err(Unreached::Changed);
+    }
+    let filesystem_root = Path::new(FILESYSTEM_ROOT);
+    let mut directory =
+        Directory::open(filesystem_root).map_err(|error| failed(filesystem_root, error))?;
+    let mut walked = PathBuf::from(FILESYSTEM_ROOT);
+    for component in components {
+        // A canonical path holds no `..` (`components` drops a `.`).
+        let Component::Normal(name) = component else {
+            tracing::debug!(path = ?path, "not a canonical path: not reached");
+            return Err(Unreached::Changed);
+        };
+        walked.push(name);
+        let Some(entered) = enter(&directory, name, &walked, |_| true)? else {
+            return Ok(None);
+        };
+        directory = entered;
+    }
+    Ok(Some(directory))
+}
+
+/// Opens the folder `name` of `parent`, at `path`, read first and accepted by
+/// `allowed`, and checked to be the one read once opened; `None` when it is
+/// gone.
 fn enter(
     parent: &Directory,
-    name: &std::ffi::OsStr,
+    name: &OsStr,
+    path: &Path,
     allowed: impl Fn(&EntryStatus) -> bool,
-) -> Result<Directory, Unreached> {
-    let status = parent.status_of(name).map_err(gone_or_failed)?;
+) -> Result<Option<Directory>, Unreached> {
+    let status = match parent.status_of(name) {
+        Ok(status) => status,
+        Err(error) => return unreached(path, error),
+    };
     if status.kind != EntryType::Directory || !allowed(&status) {
+        tracing::debug!(
+            path = ?path,
+            kind = ?status.kind,
+            identity = ?status.identity,
+            mount_root = ?status.mount_root,
+            "a folder on the way refused"
+        );
         return Err(Unreached::Changed);
     }
     // Swapped for a link meanwhile, it fails to open.
-    let opened = parent.open_child(name).map_err(gone_or_failed)?;
-    if opened.status()?.identity == status.identity {
-        Ok(opened)
+    let opened = match parent.open_child(name) {
+        Ok(opened) => opened,
+        Err(error) => return unreached(path, error),
+    };
+    let identity = opened
+        .status()
+        .map_err(|error| failed(path, error))?
+        .identity;
+    if identity == status.identity {
+        Ok(Some(opened))
     } else {
+        tracing::debug!(
+            path = ?path,
+            read = ?status.identity,
+            opened = ?identity,
+            "a folder on the way changed once opened"
+        );
         Err(Unreached::Changed)
     }
+}
+
+/// What failing to read or open the folder at `path` on the way means: gone
+/// (`Ok(None)`), or as [`gone_or_failed`] says; traced.
+fn unreached(path: &Path, error: io::Error) -> Result<Option<Directory>, Unreached> {
+    if error.kind() == io::ErrorKind::NotFound {
+        tracing::debug!(path = ?path, "a folder on the way is gone");
+        return Ok(None);
+    }
+    let kind = error.kind();
+    let code = error.raw_os_error();
+    let outcome = gone_or_failed(error);
+    match &outcome {
+        Unreached::Changed => tracing::debug!(
+            path = ?path,
+            ?kind,
+            ?code,
+            "a folder on the way is no longer one"
+        ),
+        Unreached::Io(error) => tracing::debug!(
+            path = ?path,
+            ?kind,
+            ?code,
+            %error,
+            "a folder on the way refused by the system"
+        ),
+    }
+    Err(outcome)
+}
+
+/// The system's refusal to open or read the folder at `path`, on the way;
+/// traced.
+fn failed(path: &Path, error: io::Error) -> Unreached {
+    tracing::debug!(
+        path = ?path,
+        kind = ?error.kind(),
+        code = ?error.raw_os_error(),
+        %error,
+        "a folder on the way not read"
+    );
+    Unreached::Io(error)
 }
 
 /// What an error reading an entry inside a folder means: an entry gone, or
 /// no longer a folder (a link fails to open as one), has changed; any other
 /// error is the system's.
 #[must_use]
-pub fn gone_or_failed(error: std::io::Error) -> Unreached {
-    use std::io::ErrorKind;
+pub fn gone_or_failed(error: io::Error) -> Unreached {
+    use io::ErrorKind;
 
     match error.kind() {
         ErrorKind::NotFound | ErrorKind::NotADirectory => Unreached::Changed,
@@ -377,6 +524,127 @@ mod tests {
                 ),
                 "{reached:?}"
             );
+        }
+
+        #[test]
+        fn a_folder_gone_on_the_way_is_told_apart() {
+            let temporary = tempfile::tempdir().unwrap();
+            let base = fs::canonicalize(temporary.path()).unwrap();
+            let root = base.join("root");
+            fs::create_dir_all(root.join("a/b")).unwrap();
+            let root_identity = identity(&root);
+            let names = [OsStr::new("a"), OsStr::new("b")];
+            let anything = |_: usize, _: &EntryStatus| true;
+            fs::remove_dir(root.join("a/b")).unwrap();
+            assert!(matches!(
+                reach_with(&root, root_identity, &names, anything),
+                Ok(None)
+            ));
+            fs::write(root.join("a/b"), b"x").unwrap();
+            assert!(matches!(
+                reach_with(&root, root_identity, &names, anything),
+                Err(Unreached::Changed)
+            ));
+            fs::remove_dir_all(&root).unwrap();
+            assert!(matches!(
+                reach_with(&root, root_identity, &names, anything),
+                Ok(None)
+            ));
+        }
+
+        #[test]
+        fn what_the_caller_refuses_below_the_root_is_a_change() {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = fs::canonicalize(temporary.path()).unwrap();
+            fs::create_dir_all(root.join("a/b")).unwrap();
+            let a = identity(&root.join("a"));
+            let b = identity(&root.join("a/b"));
+            let names = [OsStr::new("a"), OsStr::new("b")];
+            let listed =
+                |index: usize, status: &EntryStatus| [a, b].get(index) == Some(&status.identity);
+            assert!(matches!(
+                reach_with(&root, identity(&root), &names, listed),
+                Ok(Some(_))
+            ));
+            let swapped =
+                |index: usize, status: &EntryStatus| [b, a].get(index) == Some(&status.identity);
+            assert!(matches!(
+                reach_with(&root, identity(&root), &names, swapped),
+                Err(Unreached::Changed)
+            ));
+            // Refused at the second folder only: reached up to the first.
+            let not_second = |index: usize, _: &EntryStatus| index != 1;
+            assert!(matches!(
+                reach_with(&root, identity(&root), &names, not_second),
+                Err(Unreached::Changed)
+            ));
+            assert!(matches!(
+                reach_with(&root, identity(&root), &names[..1], not_second),
+                Ok(Some(_))
+            ));
+        }
+
+        #[test]
+        fn the_root_status_is_the_one_read_on_the_way() {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = fs::canonicalize(temporary.path()).unwrap();
+            fs::create_dir_all(root.join("a/b")).unwrap();
+            let names = [OsStr::new("a"), OsStr::new("b")];
+            let reached = reach_with(&root, identity(&root), &names, |_, _| true)
+                .unwrap()
+                .unwrap();
+            assert_eq!(reached.root.identity, identity(&root));
+            assert_eq!(
+                reached.directory.status().unwrap().identity,
+                identity(&root.join("a/b"))
+            );
+        }
+
+        #[test]
+        fn a_path_is_reached_without_a_link() {
+            let temporary = tempfile::tempdir().unwrap();
+            let base = fs::canonicalize(temporary.path()).unwrap();
+            fs::create_dir_all(base.join("real/inner")).unwrap();
+            let reached = reach_path(&base.join("real/inner")).unwrap().unwrap();
+            assert_eq!(
+                reached.status().unwrap().identity,
+                identity(&base.join("real/inner"))
+            );
+            symlink(base.join("real"), base.join("alias")).unwrap();
+            assert!(matches!(
+                reach_path(&base.join("alias/inner")),
+                Err(Unreached::Changed)
+            ));
+            assert!(matches!(reach_path(&base.join("absent/inner")), Ok(None)));
+            let relative = base.strip_prefix("/").unwrap().join("real");
+            assert!(matches!(reach_path(&relative), Err(Unreached::Changed)));
+            assert!(matches!(
+                reach_path(&base.join("real/../real")),
+                Err(Unreached::Changed)
+            ));
+        }
+
+        #[test]
+        fn a_mount_below_the_root_is_never_entered() {
+            let dev = Path::new("/dev");
+            let Some(mounted) = ["shm", "pts", "mqueue", "hugepages"]
+                .into_iter()
+                .find(|name| crate::mount_root(&dev.join(name)).ok().flatten() == Some(true))
+            else {
+                eprintln!("skipped: no mount under /dev");
+                return;
+            };
+            // The root itself may be a mount: only what is below it is refused.
+            assert!(reach(dev, identity(dev), &[]).is_ok());
+            let names = [OsStr::new(mounted)];
+            assert!(matches!(
+                reach(dev, identity(dev), &names),
+                Err(Unreached::Changed)
+            ));
+            assert!(matches!(
+                reach_with(dev, identity(dev), &names, |_, _| true),
+                Err(Unreached::Changed)
+            ));
         }
     }
 }

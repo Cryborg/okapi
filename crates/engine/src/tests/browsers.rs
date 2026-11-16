@@ -86,6 +86,34 @@ pub(super) fn groups(
 }
 
 #[test]
+fn a_browser_cache_says_what_it_removes() {
+    let fixture = Fixture::new();
+    fixture.file("cache/chrome/Default/Cache/a", 1, 2 * HOUR);
+    fixture.file("config/chrome/GrShaderCache/b", 1, 2 * HOUR);
+    // The profile, under the user data: its cache is looked for under both.
+    fixture.file("config/chrome/Default/Preferences", 1, 2 * HOUR);
+    let browsers = [browser(&fixture, "chrome", "chrome")];
+    let directories: ChromiumCacheDirectories = serde_json::from_str(
+        r#"{"profile": [{"dir": "Cache", "label": "Cache", "description": "Pages kept"}],
+            "shared": [{"dir": "GrShaderCache", "label": "Skia Shader Cache", "description": "Shaders kept"}]}"#,
+    )
+    .unwrap();
+    let report = Run::new(&fixture, entries(&browsers, &directories)).scan();
+    let described: Vec<Vec<String>> = report
+        .groups()
+        .iter()
+        .map(|group| {
+            group
+                .descriptions()
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        })
+        .collect();
+    assert_eq!(described, [["Pages kept"], ["Shaders kept"]]);
+}
+
+#[test]
 fn each_cache_is_one_group_across_profiles_and_both_roots() {
     let fixture = Fixture::new();
     // Files right under each root: a directory just made is too recent to be

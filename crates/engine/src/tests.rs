@@ -776,6 +776,92 @@ fn rules_linked_by_one_shared_root_form_one_group() {
 }
 
 #[test]
+fn a_group_says_what_each_of_its_rules_removes_once() {
+    let fixture = Fixture::new();
+    let shared = fixture.directory("shared");
+    let alone = fixture.directory("alone");
+    fixture.file("shared/old", 1, 2 * HOUR);
+    fixture.file("alone/old", 1, 2 * HOUR);
+    let rule = |id: &str, path: &Path, description: &str| {
+        app(&format!(
+            r#"{{"id": "{id}", "name": "{id}", "paths": ["{}"], "description": "{description}"}}"#,
+            path.display()
+        ))
+    };
+    let first = rule("first", &shared, "Rebuilt on demand");
+    let second = rule("second", &shared, "Downloaded again");
+    let third = rule("third", &shared, "Rebuilt on demand");
+    let lone = rule("lone", &alone, "Logs");
+    let report = Run::new(
+        &fixture,
+        [&first, &second, &third, &lone]
+            .into_iter()
+            .map(|rule| RuleEntry::App {
+                file: AppFile::Apps,
+                rule,
+            })
+            .collect(),
+    )
+    .scan();
+    let [joined, single] = report.groups() else {
+        panic!("expected two groups: {:?}", report.groups());
+    };
+    let texts = |group: &ScanGroup| -> Vec<String> {
+        group
+            .descriptions()
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    };
+    assert_eq!(
+        texts(joined),
+        ["Rebuilt on demand", "Downloaded again"],
+        "in the order of the rules, each text once"
+    );
+    assert_eq!(texts(single), ["Logs"]);
+}
+
+#[test]
+fn a_system_target_and_a_single_file_say_what_they_remove() {
+    let fixture = Fixture::new();
+    let directory = fixture.directory("logs");
+    fixture.file("logs/old", 1, 2 * HOUR);
+    let file = fixture.file("home/errors.old", 1, 2 * HOUR);
+    let target = target(&format!(
+        r#"{{"path": "{}", "subcategory": "Logs", "description": "Old logs"}}"#,
+        directory.display()
+    ));
+    let single: SingleFileTarget = serde_json::from_str(&format!(
+        r#"{{"path": "{}", "subcategory": "Errors", "description": "Last session's errors"}}"#,
+        file.display()
+    ))
+    .unwrap();
+    let report = Run::new(
+        &fixture,
+        vec![RuleEntry::Target(&target), RuleEntry::File(&single)],
+    )
+    .scan();
+    let described: Vec<(String, Vec<String>)> = report
+        .groups()
+        .iter()
+        .map(|group| {
+            let texts = group.descriptions().iter().map(ToString::to_string);
+            (group.label().to_string(), texts.collect())
+        })
+        .collect();
+    assert_eq!(
+        described,
+        [
+            ("Logs".to_owned(), vec!["Old logs".to_owned()]),
+            (
+                "Errors".to_owned(),
+                vec!["Last session's errors".to_owned()]
+            ),
+        ]
+    );
+}
+
+#[test]
 fn a_joined_group_takes_the_place_of_its_first_rule() {
     let fixture = Fixture::new();
     let shared = fixture.directory("shared");

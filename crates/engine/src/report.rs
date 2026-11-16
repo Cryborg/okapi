@@ -494,6 +494,13 @@ impl ScanGroup {
         &self.attributes.label
     }
 
+    /// What its rules say they remove, as the rules
+    /// write it: one text per rule that has one, in their order, never twice.
+    #[must_use]
+    pub fn descriptions(&self) -> &[Label] {
+        &self.attributes.descriptions
+    }
+
     /// The section that gathers related rules.
     #[must_use]
     pub const fn rule_group(&self) -> Option<&Label> {
@@ -709,6 +716,8 @@ impl BrowserLock {
 pub(crate) struct GroupAttributes {
     pub(crate) origins: Vec<Origin>,
     pub(crate) label: Label,
+    /// What each of its rules says it removes, in their order, each text once.
+    pub(crate) descriptions: Vec<Label>,
     pub(crate) rule_group: Option<Label>,
     pub(crate) cache_reset: bool,
     pub(crate) selected_by_default: bool,
@@ -722,6 +731,11 @@ impl GroupAttributes {
     /// unselected and a cache reset if either rule is.
     pub(crate) fn merge(&mut self, other: Self) {
         self.origins.extend(other.origins);
+        for description in other.descriptions {
+            if !self.descriptions.contains(&description) {
+                self.descriptions.push(description);
+            }
+        }
         self.cache_reset |= other.cache_reset;
         self.selected_by_default &= other.selected_by_default;
         self.needs_admin |= other.needs_admin;

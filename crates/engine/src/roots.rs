@@ -213,6 +213,7 @@ impl Planner<'_> {
         let attributes = GroupAttributes {
             origins: vec![origin.clone()],
             label: directory.label().clone(),
+            descriptions: directory.description().cloned().into_iter().collect(),
             rule_group: None,
             cache_reset: directory.is_cache_reset(),
             selected_by_default: directory.is_selected_by_default(),
@@ -447,6 +448,7 @@ impl Planner<'_> {
         let attributes = GroupAttributes {
             origins: vec![origin.clone()],
             label: target.subcategory().clone(),
+            descriptions: target.description().cloned().into_iter().collect(),
             rule_group: None,
             cache_reset: deletion.is_cache_reset(),
             selected_by_default: target.is_selected_by_default() && presumed_temporary,
@@ -480,6 +482,7 @@ impl Planner<'_> {
         let attributes = GroupAttributes {
             origins: vec![origin.clone()],
             label: rule.name().clone(),
+            descriptions: rule.description().cloned().into_iter().collect(),
             rule_group: rule.group().cloned(),
             cache_reset: deletion.is_cache_reset(),
             selected_by_default: rule.is_selected_by_default(),
@@ -565,6 +568,7 @@ impl Planner<'_> {
         let attributes = GroupAttributes {
             origins: vec![origin],
             label: target.subcategory().clone(),
+            descriptions: target.description().cloned().into_iter().collect(),
             rule_group: None,
             cache_reset: false,
             selected_by_default: target.is_selected_by_default(),

@@ -441,7 +441,8 @@ pub enum Outcome {
     Failed,
 }
 
-/// How a scan that noted `issues` and offers `groups` of `bytes` ended: a
+/// How a scan that noted `issues` and shows `groups` (those of its report,
+/// and those only root may read) of `bytes` ended: a
 /// stop means nothing was looked at, the other notes are counted; none when
 /// it was cancelled, which is no ending: the user goes back to choosing.
 #[must_use]
@@ -1486,17 +1487,33 @@ impl CleanerScreen {
     fn unseen_of(&self, report: &ScanReport) -> Vec<GroupFacts> {
         let state = self.0.borrow();
         let (Some(Task::Analysis(analysis)), Some(rules)) = (&state.task, &state.rules) else {
+            tracing::warn!(
+                analysis = matches!(state.task, Some(Task::Analysis(_))),
+                rules = state.rules.is_some(),
+                "what only root may read not looked for: its unreadable roots stay notes"
+            );
             return Vec::new();
         };
         // The analysis read them already, refusing what it could not use:
-        // compared as written, never read again.
-        let excluded = Exclusions::as_written(analysis.exclusions.iter().cloned())
-            .inspect_err(|error| {
-                tracing::warn!(?error, "exclusions of the analysis unusable: none compared");
-            })
-            .unwrap_or_else(|_| Exclusions::none());
+        // compared as written, never read again. Unusable, nothing is shown
+        // that one of them may cover: its unreadable roots stay notes.
+        let excluded = match Exclusions::as_written(analysis.exclusions.iter().cloned()) {
+            Ok(excluded) => excluded,
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    "exclusions of the analysis unusable: its unreadable roots stay notes"
+                );
+                return Vec::new();
+            }
+        };
         rights::unseen_groups(
-            report,
+            report.issues(),
+            report
+                .groups()
+                .iter()
+                .flat_map(okapi_engine::ScanGroup::origins)
+                .collect(),
             rules,
             state.language,
             &state.helper_targets,
@@ -1839,6 +1856,16 @@ pub mod tests {
             seen: Some((1, 1)),
         };
         assert_eq!(badge_of(&group), ui::ResultBadge::Admin);
+        assert_eq!(admin_row_of(&group), ui::AdminRow::Locked);
+        let unseen = GroupFacts {
+            seen: None,
+            ..group.clone()
+        };
+        assert_eq!(
+            admin_row_of(&unseen),
+            ui::AdminRow::Unseen,
+            "what it holds unknown: no numbers shown"
+        );
         group.admin = AdminState::Unlocked {
             entries: 1,
             bytes: 1,
@@ -1847,6 +1874,13 @@ pub mod tests {
             badge_of(&group),
             ui::ResultBadge::ToChoose,
             "never preselected (invariant 5)"
+        );
+        assert_eq!(
+            admin_row_of(&GroupFacts {
+                admin: group.admin,
+                ..unseen
+            }),
+            ui::AdminRow::Unlocked
         );
     }
 

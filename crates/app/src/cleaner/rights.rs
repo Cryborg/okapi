@@ -193,33 +193,39 @@ pub(super) fn helper_targets(rules: &RuleSet) -> BTreeMap<Origin, String> {
 
 /// What only root may read of an analysis of `chosen`: one group per target
 /// of the privileged helper (`targets`) whose root the user's own scan could
-/// not open, the system refusing (a note of `report`), of a category chosen,
-/// no group of `report` holding it already, and not `excluded`. A note of
-/// several rules (two targets reaching one root through a link) stays a
-/// note. Each group waits for root's scan, which alone says what it holds.
-pub(super) fn unseen_groups(
-    report: &ScanReport,
+/// not open, the system refusing (a note of `issues`), of a category chosen,
+/// none of the rules `shown` by the groups of its report, and not
+/// `excluded`. A note of several rules (two targets reaching one root
+/// through a link) stays a note. Each group waits for root's scan, which
+/// alone says what it holds.
+pub(super) fn unseen_groups<'a>(
+    issues: &'a [ScanIssue],
+    mut shown: BTreeSet<&'a Origin>,
     rules: &RuleSet,
     language: Language,
     targets: &BTreeMap<Origin, String>,
     chosen: &BTreeSet<Category>,
     excluded: &Exclusions,
 ) -> Vec<GroupFacts> {
-    let mut shown: BTreeSet<&Origin> = report
-        .groups()
-        .iter()
-        .flat_map(okapi_engine::ScanGroup::origins)
-        .collect();
     let mut groups = Vec::new();
-    for issue in report.issues() {
+    for issue in issues {
         let ScanIssue::UnreadableRoot {
             origins,
             path,
-            error: io::ErrorKind::PermissionDenied,
+            error,
         } = issue
         else {
             continue;
         };
+        if *error != io::ErrorKind::PermissionDenied {
+            tracing::debug!(
+                ?origins,
+                ?path,
+                ?error,
+                "a root unreadable but for the rights: left a note"
+            );
+            continue;
+        }
         let [origin] = origins.as_slice() else {
             tracing::debug!(
                 ?origins,
@@ -239,9 +245,18 @@ pub(super) fn unseen_groups(
             );
             continue;
         }
-        if let Some(group) = GroupFacts::unseen(origin, rules, language, targets) {
-            tracing::info!(?origin, ?path, targets = ?group.targets, "a target only root may read: waits for the rights");
-            groups.push(group);
+        match GroupFacts::unseen(origin, rules, language, targets) {
+            Some(group) => {
+                tracing::info!(?origin, ?path, targets = ?group.targets, "a target only root may read: waits for the rights");
+                groups.push(group);
+            }
+            None => {
+                tracing::debug!(
+                    ?origin,
+                    ?path,
+                    "an unreadable root no target of the helper: left a note"
+                );
+            }
         }
     }
     groups
@@ -637,6 +652,242 @@ mod tests {
     use okapi_helper::Refusal;
 
     use super::*;
+
+    /// The embedded rules of Linux, and the path each target of the helper
+    /// is asked by.
+    fn embedded() -> (RuleSet, BTreeMap<Origin, String>) {
+        let rules = RuleSet::embedded(okapi_rules::Os::Linux).unwrap();
+        let targets = helper_targets(&rules);
+        (rules, targets)
+    }
+
+    /// The rule of the system target `subcategory`.
+    fn origin_of(rules: &RuleSet, subcategory: &str) -> Origin {
+        rules
+            .system()
+            .clean_targets()
+            .iter()
+            .find(|target| target.subcategory().as_str() == subcategory)
+            .and_then(Origin::of_target)
+            .unwrap()
+    }
+
+    fn unreadable(origins: &[&Origin], path: &str, error: io::ErrorKind) -> ScanIssue {
+        ScanIssue::UnreadableRoot {
+            origins: origins.iter().map(|origin| (*origin).clone()).collect(),
+            path: PathBuf::from(path),
+            error,
+        }
+    }
+
+    /// The targets of each group only root may read of `issues`, the
+    /// groups of the report holding `shown`, of an analysis of `chosen`
+    /// excluding `excluded`.
+    fn unseen(
+        issues: &[ScanIssue],
+        shown: &[&Origin],
+        chosen: &[Category],
+        excluded: &[&str],
+    ) -> Vec<GroupFacts> {
+        let (rules, targets) = embedded();
+        unseen_groups(
+            issues,
+            shown.iter().copied().collect(),
+            &rules,
+            Language::French,
+            &targets,
+            &chosen.iter().copied().collect(),
+            &Exclusions::as_written(excluded.iter().map(PathBuf::from)).unwrap(),
+        )
+    }
+
+    /// How many groups only root may read [`unseen`] gives.
+    fn count(
+        issues: &[ScanIssue],
+        shown: &[&Origin],
+        chosen: &[Category],
+        excluded: &[&str],
+    ) -> usize {
+        unseen(issues, shown, chosen, excluded).len()
+    }
+
+    const SNAP_CACHE: &str = "/var/lib/snapd/cache";
+
+    #[test]
+    fn a_target_the_user_may_not_open_waits_for_root_never_checked() {
+        let (rules, _) = embedded();
+        let snap = origin_of(&rules, "Snap Cache");
+        let issue = unreadable(&[&snap], SNAP_CACHE, io::ErrorKind::PermissionDenied);
+        let [group] = unseen(&[issue], &[], &[Category::System], &[])
+            .try_into()
+            .unwrap();
+        assert_eq!(group.targets, Some(BTreeSet::from([SNAP_CACHE.to_owned()])));
+        assert_eq!(
+            group.label,
+            okapi_rules::label(Language::French, "Snap Cache")
+        );
+        assert!(group.needs_admin);
+        assert!(group.preselected, "as its rule");
+        assert!(
+            !group.checked_by_default,
+            "never for the user (invariant 5)"
+        );
+        assert_eq!(group.seen, None, "what it holds is root's to say");
+        assert_eq!(group.numbers(), (0, 0));
+        assert_eq!(group.keys, BTreeSet::from([snap.key()]));
+        assert_eq!(group.categories, BTreeSet::from([Category::System]));
+        assert_eq!(
+            group.description,
+            okapi_rules::description(
+                Language::French,
+                rules
+                    .system()
+                    .clean_targets()
+                    .iter()
+                    .find(|target| Origin::of_target(target).as_ref() == Some(&snap))
+                    .and_then(|target| target.description())
+                    .unwrap()
+                    .as_str()
+            ),
+            "its rule's, in the window's language"
+        );
+    }
+
+    #[test]
+    fn only_a_refusal_of_a_helpers_target_of_one_rule_chosen_and_not_shown_waits_for_root() {
+        let (rules, _) = embedded();
+        let snap = origin_of(&rules, "Snap Cache");
+        let crash = origin_of(&rules, "Crash Reports");
+        let thumbnails = origin_of(&rules, "Thumbnail Cache");
+        let refused = unreadable(&[&snap], SNAP_CACHE, io::ErrorKind::PermissionDenied);
+        let system = [Category::System];
+        assert_eq!(count(std::slice::from_ref(&refused), &[], &system, &[]), 1);
+        assert_eq!(
+            count(
+                &[unreadable(&[&snap], SNAP_CACHE, io::ErrorKind::Other)],
+                &[],
+                &system,
+                &[]
+            ),
+            0,
+            "root reads no better what the system cannot"
+        );
+        assert_eq!(
+            count(
+                &[unreadable(
+                    &[&snap, &crash],
+                    SNAP_CACHE,
+                    io::ErrorKind::PermissionDenied
+                )],
+                &[],
+                &system,
+                &[]
+            ),
+            0,
+            "a root of two rules stays a note"
+        );
+        assert_eq!(
+            count(
+                &[unreadable(
+                    &[&thumbnails],
+                    "/home/ana/.cache/thumbnails",
+                    io::ErrorKind::PermissionDenied
+                )],
+                &[],
+                &system,
+                &[]
+            ),
+            0,
+            "not the helper's"
+        );
+        assert_eq!(
+            count(
+                std::slice::from_ref(&refused),
+                &[],
+                &[Category::Browsers],
+                &[]
+            ),
+            0,
+            "a category left out"
+        );
+        assert_eq!(
+            count(std::slice::from_ref(&refused), &[], &[], &[]),
+            1,
+            "every category"
+        );
+        assert_eq!(
+            count(std::slice::from_ref(&refused), &[&snap], &system, &[]),
+            0,
+            "a group of the report holds it already"
+        );
+        assert_eq!(
+            count(
+                &[
+                    unreadable(&[&snap], SNAP_CACHE, io::ErrorKind::PermissionDenied),
+                    unreadable(&[&snap], SNAP_CACHE, io::ErrorKind::PermissionDenied),
+                ],
+                &[],
+                &system,
+                &[]
+            ),
+            1,
+            "once"
+        );
+        for excluded in [["/var/lib/snapd"], [SNAP_CACHE]] {
+            assert_eq!(
+                count(std::slice::from_ref(&refused), &[], &system, &excluded),
+                0,
+                "{excluded:?}"
+            );
+        }
+        assert_eq!(
+            count(
+                std::slice::from_ref(&refused),
+                &[],
+                &system,
+                &["/var/lib/snapd/cache/kept"]
+            ),
+            1,
+            "an exclusion below it leaves the rest to root"
+        );
+    }
+
+    #[test]
+    fn a_note_is_said_by_the_group_only_root_may_read_alone() {
+        let (rules, _) = embedded();
+        let snap = origin_of(&rules, "Snap Cache");
+        let crash = origin_of(&rules, "Crash Reports");
+        let issue = unreadable(&[&snap], SNAP_CACHE, io::ErrorKind::PermissionDenied);
+        let groups = unseen(std::slice::from_ref(&issue), &[], &[Category::System], &[]);
+        assert!(said_by(&issue, &groups));
+        let read = GroupFacts {
+            seen: Some((1, 1)),
+            ..groups[0].clone()
+        };
+        assert!(
+            !said_by(&issue, &[read]),
+            "a group the user read says nothing of a root it could not"
+        );
+        assert!(!said_by(
+            &unreadable(
+                &[&snap, &crash],
+                SNAP_CACHE,
+                io::ErrorKind::PermissionDenied
+            ),
+            &groups
+        ));
+        assert!(!said_by(
+            &unreadable(&[&crash], "/var/crash", io::ErrorKind::PermissionDenied),
+            &groups
+        ));
+        assert!(!said_by(
+            &ScanIssue::Excluded {
+                origins: vec![snap],
+                path: PathBuf::from(SNAP_CACHE),
+            },
+            &groups
+        ));
+    }
 
     fn inputs(minutes: Option<u64>, exclusions: &[&str]) -> Inputs {
         Inputs {

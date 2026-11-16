@@ -23,7 +23,8 @@ fn described(language: Language, descriptions: &[Label]) -> String {
         .join(PARAGRAPH)
 }
 
-/// What the results need of one group of the report.
+/// What the results need of one group of the report, or of a target only
+/// root may read ([`GroupFacts::unseen`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupFacts {
     /// Its label: under its browser's line, a browser's cache needs no more.
@@ -213,7 +214,7 @@ pub enum Line {
     },
 }
 
-/// The groups of a report, by category chosen, and the user's choice.
+/// The groups of an analysis, by category chosen, and the user's choice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Results {
     groups: Vec<GroupFacts>,
@@ -559,13 +560,14 @@ impl Results {
             })
     }
 
-    /// The entries of every group of the report, as shown.
+    /// The entries of every group held, as shown.
     #[must_use]
     pub fn entries(&self) -> usize {
         self.groups.iter().map(|group| group.numbers().0).sum()
     }
 
-    /// The size of every group of the report, as shown.
+    /// The size of every group held, as shown (root's once its scan set a
+    /// group, none for one only root may read until then).
     #[must_use]
     pub fn bytes(&self) -> u64 {
         self.groups
@@ -727,6 +729,78 @@ mod tests {
 
     fn set(targets: &[&str]) -> BTreeSet<String> {
         targets.iter().map(|target| (*target).to_owned()).collect()
+    }
+
+    const SNAP: &str = "/var/lib/snapd/cache";
+
+    /// A group only root may read, through `target`, its rule preselected.
+    fn unseen(target: &str) -> GroupFacts {
+        GroupFacts {
+            seen: None,
+            ..admin(&[target], true)
+        }
+    }
+
+    /// One group of the user's, one only root may read: root's scan sets it
+    /// as it sets any other, and it never shows numbers of its own.
+    #[test]
+    fn a_group_only_root_may_read_is_set_by_roots_scan_alone() {
+        let mut results = Results::new(
+            vec![group(&[Category::System], true, false), unseen(SNAP)],
+            BTreeSet::from([Category::System]),
+        );
+        assert_eq!(
+            results.checked(),
+            &BTreeSet::from([0]),
+            "never checked (invariant 5)"
+        );
+        assert_eq!(results.waiting_for_rights(), 1);
+        assert_eq!(results.helper_targets(), set(&[SNAP]));
+        assert_eq!(results.group(1).unwrap().numbers(), (0, 0));
+        assert_eq!(results.bytes(), 10);
+
+        results.unlock(&[(set(&[SNAP]), 4, 3_000)], &BTreeSet::new());
+        assert_eq!(
+            results.group(1).unwrap().admin,
+            AdminState::Unlocked {
+                entries: 4,
+                bytes: 3_000
+            }
+        );
+        assert_eq!(results.bytes(), 3_010, "root's numbers with the user's");
+        assert_eq!(
+            results.checked(),
+            &BTreeSet::from([0]),
+            "unlocked, unchecked"
+        );
+
+        results.relock();
+        assert_eq!(results.group(1).unwrap().admin, AdminState::Locked);
+        assert_eq!(
+            results.group(1).unwrap().numbers(),
+            (0, 0),
+            "root's gone with the rights"
+        );
+        results.unlock(&[], &BTreeSet::new());
+        assert_eq!(
+            results.group(1).unwrap().admin,
+            AdminState::NothingToClean,
+            "root offers nothing of it"
+        );
+    }
+
+    #[test]
+    fn the_size_found_adds_what_is_shown_without_overflowing() {
+        let big = GroupFacts {
+            seen: Some((1, u64::MAX)),
+            ..group(&[Category::System], true, false)
+        };
+        let results = Results::new(
+            vec![group(&[Category::System], true, false), big, unseen(SNAP)],
+            BTreeSet::from([Category::System]),
+        );
+        assert_eq!(results.bytes(), u64::MAX);
+        assert_eq!(results.entries(), 3);
     }
 
     /// Two groups of two targets and of one, one root says something about,

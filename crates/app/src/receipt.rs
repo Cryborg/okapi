@@ -229,7 +229,6 @@ impl Receipt {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     /// What root's part answered for an entry is what the receipt shows of

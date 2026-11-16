@@ -3101,21 +3101,31 @@ mod tests {
         );
     }
 
-    /// Closes `directory` to the user running the tests, as `/var/lib/snapd/cache`
-    /// is; `false` when they are root, whom nothing closes it to.
-    fn close(directory: &std::path::Path) -> bool {
-        use std::os::unix::fs::PermissionsExt as _;
-        if okapi_platform::running_as_root() {
-            return false;
+    /// A directory closed to the user running the tests, as
+    /// `/var/lib/snapd/cache` is; opened again when dropped, a test failing
+    /// or not, for the sandbox to be removed.
+    struct Closed(PathBuf);
+
+    impl Closed {
+        /// `directory` closed; none when the tests run as root, whom
+        /// nothing closes it to.
+        fn new(directory: &Path) -> Option<Self> {
+            use std::os::unix::fs::PermissionsExt as _;
+            if okapi_platform::running_as_root() {
+                return None;
+            }
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o000)).unwrap();
+            Some(Self(directory.to_path_buf()))
         }
-        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o000)).unwrap();
-        true
     }
 
-    /// Opens again what [`close`] closed, for the sandbox to be removed.
-    fn reopen(directory: &std::path::Path) {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+    impl Drop for Closed {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt as _;
+            // A failure here leaves the sandbox behind, which its removal
+            // says; a panic while a test panics would abort them all.
+            fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755)).ok();
+        }
     }
 
     /// A target whose root the user cannot read waits for the rights as a
@@ -3129,9 +3139,9 @@ mod tests {
         let dumps = sandbox.root.join("var/dumps");
         sandbox.file("var/dumps/core");
         settle_files();
-        if !close(&dumps) {
+        let Some(closed) = Closed::new(&dumps) else {
             return;
-        }
+        };
         let rules = admin_rules(&sandbox);
         let asked = Asked::default();
         let dumps_name = dumps.display().to_string();
@@ -3170,11 +3180,13 @@ mod tests {
             &window,
             "Illisible sans les droits administrateur : « Obtenir les droits » ci-dessus."
         ));
+        // The notes are folded: their model says what they would show.
+        let notes = cleaner.get_notes();
         assert!(
-            !shows(
-                &window,
-                &format!("Dossier illisible, non compté : {}", dumps.display())
-            ),
+            (0..slint::Model::row_count(&notes)).all(|row| {
+                slint::Model::row_data(&notes, row)
+                    .is_none_or(|note| note.path != dumps.display().to_string())
+            }),
             "its group says it, not a note"
         );
 
@@ -3210,7 +3222,7 @@ mod tests {
             "its target alone"
         );
         assert!(!pip.exists(), "the user's part removed");
-        reopen(&dumps);
+        drop(closed);
         assert!(
             dumps.join("core").exists(),
             "root's part is root's: never the user's own cleaning"
@@ -3227,9 +3239,9 @@ mod tests {
         let var = sandbox.root.join("var");
         sandbox.file("var/dumps/core");
         settle_files();
-        if !close(&var) {
+        let Some(_closed) = Closed::new(&var) else {
             return;
-        }
+        };
         let rules = admin_rules(&sandbox);
         let asked = Asked::default();
         let seams = admin_seams(&sandbox, &rules, &asked, |_, _: &serde_json::Value| {
@@ -3257,13 +3269,52 @@ mod tests {
         checkbox(&window, "Système").invoke_accessible_default_action();
         button(&window, "Analyser").invoke_accessible_default_action();
         watch_until(&window, ended);
-        reopen(&var);
         assert_eq!(
-            step(&window),
-            ui::CleanerStep::Outcome,
+            window.global::<ui::Cleaner>().get_outcome(),
+            ui::OutcomeKind::NothingToClean,
             "the system left out: nothing to clean"
         );
         assert!(asked.lock().unwrap().is_empty());
+    }
+
+    /// A permission the system refused is never forced (D-19): its line
+    /// says so; the system's other refusals keep theirs, without it.
+    #[test]
+    fn the_receipt_says_a_refused_permission_is_never_forced() {
+        use std::io::ErrorKind;
+
+        let (window, _screen) = on_cleaner(seams_never_scanning());
+        let cleaner = window.global::<ui::Cleaner>();
+        let model = Rc::new(slint::VecModel::default());
+        cleaner.set_receipt_lines(slint::ModelRc::from(Rc::clone(&model)));
+        cleaner.set_step(ui::CleanerStep::Receipt);
+        let refused = |kind| crate::receipt::OutcomeFacts {
+            result: okapi_engine::CleanResult::Kept(okapi_engine::KeepReason::Failed {
+                kind,
+                code: None,
+            }),
+            path: Some(PathBuf::from("/tmp/kept")),
+            blocked: None,
+            scanned_bytes: 1,
+        };
+        let note = "Elles appartiennent à un autre compte ou au système : Okapi ne les force pas.";
+        let show = |kind| {
+            super::show_receipt(
+                &cleaner,
+                &model,
+                &super::Receipt::new(false, &[refused(kind)]),
+            );
+            slint::platform::update_timers_and_animations();
+        };
+        show(ErrorKind::PermissionDenied);
+        assert!(shows_a_text_starting(
+            &window,
+            "Gardées : permission refusée par le système"
+        ));
+        assert!(shows(&window, note));
+        show(ErrorKind::ResourceBusy);
+        assert!(shows_a_text_starting(&window, "Gardées : refus du système"));
+        assert!(!shows(&window, note), "said of a refused permission alone");
     }
 
     #[test]

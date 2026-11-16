@@ -14,7 +14,7 @@ use okapi_platform::{Directory, EntryStatus, EntryType, FileIdentity};
 
 use super::report::{Found, SearchStats, Seen};
 // A file in the trash is on its way out, never a copy that keeps another.
-use super::trash::TRASH_FOLDER;
+use super::trash::trash_folder;
 
 /// How many entries of a folder are read between two looks at the
 /// cancellation.
@@ -228,7 +228,7 @@ impl Walk<'_, '_> {
         } else if name == DEPENDENCIES {
             self.stats.dependency_directories += 1;
             "dependencies"
-        } else if name == TRASH_FOLDER {
+        } else if trash_folder(name) {
             self.stats.trash_directories += 1;
             "trash"
         } else if self.listing.exclusions.excludes(path)
@@ -249,6 +249,13 @@ impl Walk<'_, '_> {
     /// Keeps the plain file at `path`, read as `status`, if it could have a
     /// copy.
     fn file(&mut self, path: PathBuf, status: &EntryStatus) {
+        // A file mounted on another (bind) may lie on another filesystem
+        // than its root's, which judges every copy found below it.
+        if status.mount_root == Some(true) {
+            self.stats.other_mounts += 1;
+            tracing::debug!(path = %path.display(), "mounted file not kept");
+            return;
+        }
         self.stats.files += 1;
         self.listing.files.fetch_add(1, Ordering::Relaxed);
         // An empty file is never a copy worth moving: it frees nothing, and
@@ -268,5 +275,67 @@ impl Walk<'_, '_> {
                 status: Seen::of(status),
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::SystemTime;
+
+    use super::*;
+
+    const SIZE: u64 = 4096;
+
+    fn status(inode: u64, mount_root: Option<bool>) -> EntryStatus {
+        EntryStatus {
+            kind: EntryType::File,
+            identity: FileIdentity::new(1, inode),
+            last_change: SystemTime::UNIX_EPOCH,
+            modified: SystemTime::UNIX_EPOCH,
+            changed: SystemTime::UNIX_EPOCH,
+            links: 1,
+            owner: 0,
+            sticky: false,
+            locked: false,
+            size: SIZE,
+            allocated: None,
+            mount_root,
+        }
+    }
+
+    #[test]
+    fn a_file_mounted_on_another_is_never_kept() {
+        let roots = HashSet::new();
+        let exclusions = Exclusions::none();
+        let mounts = BTreeSet::new();
+        let cancelled = AtomicBool::new(false);
+        let files = AtomicU64::new(0);
+        let listing = Listing {
+            roots: &roots,
+            min_size: SIZE,
+            exclusions: &exclusions,
+            mounts: &mounts,
+            cancelled: &cancelled,
+            files: &files,
+        };
+        let mut stats = SearchStats::default();
+        let mut seen = HashSet::new();
+        let mut found = Vec::new();
+        let mut walk = Walk {
+            listing: &listing,
+            root: 0,
+            device: 1,
+            stats: &mut stats,
+            seen: &mut seen,
+            found: &mut found,
+        };
+        walk.file(PathBuf::from("/root/mounted"), &status(1, Some(true)));
+        walk.file(PathBuf::from("/root/plain"), &status(2, Some(false)));
+        // A system that cannot tell keeps it: the table of mounts is read.
+        walk.file(PathBuf::from("/root/untold"), &status(3, None));
+        let kept: Vec<&Path> = found.iter().map(|file| file.path.as_path()).collect();
+        assert_eq!(kept, [Path::new("/root/plain"), Path::new("/root/untold")]);
+        assert_eq!(stats.other_mounts, 1);
+        assert_eq!(stats.files, 2);
     }
 }

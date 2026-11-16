@@ -36,7 +36,8 @@ fn write(path: &Path, content: &[u8]) -> PathBuf {
     path.to_path_buf()
 }
 
-/// The table of mounts of a machine without any below the roots.
+/// The table of mounts of a machine without any below the roots, nor one
+/// that tells their filesystem: no copy found keeps another.
 fn no_mounts(_root: &Path) -> (BTreeSet<PathBuf>, Option<String>) {
     (BTreeSet::new(), None)
 }
@@ -233,6 +234,9 @@ fn hidden_folders_projects_dependencies_and_exclusions_are_left_out() {
     write(&root.join("project/src/copy"), &content);
     write(&root.join("web/node_modules/copy"), &content);
     write(&root.join("share/Trash/files/copy"), &content);
+    write(&root.join("windows/$Recycle.Bin/S-1-5-21/$R1"), &content);
+    // A folder of the user's named like XP's trash is searched.
+    write(&root.join("Recycler/copy"), &content);
     write(&root.join("excluded/copy"), &content);
     write(&root.join("logs/copy.log"), &content);
     // A hidden file is no hidden folder: it is compared.
@@ -250,13 +254,13 @@ fn hidden_folders_projects_dependencies_and_exclusions_are_left_out() {
     );
     assert_eq!(
         groups(&search, root),
-        BTreeSet::from([set(&["kept", ".hidden file"])])
+        BTreeSet::from([set(&["kept", ".hidden file", "Recycler/copy"])])
     );
     let stats = search.report().unwrap().stats();
     assert_eq!(stats.hidden_directories, 1);
     assert_eq!(stats.projects, 1);
     assert_eq!(stats.dependency_directories, 1);
-    assert_eq!(stats.trash_directories, 1);
+    assert_eq!(stats.trash_directories, 2);
     assert_eq!(stats.excluded, 2);
     assert_eq!(stats.below_minimum, 2);
 }
@@ -636,6 +640,50 @@ fn a_filesystem_that_may_show_a_file_twice_is_known() {
     }
 }
 
+#[test]
+fn a_filesystem_without_a_change_date_of_its_own_is_known() {
+    for filesystem in ["vfat", "msdos"] {
+        assert!(search::undated(filesystem), "{filesystem}");
+    }
+    for filesystem in ["ext4", "btrfs", "xfs", "exfat", "ntfs3", "fuseblk"] {
+        assert!(!search::undated(filesystem), "{filesystem}");
+    }
+}
+
+/// The filesystem of each root, by its name: `fat`, `ext`, or unknown.
+fn filesystem_by_name(root: &Path) -> (BTreeSet<PathBuf>, Option<String>) {
+    let filesystem = match root.file_name().and_then(|name| name.to_str()) {
+        Some("fat") => Some("vfat".to_owned()),
+        Some("ext") => Some("ext4".to_owned()),
+        _ => None,
+    };
+    (BTreeSet::new(), filesystem)
+}
+
+#[test]
+fn each_root_is_judged_by_its_filesystem() {
+    let temporary = tempfile::tempdir().unwrap();
+    let names = ["fat", "ext", "other"];
+    let roots: Vec<PathBuf> = names
+        .iter()
+        .map(|name| {
+            let root = temporary.path().join(name);
+            fs::create_dir(&root).unwrap();
+            root
+        })
+        .collect();
+    let search = DuplicateSearch::start_with(&roots, options(1), filesystem_by_name, None).unwrap();
+    assert_eq!(search.wait(WAIT), Some(Outcome::Complete));
+    let report = search.report().unwrap();
+    let flags: Vec<(bool, bool)> = (0..names.len())
+        .map(|index| {
+            let root = report.root(index).unwrap();
+            (root.may_alias, root.undated)
+        })
+        .collect();
+    assert_eq!(flags, [(false, true), (false, false), (true, true)]);
+}
+
 mod moving {
     use std::sync::Arc;
 
@@ -665,6 +713,20 @@ mod moving {
         }
     }
 
+    /// The roots of `search` lie on a filesystem the table of mounts tells,
+    /// local and dated: what these tests move depends on it.
+    fn assert_sure_roots(search: &DuplicateSearch) {
+        let report = search.report().unwrap();
+        for index in 0..report.roots().count() {
+            let root = report.root(index).unwrap();
+            assert_eq!(
+                (root.may_alias, root.undated),
+                (false, false),
+                "the sandbox must lie on a local filesystem the table of mounts tells"
+            );
+        }
+    }
+
     impl Sandbox {
         fn copies(&self, names: &[&str], seed: u32) {
             for name in names {
@@ -673,7 +735,9 @@ mod moving {
         }
 
         fn search(&self) -> DuplicateSearch {
-            searched(&self.root)
+            let search = searched(&self.root);
+            assert_sure_roots(&search);
+            search
         }
 
         fn bin(&self) -> Trash {
@@ -995,6 +1059,7 @@ mod moving {
         write(&trashed.join("b"), &data(41, 3));
         // The trash searched on purpose, as a folder of its own.
         let search = searched_with(&[sandbox.root.clone(), trashed], options(1));
+        assert_sure_roots(&search);
         assert_eq!(
             moved(&search, &sandbox, &["a"]),
             [TrashResult::Kept(KeepReason::NoSureKeeper)]

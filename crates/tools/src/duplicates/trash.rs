@@ -8,7 +8,9 @@ use std::ffi::{OsStr, OsString};
 use std::io;
 
 use okapi_engine::Exclusions;
-use okapi_platform::{Directory, EntryStatus, Trash, TrashError, Unreached, tells_mount_roots};
+use okapi_platform::{
+    Directory, EntryStatus, Trash, TrashError, Unreached, effective_user, tells_mount_roots,
+};
 
 use super::compare::parent_of;
 use super::report::{CopyId, DuplicateReport, FileCopy, Group};
@@ -33,9 +35,11 @@ pub enum KeepReason {
     /// No other copy of its group, not asked for, could be read again
     /// unchanged: changed, gone, or refused by the system.
     KeeperChanged,
-    /// The only other copies left may be this very file, shown again by
-    /// another filesystem (FUSE, network, stacked), or lie in a trash: none
-    /// surely keeps it.
+    /// No other copy left keeps it, and one at least was passed over unread
+    /// as unsure: it may be this very file shown again by another filesystem
+    /// (FUSE, network, stacked), lies on FAT (where a write dated back goes
+    /// unseen) or a filesystem not known, in a trash, or is another
+    /// account's.
     NoSureKeeper,
     /// It is on another filesystem than the trash.
     OtherDevice,
@@ -154,6 +158,10 @@ pub(crate) fn trash_dated(
     if !supported {
         tracing::warn!("this system cannot tell a mount point: nothing is moved");
     }
+    let user = effective_user();
+    if user.is_none() {
+        tracing::warn!("the user is unknown: no copy surely keeps another");
+    }
     let mut asked_in_group: BTreeMap<usize, usize> = BTreeMap::new();
     for id in &ids {
         if let Some(group) = report.group_of(*id) {
@@ -166,6 +174,7 @@ pub(crate) fn trash_dated(
         bin,
         exclusions,
         deleted_at,
+        user,
     };
     let outcomes: Vec<TrashOutcome> = ids
         .into_iter()
@@ -241,22 +250,38 @@ fn is_moved_copy(copy: &FileCopy, status: &EntryStatus) -> bool {
         && status.modified == copy.modified()
 }
 
-/// Whether `path` lies in a trash (`Trash`, `.Trash`, `.Trash-<uid>`): a
-/// file there is on its way out, even under a folder searched on purpose.
+/// Whether `path` lies in a trash, a folder of its: a file there is on its
+/// way out, even under a folder searched on purpose.
 fn in_a_trash(path: &std::path::Path) -> bool {
-    path.components().any(|component| {
-        component
-            .as_os_str()
-            .to_str()
-            .is_some_and(|name| name == TRASH_FOLDER || name.starts_with(HIDDEN_TRASH))
+    path.parent().is_some_and(|folder| {
+        folder
+            .components()
+            .any(|component| trash_folder(component.as_os_str()))
+    })
+}
+
+/// Whether a folder named `name` is named as a trash is, wherever it lies:
+/// freedesktop's (`Trash`, in the data folder; `.Trash` or `.Trash-<uid>`,
+/// at the top of another disk) or Windows' on a disk it shares, whatever its
+/// letters' case (Windows writes `$Recycle.Bin` on its own disk,
+/// `$RECYCLE.BIN` on the others).
+pub(crate) fn trash_folder(name: &OsStr) -> bool {
+    name.to_str().is_some_and(|name| {
+        name == TRASH_FOLDER
+            || name.starts_with(HIDDEN_TRASH)
+            || name.eq_ignore_ascii_case(WINDOWS_TRASH)
     })
 }
 
 /// The trash folder of the freedesktop specification, in the data folder.
-pub(crate) const TRASH_FOLDER: &str = "Trash";
+const TRASH_FOLDER: &str = "Trash";
 /// What the trash of another disk is named, at its top (`.Trash`,
 /// `.Trash-1000`).
 const HIDDEN_TRASH: &str = ".Trash";
+/// What Windows names the trash at the top of each of its disks, since
+/// Vista. The `RECYCLER` of XP is left out: it is also a common name of a
+/// folder of the user's (« Recycler »).
+const WINDOWS_TRASH: &str = "$RECYCLE.BIN";
 
 /// What the trash's answer to moving `copy` makes of it.
 fn result_of(copy: &FileCopy, answer: Result<OsString, TrashError>) -> TrashResult {
@@ -277,6 +302,9 @@ struct Mover<'a> {
     bin: &'a Trash,
     exclusions: &'a Exclusions,
     deleted_at: &'a str,
+    /// Who moves: a copy of another owner keeps nothing, and none does
+    /// when the user is unknown.
+    user: Option<u32>,
 }
 
 impl Mover<'_> {
@@ -330,16 +358,11 @@ impl Mover<'_> {
     }
 
     /// Whether `other`, a copy not asked for, keeps the content of `copy`
-    /// when it goes: still there unchanged, and surely another file (a
-    /// filesystem that may show a file under another identity counts only on
-    /// the copy's own device). Each one passed over is traced.
+    /// when it goes: a sure keeper ([`Self::unsure`]), still there unchanged.
+    /// Each one passed over is traced.
     fn keeps(&self, copy: &FileCopy, other: &FileCopy) -> Result<(), KeepReason> {
-        let aliased = self
-            .report
-            .root(other.root())
-            .is_none_or(|root| root.may_alias)
-            && other.identity().device() != copy.identity().device();
-        let passed_over = if aliased || in_a_trash(other.path()) {
+        let unsure = self.unsure(copy, other);
+        let passed_over = if unsure.is_some() {
             KeepReason::NoSureKeeper
         } else {
             match self.located(other) {
@@ -351,6 +374,9 @@ impl Mover<'_> {
             copy = %copy.path().display(),
             keeper = %other.path().display(),
             reason = passed_over.key(),
+            unsure,
+            owner = other.seen().owner,
+            user = self.user,
             refusal = ?match passed_over {
                 KeepReason::Refused(refusal) => Some(refusal),
                 _ => None,
@@ -358,6 +384,32 @@ impl Mover<'_> {
             "keeper passed over"
         );
         Err(passed_over)
+    }
+
+    /// Why `other` cannot surely keep the content of `copy`, judged on what
+    /// the search read, `None` when it can: its root is not of the report
+    /// (`root`); it may be this very file shown again by another filesystem
+    /// (`alias`: on the copy's own device, it would have its identity); a
+    /// write dated back goes unseen there (`undated`); it lies in a trash,
+    /// on its way out (`trash`); or it is another account's, who may change
+    /// or remove it once the copy is gone (`owner`). Reading the keeper
+    /// again unchanged tells its owner is still the one read.
+    fn unsure(&self, copy: &FileCopy, other: &FileCopy) -> Option<&'static str> {
+        let Some(root) = self.report.root(other.root()) else {
+            return Some("root");
+        };
+        let aliased = root.may_alias && other.identity().device() != copy.identity().device();
+        if aliased {
+            Some("alias")
+        } else if root.undated {
+            Some("undated")
+        } else if in_a_trash(other.path()) {
+            Some("trash")
+        } else if self.user != Some(other.seen().owner) {
+            Some("owner")
+        } else {
+            None
+        }
     }
 
     /// The folder holding `copy`, reached from its root without a link, and
@@ -386,6 +438,10 @@ mod tests {
     use crate::duplicates::report::{Found, Root, SearchStats, Seen};
 
     const SIZE: u64 = 10;
+    /// Who moves the copies, and owns them unless told otherwise.
+    const USER: u32 = 1000;
+    /// Another account.
+    const OTHER_USER: u32 = 1001;
 
     fn status(inode: u64, size: u64, modified: SystemTime) -> EntryStatus {
         EntryStatus {
@@ -395,7 +451,7 @@ mod tests {
             modified,
             changed: modified,
             links: 1,
-            owner: 0,
+            owner: USER,
             sticky: false,
             locked: false,
             size,
@@ -404,62 +460,183 @@ mod tests {
         }
     }
 
-    /// A report of one group, `a` and `b` (`b` on device `b_device`, below
-    /// a root that may show files again or not); its dates.
-    fn report_with(b_device: u64, may_alias: bool) -> (DuplicateReport, SystemTime) {
+    /// What `b`, the other copy of the group, is.
+    #[derive(Clone, Copy)]
+    struct Other {
+        device: u64,
+        /// Its root's filesystem may show a file again.
+        may_alias: bool,
+        /// Its root's filesystem keeps no change date of its own.
+        undated: bool,
+        /// It lies in a trash folder.
+        trashed: bool,
+        owner: u32,
+    }
+
+    const SURE: Other = Other {
+        device: 1,
+        may_alias: false,
+        undated: false,
+        trashed: false,
+        owner: USER,
+    };
+
+    /// A report of one group, `a` and `b`; its dates.
+    fn report_with(b: Other) -> (DuplicateReport, SystemTime) {
         let modified = SystemTime::UNIX_EPOCH + Duration::from_secs(1000);
-        let found = |root: usize, name: &str, device, inode| {
+        let found = |root: usize, name: &str, device, inode, owner| {
             let mut status = status(inode, SIZE, modified);
             status.identity = FileIdentity::new(device, inode);
+            status.owner = owner;
             Found {
                 path: format!("/root{root}/{name}").into(),
                 root,
                 status: Seen::of(&status),
             }
         };
-        let root = |index: u64, may_alias| Root {
+        let root = |index: u64, may_alias, undated| Root {
             path: format!("/root{index}").into(),
             identity: FileIdentity::new(1, index),
             may_alias,
+            undated,
         };
         let report = DuplicateReport::new(
-            vec![vec![found(0, "a", 1, 2), found(1, "b", b_device, 3)]],
-            vec![root(0, false), root(1, may_alias)],
+            vec![vec![
+                found(0, "a", 1, 2, USER),
+                found(
+                    1,
+                    if b.trashed { "Trash/b" } else { "b" },
+                    b.device,
+                    3,
+                    b.owner,
+                ),
+            ]],
+            vec![root(0, false, false), root(1, b.may_alias, b.undated)],
             SearchStats::default(),
         );
         (report, modified)
     }
 
     fn report() -> (DuplicateReport, SystemTime) {
-        report_with(1, false)
+        report_with(SURE)
+    }
+
+    /// What `ask` makes of `a` and `b` for `user`.
+    fn judged<T>(
+        b: Other,
+        user: Option<u32>,
+        ask: impl Fn(&Mover<'_>, &FileCopy, &FileCopy) -> T,
+    ) -> T {
+        let temporary = tempfile::tempdir().unwrap();
+        let bin = Trash::in_folder(temporary.path()).unwrap();
+        let (report, _) = report_with(b);
+        let mover = Mover {
+            report: &report,
+            asked: &BTreeSet::new(),
+            bin: &bin,
+            exclusions: &Exclusions::none(),
+            deleted_at: "",
+            user,
+        };
+        let [a, b] = report.groups()[0].copies() else {
+            panic!("two copies");
+        };
+        ask(&mover, a, b)
+    }
+
+    /// Whether `b` keeps `a` for `user`. `/root1` does not exist: a keeper
+    /// read is `Changed`, one refused before any reading `NoSureKeeper`.
+    #[expect(
+        clippy::redundant_closure_for_method_calls,
+        reason = "`Mover::keeps` is of one lifetime, the closure of any"
+    )]
+    fn keeps(b: Other, user: Option<u32>) -> Result<(), KeepReason> {
+        judged(b, user, |mover, a, b| mover.keeps(a, b))
+    }
+
+    #[test]
+    #[expect(
+        clippy::redundant_closure_for_method_calls,
+        reason = "`Mover::unsure` is of one lifetime, the closure of any"
+    )]
+    fn the_first_cause_of_an_unsure_keeper_is_the_one_told() {
+        let unsure = |b| judged(b, Some(USER), |mover, a, b| mover.unsure(a, b));
+        assert_eq!(unsure(SURE), None);
+        let every = Other {
+            device: 2,
+            may_alias: true,
+            undated: true,
+            trashed: true,
+            owner: OTHER_USER,
+        };
+        assert_eq!(unsure(every), Some("alias"));
+        let no_alias = Other {
+            may_alias: false,
+            ..every
+        };
+        assert_eq!(unsure(no_alias), Some("undated"));
+        let dated = Other {
+            undated: false,
+            ..no_alias
+        };
+        assert_eq!(unsure(dated), Some("trash"));
+        let in_place = Other {
+            trashed: false,
+            ..dated
+        };
+        assert_eq!(unsure(in_place), Some("owner"));
     }
 
     #[test]
     fn a_copy_that_may_be_the_file_itself_is_no_keeper() {
-        let temporary = tempfile::tempdir().unwrap();
-        let bin = Trash::in_folder(temporary.path()).unwrap();
-        let none = Exclusions::none();
-        let asked = BTreeSet::new();
-        let keeps = |b_device, may_alias| {
-            let (report, _) = report_with(b_device, may_alias);
-            let mover = Mover {
-                report: &report,
-                asked: &asked,
-                bin: &bin,
-                exclusions: &none,
-                deleted_at: "",
-            };
-            let [a, b] = report.groups()[0].copies() else {
-                panic!("two copies");
-            };
-            mover.keeps(a, b)
-        };
+        let user = Some(USER);
         // On another device, through a filesystem that may show files again:
-        // refused without reading anything (`/root1` does not exist).
-        assert_eq!(keeps(2, true), Err(KeepReason::NoSureKeeper));
-        // Otherwise it is read, and here not found.
-        assert_eq!(keeps(2, false), Err(KeepReason::Changed));
-        assert_eq!(keeps(1, true), Err(KeepReason::Changed));
+        // refused without reading anything.
+        let elsewhere = Other {
+            device: 2,
+            may_alias: true,
+            ..SURE
+        };
+        assert_eq!(keeps(elsewhere, user), Err(KeepReason::NoSureKeeper));
+        // Otherwise it is read.
+        let sure_elsewhere = Other {
+            may_alias: false,
+            ..elsewhere
+        };
+        assert_eq!(keeps(sure_elsewhere, user), Err(KeepReason::Changed));
+        let aliasing_here = Other {
+            may_alias: true,
+            ..SURE
+        };
+        assert_eq!(keeps(aliasing_here, user), Err(KeepReason::Changed));
+    }
+
+    #[test]
+    fn a_copy_on_fat_keeps_nothing_on_any_device() {
+        let user = Some(USER);
+        let fat_here = Other {
+            undated: true,
+            ..SURE
+        };
+        assert_eq!(keeps(fat_here, user), Err(KeepReason::NoSureKeeper));
+        let fat_elsewhere = Other {
+            device: 2,
+            ..fat_here
+        };
+        assert_eq!(keeps(fat_elsewhere, user), Err(KeepReason::NoSureKeeper));
+    }
+
+    #[test]
+    fn a_copy_of_another_owner_keeps_nothing() {
+        let others = Other {
+            owner: OTHER_USER,
+            ..SURE
+        };
+        assert_eq!(keeps(others, Some(USER)), Err(KeepReason::NoSureKeeper));
+        // The same copy, for its owner, is read.
+        assert_eq!(keeps(others, Some(OTHER_USER)), Err(KeepReason::Changed));
+        assert_eq!(keeps(SURE, Some(USER)), Err(KeepReason::Changed));
+        assert_eq!(keeps(SURE, None), Err(KeepReason::NoSureKeeper));
     }
 
     #[test]
@@ -468,6 +645,8 @@ mod tests {
             "/home/f/.local/share/Trash/files/a",
             "/media/key/.Trash-1000/files/a",
             "/media/key/.Trash/1000/files/a",
+            "/media/win/$RECYCLE.BIN/S-1-5-21/$R1.jpg",
+            "/media/c/$Recycle.Bin/a",
         ] {
             assert!(in_a_trash(std::path::Path::new(path)), "{path}");
         }
@@ -475,6 +654,13 @@ mod tests {
             "/home/f/Documents/a",
             "/home/f/Trashed/a",
             "/home/f/Trash.txt",
+            "/home/f/RECYCLE.BIN/a",
+            "/home/f/$RECYCLE.BIN.txt",
+            "/home/f/$RECYCLE.BIN.old/a",
+            "/home/f/Documents/Recycler/a",
+            // A file named as a trash is no trash folder.
+            "/home/f/Documents/Trash",
+            "/home/f/$RECYCLE.BIN",
         ] {
             assert!(!in_a_trash(std::path::Path::new(path)), "{path}");
         }

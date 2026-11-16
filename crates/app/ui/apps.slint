@@ -6,10 +6,10 @@ import { LineEdit, ListView } from "std-widgets.slint";
 import { Theme, Screen } from "theme.slint";
 import {
     ActionButton, Banner, ButtonKind, Card, CheckMark, Detail, FocusRing, Icon, IconButton,
-    ModalFrame, ProgressBar, Title,
+    Badge, ModalFrame, ProgressBar, Title,
 } from "widgets.slint";
 import { Size, Words } from "cleaner-model.slint";
-import { AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, SourceShown, UninstallStep, UninstallWhy } from "apps-model.slint";
+import { AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, AppsTab, LeftoverLine, Leftovers, LeftoversBlock, SourceShown, UninstallStep, UninstallWhy } from "apps-model.slint";
 
 global AppWords {
     pure public function source(source: AppSource) -> string {
@@ -218,9 +218,18 @@ component AppRow inherits Rectangle {
 component Lines inherits FocusScope {
     accessible-role: list;
     accessible-label: @tr("Applications installées");
-    // Shown, it takes the keyboard: the arrows move in it at once.
+    // Shown, it takes the keyboard: the arrows move in it at once. Hidden
+    // behind the other tab, never: a key would go nowhere.
+    property <bool> shown: Apps.tab == AppsTab.installed;
     init => {
-        self.focus();
+        if self.shown {
+            self.focus();
+        }
+    }
+    changed shown => {
+        if self.shown {
+            self.focus();
+        }
     }
 
     function show(index: int) {
@@ -664,6 +673,403 @@ component Toast inherits Rectangle {
     }
 }
 
+// A tab: the one shown bold, underlined with the accent, said chosen.
+component Tab inherits Rectangle {
+    in property <string> text;
+    in property <AppsTab> tab;
+    // Said beside its name when not empty.
+    in property <string> badge;
+    property <bool> chosen: Apps.tab == root.tab;
+    height: Theme.app-tab-height;
+    accessible-role: AccessibleRole.tab;
+    accessible-label: root.badge == "" ? root.text : @tr("{}, {}", root.text, root.badge);
+    accessible-checkable: true;
+    accessible-checked: root.chosen;
+    accessible-action-default => {
+        Apps.tab = root.tab;
+    }
+    forward-focus: keys;
+    keys := FocusScope {
+        key-pressed(event) => {
+            if !event.repeat && (event.text == Key.Return || event.text == Key.Space) {
+                Apps.tab = root.tab;
+                return accept;
+            }
+            reject
+        }
+    }
+    TouchArea {
+        clicked => {
+            Apps.tab = root.tab;
+        }
+    }
+    FocusRing {
+        shown: keys.has-focus;
+        border-radius: Theme.radius-medium;
+    }
+    HorizontalLayout {
+        padding-left: Theme.spacing-m;
+        padding-right: Theme.spacing-m;
+        spacing: Theme.spacing-s;
+        Text {
+            text: root.text;
+            accessible-role: none;
+            color: root.chosen ? Theme.text : Theme.text-2;
+            font-weight: root.chosen ? Theme.weight-semibold : Theme.weight-medium;
+            vertical-alignment: center;
+        }
+        if root.badge != "": Badge {
+            text: root.badge;
+            tone: Theme.text-2;
+            tone-soft: Theme.surface-2;
+            y: (parent.height - self.height) / 2;
+        }
+    }
+    Rectangle {
+        y: parent.height - self.height;
+        height: Theme.focus-width;
+        background: root.chosen ? Theme.accent : transparent;
+    }
+}
+
+// A folder an application uninstalled left: checked to go to the trash,
+// or, too large to be checked, only shown.
+component LeftoverRow inherits Rectangle {
+    in property <LeftoverLine> line;
+    in property <int> index;
+    // The current line of the list that has the keyboard.
+    in property <bool> focused;
+    property <string> label: line.source == AppSource.snap
+        ? (line.known ? @tr("Données de {} (snap désinstallé)", line.name) : @tr("Données de {} (aucun snap de ce nom)", line.name))
+        : (line.known ? @tr("Données de {} (flatpak désinstallé)", line.name) : @tr("Données de {} (aucun flatpak de ce nom)", line.name));
+    property <bool> toggles: line.checkable && !Leftovers.analysing && !Leftovers.trashing;
+    // Fixed: the list scrolls to a line by its rank.
+    height: Theme.app-row-height;
+    accessible-role: list-item;
+    accessible-checkable: line.checkable;
+    accessible-checked: line.checked;
+    accessible-label: line.checkable ? @tr("{}, {}, {}", root.label, line.path, Words.size(line.size))
+        : @tr("{}, {}, trop de fichiers pour être vérifié", root.label, line.path);
+    accessible-action-default => {
+        if root.toggles {
+            Leftovers.toggle(root.index);
+        }
+    }
+    TouchArea {
+        enabled: root.toggles;
+        clicked => {
+            Leftovers.toggle(root.index);
+        }
+    }
+    FocusRing {
+        shown: root.focused;
+        border-radius: Theme.radius-medium;
+    }
+    HorizontalLayout {
+        padding-left: Theme.spacing-l;
+        padding-right: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        if line.checkable: CheckMark {
+            checked: line.checked;
+            y: (parent.height - self.height) / 2;
+        }
+        Icon {
+            source: @image-url("../assets/icons/folder.svg");
+            colorize: Theme.text-2;
+            width: Theme.icon;
+            height: Theme.icon;
+            y: (parent.height - self.height) / 2;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            Text {
+                text: root.label;
+                accessible-role: none;
+                color: Theme.text;
+                overflow: elide;
+            }
+            Detail {
+                text: line.checkable ? line.path : @tr("{} : trop de fichiers pour être vérifié, Okapi n'y touche pas.", line.path);
+                accessible-role: none;
+                overflow: elide;
+            }
+        }
+        if line.checkable: Text {
+            text: Words.size(line.size);
+            accessible-role: none;
+            color: Theme.text;
+            font-weight: Theme.weight-semibold;
+            vertical-alignment: center;
+        }
+    }
+    Rectangle {
+        y: parent.height - self.height;
+        height: Theme.border-width;
+        background: Theme.border;
+    }
+}
+
+// The leftovers, by the keyboard too: the arrows move, Space ticks.
+component LeftoverLines inherits FocusScope {
+    accessible-role: list;
+    accessible-label: @tr("Données laissées dans votre dossier personnel");
+    property <int> current;
+    // A list grown shorter keeps its line in it.
+    property <int> count: Leftovers.lines.length;
+    changed count => {
+        root.current = max(0, min(root.current, root.count - 1));
+    }
+
+    function show(index: int) {
+        let place = index * Theme.app-row-height;
+        if place < -view.content-y {
+            view.content-y = -place;
+        } else if place + Theme.app-row-height > -view.content-y + view.visible-height {
+            view.content-y = view.visible-height - place - Theme.app-row-height;
+        }
+    }
+
+    function move(index: int) {
+        if Leftovers.lines.length == 0 {
+            return;
+        }
+        root.current = clamp(index, 0, Leftovers.lines.length - 1);
+        root.show(root.current);
+    }
+
+    key-pressed(event) => {
+        if event.text == Key.DownArrow {
+            root.move(root.current + 1);
+            return accept;
+        }
+        if event.text == Key.UpArrow {
+            root.move(root.current - 1);
+            return accept;
+        }
+        if event.text == Key.Home {
+            root.move(0);
+            return accept;
+        }
+        if event.text == Key.End {
+            root.move(Leftovers.lines.length - 1);
+            return accept;
+        }
+        if event.text == Key.Space && !event.repeat && Leftovers.lines.length > 0 {
+            Leftovers.toggle(root.current);
+            return accept;
+        }
+        reject
+    }
+
+    view := ListView {
+        for line[index] in Leftovers.lines: LeftoverRow {
+            line: line;
+            index: index;
+            focused: root.has-focus && root.current == index;
+        }
+    }
+}
+
+// What applications uninstalled left: the folders to move to the trash,
+// the packages' settings the system keeps, or nothing.
+component LeftoversView inherits VerticalLayout {
+    spacing: Theme.spacing-l;
+    Detail {
+        text: @tr("Ce que des applis déjà désinstallées ont laissé derrière elles. Rien n'est mis à la corbeille sans votre accord.");
+        wrap: word-wrap;
+    }
+    if Leftovers.blocked == LeftoversBlock.settings: Banner {
+        warning: true;
+        text: @tr("Les réglages d'Okapi n'ont pas pu être lus : aucun reste n'est proposé. Le détail est dans le journal.");
+    }
+    if Leftovers.blocked == LeftoversBlock.variables: Banner {
+        warning: true;
+        text: @tr("Les dossiers du système n'ont pas pu être vérifiés : aucun reste n'est proposé. Le détail est dans le journal.");
+    }
+    if Leftovers.snaps-unread: Banner {
+        warning: true;
+        text: @tr("Les données des snaps n'ont pas pu être vérifiées : aucune n'est proposée. Le détail est dans le journal.");
+    }
+    if Leftovers.flatpaks-unread: Banner {
+        warning: true;
+        text: @tr("Les données des flatpaks n'ont pas pu être vérifiées : aucune n'est proposée. Le détail est dans le journal.");
+    }
+    if Leftovers.analysis-failed: Banner {
+        warning: true;
+        text: Leftovers.searched ? @tr("La dernière recherche des restes n'a pas abouti : la liste peut être ancienne. Le détail est dans le journal.")
+            : @tr("La recherche des restes n'a pas abouti. Le détail est dans le journal.");
+    }
+    if Leftovers.receipt: Banner {
+        warning: Leftovers.trash-failed || Leftovers.trash-interrupted || Leftovers.kept > 0 || Leftovers.unchecked > 0;
+        text: Leftovers.trash-failed ? @tr("Rien n'a été mis à la corbeille. Le détail est dans le journal.")
+            : Leftovers.trash-interrupted ? @tr("La mise à la corbeille s'est interrompue : regardez la corbeille pour savoir ce qui y est. Le détail est dans le journal.")
+            : Leftovers.kept == 0 && Leftovers.unchecked == 0
+            ? (Leftovers.trashed == 1 ? @tr("Un dossier mis à la corbeille : {}.", Words.size(Leftovers.trashed-size))
+                : @tr("{} dossiers mis à la corbeille : {}.", Leftovers.trashed, Words.size(Leftovers.trashed-size)))
+            : Leftovers.unchecked == 0
+            ? @tr("Mis à la corbeille : {} ({}). Laissés en place : {}. Le détail est dans le journal.",
+                Leftovers.trashed, Words.size(Leftovers.trashed-size), Leftovers.kept)
+            : @tr("Mis à la corbeille : {} ({}). Laissés en place : {}. À vérifier dans la corbeille : {}. Le détail est dans le journal.",
+                Leftovers.trashed, Words.size(Leftovers.trashed-size), Leftovers.kept, Leftovers.unchecked);
+        ActionButton {
+            kind: ButtonKind.ghost;
+            icon: @image-url("../assets/icons/x.svg");
+            text: "";
+            accessible-label: @tr("Fermer le message");
+            clicked => {
+                Leftovers.close-receipt();
+            }
+        }
+    }
+    if Leftovers.withheld > 0: Banner {
+        warning: true;
+        text: Leftovers.withheld == 1 ? @tr("Un dossier n'est pas proposé par sécurité : un montage ou des fichiers d'un autre utilisateur, ou une lecture impossible. Le détail est dans le journal.")
+            : @tr("{} dossiers ne sont pas proposés par sécurité : un montage ou des fichiers d'un autre utilisateur, ou une lecture impossible. Le détail est dans le journal.", Leftovers.withheld);
+    }
+    if Leftovers.analysing: ProgressBar {
+        indeterminate: true;
+        label: @tr("Recherche des restes… Rien n'est modifié.");
+    }
+    if Leftovers.trashing: ProgressBar {
+        indeterminate: true;
+        label: @tr("Mise à la corbeille…");
+    }
+    if Leftovers.lines.length > 0: Card {
+        vertical-stretch: 1;
+        VerticalLayout {
+            HorizontalLayout {
+                padding: Theme.spacing-l;
+                spacing: Theme.spacing-m;
+                Text {
+                    horizontal-stretch: 1;
+                    text: @tr("Données laissées dans votre dossier personnel");
+                    color: Theme.text;
+                    font-weight: Theme.weight-semibold;
+                }
+                if Leftovers.has-total: Detail {
+                    text: Words.size(Leftovers.total);
+                }
+            }
+            Rectangle {
+                height: Theme.border-width;
+                background: Theme.border;
+            }
+            LeftoverLines {
+                vertical-stretch: 1;
+            }
+            Rectangle {
+                background: Theme.surface-2;
+                HorizontalLayout {
+                    padding: Theme.spacing-m;
+                    padding-left: Theme.spacing-l;
+                    spacing: Theme.spacing-m;
+                    Detail {
+                        horizontal-stretch: 1;
+                        accessible-role: text;
+                        text: Leftovers.checked-count == 0 ? @tr("Rien de coché. Cochez ce que vous voulez mettre à la corbeille.")
+                            : Leftovers.checked-count == 1 ? @tr("Un dossier coché : {}.", Words.size(Leftovers.checked-size))
+                            : @tr("{} dossiers cochés : {}.", Leftovers.checked-count, Words.size(Leftovers.checked-size));
+                        vertical-alignment: center;
+                    }
+                    ActionButton {
+                        text: @tr("Mettre à la corbeille");
+                        kind: ButtonKind.danger;
+                        enabled: Leftovers.checked-count > 0 && !Leftovers.trashing && !Leftovers.analysing;
+                        clicked => {
+                            Leftovers.trash();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if Leftovers.residual > 0: Card {
+        VerticalLayout {
+            padding: Theme.spacing-l;
+            spacing: Theme.spacing-xs;
+            Text {
+                text: Leftovers.residual == 1 ? @tr("Réglages système laissés par un paquet Ubuntu désinstallé")
+                    : @tr("Réglages système laissés par {} paquets Ubuntu désinstallés", Leftovers.residual);
+                color: Theme.text;
+                font-weight: Theme.weight-semibold;
+                wrap: word-wrap;
+            }
+            Detail {
+                text: @tr("Une désinstallation simple garde les réglages d'un paquet dans les dossiers du système, au cas où vous le réinstalleriez. Ils ne prennent presque pas de place : Okapi les montre pour information et n'y touche pas.");
+                wrap: word-wrap;
+            }
+        }
+    }
+    if Leftovers.searched && !Leftovers.analysing && !Leftovers.snaps-unread && !Leftovers.flatpaks-unread && Leftovers.withheld == 0 && Leftovers.lines.length == 0 && Leftovers.residual == 0: Card {
+        vertical-stretch: 1;
+        VerticalLayout {
+            alignment: center;
+            padding: Theme.spacing-xxl;
+            spacing: Theme.spacing-s;
+            Text {
+                text: @tr("Aucun reste trouvé");
+                color: Theme.text;
+                font-size: Theme.font-title;
+                font-weight: Theme.weight-semibold;
+                horizontal-alignment: center;
+            }
+            Detail {
+                text: @tr("Les applis désinstallées n'ont rien laissé dans votre dossier personnel.");
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+    if Leftovers.lines.length == 0: Rectangle {
+        vertical-stretch: 1;
+    }
+}
+
+// Asked once before folders go to the trash. Closed by its buttons or
+// Escape, never by a click outside.
+component LeftoversConfirm inherits ModalFrame {
+    label: question.text;
+    escaped => {
+        Leftovers.cancel();
+    }
+    question := Text {
+        text: Leftovers.checked-count == 1 ? @tr("Mettre un dossier à la corbeille ?")
+            : @tr("Mettre {} dossiers à la corbeille ?", Leftovers.checked-count);
+        accessible-role: none;
+        color: Theme.text;
+        font-size: Theme.font-title;
+        font-weight: Theme.weight-semibold;
+        wrap: word-wrap;
+    }
+    Detail {
+        text: Leftovers.checked-count == 1 ? @tr("{}. Vous pourrez le restaurer depuis la corbeille.", Words.size(Leftovers.checked-size))
+            : @tr("{}. Vous pourrez les restaurer depuis la corbeille.", Words.size(Leftovers.checked-size));
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        alignment: end;
+        spacing: Theme.spacing-s;
+        cancel := ActionButton {
+            text: @tr("Annuler");
+            kind: ButtonKind.ghost;
+            clicked => {
+                Leftovers.cancel();
+            }
+        }
+        ActionButton {
+            text: @tr("Mettre à la corbeille");
+            kind: ButtonKind.danger;
+            clicked => {
+                Leftovers.confirm();
+            }
+        }
+    }
+    init => {
+        cancel.focus();
+    }
+}
+
 // A filter of the segmented control: the one chosen raised, bold, ticked.
 component Segment inherits Rectangle {
     in property <string> text;
@@ -733,6 +1139,9 @@ export component AppsPage inherits Rectangle {
         if self.asking {
             uninstall.show();
         }
+        if self.confirming {
+            confirm.show();
+        }
     }
     changed asking => {
         if self.asking {
@@ -749,13 +1158,28 @@ export component AppsPage inherits Rectangle {
         width: Theme.modal-width;
     }
 
+    // Opened and closed by Rust too.
+    property <bool> confirming: Leftovers.confirming;
+    changed confirming => {
+        if self.confirming {
+            confirm.show();
+        } else {
+            confirm.close();
+        }
+    }
+    confirm := LeftoversConfirm {
+        x: (root.width - Theme.modal-width) / 2;
+        y: root.height / 4;
+        width: Theme.modal-width;
+    }
+
     keys := FocusScope {
         key-pressed(event) => {
-            if event.modifiers.control && (event.text == "f" || event.text == "F") {
+            if Apps.tab == AppsTab.installed && event.modifiers.control && (event.text == "f" || event.text == "F") {
                 search.focus();
                 return accept;
             }
-            if event.text == Key.Escape && root.detail-shown {
+            if event.text == Key.Escape && Apps.tab == AppsTab.installed && root.detail-shown {
                 Apps.close-detail();
                 return accept;
             }
@@ -790,148 +1214,180 @@ export component AppsPage inherits Rectangle {
                     }
                 }
             }
-            if Apps.debs == SourceShown.busy: Banner {
-                warning: true;
-                text: @tr("Les paquets Ubuntu ne sont pas lisibles pour l'instant : une installation est en cours.");
-            }
-            if Apps.debs == SourceShown.failed: Banner {
-                warning: true;
-                text: @tr("Les paquets Ubuntu n'ont pas pu être lus. Le détail est dans le journal.");
-            }
-            if Apps.snaps == SourceShown.failed: Banner {
-                warning: true;
-                text: @tr("Les snaps ne sont pas lisibles : le service snapd ne répond pas.");
-            }
-            if Apps.flatpaks == SourceShown.failed: Banner {
-                warning: true;
-                text: @tr("Les flatpaks n'ont pas pu être lus. Le détail est dans le journal.");
-            }
-            if Apps.flatpaks == SourceShown.partial: Banner {
-                warning: true;
-                text: @tr("Une partie des flatpaks n'a pas pu être lue : certains peuvent manquer. Le détail est dans le journal.");
-            }
-            HorizontalLayout {
-                spacing: Theme.spacing-m;
-                search := LineEdit {
-                    horizontal-stretch: 1;
-                    placeholder-text: @tr("Chercher une appli ou un paquet");
-                    text <=> Apps.search;
-                    edited => {
-                        Apps.searched();
+            VerticalLayout {
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: Theme.spacing-xs;
+                    Tab {
+                        text: @tr("Installées");
+                        tab: AppsTab.installed;
+                    }
+                    Tab {
+                        text: @tr("Restes d'applis désinstallées");
+                        tab: AppsTab.leftovers;
+                        badge: Leftovers.has-total ? Words.size(Leftovers.total) : "";
                     }
                 }
                 Rectangle {
-                    border-radius: Theme.radius-medium;
-                    background: Theme.surface-2;
-                    border-width: Theme.border-width;
-                    border-color: Theme.border-strong;
-                    accessible-role: groupbox;
-                    accessible-label: @tr("Source");
-                    HorizontalLayout {
-                        padding: Theme.spacing-xxs;
-                        spacing: Theme.spacing-xxs;
-                        Segment {
-                            text: @tr("Toutes");
-                            filter: AppsFilter.all;
-                        }
-                        Segment {
-                            text: @tr("Ubuntu");
-                            filter: AppsFilter.deb;
-                        }
-                        Segment {
-                            text: @tr("Snap");
-                            filter: AppsFilter.snap;
-                        }
-                        if Apps.has-flatpak: Segment {
-                            text: @tr("Flatpak");
-                            filter: AppsFilter.flatpak;
-                        }
-                    }
+                    height: Theme.border-width;
+                    background: Theme.border;
                 }
             }
-            HorizontalLayout {
+            // Both tabs stay built, the other one hidden: the list keeps what
+            // it holds and where it was scrolled, and the window's minimum
+            // is that of either.
+            Rectangle {
                 vertical-stretch: 1;
-                spacing: Theme.spacing-l;
-                if !(Screen.narrow && root.detail-shown): Card {
-                    horizontal-stretch: 1;
-                    VerticalLayout {
-                        padding-top: Theme.spacing-xs;
-                        HorizontalLayout {
-                            padding-left: Theme.spacing-l + Theme.app-icon + Theme.spacing-m;
-                            padding-right: Theme.spacing-l;
-                            spacing: Theme.spacing-m;
-                            height: Theme.control-height;
-                            Detail {
-                                horizontal-stretch: 1;
-                                text: @tr("Nom");
-                                vertical-alignment: center;
-                                accessible-role: none;
-                            }
-                            Detail {
-                                width: Theme.app-col-size;
-                                text: @tr("Appli");
-                                horizontal-alignment: right;
-                                vertical-alignment: center;
-                                accessible-role: none;
-                            }
-                            Detail {
-                                width: Theme.app-col-data;
-                                text: @tr("Données");
-                                horizontal-alignment: right;
-                                vertical-alignment: center;
-                                accessible-role: none;
-                            }
-                            Detail {
-                                width: Screen.narrow ? Theme.app-bar-width-narrow : Theme.app-bar-width;
-                                text: @tr("Place prise");
-                                horizontal-alignment: right;
-                                vertical-alignment: center;
-                                accessible-role: none;
+                LeftoversView {
+                    visible: Apps.tab == AppsTab.leftovers;
+                }
+                VerticalLayout {
+                    visible: Apps.tab == AppsTab.installed;
+                    spacing: Theme.spacing-l;
+                    if Apps.debs == SourceShown.busy: Banner {
+                        warning: true;
+                        text: @tr("Les paquets Ubuntu ne sont pas lisibles pour l'instant : une installation est en cours.");
+                    }
+                    if Apps.debs == SourceShown.failed: Banner {
+                        warning: true;
+                        text: @tr("Les paquets Ubuntu n'ont pas pu être lus. Le détail est dans le journal.");
+                    }
+                    if Apps.snaps == SourceShown.failed: Banner {
+                        warning: true;
+                        text: @tr("Les snaps ne sont pas lisibles : le service snapd ne répond pas.");
+                    }
+                    if Apps.flatpaks == SourceShown.failed: Banner {
+                        warning: true;
+                        text: @tr("Les flatpaks n'ont pas pu être lus. Le détail est dans le journal.");
+                    }
+                    if Apps.flatpaks == SourceShown.partial: Banner {
+                        warning: true;
+                        text: @tr("Une partie des flatpaks n'a pas pu être lue : certains peuvent manquer. Le détail est dans le journal.");
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.spacing-m;
+                        search := LineEdit {
+                            horizontal-stretch: 1;
+                            placeholder-text: @tr("Chercher une appli ou un paquet");
+                            text <=> Apps.search;
+                            edited => {
+                                Apps.searched();
                             }
                         }
                         Rectangle {
-                            height: Theme.border-width;
-                            background: Theme.border;
-                        }
-                        // Never built again while a search is typed: it would take
-                        // the keyboard from the search.
-                        Rectangle {
-                            vertical-stretch: 1;
-                            Lines {
-                                visible: Apps.lines.length > 0 || Apps.search == "";
-                            }
-                            if Apps.lines.length == 0 && Apps.search != "": VerticalLayout {
-                            alignment: center;
-                            padding: Theme.spacing-xxl;
-                            spacing: Theme.spacing-s;
-                            Text {
-                                text: @tr("Aucune appli ne correspond à « {} »", Apps.search);
-                                color: Theme.text;
-                                font-weight: Theme.weight-semibold;
-                                horizontal-alignment: center;
-                                wrap: word-wrap;
-                            }
-                            Detail {
-                                text: @tr("La recherche porte sur le nom de l'appli et sur le nom de son paquet, dans toutes les sources.");
-                                horizontal-alignment: center;
-                            }
+                            border-radius: Theme.radius-medium;
+                            background: Theme.surface-2;
+                            border-width: Theme.border-width;
+                            border-color: Theme.border-strong;
+                            accessible-role: groupbox;
+                            accessible-label: @tr("Source");
                             HorizontalLayout {
-                                alignment: center;
-                                ActionButton {
-                                    text: @tr("Effacer la recherche");
-                                    kind: ButtonKind.ghost;
-                                    clicked => {
-                                        Apps.search = "";
-                                        Apps.searched();
-                                    }
+                                padding: Theme.spacing-xxs;
+                                spacing: Theme.spacing-xxs;
+                                Segment {
+                                    text: @tr("Toutes");
+                                    filter: AppsFilter.all;
+                                }
+                                Segment {
+                                    text: @tr("Ubuntu");
+                                    filter: AppsFilter.deb;
+                                }
+                                Segment {
+                                    text: @tr("Snap");
+                                    filter: AppsFilter.snap;
+                                }
+                                if Apps.has-flatpak: Segment {
+                                    text: @tr("Flatpak");
+                                    filter: AppsFilter.flatpak;
                                 }
                             }
                         }
+                    }
+                    HorizontalLayout {
+                        vertical-stretch: 1;
+                        spacing: Theme.spacing-l;
+                        if !(Screen.narrow && root.detail-shown): Card {
+                            horizontal-stretch: 1;
+                            VerticalLayout {
+                                padding-top: Theme.spacing-xs;
+                                HorizontalLayout {
+                                    padding-left: Theme.spacing-l + Theme.app-icon + Theme.spacing-m;
+                                    padding-right: Theme.spacing-l;
+                                    spacing: Theme.spacing-m;
+                                    height: Theme.control-height;
+                                    Detail {
+                                        horizontal-stretch: 1;
+                                        text: @tr("Nom");
+                                        vertical-alignment: center;
+                                        accessible-role: none;
+                                    }
+                                    Detail {
+                                        width: Theme.app-col-size;
+                                        text: @tr("Appli");
+                                        horizontal-alignment: right;
+                                        vertical-alignment: center;
+                                        accessible-role: none;
+                                    }
+                                    Detail {
+                                        width: Theme.app-col-data;
+                                        text: @tr("Données");
+                                        horizontal-alignment: right;
+                                        vertical-alignment: center;
+                                        accessible-role: none;
+                                    }
+                                    Detail {
+                                        width: Screen.narrow ? Theme.app-bar-width-narrow : Theme.app-bar-width;
+                                        text: @tr("Place prise");
+                                        horizontal-alignment: right;
+                                        vertical-alignment: center;
+                                        accessible-role: none;
+                                    }
+                                }
+                                Rectangle {
+                                    height: Theme.border-width;
+                                    background: Theme.border;
+                                }
+                                // Never built again while a search is typed: it would take
+                                // the keyboard from the search.
+                                Rectangle {
+                                    vertical-stretch: 1;
+                                    Lines {
+                                        visible: Apps.lines.length > 0 || Apps.search == "";
+                                    }
+                                    if Apps.lines.length == 0 && Apps.search != "": VerticalLayout {
+                                    alignment: center;
+                                    padding: Theme.spacing-xxl;
+                                    spacing: Theme.spacing-s;
+                                    Text {
+                                        text: @tr("Aucune appli ne correspond à « {} »", Apps.search);
+                                        color: Theme.text;
+                                        font-weight: Theme.weight-semibold;
+                                        horizontal-alignment: center;
+                                        wrap: word-wrap;
+                                    }
+                                    Detail {
+                                        text: @tr("La recherche porte sur le nom de l'appli et sur le nom de son paquet, dans toutes les sources.");
+                                        horizontal-alignment: center;
+                                    }
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        ActionButton {
+                                            text: @tr("Effacer la recherche");
+                                            kind: ButtonKind.ghost;
+                                            clicked => {
+                                                Apps.search = "";
+                                                Apps.searched();
+                                            }
+                                        }
+                                    }
+                                }
+                                }
+                                Rest { }
+                            }
                         }
-                        Rest { }
+                        if root.detail-shown: Panel { }
                     }
                 }
-                if root.detail-shown: Panel { }
             }
         }
     }

@@ -323,6 +323,21 @@ impl SettingsScreen {
     ///
     /// [`Unsaved`].
     pub fn wait_for_writes(&self) -> Result<(), Unsaved> {
+        self.settle_writes(true)
+    }
+
+    /// [`Self::wait_for_writes`] for a reader that must not take the one
+    /// telling of a failure from the cleaner (the leftovers): a failure is
+    /// refused all the same, and still said to the next reader.
+    ///
+    /// # Errors
+    ///
+    /// [`Unsaved`].
+    pub fn look_at_writes(&self) -> Result<(), Unsaved> {
+        self.settle_writes(false)
+    }
+
+    fn settle_writes(&self, tell: bool) -> Result<(), Unsaved> {
         let (last, _) = self.settled();
         self.said(last);
         // Looked at after: a writer gone has nothing under way any more.
@@ -330,7 +345,9 @@ impl SettingsScreen {
         if writing {
             return Err(Unsaved::Pending);
         }
-        if std::mem::take(&mut self.0.borrow_mut().untold) {
+        let untold = &mut self.0.borrow_mut().untold;
+        if *untold {
+            *untold = !tell;
             return Err(Unsaved::Failed);
         }
         Ok(())

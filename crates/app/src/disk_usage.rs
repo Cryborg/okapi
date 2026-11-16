@@ -78,12 +78,10 @@ impl DiskSeams {
             .inspect_err(|error| tracing::warn!(?error, "home folder unknown"))
             .ok();
         let folder = |wanted| {
-            variables.as_ref().and_then(|variables| {
-                variables
-                    .iter()
-                    .find(|(variable, _)| *variable == wanted)
-                    .map(|(_, path)| path.to_path_buf())
-            })
+            variables
+                .as_ref()
+                .and_then(|variables| variables.value_of(wanted))
+                .map(Path::to_path_buf)
         };
         Self {
             home: folder(okapi_rules::Variable::Home),

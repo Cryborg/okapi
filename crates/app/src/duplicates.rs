@@ -40,15 +40,15 @@ use choice::{Folder, Quick};
 use rows::{GroupChoice, Line, View, name_of};
 
 /// Never searched: what snapd installs is no duplicate of the user's.
-const SNAP_FOLDER: &str = "snap";
-/// How long the window's closing waits for a move to the trash to end:
-/// hundreds of renames take less than a second.
-const TRASH_WAIT: Duration = Duration::from_secs(5);
+const SNAP_FOLDER: &str = okapi_tools::apps::snap::SNAP_DATA;
+/// How long the window's closing waits for a move to the trash to end, of
+/// duplicates or of leftovers: hundreds of renames take less than a second.
+pub(crate) const TRASH_WAIT: Duration = Duration::from_secs(5);
 /// The characters a path takes before the page says how many it may.
 const DEFAULT_ROOM: usize = 60;
 
 /// Reads the exclusions of the settings, once the writes under way are
-/// done (the cleaner's own reading).
+/// done (the cleaner's own reading): the duplicates' and the leftovers'.
 pub type ReadExclusions = Rc<dyn Fn() -> Result<Vec<PathBuf>, Problem>>;
 /// The personal folders named below a home folder.
 pub type ReadFolders = Arc<dyn Fn(&Path) -> io::Result<Vec<PersonalFolder>> + Send + Sync>;

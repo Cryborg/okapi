@@ -796,6 +796,20 @@ fn a_writer_gone_is_said_and_nothing_can_be_changed_any_more() {
 }
 
 #[test]
+fn a_failure_looked_at_is_still_told_to_the_next_reader() {
+    // Catches the leftovers, read in the background, taking the one telling
+    // of a lost exclusion from the cleaner: it would then clean without it.
+    let sandbox = Sandbox::writing_with(failing);
+    let (window, screens) = sandbox.window();
+    preferences(&window).invoke_toggle_deletion_log();
+    assert_eq!(screens.3.look_at_writes(), Err(Unsaved::Failed));
+    assert_eq!(screens.3.look_at_writes(), Err(Unsaved::Failed));
+    assert_eq!(screens.3.wait_for_writes(), Err(Unsaved::Failed));
+    assert_eq!(screens.3.wait_for_writes(), Ok(()), "told once");
+    assert_eq!(screens.3.look_at_writes(), Ok(()));
+}
+
+#[test]
 fn a_failed_write_is_said_by_the_screen_alone() {
     // Slower than the first look: the screen looks again until it is done.
     let sandbox = Sandbox::writing_with(slow_failing);

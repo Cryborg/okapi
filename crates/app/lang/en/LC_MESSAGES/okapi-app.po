@@ -3518,3 +3518,183 @@ msgstr "And 1 more."
 msgctxt "UpdatesWords"
 msgid "{} et 1 autre"
 msgstr "{} and 1 more"
+
+msgctxt "Tab"
+msgid "{}, {}"
+msgstr "{}, {}"
+
+msgctxt "AppsPage"
+msgid "Installées"
+msgstr "Installed"
+
+msgctxt "AppsPage"
+msgid "Restes d'applis désinstallées"
+msgstr "Leftovers of uninstalled apps"
+
+msgctxt "LeftoverRow"
+msgid "Données de {} (snap désinstallé)"
+msgstr "Data of {} (uninstalled snap)"
+
+msgctxt "LeftoverRow"
+msgid "Données de {} (aucun snap de ce nom)"
+msgstr "Data of {} (no snap of this name)"
+
+msgctxt "LeftoverRow"
+msgid "Données de {} (flatpak désinstallé)"
+msgstr "Data of {} (uninstalled flatpak)"
+
+msgctxt "LeftoverRow"
+msgid "Données de {} (aucun flatpak de ce nom)"
+msgstr "Data of {} (no flatpak of this name)"
+
+msgctxt "LeftoverRow"
+msgid "{}, {}, {}"
+msgstr "{}, {}, {}"
+
+msgctxt "LeftoverRow"
+msgid "{}, {}, trop de fichiers pour être vérifié"
+msgstr "{}, {}, too many files to be checked"
+
+msgctxt "LeftoverRow"
+msgid "{} : trop de fichiers pour être vérifié, Okapi n'y touche pas."
+msgstr "{}: too many files to be checked, Okapi leaves it alone."
+
+msgctxt "LeftoverLines"
+msgid "Données laissées dans votre dossier personnel"
+msgstr "Data left in your home folder"
+
+msgctxt "LeftoversView"
+msgid "Ce que des applis déjà désinstallées ont laissé derrière elles. Rien n'est mis à la corbeille sans votre accord."
+msgstr "What apps already uninstalled left behind. Nothing goes to the trash without your consent."
+
+msgctxt "LeftoversView"
+msgid "Les réglages d'Okapi n'ont pas pu être lus : aucun reste n'est proposé. Le détail est dans le journal."
+msgstr "Okapi's settings could not be read: no leftover is offered. The details are in the log."
+
+msgctxt "LeftoversView"
+msgid "Les dossiers du système n'ont pas pu être vérifiés : aucun reste n'est proposé. Le détail est dans le journal."
+msgstr "The system's folders could not be checked: no leftover is offered. The details are in the log."
+
+msgctxt "LeftoversView"
+msgid "Les données des snaps n'ont pas pu être vérifiées : aucune n'est proposée. Le détail est dans le journal."
+msgstr "The snaps' data could not be checked: none is offered. The details are in the log."
+
+msgctxt "LeftoversView"
+msgid "Les données des flatpaks n'ont pas pu être vérifiées : aucune n'est proposée. Le détail est dans le journal."
+msgstr "The flatpaks' data could not be checked: none is offered. The details are in the log."
+
+msgctxt "LeftoversView"
+msgid "Un dossier mis à la corbeille : {}."
+msgstr "One folder moved to the trash: {}."
+
+msgctxt "LeftoversView"
+msgid "{} dossiers mis à la corbeille : {}."
+msgstr "{} folders moved to the trash: {}."
+
+msgctxt "LeftoversView"
+msgid "La dernière recherche des restes n'a pas abouti : la liste peut être ancienne. Le détail est dans le journal."
+msgstr "The last search for leftovers did not finish: the list may be old. The details are in the log."
+
+msgctxt "LeftoversView"
+msgid "La mise à la corbeille s'est interrompue : regardez la corbeille pour savoir ce qui y est. Le détail est dans le journal."
+msgstr "The move to the trash stopped short: look in the trash to see what is there. The details are in the log."
+
+msgctxt "LeftoversView"
+msgid "Un dossier n'est pas proposé par sécurité : un montage ou des fichiers d'un autre utilisateur, ou une lecture impossible. Le détail est dans le journal."
+msgstr "One folder is not offered, for safety: a mount or another user's files, or a reading that failed. The details are in the log."
+
+msgctxt "LeftoversView"
+msgid "{} dossiers ne sont pas proposés par sécurité : un montage ou des fichiers d'un autre utilisateur, ou une lecture impossible. Le détail est dans le journal."
+msgstr "{} folders are not offered, for safety: a mount or another user's files, or a reading that failed. The details are in the log."
+
+msgctxt "LeftoversView"
+msgid "La recherche des restes n'a pas abouti. Le détail est dans le journal."
+msgstr "The search for leftovers did not finish. The details are in the log."
+
+msgctxt "LeftoversView"
+msgid "Rien n'a été mis à la corbeille. Le détail est dans le journal."
+msgstr "Nothing was moved to the trash. The details are in the log."
+
+msgctxt "LeftoversView"
+msgid "Mis à la corbeille : {} ({}). Laissés en place : {}. Le détail est dans le journal."
+msgstr "Moved to the trash: {} ({}). Left in place: {}. The details are in the log."
+
+msgctxt "LeftoversView"
+msgid "Mis à la corbeille : {} ({}). Laissés en place : {}. À vérifier dans la corbeille : {}. Le détail est dans le journal."
+msgstr "Moved to the trash: {} ({}). Left in place: {}. To check in the trash: {}. The details are in the log."
+
+msgctxt "LeftoversView"
+msgid "Fermer le message"
+msgstr "Close the message"
+
+msgctxt "LeftoversView"
+msgid "Mise à la corbeille…"
+msgstr "Moving to the trash…"
+
+msgctxt "LeftoversView"
+msgid "Recherche des restes… Rien n'est modifié."
+msgstr "Looking for leftovers… Nothing is changed."
+
+msgctxt "LeftoversView"
+msgid "Données laissées dans votre dossier personnel"
+msgstr "Data left in your home folder"
+
+msgctxt "LeftoversView"
+msgid "Rien de coché. Cochez ce que vous voulez mettre à la corbeille."
+msgstr "Nothing checked. Check what you want to move to the trash."
+
+msgctxt "LeftoversView"
+msgid "Un dossier coché : {}."
+msgstr "One folder checked: {}."
+
+msgctxt "LeftoversView"
+msgid "{} dossiers cochés : {}."
+msgstr "{} folders checked: {}."
+
+msgctxt "LeftoversView"
+msgid "Mettre à la corbeille"
+msgstr "Move to the trash"
+
+msgctxt "LeftoversView"
+msgid "Réglages système laissés par un paquet Ubuntu désinstallé"
+msgstr "System settings left by one uninstalled Ubuntu package"
+
+msgctxt "LeftoversView"
+msgid "Réglages système laissés par {} paquets Ubuntu désinstallés"
+msgstr "System settings left by {} uninstalled Ubuntu packages"
+
+msgctxt "LeftoversView"
+msgid "Une désinstallation simple garde les réglages d'un paquet dans les dossiers du système, au cas où vous le réinstalleriez. Ils ne prennent presque pas de place : Okapi les montre pour information et n'y touche pas."
+msgstr "A plain uninstallation keeps a package's settings in the system's folders, in case you install it again. They take almost no space: Okapi shows them for your information and leaves them alone."
+
+msgctxt "LeftoversView"
+msgid "Aucun reste trouvé"
+msgstr "No leftover found"
+
+msgctxt "LeftoversView"
+msgid "Les applis désinstallées n'ont rien laissé dans votre dossier personnel."
+msgstr "The uninstalled apps left nothing in your home folder."
+
+msgctxt "LeftoversConfirm"
+msgid "Mettre un dossier à la corbeille ?"
+msgstr "Move one folder to the trash?"
+
+msgctxt "LeftoversConfirm"
+msgid "Mettre {} dossiers à la corbeille ?"
+msgstr "Move {} folders to the trash?"
+
+msgctxt "LeftoversConfirm"
+msgid "{}. Vous pourrez le restaurer depuis la corbeille."
+msgstr "{}. You can restore it from the trash."
+
+msgctxt "LeftoversConfirm"
+msgid "{}. Vous pourrez les restaurer depuis la corbeille."
+msgstr "{}. You can restore them from the trash."
+
+msgctxt "LeftoversConfirm"
+msgid "Annuler"
+msgstr "Cancel"
+
+msgctxt "LeftoversConfirm"
+msgid "Mettre à la corbeille"
+msgstr "Move to the trash"

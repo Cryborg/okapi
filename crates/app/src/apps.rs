@@ -5,10 +5,12 @@
 //! a thread that writes its history line itself. Nothing here runs a
 //! command nor removes a file.
 
+pub mod leftovers;
 mod rows;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -53,7 +55,46 @@ pub struct AppsSeams {
     pub uninstaller: Arc<dyn Uninstaller>,
     pub record: Record,
     pub now: fn() -> Timestamp,
+    pub leftovers: leftovers::LeftoverSeams,
+    /// The home folder, as a leftover's path is shown under it.
+    pub home: Option<PathBuf>,
 }
+
+/// How the applications seen name `source`: written and read by this key.
+const fn source_key(source: Source) -> &'static str {
+    match source {
+        Source::Deb => "deb",
+        Source::Snap => "snap",
+        Source::Flatpak => "flatpak",
+    }
+}
+
+/// What a day is, in seconds: an application seen is dated by its day.
+const SECONDS_PER_DAY: i64 = 86_400;
+
+/// What Okapi keeps of `app`, seen installed on `day`: the names a folder it
+/// left may bear.
+fn seen_app(app: &okapi_tools::apps::App, day: i64) -> okapi_store::SeenApp {
+    let source = source_key(app.source);
+    // A flatpak's id ends with the application's own name (`org.gimp.GIMP`).
+    let last = (app.source == Source::Flatpak)
+        .then(|| app.id.rsplit('.').next().map(str::to_owned))
+        .flatten();
+    let names = std::iter::once(app.package.clone())
+        .chain(last)
+        .chain(std::iter::once(app.name.clone()))
+        .chain(app.aliases.iter().cloned())
+        .collect();
+    okapi_store::SeenApp {
+        source: source.to_owned(),
+        id: app.id.clone(),
+        shown: app.name.clone(),
+        names,
+        day,
+    }
+}
+
+pub use crate::duplicates::ReadExclusions;
 
 impl std::fmt::Debug for AppsSeams {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -62,13 +103,17 @@ impl std::fmt::Debug for AppsSeams {
 }
 
 impl AppsSeams {
-    /// The system's sources, services and history.
-    pub fn system() -> Self {
+    /// The system's sources, services and history, the home folder `home`
+    /// (canonical, as the leftovers' paths are).
+    pub fn system(home: Option<PathBuf>) -> Self {
+        let home = home.map(|home| home.canonicalize().unwrap_or(home));
         Self {
             read: Rc::new(read_system),
             uninstaller: system_uninstaller(),
             record: Arc::new(record_system),
             now: Timestamp::now,
+            leftovers: leftovers::LeftoverSeams::system(),
+            home,
         }
     }
 }
@@ -90,20 +135,22 @@ fn record_system(entry: &UninstallEntry) -> Result<(), HistoryUnavailable> {
 /// The system's sources, each on a thread of its own.
 fn read_system(language: Language, sink: &Sender<Arrival>, stop: &Arc<AtomicBool>) {
     let reading = okapi_tools::apps::Reading::session(language);
-    let home = okapi_platform::template_variables()
+    let variables = okapi_platform::template_variables()
         .inspect_err(|error| {
             tracing::warn!(
                 ?error,
                 "no home folder: the data of snaps and flatpaks not read"
             );
         })
-        .ok()
-        .and_then(|variables| {
-            variables
-                .iter()
-                .find(|(variable, _)| *variable == okapi_rules::Variable::Home)
-                .map(|(_, path)| path.to_path_buf())
-        });
+        .ok();
+    let folder = |wanted| {
+        variables
+            .as_ref()
+            .and_then(|variables| variables.value_of(wanted))
+            .map(Path::to_path_buf)
+    };
+    let home = folder(okapi_rules::Variable::Home);
+    let data_home = folder(okapi_rules::Variable::LocalShare);
     let debs = {
         let reading = reading.clone();
         Box::new(move || {
@@ -115,7 +162,7 @@ fn read_system(language: Language, sink: &Sender<Arrival>, stop: &Arc<AtomicBool
         let reading = reading.clone();
         Box::new(move || {
             okapi_tools::apps::flatpak::read_flatpaks(
-                &okapi_tools::apps::flatpak::installations(home.as_deref()),
+                &okapi_tools::apps::flatpak::installations(data_home.as_deref()),
                 home.as_deref(),
                 &reading,
             )
@@ -326,6 +373,9 @@ struct State {
     timer: slint::Timer,
     minutes_timer: slint::Timer,
     toast_timer: slint::Timer,
+    /// The exclusions of the settings: never a leftover there.
+    exclusions: ReadExclusions,
+    leftovers: leftovers::LeftoversState,
 }
 
 /// The applications screen.
@@ -339,8 +389,15 @@ impl std::fmt::Debug for AppsScreen {
 }
 
 impl AppsScreen {
-    pub fn attach(window: &ui::AppWindow, seams: AppsSeams, language: Language) -> Self {
+    pub fn attach(
+        window: &ui::AppWindow,
+        seams: AppsSeams,
+        exclusions: ReadExclusions,
+        language: Language,
+    ) -> Self {
         let state = State {
+            exclusions,
+            leftovers: leftovers::LeftoversState::default(),
             window: window.as_weak(),
             seams,
             language,
@@ -374,6 +431,7 @@ impl AppsScreen {
         apps.set_snaps(ui::SourceShown::Reading);
         apps.set_flatpaks(ui::SourceShown::Reading);
         let screen = Self(Rc::new(RefCell::new(state)));
+        screen.attach_leftovers(window);
         let weak = Rc::downgrade(&screen.0);
         let on = move |action: fn(&Self)| {
             let weak = weak.clone();
@@ -553,6 +611,8 @@ impl AppsScreen {
         // The screen keeps no sender: the reading ends when its threads do.
         read(language, &sink, &stop);
         drop(sink);
+        // It reads its own sources: it never waits for the list's measures.
+        self.analyse_leftovers();
         self.show_lines_now();
         self.watch();
     }
@@ -562,13 +622,14 @@ impl AppsScreen {
     fn read(&self) {
         self.take_arrivals();
         self.take_said();
+        self.take_leftovers();
         let (owed, on_page, busy) = {
             let mut state = self.0.borrow_mut();
             state.readings_since_sort = state.readings_since_sort.saturating_add(1);
             (
                 state.sort_owed,
                 state.on_page,
-                state.reading.is_some() || state.operation.is_some(),
+                state.reading.is_some() || state.operation.is_some() || state.leftovers.busy(),
             )
         };
         if owed {
@@ -637,6 +698,7 @@ impl AppsScreen {
     /// on return; otherwise it is whole, and what never came is said.
     fn reading_ended(&self) {
         let now = (self.0.borrow().seams.now)();
+        let mut remembered = Vec::new();
         let mut state = self.0.borrow_mut();
         let Some(reading) = state.reading.take() else {
             return;
@@ -674,10 +736,26 @@ impl AppsScreen {
                 partial,
                 "applications read to their end"
             );
+            // Only a whole reading says which are installed.
+            let whole = state
+                .sources
+                .values()
+                .all(|source| matches!(source, ui::SourceShown::Read | ui::SourceShown::Absent));
+            if whole {
+                let day = now.as_second().div_euclid(SECONDS_PER_DAY);
+                remembered = state
+                    .entries
+                    .values()
+                    .map(|entry| seen_app(&entry.app, day))
+                    .collect();
+            }
         }
         state.sort_owed = true;
         state.readings_since_sort = u32::MAX;
         drop(state);
+        if !remembered.is_empty() {
+            self.remember_seen(remembered);
+        }
         self.show_lines(false);
     }
 
@@ -1334,6 +1412,7 @@ impl AppsScreen {
     /// The window closes: measuring stops; an uninstallation running is
     /// left to its service, never waited for.
     pub fn shut_down(&self) {
+        self.wait_for_leftovers();
         let state = self.0.borrow();
         if let Some(reading) = &state.reading {
             reading.stop.store(true, Ordering::Relaxed);

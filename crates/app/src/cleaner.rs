@@ -167,9 +167,9 @@ impl Seams {
             },
             settings: crate::settings::SettingsSeams::system(disk.home.clone()),
             duplicates: crate::duplicates::DuplicateSeams::system(disk.home.clone()),
+            apps: crate::apps::AppsSeams::system(disk.home.clone()),
             disk,
             updates: crate::updates::UpdatesSeams::system(),
-            apps: crate::apps::AppsSeams::system(),
         }
     }
 }

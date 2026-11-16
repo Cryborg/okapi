@@ -122,8 +122,13 @@ fn window(
     // word.
     let read = Rc::clone(&seams.read);
     let settled = settings.clone();
-    seams.read = Rc::new(move || {
-        if let Err(unsaved) = settled.wait_for_writes() {
+    let read_settled = move |tell: bool| {
+        let waited = if tell {
+            settled.wait_for_writes()
+        } else {
+            settled.look_at_writes()
+        };
+        if let Err(unsaved) = waited {
             tracing::error!(
                 ?unsaved,
                 "the last change of the settings is not on the disk: not read, nothing starts"
@@ -134,7 +139,10 @@ fn window(
             });
         }
         read()
-    });
+    };
+    let read_settled = Rc::new(read_settled);
+    let telling = Rc::clone(&read_settled);
+    seams.read = Rc::new(move || telling(true));
     let disk = DiskUsageScreen::attach(&window, seams.disk.clone(), language);
     // The settings as the cleaner reads them, its writes waited for: an
     // exclusion just added is never missed by a search nor a move.
@@ -146,12 +154,25 @@ fn window(
         language,
     );
     let updates = UpdatesScreen::attach(&window, seams.updates.clone());
-    let apps = AppsScreen::attach(&window, seams.apps.clone(), language);
+    // The same settings: never a leftover where the user excluded. Read in
+    // the background, they leave a failure to be said to the cleaner.
+    let apps = AppsScreen::attach(
+        &window,
+        seams.apps.clone(),
+        Rc::new(move || read_settled(false).map(|inputs| inputs.exclusions)),
+        language,
+    );
     let screen = CleanerScreen::attach(&window, seams, language);
-    // Once the writes are done, the cleaner reads them again: a refusal
-    // they caused is lifted, or a failure said there.
+    // Once the writes are done, the cleaner reads them again, and the
+    // leftovers they held back are looked for: a refusal they caused is
+    // lifted, or a failure said there. The cleaner first: it is the one
+    // told of a failure, the leftovers then read the file as it is.
     let refreshed = screen.clone();
-    settings.when_written(Rc::new(move || refreshed.refresh()));
+    let written_apps = apps.clone();
+    settings.when_written(Rc::new(move || {
+        refreshed.refresh();
+        written_apps.settings_written();
+    }));
     let closing = screen.clone();
     let closing_apps = apps.clone();
     window.window().on_close_requested(move || {
@@ -807,79 +828,87 @@ mod tests {
         }
     }
 
+    /// The components whose texts are translated: each must have some.
+    const TRANSLATED_COMPONENTS: &[&str] = &[
+        "Sidebar",
+        "AboutPage",
+        "Words",
+        "Choosing",
+        "Scanning",
+        "Ended",
+        "ResultsPage",
+        "Confirmation",
+        "CleaningPage",
+        "ReceiptPage",
+        "DashboardPage",
+        "DashboardWords",
+        "WidgetCard",
+        "AnalyzeButton",
+        "ReclaimableWidget",
+        "SystemWidget",
+        "KeyValue",
+        "VolumeLine",
+        "DisksWidget",
+        "Applications",
+        "MemoryWidget",
+        "ProcessorWidget",
+        "EditBar",
+        "Grip",
+        "DropSlot",
+        "AddTile",
+        "AddDialog",
+        "ResetDialog",
+        "Toast",
+        "DiskWords",
+        "Start",
+        "Lines",
+        "Panel",
+        "Browse",
+        "Exclusions",
+        "General",
+        "SettingsPage",
+        "Preferences",
+        "UpdatesWords",
+        "Inline",
+        "SnapRow",
+        "SnapNote",
+        "Settled",
+        "UpdatesPage",
+        "Removals",
+        "Installing",
+        "Outcome",
+        "AppWords",
+        "AppRow",
+        "Rest",
+        "Uninstall",
+        "AppsPage",
+        "Tab",
+        "LeftoverRow",
+        "LeftoverLines",
+        "LeftoversView",
+        "LeftoversConfirm",
+        "DuplicateWords",
+        "RefusalBanner",
+        "PickLine",
+        "DuplicateStart",
+        "DuplicateSearching",
+        "TreeLine",
+        "Tree",
+        "DuplicatePanel",
+        "QuickMenu",
+        "DuplicateConfirmation",
+        "DuplicateResult",
+        "KeptLine",
+        "DuplicateReceipt",
+    ];
+
     #[test]
     fn every_text_is_translated_into_english() {
         let po_file =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("lang/en/LC_MESSAGES/okapi-app.po");
         let po = fs::read_to_string(po_file).unwrap();
         let texts = translatable_texts();
-        for context in [
-            "Sidebar",
-            "AboutPage",
-            "Words",
-            "Choosing",
-            "Scanning",
-            "Ended",
-            "ResultsPage",
-            "Confirmation",
-            "CleaningPage",
-            "ReceiptPage",
-            "DashboardPage",
-            "DashboardWords",
-            "WidgetCard",
-            "AnalyzeButton",
-            "ReclaimableWidget",
-            "SystemWidget",
-            "KeyValue",
-            "VolumeLine",
-            "DisksWidget",
-            "Applications",
-            "MemoryWidget",
-            "ProcessorWidget",
-            "EditBar",
-            "Grip",
-            "DropSlot",
-            "AddTile",
-            "AddDialog",
-            "ResetDialog",
-            "Toast",
-            "DiskWords",
-            "Start",
-            "Lines",
-            "Panel",
-            "Browse",
-            "Exclusions",
-            "General",
-            "SettingsPage",
-            "Preferences",
-            "UpdatesWords",
-            "Inline",
-            "SnapRow",
-            "SnapNote",
-            "Settled",
-            "UpdatesPage",
-            "Removals",
-            "Installing",
-            "Outcome",
-            "AppWords",
-            "AppRow",
-            "Rest",
-            "Uninstall",
-            "AppsPage",
-            "DuplicateWords",
-            "RefusalBanner",
-            "PickLine",
-            "DuplicateStart",
-            "DuplicateSearching",
-            "TreeLine",
-            "Tree",
-            "DuplicatePanel",
-            "QuickMenu",
-            "DuplicateConfirmation",
-            "DuplicateResult",
-            "KeptLine",
-            "DuplicateReceipt",
-        ] {
+        for context in TRANSLATED_COMPONENTS {
             assert!(
                 texts.iter().any(|(component, _)| component == context),
                 "{context}"

@@ -27,6 +27,8 @@ pub(crate) fn inert() -> AppsSeams {
         uninstaller: Fake::new(Vec::new(), Ended::Done(Gone::default())),
         record: Arc::new(|_| Ok(())),
         now: Timestamp::now,
+        leftovers: super::leftovers::tests::inert(),
+        home: None,
     }
 }
 
@@ -37,6 +39,7 @@ fn app(source: Source, id: &str, name: &str, bytes: u64) -> App {
         id: id.to_owned(),
         package: package.clone(),
         name: name.to_owned(),
+        aliases: Vec::new(),
         version: "1.0".to_owned(),
         publisher: None,
         origin: (source == Source::Deb).then_some(Origin::ByUser),
@@ -63,7 +66,7 @@ fn app(source: Source, id: &str, name: &str, bytes: u64) -> App {
 /// The machine of these tests: GIMP (a deb, 3 MB), Files (the system's),
 /// Android Studio (a snap, 1 MB, its data 5 MB measured after, an old
 /// version of 1 MB), Builder (a flatpak, 2 MB measured).
-fn arrivals() -> Vec<Arrival> {
+pub(crate) fn arrivals() -> Vec<Arrival> {
     let studio = App {
         old_bytes: 1_000_000,
         old_versions: 1,
@@ -246,6 +249,8 @@ fn on_apps_reading(
                 Ok(())
             }),
             now: Timestamp::now,
+            leftovers: super::leftovers::tests::inert(),
+            home: None,
         },
         ..seams_never_scanning()
     };
@@ -406,6 +411,37 @@ fn the_search_reads_names_and_packages_and_the_filter_the_source() {
         ["GIMP"],
         "the filter and the search together"
     );
+}
+
+#[test]
+fn the_list_hidden_behind_the_leftovers_never_takes_the_keyboard() {
+    // Catches the list of the installed applications, built hidden behind
+    // the other tab, taking the keyboard: a key would go nowhere; and the
+    // search no longer reached by Ctrl+F.
+    let (window, ..) = on_apps(inert().uninstaller);
+    let current = apps(&window).get_current();
+    apps(&window).set_tab(ui::AppsTab::Leftovers);
+    button(&window, "Accueil").invoke_accessible_default_action();
+    button(&window, "Applications").invoke_accessible_default_action();
+    press(&window, slint::platform::Key::DownArrow);
+    assert_eq!(apps(&window).get_current(), current, "hidden, untouched");
+    apps(&window).set_tab(ui::AppsTab::Installed);
+    press(&window, slint::platform::Key::DownArrow);
+    assert_eq!(
+        apps(&window).get_current(),
+        current + 1,
+        "shown again, it takes the keyboard"
+    );
+    let control = slint::SharedString::from(slint::platform::Key::Control);
+    let event = |event| window.window().dispatch_event(event);
+    event(slint::platform::WindowEvent::KeyPressed {
+        text: control.clone(),
+    });
+    event(slint::platform::WindowEvent::KeyPressed { text: "f".into() });
+    event(slint::platform::WindowEvent::KeyReleased { text: "f".into() });
+    event(slint::platform::WindowEvent::KeyReleased { text: control });
+    event(slint::platform::WindowEvent::KeyPressed { text: "g".into() });
+    assert_eq!(apps(&window).get_search(), "g", "Ctrl+F reached the search");
 }
 
 #[test]

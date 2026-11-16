@@ -933,6 +933,49 @@ fn apps(app: &ui::AppWindow, detail: bool, asking: bool) {
     }
 }
 
+/// The tab of leftovers, as on the mockup; empty when `empty`.
+fn apps_leftovers(app: &ui::AppWindow, empty: bool) {
+    apps(app, false, false);
+    app.global::<ui::Apps>().set_tab(ui::AppsTab::Leftovers);
+    let leftovers = app.global::<ui::Leftovers>();
+    leftovers.set_searched(true);
+    if empty {
+        return;
+    }
+    let line = |source, name: &str, known, path: &str, size: ui::Size, checked| ui::LeftoverLine {
+        source,
+        name: name.into(),
+        known,
+        path: path.into(),
+        size,
+        checkable: true,
+        checked,
+    };
+    leftovers.set_lines(ModelRc::new(VecModel::from(vec![
+        line(
+            ui::AppSource::Snap,
+            "Spotify",
+            true,
+            "~/snap/spotify",
+            size(1, 2, ui::SizeUnit::Gigabyte),
+            true,
+        ),
+        line(
+            ui::AppSource::Flatpak,
+            "org.gnome.Builder",
+            false,
+            "~/.var/app/org.gnome.Builder",
+            size(640, 0, ui::SizeUnit::Megabyte),
+            false,
+        ),
+    ])));
+    leftovers.set_total(size(1, 8, ui::SizeUnit::Gigabyte));
+    leftovers.set_has_total(true);
+    leftovers.set_checked_count(1);
+    leftovers.set_checked_size(size(1, 2, ui::SizeUnit::Gigabyte));
+    leftovers.set_residual(9);
+}
+
 /// The uninstallation of a flatpak asked, with its translations.
 fn apps_flatpak(app: &ui::AppWindow) {
     apps(app, false, false);
@@ -1020,8 +1063,10 @@ fn main() {
         "apps-small" => apps(&app, false, false),
         "apps-uninstall" => apps(&app, true, true),
         "apps-uninstall-flatpak" => apps_flatpak(&app),
+        "apps-leftovers" => apps_leftovers(&app, false),
+        "apps-leftovers-empty" => apps_leftovers(&app, true),
         other => panic!(
-            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak"
+            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

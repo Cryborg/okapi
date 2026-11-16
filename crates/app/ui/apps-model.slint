@@ -73,7 +73,70 @@ export enum UninstallStep { closed, checking, confirm, refused, running, failed 
 // Why an uninstallation did not happen.
 export enum UninstallWhy { none, absent, not-authorized, busy, unanswered, timed-out, not-found, unclear, service }
 
+// The tab shown: what is installed, or what applications uninstalled left.
+export enum AppsTab { installed, leftovers }
+
+// A folder an application uninstalled left.
+export struct LeftoverLine {
+    source: AppSource,
+    // The application's name as Okapi saw it installed, else its identifier.
+    name: string,
+    // Okapi saw it installed: it was uninstalled.
+    known: bool,
+    // `~/…`.
+    path: string,
+    size: Size,
+    // Small enough to be checked, hence moved.
+    checkable: bool,
+    checked: bool,
+}
+
+// Why no leftover is proposed at all.
+export enum LeftoversBlock { none, settings, variables }
+
+export global Leftovers {
+    in property <bool> analysing;
+    in property <[LeftoverLine]> lines;
+    // What the leftovers that can be moved take: the tab's badge, when
+    // there is any.
+    in property <Size> total;
+    in property <bool> has-total;
+    // Packages removed whose settings stay; 0 when none or unknown.
+    in property <int> residual;
+    // A report is shown: what it did not find is known to be absent.
+    in property <bool> searched;
+    // The last analysis ended without a word, or could not start.
+    in property <bool> analysis-failed;
+    // Folders no application bears, not proposed for safety.
+    in property <int> withheld;
+    in property <bool> snaps-unread;
+    in property <bool> flatpaks-unread;
+    in property <LeftoversBlock> blocked;
+    in property <int> checked-count;
+    in property <Size> checked-size;
+    in property <bool> confirming;
+    in property <bool> trashing;
+    // What the last move did, until closed.
+    in property <bool> receipt;
+    // Nothing was moved: the move could not run.
+    in property <bool> trash-failed;
+    // The move ended without a word: what it did is in the trash.
+    in property <bool> trash-interrupted;
+    in property <int> trashed;
+    in property <Size> trashed-size;
+    in property <int> kept;
+    // In the trash, not known to be what was checked.
+    in property <int> unchecked;
+
+    callback toggle(int);
+    callback trash();
+    callback confirm();
+    callback cancel();
+    callback close-receipt();
+}
+
 export global Apps {
+    in-out property <AppsTab> tab;
     in property <bool> reading;
     // An uninstallation runs, its window shown or not: no other, no reading.
     in property <bool> busy;

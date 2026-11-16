@@ -2,7 +2,7 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
-use okapi_platform::IDENTITY_SUPPORTED;
+use okapi_platform::{IDENTITY_SUPPORTED, ROOT_USER};
 use okapi_rules::{MiscRules, RuleSet, TemplateVariables};
 
 use crate::options::ScanOptions;
@@ -218,9 +218,9 @@ pub(crate) fn scan_entries(
             .unwrap_or_default();
         progress.issues = report.issue_count();
         // What needs the administrator will be removed by root, through the
-        // privileged helper: the sticky bit does not stand in its way.
+        // privileged helper.
         let needs_admin = group_attributes.is_some_and(|attributes| attributes.needs_admin);
-        let remover = if needs_admin { None } else { user };
+        let remover = if needs_admin { Some(ROOT_USER) } else { user };
         let withheld = root.kind == PlannedKind::Withheld;
         let found = match root.kind {
             PlannedKind::File(found) => {
@@ -238,6 +238,7 @@ pub(crate) fn scan_entries(
                     readers,
                     limits,
                     remover,
+                    root_owner: None,
                 };
                 walk_root(&mut report, &root, &origins, context, &mut progress)
             }

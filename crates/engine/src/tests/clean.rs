@@ -49,13 +49,29 @@ pub(super) fn ids(report: &ScanReport) -> Vec<ItemId> {
 }
 
 pub(super) fn clean(run: &Run<'_>, report: &ScanReport, ids: &[ItemId]) -> CleanReceipt {
+    clean_as(run, report, ids, run.user)
+}
+
+/// [`clean`], removed by `remover`: the system's readers, but the owners the
+/// marks say.
+pub(super) fn clean_as(
+    run: &Run<'_>,
+    report: &ScanReport,
+    ids: &[ItemId],
+    remover: Option<u32>,
+) -> CleanReceipt {
     clean_items(
         report,
         ids,
         &run.misc,
         &run.variables,
         &run.options,
+        Readers {
+            entry_owner: marked_entry_owner,
+            ..Readers::SYSTEM
+        },
         run.limits,
+        remover,
         &run.watch,
     )
 }
@@ -82,6 +98,51 @@ pub(super) fn file_and_directory(fixture: &Fixture) -> (PathBuf, CleanTarget) {
     fixture.age(&fixture.path("data/dir"), 2 * HOUR);
     let rule = target_at(&root);
     (root, rule)
+}
+
+#[test]
+fn root_removes_no_directory_another_user_came_to_own() {
+    use okapi_platform::ROOT_USER;
+
+    let fixture = Fixture::new();
+    let (_, rule) = file_and_directory(&fixture);
+    fixture.file("data/theirs/a", 1, 2 * HOUR);
+    mark(&fixture.path("data/theirs"), FOREIGN_MARK);
+    fixture.file("data/mixed/a", 1, 2 * HOUR);
+    fixture.file("data/mixed/sub/b", 1, 2 * HOUR);
+    mark(&fixture.path("data/mixed/sub"), FOREIGN_MARK);
+    fixture.age(&fixture.path("data/mixed"), 2 * HOUR);
+    // Scanned for the user, whom the system stops: all of it offered.
+    let run = run_later(&fixture, vec![RuleEntry::Target(&rule)]);
+    let report = run.scan();
+    let receipt = clean_as(&run, &report, &ids(&report), Some(ROOT_USER));
+    assert_eq!(
+        results(&receipt),
+        [
+            (fixture.path("data/dir"), CleanResult::Removed { bytes: 23 }),
+            (fixture.path("data/file"), CleanResult::Removed { bytes: 3 }),
+            (
+                fixture.path("data/mixed"),
+                CleanResult::Kept(KeepReason::Changed)
+            ),
+            (
+                fixture.path("data/theirs"),
+                CleanResult::Kept(KeepReason::Changed)
+            ),
+        ],
+        "the root's owner's directories go, below one another's too"
+    );
+    let mixed = receipt
+        .outcomes()
+        .iter()
+        .find(|outcome| outcome.path() == Some(fixture.path("data/mixed").as_path()))
+        .unwrap();
+    assert_eq!(
+        mixed.blocked(),
+        Some(fixture.path("data/mixed/sub").as_path())
+    );
+    assert!(fixture.path("data/theirs/a").exists());
+    assert!(fixture.path("data/mixed/sub/b").exists());
 }
 
 #[test]
@@ -524,6 +585,7 @@ fn empty_now(
             readers: Readers::SYSTEM,
             limits: Limits::DEFAULT,
             remover: None,
+            root_owner: None,
         },
         device: opened.status().unwrap().identity.device(),
         pass: crate::clean::CleanPass::Remove,
@@ -1085,6 +1147,7 @@ fn a_removal_that_stops_halfway_is_partial_and_names_the_entry() {
             readers: Readers::SYSTEM,
             limits: Limits::DEFAULT,
             remover: None,
+            root_owner: None,
         },
         device: opened.status().unwrap().identity.device(),
         pass: crate::clean::CleanPass::Remove,

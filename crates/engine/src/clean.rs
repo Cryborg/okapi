@@ -314,7 +314,9 @@ pub fn clean_watched(
             rules.misc(),
             variables,
             options,
+            Readers::SYSTEM,
             Limits::DEFAULT,
+            okapi_platform::effective_user(),
             watch,
         )
     } else {
@@ -345,23 +347,29 @@ enum Checked<'a> {
 type Outcome = (CleanResult, Option<PathBuf>);
 
 /// [`clean`] once the system and the variables are known to be complete, with
-/// the walking limits given. The token is read between entries, never inside
-/// the walk of one (`Walking` and `WalkContext` do not carry it): an entry is
-/// removed whole or not at all (invariant 2).
+/// the readers, the walking limits and the user who removes (`remover`, root
+/// in the privileged helper) given. The token is read between entries, never
+/// inside the walk of one (`Walking` and `WalkContext` do not carry it): an
+/// entry is removed whole or not at all (invariant 2).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each one a seam the tests set apart; a struct would only rename them"
+)]
 pub(crate) fn clean_items(
     report: &ScanReport,
     ids: &[ItemId],
     misc: &MiscRules,
     variables: &TemplateVariables,
     options: &ScanOptions,
+    readers: Readers,
     limits: Limits,
+    remover: Option<u32>,
     watch: &Watch,
 ) -> CleanReceipt {
     if !tells_mount_roots() {
         return CleanReceipt::stopped(vec![Stop::UnsupportedSystem]);
     }
-    let (global_cutoff, protected) = match protection(variables, options, Readers::SYSTEM.identity)
-    {
+    let (global_cutoff, protected) = match protection(variables, options, readers.identity) {
         Ok(prepared) => prepared,
         Err(stop) => return CleanReceipt::stopped(vec![stop]),
     };
@@ -371,7 +379,9 @@ pub(crate) fn clean_items(
         options,
         protected: &protected,
         global_cutoff,
+        readers,
         limits,
+        remover,
     };
     let mut dates = RemovedDates::new();
     let mut seen = BTreeSet::new();
@@ -514,7 +524,9 @@ struct Cleaner<'a> {
     options: &'a ScanOptions,
     protected: &'a ProtectedRoots,
     global_cutoff: SystemTime,
+    readers: Readers,
     limits: Limits,
+    remover: Option<u32>,
 }
 
 /// What a removal has done so far.
@@ -563,11 +575,11 @@ impl Cleaner<'_> {
             misc: self.misc,
             protected: self.protected,
             roots: self.report.roots(),
-            readers: Readers::SYSTEM,
+            readers: self.readers,
             limits: self.limits,
-            // Not read by the cleaning's walk: `ensure_removable` judges the
-            // right to remove each entry.
-            remover: None,
+            remover: self.remover,
+            // Read when the root is reached (`judge_entry`).
+            root_owner: None,
         }
     }
 
@@ -580,9 +592,9 @@ impl Cleaner<'_> {
         pass: CleanPass,
         dates: &mut RemovedDates,
     ) -> Result<u64, Outcome> {
-        let context = self.context(item);
+        let mut context = self.context(item);
         let (parent, name, status) = self
-            .judge_entry(item, &context, pass, dates)
+            .judge_entry(item, &mut context, pass, dates)
             .map_err(|result| (result, None))?;
         let depth = depth_below_root(item);
         let mut walking = Walking {
@@ -622,11 +634,13 @@ impl Cleaner<'_> {
     }
 
     /// Reaches the entry and judges it alone: its root, its identity, its age,
-    /// its filesystem, its name, and (when checking) the right to remove it.
+    /// its filesystem, its owner, its name, and (when checking) the right to
+    /// remove it. Completes `context` with the owner of the root, read on the
+    /// way, for the walk of the entry.
     fn judge_entry<'a>(
         &self,
         item: &'a FoundItem,
-        context: &WalkContext<'_>,
+        context: &mut WalkContext<'_>,
         pass: CleanPass,
         dates: &RemovedDates,
     ) -> Result<(Directory, &'a OsStr, EntryStatus), CleanResult> {
@@ -637,7 +651,7 @@ impl Cleaner<'_> {
         if self
             .options
             .exclusions()
-            .excludes_by_identity(&item.root, Readers::SYSTEM.identity)
+            .excludes_by_identity(&item.root, self.readers.identity)
         {
             return Err(kept(KeepReason::Excluded));
         }
@@ -646,7 +660,8 @@ impl Cleaner<'_> {
             Some(_) => return Err(kept(KeepReason::Protected)),
             None => {}
         }
-        let (parent, name) = reach_parent(item)?;
+        let (parent, name, root) = reach_parent(item)?;
+        context.root_owner = root.map(|root| (self.readers.entry_owner)(&root));
         let status = parent
             .status_of(name)
             .map_err(|error| gone_or_failed(&error))?;
@@ -656,7 +671,7 @@ impl Cleaner<'_> {
         }
         context
             .by_status(
-                &observed(&status),
+                &Observed::from_status(&status, self.readers),
                 item.root_identity.device(),
                 Some(item.root_identity),
             )
@@ -684,10 +699,11 @@ fn depth_below_root(item: &FoundItem) -> usize {
 }
 
 /// The directory holding the entry, reached from its scan root through
-/// descriptors, and the entry's name in it. The root is reached from the
+/// descriptors, the entry's name in it, and the root's status (`None` for a
+/// single file target, its own root). The root is reached from the
 /// filesystem root, one directory at a time and never through a link, so its
 /// path is real by construction, and is recognised by its identity.
-fn reach_parent(item: &FoundItem) -> Result<(Directory, &OsStr), CleanResult> {
+fn reach_parent(item: &FoundItem) -> Result<(Directory, &OsStr, Option<EntryStatus>), CleanResult> {
     let path = &item.found.path;
     let replaced = || CleanResult::Kept(KeepReason::Replaced);
     if *path == item.root {
@@ -696,7 +712,7 @@ fn reach_parent(item: &FoundItem) -> Result<(Directory, &OsStr), CleanResult> {
         let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
             return Err(replaced());
         };
-        return Ok((open_real(parent)?, name));
+        return Ok((open_real(parent)?, name, None));
     }
     let mut directory = open_real(&item.root)?;
     let root = directory
@@ -720,7 +736,7 @@ fn reach_parent(item: &FoundItem) -> Result<(Directory, &OsStr), CleanResult> {
         }
         directory = enter_or_stop(&directory, component, &status)?;
     }
-    Ok((directory, name))
+    Ok((directory, name, Some(root)))
 }
 
 /// Opens the directory at the absolute path `path`, from the filesystem root
@@ -868,7 +884,11 @@ fn walk_entry(
     };
     walking
         .context
-        .by_status(&observed(&status), walking.device, None)
+        .by_status(
+            &Observed::from_status(&status, walking.context.readers),
+            walking.device,
+            None,
+        )
         .map_err(keep_reason)?;
     let is_directory = status.kind == EntryType::Directory;
     if let Some(reason) = by_name(path, is_directory, false) {
@@ -955,15 +975,6 @@ pub(crate) fn remembered(mut status: EntryStatus, dates: &RemovedDates) -> Entry
     status
 }
 
-const fn observed(status: &EntryStatus) -> Observed {
-    Observed {
-        kind: status.kind,
-        identity: Some(status.identity),
-        last_change: Some(status.last_change),
-        mount_root: status.mount_root,
-    }
-}
-
 const fn entry_type(kind: EntryKind) -> EntryType {
     match kind {
         EntryKind::File => EntryType::File,
@@ -980,13 +991,11 @@ const fn keep_reason(reason: HoldBack) -> KeepReason {
             kind: io::ErrorKind::Unsupported,
             code: None,
         },
-        // Never from the cleaning's walk: `by_path` and `by_status` never hold
-        // back for ownership, `ensure_removable` judges the right to remove.
-        HoldBack::NotOwned => KeepReason::Failed {
-            kind: io::ErrorKind::PermissionDenied,
-            code: None,
-        },
-        HoldBack::Excluded
+        // A directory root may not enter, which the scan would not have
+        // offered: it changed since. The sticky bit is judged by
+        // `ensure_removable`, never here.
+        HoldBack::NotOwned
+        | HoldBack::Excluded
         | HoldBack::ProtectedName
         | HoldBack::Link
         | HoldBack::Special

@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use okapi_platform::{EntryType, FileIdentity, Ownership, sticky_allows};
+use okapi_platform::{EntryStatus, EntryType, FileIdentity, Ownership, ROOT_USER, sticky_allows};
 use okapi_rules::MiscRules;
 
 use crate::options::Exclusions;
@@ -16,9 +16,10 @@ use crate::watch::{PROGRESS_EVERY, Progress, Watch};
 /// Reads the identity of a file from its metadata.
 pub(crate) type IdentityReader = fn(&Metadata) -> Option<FileIdentity>;
 
-/// What the scan reads from metadata beyond its type: the platform's readers in
-/// production, stand-ins in tests (a test cannot set a file's status change
-/// time back, nor fake a mount point).
+/// What the walks read beyond an entry's type: from metadata for the scan,
+/// from a status read through a descriptor for the cleaning's owner. The
+/// platform's readers in production, stand-ins in tests (a test cannot set a
+/// file's status change time back, nor fake a mount point).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Readers {
     pub(crate) identity: IdentityReader,
@@ -27,6 +28,8 @@ pub(crate) struct Readers {
     /// Who owns it, and for a directory whether it is sticky (a test cannot
     /// give a file to another user).
     pub(crate) ownership: fn(&Metadata) -> Option<Ownership>,
+    /// Who owns an entry the cleaning read (same reason).
+    pub(crate) entry_owner: fn(&EntryStatus) -> u32,
     /// Whether the entry at a path, its link never followed, is the root of
     /// a mount; `Ok(None)` when the system cannot tell (a test cannot mount).
     pub(crate) mount_root: fn(&Path) -> io::Result<Option<bool>>,
@@ -37,8 +40,13 @@ impl Readers {
         identity: okapi_platform::file_identity,
         last_change: okapi_platform::last_change,
         ownership: okapi_platform::ownership,
+        entry_owner: status_owner,
         mount_root: okapi_platform::mount_root,
     };
+}
+
+const fn status_owner(status: &EntryStatus) -> u32 {
+    status.owner
 }
 
 /// How far a walk may go below one root.
@@ -81,11 +89,15 @@ pub(crate) struct WalkContext<'a> {
     pub(crate) roots: &'a BTreeSet<FileIdentity>,
     pub(crate) readers: Readers,
     pub(crate) limits: Limits,
-    /// The user who will remove what is offered, for the sticky bit: an
-    /// entry of another user in a sticky directory (`/tmp`) is held back.
-    /// `None` when that user is root (through the privileged helper) or
-    /// unknown, and in the cleaning, whose walk does not read it.
+    /// The user who will remove what is offered: root ([`ROOT_USER`]) for
+    /// what needs the administrator, removed through the privileged helper;
+    /// `None` when unknown. The scan holds back another user's entry in a
+    /// sticky directory (`/tmp`), which the remover may not remove; with root,
+    /// both walks hold back the directories [`Self::refuses_owner`] refuses.
     pub(crate) remover: Option<u32>,
+    /// Who owns the scan root, read when it is opened; `None` before, or when
+    /// it cannot be read.
+    pub(crate) root_owner: Option<u32>,
 }
 
 /// Why an entry is held back, which keeps its parent directory open.
@@ -105,8 +117,9 @@ pub(crate) enum HoldBack {
     Reserved,
     /// A file changed after the cutoff.
     Recent,
-    /// Another user's entry in a sticky directory: the remover may not remove
-    /// it.
+    /// Another user's entry in a sticky directory, which the remover may not
+    /// remove; or, root removing, a directory that belongs to neither root
+    /// nor the root's owner ([`WalkContext::refuses_owner`]).
     NotOwned,
 }
 
@@ -118,9 +131,21 @@ pub(crate) struct Observed {
     pub(crate) identity: Option<FileIdentity>,
     pub(crate) last_change: Option<SystemTime>,
     pub(crate) mount_root: Option<bool>,
+    pub(crate) owner: Option<u32>,
 }
 
 impl Observed {
+    /// What the cleaning read through a descriptor.
+    pub(crate) fn from_status(status: &EntryStatus, readers: Readers) -> Self {
+        Self {
+            kind: status.kind,
+            identity: Some(status.identity),
+            last_change: Some(status.last_change),
+            mount_root: status.mount_root,
+            owner: Some((readers.entry_owner)(status)),
+        }
+    }
+
     /// What the scan reads by path, with whether the entry is the root of a
     /// mount, read apart ([`Walker::mount_root`]).
     fn from_metadata(metadata: &Metadata, readers: Readers, mount_root: bool) -> Self {
@@ -139,6 +164,7 @@ impl Observed {
             identity: (readers.identity)(metadata),
             last_change: (readers.last_change)(metadata),
             mount_root: Some(mount_root),
+            owner: (readers.ownership)(metadata).map(|ownership| ownership.owner),
         }
     }
 }
@@ -207,10 +233,26 @@ impl WalkContext<'_> {
         {
             return Err(HoldBack::Reserved);
         }
+        if self.refuses_owner(observed.kind, observed.owner) {
+            return Err(HoldBack::NotOwned);
+        }
         Ok(Accepted {
             identity,
             last_change,
         })
+    }
+
+    /// Whether root, removing what is offered, must neither enter nor offer
+    /// an entry of `kind` owned by `owner`: a directory that belongs to
+    /// neither root nor the root's owner (unknown owners included). Another
+    /// user may have moved there a tree they could not empty (`/var/crash` is
+    /// writable by all), which root, whom nothing stops, would remove whole.
+    /// A file is never refused so: a crash report belongs to the user who
+    /// crashed, and a file moved in is one its mover could remove already.
+    pub(crate) fn refuses_owner(&self, kind: EntryType, owner: Option<u32>) -> bool {
+        self.remover == Some(ROOT_USER)
+            && kind == EntryType::Directory
+            && !owner.is_some_and(|owner| owner == ROOT_USER || Some(owner) == self.root_owner)
     }
 }
 
@@ -309,8 +351,9 @@ struct Walker<'a, 'p, 'w> {
 /// link, a special file, another device or the root of a mount, a variable's
 /// directory or one of its ancestors, another scan root, an unreadable or
 /// recent entry, an excluded or protected name, a name a running session
-/// relies on, an entry the remover may not remove from a sticky directory, or
-/// a limit reached.
+/// relies on, an entry the remover may not remove from a sticky directory, a
+/// directory root may not enter ([`WalkContext::refuses_owner`]), or a limit
+/// reached.
 ///
 /// No link is followed: every entry is judged by metadata read without
 /// following links, and a directory is listed only if, once opened, it is
@@ -336,6 +379,7 @@ pub(crate) fn walk(
     };
     match walker.open_directory(root, root_identity) {
         Ok((entries, ownership)) => {
+            walker.context.root_owner = ownership.map(|ownership| ownership.owner);
             let resolved = walker.children(entries, context.limits.depth, ownership);
             walker.walk.found = resolved.found;
         }
@@ -442,7 +486,7 @@ impl Walker<'_, '_, '_> {
         if let Some(reason) = by_name(path, is_directory, top_level) {
             return self.held_back(path, reason);
         }
-        if !self.removable_from(listed, &metadata) {
+        if !self.removable_from(listed, observed.owner) {
             return self.held_back(path, HoldBack::NotOwned);
         }
         if !is_directory {
@@ -476,16 +520,16 @@ impl Walker<'_, '_, '_> {
         }
     }
 
-    /// Whether the remover may remove the entry read as `metadata` from a
+    /// Whether the remover may remove an entry owned by `owner` from a
     /// directory owned as `listed`, as far as the sticky bit goes. Without a
     /// known remover or directory, nothing more is held back; an entry whose
     /// owner cannot be read in a sticky directory is.
-    fn removable_from(&self, listed: Option<Ownership>, metadata: &Metadata) -> bool {
+    fn removable_from(&self, listed: Option<Ownership>, owner: Option<u32>) -> bool {
         let (Some(user), Some(directory)) = (self.context.remover, listed) else {
             return true;
         };
-        (self.context.readers.ownership)(metadata).map_or(!directory.sticky, |entry| {
-            sticky_allows(user, directory, entry.owner)
+        owner.map_or(!directory.sticky, |owner| {
+            sticky_allows(user, directory, owner)
         })
     }
 

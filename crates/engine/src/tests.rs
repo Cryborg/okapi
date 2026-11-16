@@ -153,6 +153,16 @@ fn marked_ownership(metadata: &fs::Metadata) -> Option<okapi_platform::Ownership
     Some(okapi_platform::Ownership { owner, sticky })
 }
 
+/// The owner of an entry the cleaning read, as the marks say; by default its
+/// real owner, the user running the tests.
+fn marked_entry_owner(status: &okapi_platform::EntryStatus) -> u32 {
+    match status.modified.duration_since(SystemTime::UNIX_EPOCH).ok() {
+        Some(STICKY_MARK) => okapi_platform::ROOT_USER,
+        Some(FOREIGN_MARK) => FOREIGN_USER,
+        _ => status.owner,
+    }
+}
+
 impl<'a> Run<'a> {
     fn new(fixture: &Fixture, entries: Vec<RuleEntry<'a>>) -> Self {
         Self {
@@ -166,6 +176,7 @@ impl<'a> Run<'a> {
                 identity: file_identity,
                 last_change: modification_time,
                 ownership: marked_ownership,
+                entry_owner: marked_entry_owner,
                 mount_root: okapi_platform::mount_root,
             },
             limits: Limits::DEFAULT,
@@ -1081,6 +1092,7 @@ fn a_root_replaced_after_its_check_is_reported() {
         readers: Readers::SYSTEM,
         limits: Limits::DEFAULT,
         remover: None,
+        root_owner: None,
     };
     // The identity checked before does not match what is opened now.
     let watch = crate::watch::Watch::none();
@@ -2231,12 +2243,14 @@ fn an_entry_whose_date_or_identity_is_unknown_is_held_back() {
             identity: unknown_when_marked,
             last_change: modification_time,
             ownership: marked_ownership,
+            entry_owner: marked_entry_owner,
             mount_root: okapi_platform::mount_root,
         },
         Readers {
             identity: file_identity,
             last_change: no_date_when_marked,
             ownership: marked_ownership,
+            entry_owner: marked_entry_owner,
             mount_root: okapi_platform::mount_root,
         },
     ] {
@@ -2578,12 +2592,14 @@ fn the_policy_holds_back_mount_roots_links_and_recent_files() {
         readers: Readers::SYSTEM,
         limits: Limits::DEFAULT,
         remover: None,
+        root_owner: None,
     };
     let observed = |kind, identity, last_change, mount_root| Observed {
         kind,
         identity: Some(identity),
         last_change: Some(last_change),
         mount_root,
+        owner: None,
     };
     let old = now - HOUR;
     assert_eq!(
@@ -2665,6 +2681,7 @@ fn the_policy_holds_back_an_excluded_directory_by_identity() {
         readers: Readers::SYSTEM,
         limits: Limits::DEFAULT,
         remover: None,
+        root_owner: None,
     };
     // Met at another path (a bind mount shows it elsewhere): the same object.
     let identity = file_identity(&fs::symlink_metadata(&kept).unwrap()).unwrap();
@@ -2673,6 +2690,7 @@ fn the_policy_holds_back_an_excluded_directory_by_identity() {
         identity: Some(identity),
         last_change: Some(fixture.now - HOUR),
         mount_root: Some(false),
+        owner: None,
     };
     assert_eq!(context.by_path(&fixture.path("elsewhere")), None);
     assert_eq!(
@@ -2701,6 +2719,7 @@ fn the_policy_holds_back_a_variable_directory_and_what_cannot_be_read() {
         readers: Readers::SYSTEM,
         limits: Limits::DEFAULT,
         remover: None,
+        root_owner: None,
     };
     let identity = file_identity(&fs::symlink_metadata(&home).unwrap()).unwrap();
     let observed = Observed {
@@ -2708,6 +2727,7 @@ fn the_policy_holds_back_a_variable_directory_and_what_cannot_be_read() {
         identity: Some(identity),
         last_change: Some(fixture.now),
         mount_root: Some(false),
+        owner: None,
     };
     assert_eq!(
         context.by_status(&observed, identity.device(), None),
@@ -2718,6 +2738,7 @@ fn the_policy_holds_back_a_variable_directory_and_what_cannot_be_read() {
         identity: None,
         last_change: Some(fixture.now - HOUR),
         mount_root: Some(false),
+        owner: None,
     };
     assert_eq!(
         context.by_status(&unknown, identity.device(), None),
@@ -2740,6 +2761,7 @@ fn the_policy_holds_back_a_variable_directory_and_what_cannot_be_read() {
                     identity: Some(FileIdentity::new(identity.device(), 2)),
                     last_change: Some(fixture.now),
                     mount_root: Some(false),
+                    owner: None,
                 },
                 identity.device(),
                 None
@@ -2836,17 +2858,136 @@ fn only_the_directory_listed_counts() {
     assert_eq!(offered_paths(&report), [fixture.path("tmp/sub")]);
 }
 
-#[test]
-fn what_needs_the_administrator_is_offered_for_root_to_remove() {
-    let fixture = Fixture::new();
-    let root = shared_temporary(&fixture, Some(STICKY_MARK));
-    let rule = target(&format!(
+/// A rule at `root` that only root may clean.
+fn admin_target_at(root: &Path) -> CleanTarget {
+    target(&format!(
         r#"{{"path": "{}", "subcategory": "Crash", "needsAdmin": true}}"#,
         root.display()
-    ));
+    ))
+}
+
+#[test]
+fn root_never_enters_a_tree_another_user_left_in_a_shared_root() {
+    // `/var/crash`: sticky, root's, writable by all.
+    let fixture = Fixture::new();
+    let root = shared_temporary(&fixture, Some(STICKY_MARK));
+    fixture.file("tmp/user-dir/a", 1, 2 * HOUR);
+    mark(&fixture.path("tmp/user-dir"), FOREIGN_MARK);
+    fixture.file("tmp/root-dir/a", 1, 2 * HOUR);
+    mark(&fixture.path("tmp/root-dir"), STICKY_MARK);
+    let rule = admin_target_at(&root);
     let report = Run::new(&fixture, vec![RuleEntry::Target(&rule)]).scan();
-    assert_eq!(offered_paths(&report).len(), 3);
-    assert_eq!(report.stats().not_owned(), 0);
+    assert_eq!(
+        offered_paths(&report),
+        [
+            fixture.path("tmp/mine"),
+            fixture.path("tmp/root-dir"),
+            fixture.path("tmp/theirs"),
+        ],
+        "every file, and root's directory; no other user's directory"
+    );
+    assert_eq!(report.stats().not_owned(), 2, "their-dir and user-dir");
+}
+
+#[test]
+fn root_enters_the_directories_of_the_roots_owner() {
+    // `/var/cache/man`: the `man` account's, its directories too.
+    let fixture = Fixture::new();
+    let root = fixture.directory("man");
+    fixture.file("man/cat1/page", 1, 2 * HOUR);
+    fixture.file("man/cat1/deeper/page", 1, 2 * HOUR);
+    fixture.age(&fixture.path("man/cat1/deeper"), 2 * HOUR);
+    fixture.age(&fixture.path("man/cat1"), 2 * HOUR);
+    fixture.file("man/theirs/page", 1, 2 * HOUR);
+    mark(&fixture.path("man/theirs"), FOREIGN_MARK);
+    let rule = admin_target_at(&root);
+    let report = Run::new(&fixture, vec![RuleEntry::Target(&rule)]).scan();
+    assert_eq!(offered_paths(&report), [fixture.path("man/cat1")]);
+    assert_eq!(report.stats().not_owned(), 1);
+}
+
+#[test]
+fn root_enters_only_its_own_directories_below_a_root_of_unknown_owner() {
+    let fixture = Fixture::new();
+    let root = fixture.directory("crash");
+    fixture.file("crash/user-dir/a", 1, 2 * HOUR);
+    fixture.age(&fixture.path("crash/user-dir"), 2 * HOUR);
+    fixture.file("crash/root-dir/a", 1, 2 * HOUR);
+    mark(&fixture.path("crash/root-dir"), STICKY_MARK);
+    mark(&root, UNKNOWN_OWNER_MARK);
+    let rule = admin_target_at(&root);
+    let report = Run::new(&fixture, vec![RuleEntry::Target(&rule)]).scan();
+    assert_eq!(offered_paths(&report), [fixture.path("crash/root-dir")]);
+    assert_eq!(report.stats().not_owned(), 1);
+}
+
+#[test]
+fn the_policy_lets_root_enter_only_directories_of_root_or_the_roots_owner() {
+    use crate::walk::{HoldBack, Observed, WalkContext};
+    use okapi_platform::{EntryType, ROOT_USER};
+
+    let protected =
+        crate::protection::ProtectedRoots::new(&TemplateVariables::new(), file_identity).unwrap();
+    let misc = no_protected_names();
+    let roots = std::collections::BTreeSet::new();
+    let now = SystemTime::now();
+    let root_removes = WalkContext {
+        cutoff: now,
+        exclusions: &Exclusions::none(),
+        misc: &misc,
+        protected: &protected,
+        roots: &roots,
+        readers: Readers::SYSTEM,
+        limits: Limits::DEFAULT,
+        remover: Some(ROOT_USER),
+        root_owner: Some(TEST_USER),
+    };
+    let entry = |kind, owner| Observed {
+        kind,
+        identity: Some(FileIdentity::new(7, 2)),
+        last_change: Some(now - HOUR),
+        mount_root: Some(false),
+        owner,
+    };
+    let judged = |context: &WalkContext<'_>, kind, owner| {
+        context.by_status(&entry(kind, owner), 7, None).map(drop)
+    };
+    let directory = EntryType::Directory;
+    assert_eq!(judged(&root_removes, directory, Some(ROOT_USER)), Ok(()));
+    assert_eq!(judged(&root_removes, directory, Some(TEST_USER)), Ok(()));
+    for owner in [Some(FOREIGN_USER), None] {
+        assert_eq!(
+            judged(&root_removes, directory, owner),
+            Err(HoldBack::NotOwned),
+            "{owner:?}"
+        );
+        assert_eq!(
+            judged(&root_removes, EntryType::File, owner),
+            Ok(()),
+            "a file: {owner:?}"
+        );
+    }
+    let user_removes = WalkContext {
+        remover: Some(TEST_USER),
+        ..root_removes
+    };
+    assert_eq!(
+        judged(&user_removes, directory, Some(FOREIGN_USER)),
+        Ok(()),
+        "the system judges what a user may remove"
+    );
+    let unknown_root_owner = WalkContext {
+        root_owner: None,
+        ..root_removes
+    };
+    assert_eq!(
+        judged(&unknown_root_owner, directory, Some(TEST_USER)),
+        Err(HoldBack::NotOwned)
+    );
+    assert_eq!(
+        judged(&unknown_root_owner, directory, Some(ROOT_USER)),
+        Ok(())
+    );
 }
 
 #[test]

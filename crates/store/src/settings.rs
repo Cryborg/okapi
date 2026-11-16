@@ -30,6 +30,9 @@ pub struct Settings {
     /// Exclusions as written (`/home/ana/keep`, `*.log`): resolved again at
     /// each scan, never kept resolved.
     pub exclusions: Vec<String>,
+    /// The folders the user wants emptied, as written: checked again at
+    /// each scan, never kept resolved.
+    pub custom_folders: Vec<String>,
     /// The minimum age, in minutes; `None` leaves the engine's default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_age_minutes: Option<u64>,
@@ -60,6 +63,8 @@ struct RawSettings {
     version: u32,
     #[serde(default)]
     exclusions: Vec<String>,
+    #[serde(default)]
+    custom_folders: Vec<String>,
     min_age_minutes: Option<u64>,
     #[serde(default)]
     deletion_log: bool,
@@ -115,6 +120,7 @@ impl Settings {
     fn differing(&self, other: &Self) -> Vec<&'static str> {
         let Self {
             exclusions,
+            custom_folders,
             min_age_minutes,
             deletion_log,
             language,
@@ -122,6 +128,7 @@ impl Settings {
         } = self;
         [
             ("exclusions", *exclusions != other.exclusions),
+            ("customFolders", *custom_folders != other.custom_folders),
             ("minAgeMinutes", *min_age_minutes != other.min_age_minutes),
             ("deletionLog", *deletion_log != other.deletion_log),
             ("language", *language != other.language),
@@ -149,6 +156,7 @@ impl Settings {
         };
         let settings = Self {
             exclusions: raw.exclusions,
+            custom_folders: raw.custom_folders,
             min_age_minutes: raw.min_age_minutes,
             deletion_log: raw.deletion_log,
             language: raw.language,
@@ -191,8 +199,9 @@ mod tests {
     #[test]
     fn every_field_is_read() {
         let settings = load(
-            r#"{"version": 1, "exclusions": ["/data/keep", "*.log"], "minAgeMinutes": 90,
-                "deletionLog": true, "language": "en", "theme": "dark"}"#,
+            r#"{"version": 1, "exclusions": ["/data/keep", "*.log"],
+                "customFolders": ["/data/build", "/home/ana/tmp", "/srv/drop"],
+                "minAgeMinutes": 90, "deletionLog": true, "language": "en", "theme": "dark"}"#,
         )
         .unwrap();
         assert_eq!(settings, every_field());
@@ -212,6 +221,11 @@ mod tests {
     fn every_field() -> Settings {
         Settings {
             exclusions: vec!["/data/keep".to_owned(), "*.log".to_owned()],
+            custom_folders: vec![
+                "/data/build".to_owned(),
+                "/home/ana/tmp".to_owned(),
+                "/srv/drop".to_owned(),
+            ],
             min_age_minutes: Some(90),
             deletion_log: true,
             language: Some(Language::English),
@@ -313,6 +327,7 @@ mod tests {
             every_field().differing(&Settings::default()),
             [
                 "exclusions",
+                "customFolders",
                 "minAgeMinutes",
                 "deletionLog",
                 "language",
@@ -333,6 +348,7 @@ mod tests {
         fs::write(
             directory.path().join(SETTINGS_FILE),
             r#"{"theme":"dark","exclusions":["/data/keep","*.log"],"version":1,
+                "customFolders":["/data/build","/home/ana/tmp","/srv/drop"],
                 "language":"en","deletionLog":true,"minAgeMinutes":90}"#,
         )
         .unwrap();
@@ -355,7 +371,7 @@ mod tests {
         assert_eq!(written, Replaced::Written);
         assert_eq!(
             fs::read_to_string(directory.path().join(SETTINGS_FILE)).unwrap(),
-            "{\n  \"version\": 1,\n  \"exclusions\": [],\n  \"deletionLog\": false\n}\n"
+            "{\n  \"version\": 1,\n  \"exclusions\": [],\n  \"customFolders\": [],\n  \"deletionLog\": false\n}\n"
         );
     }
 

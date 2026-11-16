@@ -98,9 +98,11 @@ impl Directory {
     ///
     /// # Errors
     ///
-    /// [`io::ErrorKind::PermissionDenied`] when it may not (`EPERM`, as
-    /// `unlinkat` would say it: its number crosses the helper's answer and
-    /// the history), the system's error while reading the directory, or
+    /// [`io::ErrorKind::PermissionDenied`] when it may not, with the number
+    /// `unlinkat` would give (`EACCES` when writing or searching the directory
+    /// is denied, `EPERM` for the sticky bit or a lock): it crosses the
+    /// helper's answer and the history. The system's error while reading the
+    /// directory, or
     /// [`io::ErrorKind::Unsupported`] were the effective user unknown (never
     /// on Linux).
     pub fn ensure_removable(&self, entry: &EntryStatus) -> io::Result<()> {

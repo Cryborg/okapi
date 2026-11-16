@@ -355,6 +355,19 @@ mod tests {
         assert_eq!(receipt.lines[0].count, PATHS_SHOWN + 2);
     }
 
+    /// A refusal root met reaches the receipt by its number alone (the
+    /// helper's answer): the sticky bit's or a lock's `EPERM`, and
+    /// `EACCES`, are refused permissions, as the user's own.
+    #[test]
+    fn a_refusal_of_roots_is_read_back_by_its_number() {
+        for code in [1, 13] {
+            let reason = KeepReason::from_key("failed", Some(code)).unwrap();
+            assert_eq!(Kept::of(reason), Kept::Denied, "{code}");
+        }
+        let unknown = KeepReason::from_key("failed", None).unwrap();
+        assert_eq!(Kept::of(unknown), Kept::Refused);
+    }
+
     #[test]
     fn the_kept_entries_are_sorted_by_their_own_reason() {
         let reasons = [

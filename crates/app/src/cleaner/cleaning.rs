@@ -3227,8 +3227,7 @@ mod tests {
         assert_eq!(
             (&history[0]["removed"], &history[0]["kept"]),
             (&serde_json::json!(2), &serde_json::json!(0)),
-            "the user's file and root's answer, nothing more: root's part is \
-             never the user's own cleaning, which would keep what it cannot read"
+            "the user's file and root's answer, merged in one line"
         );
     }
 

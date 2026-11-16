@@ -5,6 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::fs;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use std::time::{Duration, Instant};
 
@@ -519,7 +520,7 @@ fn the_deletion_log_is_switched_and_says_where_it_goes() {
     // The journal is not it, and says what it holds.
     assert!(shows(
         &window,
-        "okapi-app.log, okapi.log et leurs copies .1, dans ~/.local/state/okapi, gardent quelques semaines le détail de chaque lancement, dont les chemins analysés, supprimés ou mis à la corbeille, les applis et vos exclusions. Relisez-les avant de les partager. Le réglage « Journal des suppressions » n'y change rien."
+        "okapi-app.log et okapi.log, avec leurs copies .1, dans ~/.local/state/okapi, gardent quelques semaines le détail de chaque lancement, dont les chemins analysés, supprimés ou mis à la corbeille, les applis et vos exclusions. Relisez-les avant de les partager. Le réglage « Journal des suppressions » n'y change rien."
     ));
     let switch = || {
         ElementHandle::find_by_accessible_label(&window, "Journal des suppressions")
@@ -925,10 +926,7 @@ fn a_failed_write_is_said_by_the_screen_alone() {
     preferences(&window).invoke_toggle_deletion_log();
     i_slint_backend_testing::mock_elapsed_time(WRITE_CHECK);
     slint::platform::update_timers_and_animations();
-    assert!(
-        !save_refused(&window, ui::SaveRefusal::Failed),
-        "not done yet"
-    );
+    assert!(save_refused(&window, ui::SaveRefusal::None), "not done yet");
     let mut looked = 0;
     while !save_refused(&window, ui::SaveRefusal::Failed) {
         std::thread::sleep(Duration::from_millis(10));
@@ -963,7 +961,7 @@ fn a_failure_is_said_until_a_write_keeps_the_settings_or_they_are_read_again() {
         ui::SettingsState::Editable
     );
     assert!(
-        !save_refused(&window, ui::SaveRefusal::Failed),
+        save_refused(&window, ui::SaveRefusal::None),
         "said no longer"
     );
     // A write that keeps them clears it too, read again or not.
@@ -981,7 +979,7 @@ fn a_failure_is_said_until_a_write_keeps_the_settings_or_they_are_read_again() {
     preferences(&window).invoke_toggle_deletion_log();
     written(&screens);
     assert!(sandbox.settings().deletion_log);
-    assert!(!save_refused(&window, ui::SaveRefusal::Failed));
+    assert!(save_refused(&window, ui::SaveRefusal::None));
 }
 
 #[test]
@@ -1064,7 +1062,16 @@ fn without_a_settings_directory_nothing_can_be_changed() {
     preferences(&window).invoke_toggle_deletion_log();
     assert_eq!(rows(&window), []);
     assert!(!preferences(&window).get_deletion_log());
-    assert!(!save_refused(&window, ui::SaveRefusal::Failed));
+    assert!(save_refused(&window, ui::SaveRefusal::None));
+    // Nor is any history or journal kept, which the screen says.
+    assert!(shows(
+        &window,
+        "Aucun historique n'est tenu : ni XDG_STATE_HOME ni HOME ne sont utilisables."
+    ));
+    assert!(shows(
+        &window,
+        "Aucun journal technique n'est tenu : ni XDG_STATE_HOME ni HOME ne sont utilisables."
+    ));
 }
 
 #[cfg(unix)]
@@ -1128,9 +1135,10 @@ fn an_exclusion_added_by_hand_is_never_written_over_and_said() {
     assert!(save_refused(&window, ui::SaveRefusal::ChangedElsewhere));
     assert!(shows(
         &window,
-        "Vos réglages ont été modifiés hors de cet écran : ils viennent d'être relus, et vos derniers changements n'ont pas été enregistrés."
+        "Vos réglages ont été modifiés hors de cet écran : vos derniers changements n'ont pas été enregistrés, pour ne pas effacer ceux faits ailleurs. Refaites-les si besoin."
     ));
     assert_eq!(rows(&window).len(), 1, "the file read again is shown");
+    assert!(!dark(&window), "its theme, not the one refused");
     // The next change comes from that reading: written, and said no longer.
     segment(&window, "Sombre").invoke_accessible_default_action();
     written(&screens);
@@ -1140,25 +1148,104 @@ fn an_exclusion_added_by_hand_is_never_written_over_and_said() {
 }
 
 #[test]
-fn changes_passed_by_a_newer_one_are_never_taken_for_a_change_elsewhere() {
-    let sandbox = Sandbox::writing_with(slow);
+fn a_reading_after_a_kept_write_is_what_the_next_change_is_written_over() {
+    let sandbox = Sandbox::new();
     let (window, screens) = sandbox.window();
-    // The first is being written while the second waits, passed by the third.
     preferences(&window).invoke_toggle_deletion_log();
-    std::thread::sleep(Duration::from_millis(50));
-    preferences(&window).invoke_toggle_deletion_log();
-    preferences(&window).invoke_toggle_deletion_log();
-    assert_eq!(screens.3.wait_for_writes(), Ok(()));
-    assert!(sandbox.settings().deletion_log);
+    written(&screens);
+    // Changed by hand since, then read again as the page shows.
+    sandbox.write(r#"{"version": 1, "exclusions": ["/data/keep"], "deletionLog": true}"#);
+    preferences(&window).invoke_reload();
+    segment(&window, "Sombre").invoke_accessible_default_action();
+    written(&screens);
+    assert_eq!(sandbox.settings().exclusions, ["/data/keep"]);
+    assert_eq!(sandbox.settings().theme, Some(Theme::Dark));
     assert!(save_refused(&window, ui::SaveRefusal::None));
 }
 
-/// Fails its first write (after a while, so that the next change waits),
-/// then writes as the store does.
-fn failing_once(settings: &Settings, over: &Settings, directory: &Path) -> Written {
-    static FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if !FAILED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        std::thread::sleep(Duration::from_millis(150));
+/// The first write of a test's writer, held: said started, then let go by
+/// the test, so that what the test hands meanwhile waits behind it. Each
+/// writer that holds has its own.
+struct Held {
+    started: AtomicBool,
+    go: AtomicBool,
+    writes: AtomicUsize,
+}
+
+impl Held {
+    const fn new() -> Self {
+        Self {
+            started: AtomicBool::new(false),
+            go: AtomicBool::new(false),
+            writes: AtomicUsize::new(0),
+        }
+    }
+
+    /// Counts a write; whether it is the first, held until let go.
+    fn hold_first(&self) -> bool {
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        if self.started.swap(true, Ordering::SeqCst) {
+            return false;
+        }
+        let begun = Instant::now();
+        while !self.go.load(Ordering::SeqCst) {
+            assert!(begun.elapsed() < Duration::from_secs(20), "never let go");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        true
+    }
+
+    /// Waits for the first write to be held.
+    fn wait_started(&self) {
+        let begun = Instant::now();
+        while !self.started.load(Ordering::SeqCst) {
+            assert!(begun.elapsed() < Duration::from_secs(20), "never started");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn let_go(&self) {
+        self.go.store(true, Ordering::SeqCst);
+    }
+}
+
+static PASSING: Held = Held::new();
+
+/// Writes as the store does, its first write held by [`PASSING`].
+fn held_then_stored(settings: &Settings, over: &Settings, directory: &Path) -> Written {
+    PASSING.hold_first();
+    stored(settings, over, directory)
+}
+
+#[test]
+fn changes_passed_by_a_newer_one_are_never_taken_for_a_change_elsewhere() {
+    let sandbox = Sandbox::writing_with(held_then_stored);
+    let (window, screens) = sandbox.window();
+    // The first is being written while the second waits, passed by the third.
+    preferences(&window).invoke_toggle_deletion_log();
+    PASSING.wait_started();
+    segment(&window, "Sombre").invoke_accessible_default_action();
+    type_and_add(&window, "*.log");
+    PASSING.let_go();
+    assert_eq!(screens.3.wait_for_writes(), Ok(()));
+    assert_eq!(
+        PASSING.writes.load(Ordering::SeqCst),
+        2,
+        "the second passed"
+    );
+    let kept = sandbox.settings();
+    assert!(kept.deletion_log);
+    assert_eq!(kept.theme, Some(Theme::Dark));
+    assert_eq!(kept.exclusions, ["*.log"]);
+    assert!(save_refused(&window, ui::SaveRefusal::None));
+}
+
+static FAILING: Held = Held::new();
+
+/// Fails its first write, held by [`FAILING`], then writes as the store
+/// does.
+fn failing_first(settings: &Settings, over: &Settings, directory: &Path) -> Written {
+    if FAILING.hold_first() {
         return Written::Failed;
     }
     stored(settings, over, directory)
@@ -1166,17 +1253,23 @@ fn failing_once(settings: &Settings, over: &Settings, directory: &Path) -> Writt
 
 #[test]
 fn a_write_that_failed_never_makes_the_next_one_refused() {
-    let sandbox = Sandbox::writing_with(failing_once);
+    let sandbox = Sandbox::writing_with(failing_first);
     let (window, screens) = sandbox.window();
     preferences(&window).invoke_toggle_deletion_log();
-    // Handed while the first is being written.
-    std::thread::sleep(Duration::from_millis(50));
+    // Handed while the first is being written, which then fails.
+    FAILING.wait_started();
     segment(&window, "Sombre").invoke_accessible_default_action();
+    FAILING.let_go();
     // The second holds the first: written over what was read, the file
     // untouched by the failure.
     written(&screens);
+    assert_eq!(FAILING.writes.load(Ordering::SeqCst), 2);
     assert!(sandbox.settings().deletion_log);
     assert_eq!(sandbox.settings().theme, Some(Theme::Dark));
+    assert!(
+        save_refused(&window, ui::SaveRefusal::None),
+        "the last kept"
+    );
 }
 
 #[test]

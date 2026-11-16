@@ -441,7 +441,7 @@ component General inherits Card {
         SettingRow {
             name: @tr("Journal des suppressions");
             description: Preferences.state-directory == ""
-                ? @tr("Garde dans l'historique, pour chaque nettoyage, la liste des chemins retirés.")
+                ? @tr("Aucun historique n'est tenu : ni XDG_STATE_HOME ni HOME ne sont utilisables.")
                 : @tr("Garde dans l'historique ({}), pour chaque nettoyage, la liste des chemins retirés.", Preferences.state-directory);
             HorizontalLayout {
                 spacing: Theme.spacing-m;
@@ -466,8 +466,8 @@ component General inherits Card {
         InfoRow {
             name: @tr("Journal technique");
             description: Preferences.state-directory == ""
-                ? @tr("{} et leurs copies .1 gardent quelques semaines le détail de chaque lancement, dont les chemins analysés, supprimés ou mis à la corbeille, les applis et vos exclusions. Relisez-les avant de les partager. Le réglage « Journal des suppressions » n'y change rien.", Preferences.journal-files)
-                : @tr("{} et leurs copies .1, dans {}, gardent quelques semaines le détail de chaque lancement, dont les chemins analysés, supprimés ou mis à la corbeille, les applis et vos exclusions. Relisez-les avant de les partager. Le réglage « Journal des suppressions » n'y change rien.", Preferences.journal-files, Preferences.state-directory);
+                ? @tr("Aucun journal technique n'est tenu : ni XDG_STATE_HOME ni HOME ne sont utilisables.")
+                : @tr("{} et {}, avec leurs copies .1, dans {}, gardent quelques semaines le détail de chaque lancement, dont les chemins analysés, supprimés ou mis à la corbeille, les applis et vos exclusions. Relisez-les avant de les partager. Le réglage « Journal des suppressions » n'y change rien.", Preferences.app-journal, Preferences.cli-journal, Preferences.state-directory);
         }
         Separator { }
         SettingRow {
@@ -553,7 +553,7 @@ export component SettingsPage inherits VerticalLayout {
     if Preferences.save-refused != SaveRefusal.none: Banner {
         warning: true;
         text: Preferences.save-refused == SaveRefusal.changed-elsewhere
-            ? @tr("Vos réglages ont été modifiés hors de cet écran : ils viennent d'être relus, et vos derniers changements n'ont pas été enregistrés.")
+            ? @tr("Vos réglages ont été modifiés hors de cet écran : vos derniers changements n'ont pas été enregistrés, pour ne pas effacer ceux faits ailleurs. Refaites-les si besoin.")
             : @tr("Ce réglage n'a pas pu être enregistré (le détail est dans le journal).");
     }
 

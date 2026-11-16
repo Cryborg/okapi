@@ -85,7 +85,8 @@ pub type Save = fn(&Settings, &Settings, &Path) -> Written;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Written {
     Kept,
-    /// The file holds what it held.
+    /// Not written (unreadable, a link, a failing disk): the file is as it
+    /// was, a write never failing once it is replaced.
     Failed,
     /// The file no longer held what the screen read or wrote last (changed
     /// by hand, or by another window): left as it is.
@@ -252,9 +253,9 @@ struct State {
     seams: SettingsSeams,
     /// As shown: as last read, with the changes made since.
     settings: Settings,
-    /// The number of the last reading of the file, and what it read: the
-    /// changes made since are written over it, never over a file changed
-    /// elsewhere meanwhile.
+    /// The number of the last reading of the file, and what it read: what
+    /// the changes made since are written over (see the writer, in
+    /// `attach`).
     reading: u64,
     read: Settings,
     /// Whether the settings can be changed here, and why not.
@@ -339,8 +340,8 @@ impl SettingsScreen {
         };
         preferences.set_state_directory(path_shown(seams.state_directory.clone()));
         preferences.set_settings_file(path_shown(seams.directory.as_deref().map(Settings::path)));
-        preferences
-            .set_journal_files(format!("{}, {}", journal::APP_FILE, journal::CLI_FILE).into());
+        preferences.set_app_journal(journal::APP_FILE.into());
+        preferences.set_cli_journal(journal::CLI_FILE.into());
         let screen = Self(Rc::new(RefCell::new(State {
             window: window.as_weak(),
             seams,
@@ -483,7 +484,7 @@ impl SettingsScreen {
         let (last, writing) = self.settled();
         // A failure reads the file itself, when nothing else is under way.
         let failed = match last {
-            LastWrite::Kept(written) => written.refused(),
+            LastWrite::Said(written) => written.refused(),
             LastWrite::Gone => true,
             LastWrite::Nothing => false,
         };
@@ -741,12 +742,12 @@ impl SettingsScreen {
     fn said(&self, last: LastWrite<Written>) {
         match last {
             LastWrite::Nothing => {}
-            LastWrite::Kept(Written::Kept) => {
+            LastWrite::Said(Written::Kept) => {
                 // Each write holds every change made: none is missing now.
                 self.0.borrow_mut().untold = false;
                 self.set_save_refused(refusal_shown(Written::Kept));
             }
-            LastWrite::Kept(refused) => {
+            LastWrite::Said(refused) => {
                 tracing::warn!(writer = SAVER_NAME, ?refused, "settings not written: said");
                 self.0.borrow_mut().untold = true;
                 self.set_save_refused(refusal_shown(refused));

@@ -1066,7 +1066,8 @@ fn settings(window: &ui::AppWindow) {
     preferences.set_save_refused(ui::SaveRefusal::ChangedElsewhere);
     preferences.set_state_directory("~/.local/state/okapi".into());
     preferences.set_settings_file("~/.config/okapi/settings.json".into());
-    preferences.set_journal_files("okapi-app.log, okapi.log".into());
+    preferences.set_app_journal(okapi_store::journal::APP_FILE.into());
+    preferences.set_cli_journal(okapi_store::journal::CLI_FILE.into());
     preferences.set_min_age_options(ModelRc::new(VecModel::from(vec![
         "30 min".into(),
         "1 h".into(),

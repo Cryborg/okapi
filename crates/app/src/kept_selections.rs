@@ -89,7 +89,7 @@ impl KeptSelections {
         }
         match last {
             LastWrite::Nothing => {}
-            LastWrite::Kept(kept) => {
+            LastWrite::Said(kept) => {
                 if !kept && !self.lost {
                     tracing::warn!("choices among the results not kept: said");
                 }

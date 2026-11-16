@@ -11,22 +11,23 @@
 //! removed, then the journal is set aside if none is: the one set aside goes
 //! [`KEPT_FOR`] after its last line, and the journal is set aside at the next
 //! launch, so nothing much older than twice [`KEPT_FOR`] is kept at a launch
-//! (more between launches, and in a run left open longer). Only the date of
-//! the last write is read: a file's birth is not known everywhere. Two runs of
-//! one binary write whole lines, to a
-//! file opened for appending, but each counts only its own; every megabyte it
-//! writes or every minute, and before setting the journal aside, a run looks
-//! whether the journal's path still leads to its file, and follows it
-//! otherwise (another run set it aside or removed it, or a person removed it,
-//! or its directory). Lines are
-//! lost: what a run writes, until its next look, to a journal no longer
-//! named (removed, or set aside twice by another run); where files have no
-//! known identity (outside Unix for now) it cannot look, and two runs set
-//! each other's journal aside; two runs that cross the limit together, or
-//! start together on a journal too large or with none set aside, may both set
-//! it aside, the previous journal then lost, as one set aside by a run just
-//! as another, launching, removes the old one. What a launch removed is not
-//! traced when no journal can be opened.
+//! (more between launches, in a run left open longer, and in the first
+//! journal set aside this way, which holds what came before). Only the date
+//! of the last write is read: a file's birth is not known everywhere. Two
+//! runs of one binary write whole lines, to a file opened for appending, but
+//! each counts only its own. Before a line, once it wrote a megabyte or a
+//! minute went by since it last looked, and before setting the journal
+//! aside, a run looks whether the journal's path still leads to its file,
+//! and follows it otherwise (another run set it aside or removed it, or a
+//! person removed it, or its directory). Lines are lost: what a run writes,
+//! until its next look, to a journal no longer named (removed, or set aside
+//! twice by another run); where files have no known identity (outside Unix
+//! for now) it cannot look, and two runs set each other's journal aside; two
+//! runs that cross the limit together, or start together on a journal too
+//! large or with none set aside, may both set it aside, the previous journal
+//! then lost; a launch that removes an old journal set aside just after
+//! another run set a new one aside removes the new one. What a launch removed
+//! is not traced when no journal can be opened.
 
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -58,11 +59,11 @@ const ROTATED_SUFFIX: &str = ".1";
 pub const ROTATION_SIZE: u64 = 64 * 1024 * 1024;
 /// What a run writes between two looks at where the journal's path leads.
 const LOOK_EVERY: u64 = 1024 * 1024;
-/// How long a run that traces goes, at most, between two such looks: one
-/// left open would otherwise keep writing for days to a journal another set
-/// aside, which would then never be old enough to go.
+/// The longest a line is written after the last such look: a run left open
+/// would otherwise keep writing for days to a journal another set aside,
+/// which would then never be old enough to go.
 const LOOK_AFTER: Duration = Duration::from_secs(60);
-/// A journal not written for this long is removed at launch.
+/// A journal not written for longer is removed at launch.
 pub const KEPT_FOR: Duration = Duration::from_hours(14 * 24);
 /// The journals every launch looks at, whichever binary it is.
 const JOURNALS: [&str; 2] = [CLI_FILE, APP_FILE];
@@ -250,35 +251,56 @@ impl<W: Write> Write for OneLine<W> {
 pub struct Opening {
     /// What became of the binary's journal.
     pub rotation: Rotation,
-    /// The journals removed, not written for longer than [`KEPT_FOR`], or
-    /// that could not be.
-    pub removed: Vec<Removed>,
+    /// What became of each journal there that was removed, is old but
+    /// stayed, or could not be judged (dated after now, not a file, its
+    /// last write unreadable).
+    pub old: Vec<OldJournal>,
 }
 
 impl Opening {
     /// Traces it, once tracing goes to the journal.
     pub fn trace(&self) {
         self.rotation.trace();
-        for removed in &self.removed {
-            match &removed.result {
-                Ok(()) => {
-                    tracing::info!(path = %removed.path.display(), idle = ?removed.idle, "old journal removed");
+        for old in &self.old {
+            match old {
+                OldJournal::Removed { path, idle } => {
+                    tracing::info!(path = %path.display(), ?idle, "old journal removed");
                 }
-                Err(error) => {
-                    tracing::warn!(path = %removed.path.display(), idle = ?removed.idle, %error, code = error.raw_os_error(), "old journal not removed");
+                OldJournal::NotRemoved { path, idle, error } => {
+                    tracing::warn!(path = %path.display(), ?idle, %error, code = error.raw_os_error(), "old journal not removed");
+                }
+                OldJournal::Unknown { path, error } => {
+                    tracing::warn!(path = %path.display(), %error, code = error.raw_os_error(), "journal whose last write cannot be read: kept");
+                }
+                OldJournal::NotAFile { path } => {
+                    tracing::warn!(path = %path.display(), "journal that is not a regular file: never removed");
+                }
+                OldJournal::Ahead { path, ahead } => {
+                    tracing::warn!(path = %path.display(), ?ahead, "journal dated after now: kept");
                 }
             }
         }
     }
 }
 
-/// A journal not written for longer than [`KEPT_FOR`], removed or not.
+/// A journal a launch did not keep as it is, or could not judge.
 #[derive(Debug)]
-pub struct Removed {
-    pub path: PathBuf,
-    /// Since its last write.
-    pub idle: Duration,
-    pub result: io::Result<()>,
+pub enum OldJournal {
+    /// Not written for `idle`, longer than [`KEPT_FOR`].
+    Removed { path: PathBuf, idle: Duration },
+    /// Not written for longer than [`KEPT_FOR`], but `error` kept it.
+    NotRemoved {
+        path: PathBuf,
+        idle: Duration,
+        error: io::Error,
+    },
+    /// When it was last written cannot be read: kept.
+    Unknown { path: PathBuf, error: io::Error },
+    /// A link, a directory...: neither followed nor removed.
+    NotAFile { path: PathBuf },
+    /// Last written `ahead` of now: kept, as just written (a `.1` so dated
+    /// keeps the journal from being set aside, which each launch says).
+    Ahead { path: PathBuf, ahead: Duration },
 }
 
 /// Why a journal was set aside.
@@ -335,12 +357,16 @@ fn open(
     on_write_failure: WriteFailure,
 ) -> Result<(JournalFile, Opening), Unavailable> {
     let path = directory.join(file_name);
+    debug_assert!(
+        JOURNALS.contains(&file_name),
+        "a journal unknown to the launches that remove old ones"
+    );
     let unopenable = |error| Unavailable::Unopenable {
         path: path.clone(),
         error,
     };
     okapi_platform::create_private_directory(directory).map_err(unopenable)?;
-    let removed = remove_old(directory, file_name, SystemTime::now());
+    let old = remove_old(directory, SystemTime::now());
     let size = fs::symlink_metadata(&path)
         .ok()
         .filter(fs::Metadata::is_file)
@@ -375,19 +401,17 @@ fn open(
         failed: AtomicBool::new(false),
         on_write_failure,
     };
-    Ok((journal, Opening { rotation, removed }))
+    Ok((journal, Opening { rotation, old }))
 }
 
-/// Removes the journals of `directory` (every binary's, `file_name`'s, and
-/// those they set aside) last written more than [`KEPT_FOR`] before `now`.
-/// Only regular files: a link is neither followed nor removed (no journal is
-/// ever opened through one). One dated after `now` is kept, as just written.
-fn remove_old(directory: &Path, file_name: &str, now: SystemTime) -> Vec<Removed> {
-    let mut names: Vec<&str> = JOURNALS.to_vec();
-    if !names.contains(&file_name) {
-        names.push(file_name);
-    }
-    names
+/// Removes the journals of `directory` (every binary's, and those they set
+/// aside) last written more than [`KEPT_FOR`] before `now`; says what became
+/// of each one not kept as it is. Only regular files: a link is neither
+/// followed nor removed (no journal is ever opened through one). One gone
+/// meanwhile, before it is looked at or as it is removed (another launch
+/// removed it), is nothing to say.
+fn remove_old(directory: &Path, now: SystemTime) -> Vec<OldJournal> {
+    JOURNALS
         .into_iter()
         .flat_map(|name| {
             let path = directory.join(name);
@@ -395,16 +419,34 @@ fn remove_old(directory: &Path, file_name: &str, now: SystemTime) -> Vec<Removed
             [path, aside]
         })
         .filter_map(|path| {
-            let modified = fs::symlink_metadata(&path)
-                .ok()
-                .filter(fs::Metadata::is_file)?
-                .modified()
-                .ok()?;
-            let idle = now.duration_since(modified).ok()?;
-            (idle > KEPT_FOR).then(|| {
-                let result = fs::remove_file(&path);
-                Removed { path, idle, result }
-            })
+            let gone = |error: &io::Error| error.kind() == io::ErrorKind::NotFound;
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(error) if gone(&error) => return None,
+                Err(error) => return Some(OldJournal::Unknown { path, error }),
+            };
+            if !metadata.is_file() {
+                return Some(OldJournal::NotAFile { path });
+            }
+            let modified = match metadata.modified() {
+                Ok(modified) => modified,
+                Err(error) => return Some(OldJournal::Unknown { path, error }),
+            };
+            let idle = match now.duration_since(modified) {
+                Ok(idle) => idle,
+                Err(ahead) => {
+                    let ahead = ahead.duration();
+                    return Some(OldJournal::Ahead { path, ahead });
+                }
+            };
+            if idle <= KEPT_FOR {
+                return None;
+            }
+            match fs::remove_file(&path) {
+                Ok(()) => Some(OldJournal::Removed { path, idle }),
+                Err(error) if gone(&error) => None,
+                Err(error) => Some(OldJournal::NotRemoved { path, idle, error }),
+            }
         })
         .collect()
 }
@@ -620,14 +662,14 @@ mod tests {
         journal.make_writer().write_all(line.as_bytes()).unwrap();
     }
 
-    /// The journal `app.log` of `directory`, at `size` bytes, with one set
+    /// The interface's journal in `directory`, at `size` bytes, with one set
     /// aside just now (as after any launch), empty.
     fn grown_to(directory: &Path, size: u64) {
-        File::create(directory.join("app.log"))
+        File::create(directory.join(APP_FILE))
             .unwrap()
             .set_len(size)
             .unwrap();
-        File::create(directory.join("app.log.1")).unwrap();
+        File::create(directory.join("okapi-app.log.1")).unwrap();
     }
 
     /// Counts `bytes` more in `journal`, as if this run had written them.
@@ -710,22 +752,22 @@ mod tests {
     #[test]
     fn a_journal_grown_too_large_is_set_aside_under_its_own_name() {
         let directory = tempfile::tempdir().unwrap();
-        let grown = File::create(directory.path().join("app.log")).unwrap();
+        let grown = File::create(directory.path().join(APP_FILE)).unwrap();
         grown.set_len(ROTATION_SIZE + 1).unwrap();
         let (journal, Opening { rotation, .. }) =
-            open(directory.path(), "app.log", unheard()).unwrap();
+            open(directory.path(), APP_FILE, unheard()).unwrap();
         assert!(
             matches!(rotation, Rotation::Done { size, why: SetAside::TooLarge } if size == ROTATION_SIZE + 1)
         );
         assert_eq!(
-            fs::metadata(directory.path().join("app.log.1"))
+            fs::metadata(directory.path().join("okapi-app.log.1"))
                 .unwrap()
                 .len(),
             ROTATION_SIZE + 1
         );
         assert_eq!(length_of(&journal.path), 0, "started afresh");
 
-        let (_, Opening { rotation, .. }) = open(directory.path(), "app.log", unheard()).unwrap();
+        let (_, Opening { rotation, .. }) = open(directory.path(), APP_FILE, unheard()).unwrap();
         assert!(matches!(rotation, Rotation::None), "small: appended to");
     }
 
@@ -733,37 +775,37 @@ mod tests {
     fn a_journal_at_the_limit_is_kept() {
         let directory = tempfile::tempdir().unwrap();
         grown_to(directory.path(), ROTATION_SIZE);
-        let (_, Opening { rotation, .. }) = open(directory.path(), "app.log", unheard()).unwrap();
+        let (_, Opening { rotation, .. }) = open(directory.path(), APP_FILE, unheard()).unwrap();
         assert!(matches!(rotation, Rotation::None));
-        assert_eq!(length_of(&directory.path().join("app.log.1")), 0);
+        assert_eq!(length_of(&directory.path().join("okapi-app.log.1")), 0);
     }
 
     #[test]
     fn a_rotation_that_fails_appends_to_the_old_journal() {
         let directory = tempfile::tempdir().unwrap();
-        let grown = File::create(directory.path().join("app.log")).unwrap();
+        let grown = File::create(directory.path().join(APP_FILE)).unwrap();
         grown.set_len(ROTATION_SIZE + 1).unwrap();
         // A non-empty directory where the old journal would go.
-        fs::create_dir_all(directory.path().join("app.log.1/kept")).unwrap();
+        fs::create_dir_all(directory.path().join("okapi-app.log.1/kept")).unwrap();
         let (journal, Opening { rotation, .. }) =
-            open(directory.path(), "app.log", unheard()).unwrap();
+            open(directory.path(), APP_FILE, unheard()).unwrap();
         assert!(matches!(rotation, Rotation::Failed(_)));
         assert_eq!(
-            length_of(&directory.path().join("app.log")),
+            length_of(&directory.path().join(APP_FILE)),
             ROTATION_SIZE + 1
         );
 
         // Not tried again before each line, even once it could be.
-        fs::remove_dir_all(directory.path().join("app.log.1")).unwrap();
+        fs::remove_dir_all(directory.path().join("okapi-app.log.1")).unwrap();
         write_line(&journal, "one\n");
         assert_eq!(length_of(&journal.path), ROTATION_SIZE + 5);
-        assert!(!directory.path().join("app.log.1").exists());
+        assert!(!directory.path().join("okapi-app.log.1").exists());
 
         // Tried again once it grew as much again.
         grown_by(&journal, ROTATION_SIZE);
         write_line(&journal, "two\n");
         assert_eq!(
-            length_of(&directory.path().join("app.log.1")),
+            length_of(&directory.path().join("okapi-app.log.1")),
             ROTATION_SIZE + 5
         );
         assert_eq!(fs::read_to_string(&journal.path).unwrap(), "two\n");
@@ -774,13 +816,13 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         grown_to(directory.path(), ROTATION_SIZE);
         let (journal, Opening { rotation, .. }) =
-            open(directory.path(), "app.log", unheard()).unwrap();
+            open(directory.path(), APP_FILE, unheard()).unwrap();
         assert!(matches!(rotation, Rotation::None), "at the limit: kept");
 
         write_line(&journal, "one\n");
         write_line(&journal, "two\n");
         write_line(&journal, "three\n");
-        let rotated = directory.path().join("app.log.1");
+        let rotated = directory.path().join("okapi-app.log.1");
         assert_eq!(length_of(&rotated), ROTATION_SIZE + 4);
         let old = fs::read(rotated).unwrap();
         assert!(old.ends_with(b"\0one\n"), "the line that crossed the limit");
@@ -791,13 +833,13 @@ mod tests {
     fn a_journal_set_aside_at_launch_counts_afresh() {
         let directory = tempfile::tempdir().unwrap();
         grown_to(directory.path(), ROTATION_SIZE + 1);
-        let (journal, _) = open(directory.path(), "app.log", unheard()).unwrap();
+        let (journal, _) = open(directory.path(), APP_FILE, unheard()).unwrap();
         // The one set aside at launch is replaced only after the new journal
         // grows too large in turn.
         write_line(&journal, "one\n");
         write_line(&journal, "two\n");
         assert_eq!(
-            length_of(&directory.path().join("app.log.1")),
+            length_of(&directory.path().join("okapi-app.log.1")),
             ROTATION_SIZE + 1
         );
         assert_eq!(fs::read_to_string(&journal.path).unwrap(), "one\ntwo\n");
@@ -807,14 +849,14 @@ mod tests {
     fn a_run_follows_the_journal_another_run_set_aside() {
         let directory = tempfile::tempdir().unwrap();
         grown_to(directory.path(), ROTATION_SIZE);
-        let (first, _) = open(directory.path(), "app.log", unheard()).unwrap();
-        let (second, _) = open(directory.path(), "app.log", unheard()).unwrap();
+        let (first, _) = open(directory.path(), APP_FILE, unheard()).unwrap();
+        let (second, _) = open(directory.path(), APP_FILE, unheard()).unwrap();
         write_line(&first, "a1\n");
         write_line(&second, "b1\n");
         write_line(&first, "a2\n");
         // Its own count crossed the limit too, but the journal is new.
         write_line(&second, "b2\n");
-        let aside = directory.path().join("app.log.1");
+        let aside = directory.path().join("okapi-app.log.1");
         assert_eq!(length_of(&aside), ROTATION_SIZE + 6);
         // It counts from the new journal's size: six bytes, then three.
         write_line(&second, "b3\n");
@@ -833,15 +875,15 @@ mod tests {
     fn a_run_that_writes_little_follows_the_journal_within_a_megabyte() {
         let directory = tempfile::tempdir().unwrap();
         grown_to(directory.path(), 0);
-        let (first, _) = open(directory.path(), "app.log", unheard()).unwrap();
-        let (second, _) = open(directory.path(), "app.log", unheard()).unwrap();
+        let (first, _) = open(directory.path(), APP_FILE, unheard()).unwrap();
+        let (second, _) = open(directory.path(), APP_FILE, unheard()).unwrap();
         grown_by(&first, ROTATION_SIZE + 1);
         write_line(&first, "a1\n");
         // Far from its own limit, it has not looked yet.
         write_line(&second, "b1\n");
         grown_by(&second, LOOK_EVERY);
         write_line(&second, "b2\n");
-        let aside = directory.path().join("app.log.1");
+        let aside = directory.path().join("okapi-app.log.1");
         assert_eq!(fs::read_to_string(&aside).unwrap(), "b1\n");
         assert_eq!(fs::read_to_string(&second.path).unwrap(), "a1\nb2\n");
     }
@@ -850,7 +892,7 @@ mod tests {
     fn a_journal_whose_directory_is_removed_during_a_run_comes_back() {
         let directory = tempfile::tempdir().unwrap();
         let state = directory.path().join("state");
-        let (journal, _) = open(&state, "app.log", unheard()).unwrap();
+        let (journal, _) = open(&state, APP_FILE, unheard()).unwrap();
         write_line(&journal, "one\n");
         fs::remove_dir_all(&state).unwrap();
         grown_by(&journal, LOOK_EVERY);
@@ -865,7 +907,7 @@ mod tests {
         let counter = Arc::clone(&said);
         let (journal, _) = open(
             directory.path(),
-            "app.log",
+            APP_FILE,
             Box::new(move |_| {
                 counter.fetch_add(1, Ordering::Relaxed);
             }),
@@ -902,7 +944,7 @@ mod tests {
             return;
         }
         let directory = tempfile::tempdir().unwrap();
-        let (journal, _) = open(directory.path(), "app.log", unheard()).unwrap();
+        let (journal, _) = open(directory.path(), APP_FILE, unheard()).unwrap();
         grown_by(&journal, LOOK_EVERY);
         // The directory unreadable: where the path leads cannot be known.
         let permissions = |mode| fs::Permissions::from_mode(mode);
@@ -919,18 +961,18 @@ mod tests {
     fn a_rotation_that_fails_during_a_run_appends_to_the_same_journal() {
         let directory = tempfile::tempdir().unwrap();
         grown_to(directory.path(), ROTATION_SIZE);
-        let (journal, _) = open(directory.path(), "app.log", unheard()).unwrap();
-        fs::remove_file(directory.path().join("app.log.1")).unwrap();
-        fs::create_dir_all(directory.path().join("app.log.1/kept")).unwrap();
+        let (journal, _) = open(directory.path(), APP_FILE, unheard()).unwrap();
+        fs::remove_file(directory.path().join("okapi-app.log.1")).unwrap();
+        fs::create_dir_all(directory.path().join("okapi-app.log.1/kept")).unwrap();
 
         write_line(&journal, "one\n");
         write_line(&journal, "two\n");
         assert_eq!(
-            length_of(&directory.path().join("app.log")),
+            length_of(&directory.path().join(APP_FILE)),
             ROTATION_SIZE + 8
         );
         // Not tried again before each line, even once it could be.
-        fs::remove_dir_all(directory.path().join("app.log.1")).unwrap();
+        fs::remove_dir_all(directory.path().join("okapi-app.log.1")).unwrap();
         write_line(&journal, "three\n");
         assert_eq!(length_of(&journal.path), ROTATION_SIZE + 14);
 
@@ -940,42 +982,126 @@ mod tests {
         assert_eq!(fs::read_to_string(&journal.path).unwrap(), "four\n");
     }
 
-    /// `path`, written last `days` ago.
-    fn written_ago(path: &Path, days: u64) {
-        let ago = SystemTime::now() - Duration::from_hours(days * 24);
+    /// A day, to stand on either side of [`KEPT_FOR`].
+    const DAY: Duration = Duration::from_hours(24);
+
+    /// `path`, last written at `when`.
+    fn written_at(path: &Path, when: SystemTime) {
         File::options()
             .append(true)
             .open(path)
             .unwrap()
-            .set_modified(ago)
+            .set_modified(when)
             .unwrap();
     }
 
-    #[test]
-    fn every_journal_not_written_for_two_weeks_is_removed_at_launch() {
-        let directory = tempfile::tempdir().unwrap();
-        let file = |name: &str| directory.path().join(name);
-        for name in [CLI_FILE, "okapi-app.log.1", "app.log.1", APP_FILE] {
-            fs::write(file(name), b"x\n").unwrap();
-        }
-        // The other binary's journal and its own, the one set aside.
-        written_ago(&file(CLI_FILE), 15);
-        written_ago(&file("okapi-app.log.1"), 15);
-        written_ago(&file("app.log.1"), 15);
-        written_ago(&file(APP_FILE), 13);
-        let (_, Opening { removed, .. }) = open(directory.path(), "app.log", unheard()).unwrap();
-        let mut gone: Vec<_> = removed
+    /// `path`, last written `ago` before now.
+    fn written_ago(path: &Path, ago: Duration) {
+        written_at(path, SystemTime::now() - ago);
+    }
+
+    /// The names of the journals removed among `old`; panics on any other.
+    fn removed_names(old: &[OldJournal]) -> Vec<String> {
+        let mut names: Vec<String> = old
             .iter()
-            .map(|removed| {
-                assert!(removed.result.is_ok(), "{removed:?}");
-                assert!(removed.idle > KEPT_FOR);
-                removed.path.file_name().unwrap().to_owned()
+            .map(|old| match old {
+                OldJournal::Removed { path, idle } => {
+                    assert!(*idle > KEPT_FOR);
+                    path.file_name().unwrap().to_string_lossy().into_owned()
+                }
+                other => panic!("{other:?}"),
             })
             .collect();
-        gone.sort();
-        assert_eq!(gone, ["app.log.1", "okapi-app.log.1", CLI_FILE]);
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn every_journal_not_written_for_longer_than_kept_for_is_removed_at_launch() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = |name: &str| directory.path().join(name);
+        let other_aside = "okapi.log.1";
+        let aside = "okapi-app.log.1";
+        for name in [CLI_FILE, other_aside, aside, APP_FILE] {
+            fs::write(file(name), name).unwrap();
+        }
+        // The other binary's journals, and the one this one set aside.
+        for name in [CLI_FILE, other_aside, aside] {
+            written_ago(&file(name), KEPT_FOR + DAY);
+        }
+        written_ago(&file(APP_FILE), KEPT_FOR.saturating_sub(DAY));
+        let (_, Opening { old, rotation }) = open(directory.path(), APP_FILE, unheard()).unwrap();
+        assert_eq!(removed_names(&old), [aside, CLI_FILE, other_aside]);
         assert!(!file(CLI_FILE).exists());
-        assert!(file(APP_FILE).exists(), "written within two weeks");
+        assert!(!file(other_aside).exists());
+        // Its own, recent, kept: set aside, as none is any more.
+        assert!(matches!(
+            rotation,
+            Rotation::Done {
+                why: SetAside::NoneAside,
+                ..
+            }
+        ));
+        assert_eq!(fs::read_to_string(file(aside)).unwrap(), APP_FILE);
+    }
+
+    #[test]
+    fn a_journal_written_kept_for_ago_exactly_is_kept() {
+        let directory = tempfile::tempdir().unwrap();
+        let journal = directory.path().join(CLI_FILE);
+        fs::write(&journal, b"x\n").unwrap();
+        written_at(&journal, SystemTime::now() - KEPT_FOR - DAY);
+        // As the file system keeps it: some keep whole seconds only.
+        let written = fs::metadata(&journal).unwrap().modified().unwrap();
+        assert_eq!(
+            removed_names(&remove_old(directory.path(), written + KEPT_FOR)),
+            Vec::<String>::new()
+        );
+        assert!(journal.exists());
+        let later = written + KEPT_FOR + Duration::from_secs(1);
+        assert_eq!(
+            removed_names(&remove_old(directory.path(), later)),
+            [CLI_FILE]
+        );
+        assert!(!journal.exists());
+    }
+
+    #[test]
+    fn a_journal_written_after_now_is_kept_and_said() {
+        let directory = tempfile::tempdir().unwrap();
+        let journal = directory.path().join(CLI_FILE);
+        fs::write(&journal, b"x\n").unwrap();
+        written_at(&journal, SystemTime::now() + DAY);
+        let (_, Opening { old, .. }) = open(directory.path(), APP_FILE, unheard()).unwrap();
+        assert!(
+            matches!(&old[..], [OldJournal::Ahead { path, .. }] if *path == journal),
+            "{old:?}"
+        );
+        assert!(journal.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_journal_that_cannot_be_removed_is_said() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if okapi_platform::running_as_root() {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let journal = directory.path().join(CLI_FILE);
+        fs::write(&journal, b"x\n").unwrap();
+        written_ago(&journal, KEPT_FOR + DAY);
+        let permissions = |mode| fs::Permissions::from_mode(mode);
+        // Its directory read-only: nothing in it can be removed.
+        fs::set_permissions(directory.path(), permissions(0o500)).unwrap();
+        let old = remove_old(directory.path(), SystemTime::now());
+        fs::set_permissions(directory.path(), permissions(0o700)).unwrap();
+        assert!(
+            matches!(&old[..], [OldJournal::NotRemoved { path, error, .. }] if *path == journal && error.kind() == io::ErrorKind::PermissionDenied),
+            "{old:?}"
+        );
+        assert!(journal.exists());
     }
 
     #[cfg(unix)]
@@ -984,10 +1110,14 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let target = directory.path().join("elsewhere.log");
         fs::write(&target, b"x\n").unwrap();
-        written_ago(&target, 30);
-        std::os::unix::fs::symlink(&target, directory.path().join(CLI_FILE)).unwrap();
-        let (_, Opening { removed, .. }) = open(directory.path(), "app.log", unheard()).unwrap();
-        assert!(removed.is_empty(), "{removed:?}");
+        written_ago(&target, KEPT_FOR + DAY);
+        let link = directory.path().join(CLI_FILE);
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let (_, Opening { old, .. }) = open(directory.path(), APP_FILE, unheard()).unwrap();
+        assert!(
+            matches!(&old[..], [OldJournal::NotAFile { path }] if *path == link),
+            "{old:?}"
+        );
         assert!(target.exists());
         assert!(fs::symlink_metadata(directory.path().join(CLI_FILE)).is_ok());
     }
@@ -995,10 +1125,10 @@ mod tests {
     #[test]
     fn a_journal_is_set_aside_at_launch_when_none_is() {
         let directory = tempfile::tempdir().unwrap();
-        let journal = directory.path().join("app.log");
-        let aside = directory.path().join("app.log.1");
+        let journal = directory.path().join(APP_FILE);
+        let aside = directory.path().join("okapi-app.log.1");
         fs::write(&journal, b"before\n").unwrap();
-        let (_, Opening { rotation, .. }) = open(directory.path(), "app.log", unheard()).unwrap();
+        let (_, Opening { rotation, .. }) = open(directory.path(), APP_FILE, unheard()).unwrap();
         assert!(matches!(
             rotation,
             Rotation::Done {
@@ -1009,32 +1139,32 @@ mod tests {
         assert_eq!(fs::read_to_string(&aside).unwrap(), "before\n");
         // One set aside: the journal is written on.
         fs::write(&journal, b"after\n").unwrap();
-        let (_, Opening { rotation, .. }) = open(directory.path(), "app.log", unheard()).unwrap();
+        let (_, Opening { rotation, .. }) = open(directory.path(), APP_FILE, unheard()).unwrap();
         assert!(matches!(rotation, Rotation::None));
         assert_eq!(fs::read_to_string(&journal).unwrap(), "after\n");
         // Empty, nothing to set aside.
         fs::remove_file(&aside).unwrap();
         fs::write(&journal, b"").unwrap();
-        let (_, Opening { rotation, .. }) = open(directory.path(), "app.log", unheard()).unwrap();
+        let (_, Opening { rotation, .. }) = open(directory.path(), APP_FILE, unheard()).unwrap();
         assert!(matches!(rotation, Rotation::None));
         assert!(!aside.exists());
     }
 
-    /// Launches two weeks apart: what the first launch wrote is gone by the
-    /// third, never kept beyond about four weeks.
+    /// Launches further apart than [`KEPT_FOR`]: what was written before the
+    /// first is gone at the second, the journal set aside in its place.
     #[test]
-    fn launches_keep_no_line_much_older_than_four_weeks() {
+    fn launches_keep_no_line_much_older_than_twice_kept_for() {
         let directory = tempfile::tempdir().unwrap();
-        let journal = directory.path().join("app.log");
-        let aside = directory.path().join("app.log.1");
+        let journal = directory.path().join(APP_FILE);
+        let aside = directory.path().join("okapi-app.log.1");
         fs::write(&journal, b"first\n").unwrap();
         // Launch: set aside, none was.
-        open(directory.path(), "app.log", unheard()).unwrap();
+        open(directory.path(), APP_FILE, unheard()).unwrap();
         fs::write(&journal, b"second\n").unwrap();
-        written_ago(&aside, 15);
-        written_ago(&journal, 1);
-        // Two weeks later: the old one goes, the journal is set aside.
-        open(directory.path(), "app.log", unheard()).unwrap();
+        written_ago(&aside, KEPT_FOR + DAY);
+        written_ago(&journal, DAY);
+        // The next launch: the old one goes, the journal is set aside.
+        open(directory.path(), APP_FILE, unheard()).unwrap();
         assert_eq!(fs::read_to_string(&aside).unwrap(), "second\n");
         assert_eq!(fs::read_to_string(&journal).unwrap(), "");
     }
@@ -1043,16 +1173,20 @@ mod tests {
     fn a_run_that_writes_little_follows_the_journal_within_a_minute() {
         let directory = tempfile::tempdir().unwrap();
         grown_to(directory.path(), 0);
-        let (first, _) = open(directory.path(), "app.log", unheard()).unwrap();
-        let (second, _) = open(directory.path(), "app.log", unheard()).unwrap();
+        let (first, _) = open(directory.path(), APP_FILE, unheard()).unwrap();
+        let (second, _) = open(directory.path(), APP_FILE, unheard()).unwrap();
         grown_by(&first, ROTATION_SIZE + 1);
         write_line(&first, "a1\n");
         write_line(&second, "b1\n");
         let mut opened = second.opened.lock().unwrap();
-        opened.looked_at = opened.looked_at.checked_sub(LOOK_AFTER).unwrap();
+        // A clock started less than a minute ago cannot say a minute went by.
+        let Some(earlier) = opened.looked_at.checked_sub(LOOK_AFTER) else {
+            return;
+        };
+        opened.looked_at = earlier;
         drop(opened);
         write_line(&second, "b2\n");
-        let aside = directory.path().join("app.log.1");
+        let aside = directory.path().join("okapi-app.log.1");
         assert_eq!(fs::read_to_string(&aside).unwrap(), "b1\n");
         assert_eq!(fs::read_to_string(&second.path).unwrap(), "a1\nb2\n");
     }
@@ -1065,10 +1199,10 @@ mod tests {
     #[test]
     fn a_journal_that_cannot_be_opened_names_its_path() {
         let directory = tempfile::tempdir().unwrap();
-        fs::create_dir(directory.path().join("app.log")).unwrap();
-        match open(directory.path(), "app.log", unheard()) {
+        fs::create_dir(directory.path().join(APP_FILE)).unwrap();
+        match open(directory.path(), APP_FILE, unheard()) {
             Err(Unavailable::Unopenable { path, .. }) => {
-                assert_eq!(path, directory.path().join("app.log"));
+                assert_eq!(path, directory.path().join(APP_FILE));
             }
             Err(other) => panic!("{other:?}"),
             Ok(_) => panic!("a directory opened as the journal"),
@@ -1110,7 +1244,7 @@ mod tests {
         let counter = Arc::clone(&said);
         let (journal, _) = open(
             directory.path(),
-            "app.log",
+            APP_FILE,
             Box::new(move |_| {
                 counter.fetch_add(1, Ordering::Relaxed);
             }),

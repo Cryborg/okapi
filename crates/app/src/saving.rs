@@ -29,7 +29,7 @@ pub(crate) enum LastWrite<O = bool> {
     /// None was done.
     Nothing,
     /// What the last one said: by default, whether it kept its value.
-    Kept(O),
+    Said(O),
     /// The thread is gone: no write will be done any more.
     Gone,
 }
@@ -85,7 +85,7 @@ impl<T: Send + 'static, O: Copy + PartialEq + std::fmt::Debug + Send + 'static> 
             match self.kept.try_recv() {
                 Ok((kept, covered)) => {
                     self.unsaid.set(self.unsaid.get().saturating_sub(covered));
-                    last = LastWrite::Kept(kept);
+                    last = LastWrite::Said(kept);
                 }
                 Err(TryRecvError::Empty) => return last,
                 // What was said before it went comes first.
@@ -111,7 +111,7 @@ impl<T: Send + 'static, O: Copy + PartialEq + std::fmt::Debug + Send + 'static> 
             match self.last_write() {
                 LastWrite::Nothing => {}
                 LastWrite::Gone => return LastWrite::Gone,
-                said @ LastWrite::Kept(_) => last = said,
+                said @ LastWrite::Said(_) => last = said,
             }
             if self.unsaid.get() == 0 {
                 return last;
@@ -224,7 +224,7 @@ mod tests {
         go.send(()).unwrap();
         saver.shut_down();
         assert_eq!(*written.lock().unwrap(), [1, 3]);
-        assert_eq!(saver.last_write(), LastWrite::Kept(true));
+        assert_eq!(saver.last_write(), LastWrite::Said(true));
     }
 
     #[test]
@@ -250,7 +250,7 @@ mod tests {
         assert_eq!(saver.unsaid.get(), 2);
         started.recv().unwrap();
         go.send(()).unwrap();
-        assert_eq!(saver.settle(), LastWrite::Kept(true));
+        assert_eq!(saver.settle(), LastWrite::Said(true));
         assert_eq!(*written.lock().unwrap(), [1, 3]);
         assert_eq!(saver.unsaid.get(), 0);
         assert_eq!(
@@ -306,7 +306,7 @@ mod tests {
         assert!(saver.save(layout(1)));
         let said = |saver: &Saver<DashboardLayout>| {
             for _ in 0..1000 {
-                if let LastWrite::Kept(kept) = saver.last_write() {
+                if let LastWrite::Said(kept) = saver.last_write() {
                     return kept;
                 }
                 thread::sleep(LAST_WRITE_POLL);
@@ -349,7 +349,7 @@ mod tests {
             saver.thread.as_ref().is_some_and(JoinHandle::is_finished)
         });
         assert!(died);
-        assert_eq!(saver.last_write(), LastWrite::Kept(false));
+        assert_eq!(saver.last_write(), LastWrite::Said(false));
         assert_eq!(saver.last_write(), LastWrite::Gone);
     }
 

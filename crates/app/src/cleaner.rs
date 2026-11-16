@@ -2400,6 +2400,10 @@ pub mod tests {
         /// The entries of the deletion log of each cleaning, in order.
         pub fn deletion_logs(&self) -> Vec<serde_json::Value> {
             let lines = self.history_lines();
+            assert!(
+                lines.last().is_none_or(|line| line["kind"] != "deletions"),
+                "a deletion log without its cleaning line"
+            );
             lines
                 .iter()
                 .zip(lines.iter().skip(1))

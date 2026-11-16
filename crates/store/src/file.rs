@@ -156,10 +156,11 @@ pub(crate) fn write_versioned<T: Serialize>(
     write_atomically(directory, name, &bytes)
 }
 
-/// Whether the file whose reading is `read` may be replaced: one that cannot
-/// be read never is (D-10: replacing it would lose what the user had set,
-/// theirs to repair), which is traced. Judged just before the write: one
-/// damaged in that very instant may still be replaced. Gives what was read.
+/// What a file about to be replaced holds, from its reading `read`, or the
+/// error that forbids replacing it: one that cannot be read never is (D-10:
+/// replacing it would lose what the user had set, theirs to repair), which is
+/// traced. Judged just before the write: one damaged in that very instant may
+/// still be replaced.
 ///
 /// # Errors
 ///

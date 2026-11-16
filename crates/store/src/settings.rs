@@ -83,13 +83,14 @@ impl Settings {
     }
 
     /// Replaces the settings of `directory` by these, if they still hold
-    /// `over` (what the caller read or wrote there last), and unless they
+    /// `over` (what the caller read or wrote there last) or already hold
+    /// these (nothing is lost then), and unless they
     /// cannot be read (D-10: they are the user's to repair). Settings
     /// changed elsewhere since (by hand, by another window) are never
     /// replaced: the caller reads them again. Their values are compared, not
     /// their bytes: a file laid out again by hand is no change; none there
-    /// holds the defaults. A change made between that reading and the
-    /// replacement (a few milliseconds) is still lost.
+    /// holds the defaults. A change made between that reading and the end of
+    /// the replacement (the time of one write) is still lost.
     ///
     /// # Errors
     ///
@@ -98,12 +99,37 @@ impl Settings {
     /// [`StoreError::NotAFile`] (a link there is never written through,
     /// D-9) or [`StoreError::Unwritable`].
     pub fn save(&self, directory: &Path, over: &Self) -> Result<Replaced, StoreError> {
-        if file::replaceable(Self::load(directory))? != *over {
-            tracing::warn!(path = %Self::path(directory).display(), "settings changed elsewhere: not written");
+        let there = file::replaceable(Self::load(directory))?;
+        if there != *over && there != *self {
+            tracing::warn!(path = %Self::path(directory).display(), changed = ?there.differing(over), lost = ?self.differing(over), "settings changed elsewhere: not written");
             return Ok(Replaced::ChangedElsewhere);
         }
         file::write_versioned(directory, SETTINGS_FILE, SETTINGS_VERSION, self)?;
         Ok(Replaced::Written)
+    }
+
+    /// The names of the settings that differ from `other`'s: what a refusal
+    /// traces (the file's values are in its reading traced just before, the
+    /// caller's where it made them). Every
+    /// field is named, which the compiler checks.
+    fn differing(&self, other: &Self) -> Vec<&'static str> {
+        let Self {
+            exclusions,
+            min_age_minutes,
+            deletion_log,
+            language,
+            theme,
+        } = self;
+        [
+            ("exclusions", *exclusions != other.exclusions),
+            ("minAgeMinutes", *min_age_minutes != other.min_age_minutes),
+            ("deletionLog", *deletion_log != other.deletion_log),
+            ("language", *language != other.language),
+            ("theme", *theme != other.theme),
+        ]
+        .into_iter()
+        .filter_map(|(name, differs)| differs.then_some(name))
+        .collect()
     }
 
     /// Reads the settings in `directory`; the defaults when there are none.
@@ -257,11 +283,48 @@ mod tests {
         assert_eq!(fs::read_to_string(&file).unwrap(), by_hand);
         // Removed by hand since it was read: none there is the defaults.
         fs::remove_file(&file).unwrap();
-        let written = Settings::default()
-            .save(directory.path(), &every_field())
-            .unwrap();
+        let lighter = Settings {
+            theme: Some(Theme::Light),
+            ..every_field()
+        };
+        let written = lighter.save(directory.path(), &every_field()).unwrap();
         assert_eq!(written, Replaced::ChangedElsewhere);
         assert!(!file.exists());
+    }
+
+    #[test]
+    fn settings_changed_elsewhere_to_these_very_ones_are_no_refusal() {
+        let directory = tempfile::tempdir().unwrap();
+        // Another window made the same change first.
+        let written = every_field()
+            .save(directory.path(), &Settings::default())
+            .unwrap();
+        assert_eq!(written, Replaced::Written);
+        let written = every_field()
+            .save(directory.path(), &Settings::default())
+            .unwrap();
+        assert_eq!(written, Replaced::Written);
+        assert_eq!(Settings::load(directory.path()).unwrap(), every_field());
+    }
+
+    #[test]
+    fn a_refusal_names_each_setting_that_differs() {
+        assert_eq!(
+            every_field().differing(&Settings::default()),
+            [
+                "exclusions",
+                "minAgeMinutes",
+                "deletionLog",
+                "language",
+                "theme"
+            ]
+        );
+        assert_eq!(every_field().differing(&every_field()), Vec::<&str>::new());
+        let lighter = Settings {
+            theme: Some(Theme::Light),
+            ..every_field()
+        };
+        assert_eq!(lighter.differing(&every_field()), ["theme"]);
     }
 
     #[test]

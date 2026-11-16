@@ -941,7 +941,7 @@ impl DashboardScreen {
             let before = state.banners.save_failed;
             match state.saver.as_ref().map(Saver::last_write) {
                 None | Some(LastWrite::Nothing) => {}
-                Some(LastWrite::Kept(kept)) => {
+                Some(LastWrite::Said(kept)) => {
                     state.banners.save_failed = !kept;
                     if !kept {
                         tracing::warn!("dashboard layout not kept: said");

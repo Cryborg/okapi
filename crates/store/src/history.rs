@@ -13,10 +13,11 @@ const HISTORY_FILE: &str = "history.jsonl";
 /// The format of each history line.
 const HISTORY_VERSION: u32 = 1;
 /// A bound on what is read, on the caller's thread, to find the last
-/// cleaning: its line and the uninstallations after it take a few hundred
-/// bytes each, its deletion log is on a line of its own before it, never
-/// read. More (a link to another file, a line of a deletion log whose
-/// cleaning line is missing) is not read, which is traced.
+/// cleaning: its line and the uninstallations after it are short, its
+/// deletion log is on a line of its own before it, never read. More (a link
+/// to another file, a line of a deletion log whose cleaning line is missing,
+/// a cleaning line written by an earlier Okapi with its deletion log in it)
+/// is not read, which is traced.
 const MAX_LINE: u64 = 1024 * 1024;
 /// The blocks the history is read by from its end, none of them kept.
 const BLOCK: u64 = 64 * 1024;
@@ -96,8 +97,8 @@ pub struct HistoryOutcome {
 }
 
 impl HistoryEntry {
-    /// The line of a cleaning that ended at `now`, with every entry when the
-    /// user keeps a deletion log.
+    /// The line of a cleaning that ended at `now`, with every entry (its
+    /// deletion log) when the user keeps one.
     #[must_use]
     pub(crate) fn of(receipt: &CleanReceipt, now: SystemTime, deletion_log: bool) -> Self {
         Self::of_outcomes(
@@ -323,8 +324,8 @@ impl History {
         Ok(Self { file, path })
     }
 
-    /// Adds the line of `receipt`, a cleaning that ended now, with every
-    /// entry when the user keeps a deletion log.
+    /// Adds the line of `receipt`, a cleaning that ended now, after the line
+    /// of its deletion log when the user keeps one.
     ///
     /// # Errors
     ///
@@ -1385,6 +1386,17 @@ mod tests {
                 freed: Some(9)
             })
         );
+    }
+
+    #[test]
+    fn a_deletion_log_without_its_cleaning_line_is_met_past_uninstallations() {
+        let directory = tempfile::tempdir().unwrap();
+        recorded(directory.path(), &[(100, 7, None)]);
+        let text = std::fs::read_to_string(History::path(directory.path())).unwrap();
+        let deletions = text.lines().next().unwrap().to_owned();
+        append(directory.path(), format!("{deletions}\n").as_bytes());
+        uninstalled(directory.path(), 200);
+        assert_eq!(last(directory.path()), None, "never the one before");
     }
 
     #[test]

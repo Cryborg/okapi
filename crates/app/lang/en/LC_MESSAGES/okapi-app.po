@@ -1871,8 +1871,8 @@ msgid "Journal des suppressions"
 msgstr "Deletion log"
 
 msgctxt "General"
-msgid "Garde dans l'historique, pour chaque nettoyage, la liste des chemins retirés."
-msgstr "Keeps in the history, for each cleaning, the list of the paths removed."
+msgid "Aucun historique n'est tenu : ni XDG_STATE_HOME ni HOME ne sont utilisables."
+msgstr "No history is kept: neither XDG_STATE_HOME nor HOME can be used."
 
 msgctxt "General"
 msgid "Garde dans l'historique ({}), pour chaque nettoyage, la liste des chemins retirés."
@@ -1883,12 +1883,12 @@ msgid "Journal technique"
 msgstr "Technical log"
 
 msgctxt "General"
-msgid "{} et leurs copies .1 gardent quelques semaines le détail de chaque lancement, dont les chemins analysés, supprimés ou mis à la corbeille, les applis et vos exclusions. Relisez-les avant de les partager. Le réglage « Journal des suppressions » n'y change rien."
-msgstr "{} and their .1 copies keep for a few weeks the detail of each launch, including the paths analysed, deleted or moved to the trash, the apps and your exclusions. Read them before sharing them. The “Deletion log” setting does not change them."
+msgid "Aucun journal technique n'est tenu : ni XDG_STATE_HOME ni HOME ne sont utilisables."
+msgstr "No technical log is kept: neither XDG_STATE_HOME nor HOME can be used."
 
 msgctxt "General"
-msgid "{} et leurs copies .1, dans {}, gardent quelques semaines le détail de chaque lancement, dont les chemins analysés, supprimés ou mis à la corbeille, les applis et vos exclusions. Relisez-les avant de les partager. Le réglage « Journal des suppressions » n'y change rien."
-msgstr "{} and their .1 copies, in {}, keep for a few weeks the detail of each launch, including the paths analysed, deleted or moved to the trash, the apps and your exclusions. Read them before sharing them. The “Deletion log” setting does not change them."
+msgid "{} et {}, avec leurs copies .1, dans {}, gardent quelques semaines le détail de chaque lancement, dont les chemins analysés, supprimés ou mis à la corbeille, les applis et vos exclusions. Relisez-les avant de les partager. Le réglage « Journal des suppressions » n'y change rien."
+msgstr "{} and {}, with their .1 copies, in {}, keep for a few weeks the detail of each launch, including the paths analysed, deleted or moved to the trash, the apps and your exclusions. Read them before sharing them. The “Deletion log” setting does not change them."
 
 msgctxt "General"
 msgid "Activé"
@@ -1967,8 +1967,8 @@ msgid "Ce réglage n'a pas pu être enregistré (le détail est dans le journal)
 msgstr "This setting could not be saved (the details are in the log)."
 
 msgctxt "SettingsPage"
-msgid "Vos réglages ont été modifiés hors de cet écran : ils viennent d'être relus, et vos derniers changements n'ont pas été enregistrés."
-msgstr "Your settings were changed outside this screen: they have just been read again, and your last changes were not saved."
+msgid "Vos réglages ont été modifiés hors de cet écran : vos derniers changements n'ont pas été enregistrés, pour ne pas effacer ceux faits ailleurs. Refaites-les si besoin."
+msgstr "Your settings were changed outside this screen: your last changes were not saved, so as not to erase the ones made elsewhere. Make them again if needed."
 
 msgctxt "Preferences"
 msgid "Choisir un dossier à exclure"

@@ -6,10 +6,9 @@
 //! It reads one request on one line of its standard input ([`Request`]): the
 //! targets by the path the rules write them with, never a path to remove
 //! (invariant 1), an age no younger than [`HELPER_MIN_AGE_FLOOR`], and
-//! exclusions, each an extension or a path at, above or below one of its
-//! targets as written (it resolves none written elsewhere). It scans those
-//! targets itself and, for a cleaning, removes what that scan offers there,
-//! through the engine and its checks. It writes
+//! exclusions as the interface resolved them, which it compares as received
+//! and never reads. It scans those targets itself and, for a cleaning, removes
+//! what that scan offers there, through the engine and its checks. It writes
 //! one JSON document on its standard output ([`Answer`], or [`RefusalAnswer`])
 //! and its traces on its standard error, never a file of its own (no
 //! journal). It runs no command (invariant 4).
@@ -43,7 +42,7 @@ pub use request::{
 
 /// The version of the request and of the answer; a helper of another version
 /// refuses the request (`unsupportedVersion`).
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// How the helper ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

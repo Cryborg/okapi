@@ -33,10 +33,11 @@ pub struct Granted {
 impl Granted {
     /// What the helper is sent for `targets`, from the settings `inputs`:
     /// the settings' age, never below the helper's floor; and each exclusion
-    /// that may touch a target, in the forms the helper accepts
-    /// ([`sent_forms`]), so that it never reads where something lies
-    /// elsewhere. Reading where each lies waits on a mount that stopped
-    /// answering: call it from a task's thread, not the window's.
+    /// that may touch a target (each one, when where a target lies is not
+    /// known), in the forms root compares as received ([`sent_forms`],
+    /// [`whole_by_identity`]): the helper never reads one.
+    /// Reading where each lies waits on a mount that stopped answering: call
+    /// it from a task's thread, not the window's.
     ///
     /// # Errors
     ///
@@ -60,14 +61,21 @@ impl Granted {
             tracing::warn!(?error, "settings exclusion refused: nothing asked of root");
             Problem::Exclusion
         })?;
-        let led_to = linked_targets(targets);
+        let (places, every_place_known) = real_places(targets);
+        let known = every_place_known.then_some(places.as_slice());
         // In order: settings that only reorder them are the same.
         let mut exclusions = BTreeSet::new();
         let mut dropped = 0_usize;
         for exclusion in &inputs.exclusions {
-            let sent = sent_forms(exclusion, targets, &led_to).map_err(|error| {
+            let sent = sent_forms(exclusion, targets, known).map_err(|error| {
                 // Located a moment ago: it moved meanwhile.
-                tracing::warn!(exclusion = %exclusion.display(), kind = ?error.kind(), code = error.raw_os_error(), %error, "an exclusion can no longer be located: nothing asked of root");
+                tracing::warn!(
+                    exclusion = %exclusion.display(),
+                    kind = ?error.kind(),
+                    code = error.raw_os_error(),
+                    %error,
+                    "an exclusion can no longer be located: nothing asked of root"
+                );
                 Problem::Exclusion
             })?;
             if sent.is_empty() {
@@ -76,7 +84,7 @@ impl Granted {
             }
             exclusions.extend(sent);
         }
-        let whole = whole_by_identity(&resolved, targets, &led_to, &exclusions);
+        let whole = whole_by_identity(&resolved, &places, &exclusions);
         exclusions.extend(whole);
         let exclusions: Vec<PathBuf> = exclusions.into_iter().collect();
         tracing::info!(elapsed = ?started.elapsed(), kept = exclusions.len(), dropped, "exclusions for root read");
@@ -97,61 +105,54 @@ impl Granted {
     }
 }
 
-/// The targets reached through a linked ancestor (`/var/cache` moved to
-/// another volume), each with where it leads: root's scan walks it there. One
-/// whose way the user cannot read is left out, traced: an exclusion where it
-/// leads would need a link the user cannot see, in a directory they cannot
-/// enter.
-fn linked_targets(targets: &BTreeSet<String>) -> Vec<(&Path, PathBuf)> {
-    targets
+/// Where root's scan walks `targets`: the real location of each (one below
+/// a linked ancestor, `/var/cache` moved to another volume, lies where the
+/// link leads); then whether every one is known. One whose way the user
+/// cannot read keeps its written form (its ancestors still tell an exclusion
+/// by identity, unless one is a link), traced: where it leads, root may still
+/// walk.
+fn real_places(targets: &BTreeSet<String>) -> (Vec<PathBuf>, bool) {
+    let mut every_one_known = true;
+    let places = targets
         .iter()
         .map(Path::new)
-        .filter_map(|target| match Exclusions::real_location(target) {
-            Ok(real) => (real != target).then_some((target, real)),
-            Err(error) => {
-                tracing::warn!(target = %target.display(), kind = ?error.kind(), %error, "where a target leads cannot be read: no exclusion is placed there");
-                None
-            }
+        .map(|target| {
+            Exclusions::real_location(target).unwrap_or_else(|error| {
+                every_one_known = false;
+                tracing::warn!(target = %target.display(), kind = ?error.kind(), code = error.raw_os_error(), %error, "where a target leads cannot be read: every exclusion sent where it lies");
+                target.to_path_buf()
+            })
         })
-        .collect()
+        .collect();
+    (places, every_one_known)
 }
 
-/// The targets excluded by identity alone (a bind mount of an excluded
-/// directory, or of one above the target or where it leads), that no form in
+/// The places of `places` (real locations) excluded by identity alone (a
+/// bind mount of an excluded directory, or of one above), that no form in
 /// `sent` covers already: sent whole, as the user's scan leaves them whole. A
-/// directory excluded by identity below a target cannot be named: never sent.
+/// directory or a file excluded by identity below a target (a bind mount, a
+/// hard link) cannot be named: never sent.
 fn whole_by_identity(
     resolved: &Exclusions,
-    targets: &BTreeSet<String>,
-    led_to: &[(&Path, PathBuf)],
+    places: &[PathBuf],
     sent: &BTreeSet<PathBuf>,
 ) -> Vec<PathBuf> {
-    targets
+    places
         .iter()
-        .map(Path::new)
-        .filter(|target| !sent.iter().any(|form| target.starts_with(form)))
-        .filter(|target| {
-            let leads_to = led_to
-                .iter()
-                .find(|(linked, _)| linked == target)
-                .map(|(_, leads_to)| leads_to.as_path());
-            std::iter::once(*target)
-                .chain(leads_to)
-                .any(|place| resolved.excludes_through_identity(place))
-        })
-        .inspect(|target| tracing::info!(target = %target.display(), "a target excluded by identity: sent whole"))
-        .map(Path::to_path_buf)
+        .filter(|place| !sent.iter().any(|form| place.starts_with(form)))
+        .filter(|place| resolved.excludes_through_identity(place))
+        .inspect(|place| tracing::info!(place = %place.display(), "a target excluded by identity: sent whole"))
+        .cloned()
         .collect()
 }
 
-/// The forms of `exclusion` the helper is sent, each at, above or below one
-/// of `targets` as written ([`Exclusions::touches_lexically`]): itself when
-/// it is; else its real location when that is (root reads it again); else,
-/// for every target of `led_to` (a link) where it leads, the same place
-/// below that target as written when `exclusion` lies there, or the target
-/// itself when it lies above (root resolves either to where it lies); none
-/// when it touches no target. Where a target leads is compared to the real
-/// location as written, case included.
+/// The forms of `exclusion` root is sent, which it compares as received and
+/// never reads: itself when it touches one of `targets` as written
+/// ([`Exclusions::touches_lexically`]); its real location when that touches
+/// one of `places`, where the targets really lie and root's scan walks, or
+/// always when not every place is known (None): root reads none of them,
+/// and one too many only lengthens the request. None when it touches no
+/// target: it protects nothing of root's.
 ///
 /// # Errors
 ///
@@ -159,32 +160,24 @@ fn whole_by_identity(
 fn sent_forms(
     exclusion: &Path,
     targets: &BTreeSet<String>,
-    led_to: &[(&Path, PathBuf)],
+    places: Option<&[PathBuf]>,
 ) -> io::Result<Vec<PathBuf>> {
-    let touches = |path: &Path| {
-        targets
-            .iter()
-            .any(|target| Exclusions::touches_lexically(path, Path::new(target)))
-    };
-    if touches(exclusion) {
-        return Ok(vec![exclusion.to_path_buf()]);
+    let mut forms = Vec::new();
+    if targets
+        .iter()
+        .any(|target| Exclusions::touches_lexically(exclusion, Path::new(target)))
+    {
+        forms.push(exclusion.to_path_buf());
     }
     let real = Exclusions::real_location(exclusion)?;
-    if touches(&real) {
-        return Ok(vec![real]);
+    if places.is_none_or(|places| {
+        places
+            .iter()
+            .any(|place| Exclusions::touches_lexically(&real, place))
+    }) {
+        forms.push(real);
     }
-    Ok(led_to
-        .iter()
-        .filter_map(|(target, leads_to)| {
-            if let Ok(rest) = real.strip_prefix(leads_to) {
-                Some(target.join(rest).components().collect())
-            } else if leads_to.starts_with(&real) {
-                Some(target.to_path_buf())
-            } else {
-                None
-            }
-        })
-        .collect())
+    Ok(forms)
 }
 
 /// The path each rule of `rules` the privileged helper may be asked for is
@@ -649,11 +642,10 @@ mod tests {
     }
 
     /// Targets reached through a linked ancestor (`var` moved to `data/var`)
-    /// are walked where they lead: an exclusion there is sent at the same
-    /// place below each target as written, which the helper accepts and
-    /// resolves to where it lies.
+    /// are walked where they lead: an exclusion is sent by where it lies,
+    /// and also as written when it touches a target as written.
     #[test]
-    fn an_exclusion_where_a_linked_target_leads_is_sent_below_the_target() {
+    fn an_exclusion_is_sent_where_it_lies_and_as_written() {
         let directory = tempfile::tempdir().unwrap();
         let real = std::fs::canonicalize(directory.path()).unwrap();
         for moved in ["data/var/crash", "data/var/man", "data/other"] {
@@ -671,18 +663,116 @@ mod tests {
         };
         assert_eq!(
             granted_for(real.join("data/var/crash/keep")),
-            [crash.join("keep")],
-            "below where it leads: the same place below the target"
+            [real.join("data/var/crash/keep")],
+            "written where it lies: as it is"
+        );
+        assert_eq!(
+            granted_for(crash.join("keep"))
+                .iter()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([&crash.join("keep"), &real.join("data/var/crash/keep")]),
+            "written through the link: as written and where it lies"
         );
         assert_eq!(
             granted_for(real.join("data/var")),
-            [crash.clone(), man.clone()],
-            "above where they lead: every such target whole"
+            [real.join("data/var")],
+            "above where they lead"
         );
         assert!(
             granted_for(real.join("data/other")).is_empty(),
             "beside: nothing"
         );
+    }
+
+    /// Where a target leads, unreadable to the user, may be where an
+    /// exclusion lies: every exclusion is then sent where it lies.
+    #[test]
+    fn a_target_the_user_cannot_follow_gets_every_exclusion() {
+        use std::os::unix::fs::PermissionsExt as _;
+        // Root reads through any mode.
+        if okapi_platform::running_as_root() {
+            return;
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(directory.path()).unwrap();
+        let closed = real.join("closed");
+        std::fs::create_dir_all(closed.join("crash")).unwrap();
+        std::fs::create_dir(real.join("elsewhere")).unwrap();
+        let elsewhere = real.join("elsewhere/keep");
+        let crash = closed.join("crash");
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let granted = Granted::of(
+            &inputs(None, &[elsewhere.to_str().unwrap()]),
+            &targets(&[crash.to_str().unwrap()]),
+        );
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(granted.unwrap().exclusions, [elsewhere]);
+    }
+
+    /// What the user excludes, root neither offers nor removes, though it
+    /// never reads an exclusion: below a target reached through a linked
+    /// ancestor, through an alias below the target, through one above it.
+    #[test]
+    fn root_keeps_what_the_user_excludes_without_reading_it() {
+        use okapi_engine::{ScanOptions, Watch};
+        use okapi_helper::{Request, Selection, operate};
+
+        let sandbox = super::super::tests::Sandbox::new();
+        let root = &sandbox.root;
+        let crash = root.join("data/var/crash");
+        for kept in ["keep1/old", "keep2/old", "keep3/old", "gone/old"] {
+            sandbox.file(&format!("data/var/crash/{kept}"));
+        }
+        std::os::unix::fs::symlink(root.join("data/var"), root.join("var")).unwrap();
+        std::os::unix::fs::symlink(crash.join("keep2"), crash.join("alias")).unwrap();
+        std::os::unix::fs::symlink(root.join("data/var"), root.join("up")).unwrap();
+        let target = root.join("var/crash").display().to_string();
+        let system = serde_json::json!({
+            "type": "system",
+            "cleanTargets": [{ "path": target, "subcategory": "Crash", "needsAdmin": true }],
+        });
+        let rules = RuleSet::embedded_with(
+            okapi_rules::Os::Linux,
+            okapi_rules::RuleFileKind::System,
+            &system.to_string(),
+        )
+        .unwrap();
+        let exclusions = [
+            root.join("var/crash/keep1"),
+            root.join("var/crash/alias"),
+            root.join("up/crash/keep3"),
+        ];
+        let exclusions: Vec<&str> = exclusions
+            .iter()
+            .map(|path| path.to_str().unwrap())
+            .collect();
+        let asked = targets(&[target.as_str()]);
+        let granted = Granted::of(&inputs(None, &exclusions), &asked).unwrap();
+        super::super::tests::settle_files();
+        let now = std::time::SystemTime::now();
+        let line = granted.line(Operation::Clean, &asked).unwrap();
+        Request::read(&line, &rules, now).expect("the helper accepts it");
+        // As the helper reads the request, but every age offered: a test
+        // cannot set a change time back.
+        let options = ScanOptions::new(
+            now,
+            Duration::ZERO,
+            Exclusions::as_written(granted.exclusions.clone()).unwrap(),
+        );
+        let answer = operate(
+            Operation::Clean,
+            &Selection::of(&rules, &[target]).unwrap(),
+            &rules,
+            &sandbox.variables(),
+            options,
+            &Watch::none(),
+        );
+        assert_eq!(answer.exit(), okapi_helper::Exit::Success, "{answer:?}");
+        for kept in ["keep1/old", "keep2/old", "keep3/old"] {
+            assert!(crash.join(kept).exists(), "{kept} kept: {granted:?}");
+        }
+        assert!(!crash.join("gone").exists(), "the rest removed: {answer:?}");
     }
 
     #[test]

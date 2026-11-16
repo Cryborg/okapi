@@ -89,9 +89,17 @@ fn refuses_any_target_but_those_of_its_rules_that_need_the_administrator() {
 #[test]
 fn refuses_a_request_of_another_form_or_version() {
     assert_eq!(
-        refusal(&json!({ "version": 3, "added": true })),
-        Refusal::UnsupportedVersion { version: 3 },
+        refusal(&json!({ "version": PROTOCOL_VERSION + 1, "added": true })),
+        Refusal::UnsupportedVersion {
+            version: PROTOCOL_VERSION + 1
+        },
         "another version is said as such, whatever it adds"
+    );
+    // Version 2 had the helper resolve the exclusions: read as resolved, its
+    // aliases would protect nothing.
+    assert_eq!(
+        refusal(&json!({ "version": 2 })),
+        Refusal::UnsupportedVersion { version: 2 }
     );
     for overrides in [
         json!({ "paths": ["/var/crash"] }),
@@ -105,12 +113,12 @@ fn refuses_a_request_of_another_form_or_version() {
     let now = SystemTime::now();
     for line in [
         &b"not json"[..],
-        b"{\"version\": 2}",
+        b"{\"version\": 3}",
         b"",
         // The fields as an array, which serde accepts for a structure.
-        b"[2, \"clean\", [\"/var/crash\"], 60, []]",
+        b"[3, \"clean\", [\"/var/crash\"], 60, []]",
         // Complete but for its one byte that is not UTF-8.
-        b"{\"version\": 2, \"operation\": \"clean\", \"targets\": [\"/var/\xff\"], \"minAgeMinutes\": 60, \"exclusions\": []}",
+        b"{\"version\": 3, \"operation\": \"clean\", \"targets\": [\"/var/\xff\"], \"minAgeMinutes\": 60, \"exclusions\": []}",
     ] {
         assert!(
             matches!(
@@ -140,11 +148,6 @@ fn refuses_an_age_below_its_floor_or_beyond_the_clock() {
         refusal(&json!({ "minAgeMinutes": u64::MAX })),
         Refusal::AgeBeyondClock { minutes: u64::MAX }
     );
-    // Empty, it lies above every path, so placed; then refused as such.
-    assert!(matches!(
-        refusal(&json!({ "exclusions": [""] })),
-        Refusal::Exclusion { .. }
-    ));
     let request = read(&json!({ "minAgeMinutes": 90, "exclusions": ["/var/crash/keep"] })).unwrap();
     let now = SystemTime::now();
     assert_eq!(
@@ -152,7 +155,7 @@ fn refuses_an_age_below_its_floor_or_beyond_the_clock() {
         ScanOptions::new(
             now,
             Duration::from_mins(90),
-            Exclusions::new([PathBuf::from("/var/crash/keep")]).unwrap()
+            Exclusions::as_written([PathBuf::from("/var/crash/keep")]).unwrap()
         )
     );
 }
@@ -190,61 +193,54 @@ fn a_valid_request_names_the_targets_of_its_rules() {
     assert!(!request.selection().contains(&target("/var/tmp")));
 }
 
-/// An exclusion must lie at, above or below a target of the helper, as
-/// written: any of them, not only those asked for (a cleaning names the
-/// targets checked, its exclusions were chosen for all). Nothing else is
-/// read as root.
+/// The exclusions are compared as received, never read: one anywhere is no
+/// refusal, one of a form that cannot be used is, and a link the caller
+/// placed below a target gives the same answer, wherever it leads or whether
+/// it leads anywhere.
 #[test]
-fn refuses_an_exclusion_that_touches_none_of_its_targets() {
-    for accepted in [
-        "/var/crash/keep",
-        "/VAR/Crash/keep",
-        "/var",
-        "/",
-        "*.log",
-        "/var/cache/apt/archives/keep",
-    ] {
-        read(&json!({ "targets": ["/var/crash"], "exclusions": [accepted] }))
-            .unwrap_or_else(|refusal| panic!("{accepted}: {refusal}"));
+fn an_exclusion_is_never_read() {
+    for anywhere in ["/root/x", "/proc/1/cwd", "/var/crashes", "/", "*.log"] {
+        read(&json!({ "exclusions": [anywhere] }))
+            .unwrap_or_else(|refusal| panic!("{anywhere}: {refusal}"));
     }
-    for elsewhere in [
-        "/root/x",
-        "/proc/1/cwd",
-        "/var/crashes",
-        "/home/ana",
-        "relative",
-    ] {
-        assert_eq!(
-            refusal(&json!({ "exclusions": ["/var/crash/keep", elsewhere] })),
-            Refusal::ExclusionElsewhere {
-                path: PathBuf::from(elsewhere)
-            },
-            "{elsewhere}"
+    for unusable in ["", "relative", "/var/crash/../..", "*."] {
+        assert!(
+            matches!(
+                refusal(&json!({ "exclusions": [unusable] })),
+                Refusal::Exclusion { .. }
+            ),
+            "{unusable}"
         );
     }
-    assert_eq!(
-        refusal(&json!({ "exclusions": ["/home/ana", "/var/crash/keep", "/root/x"] })),
-        Refusal::ExclusionElsewhere {
-            path: PathBuf::from("/home/ana")
-        },
-        "the first named"
-    );
-    assert_eq!(
-        refusal(&json!({ "exclusions": ["/var/crash/../..", "/root/x"] })),
-        Refusal::ExclusionElsewhere {
-            path: PathBuf::from("/root/x")
-        },
-        "every exclusion is placed before any is read"
-    );
-    assert!(
-        matches!(
-            refusal(&json!({ "exclusions": ["/var/crash/../.."] })),
-            Refusal::Exclusion {
-                error: okapi_engine::ExclusionError::Invalid { .. }
-            }
-        ),
-        "placed, then refused for its `..`"
-    );
+    let sandbox = Sandbox::new();
+    sandbox.file("var/crash/core.1");
+    fs::create_dir_all(sandbox.path("elsewhere/keep")).unwrap();
+    std::os::unix::fs::symlink(sandbox.path("elsewhere"), sandbox.path("var/crash/live")).unwrap();
+    std::os::unix::fs::symlink(sandbox.path("nowhere"), sandbox.path("var/crash/dangling"))
+        .unwrap();
+    let rules = sandbox.rules(&[("var/crash", "Crash", true)]);
+    let answer_through = |link: &str| {
+        let exclusion = sandbox.path(&format!("var/crash/{link}/keep"));
+        let line = crate::request_line(
+            Operation::Scan,
+            &[sandbox.name("var/crash")],
+            60,
+            &[exclusion],
+        )
+        .unwrap();
+        let now = SystemTime::now();
+        let request = Request::read(&line, &rules, now).unwrap();
+        let answer = operate(
+            request.operation(),
+            request.selection(),
+            &rules,
+            &sandbox.variables(),
+            request.options(now),
+            &Watch::none(),
+        );
+        serde_json::to_value(answer).unwrap()
+    };
+    assert_eq!(answer_through("live"), answer_through("dangling"));
 }
 
 std::thread_local! {
@@ -289,10 +285,10 @@ fn traces_of(run: impl FnOnce()) -> String {
 #[test]
 fn a_request_refused_is_traced() {
     let traces = traces_of(|| {
-        refusal(&json!({ "exclusions": ["/root/x"] }));
+        refusal(&json!({ "exclusions": ["relative"] }));
     });
     assert!(traces.contains("request refused"), "{traces}");
-    assert!(traces.contains("exclusionElsewhere"), "{traces}");
+    assert!(traces.contains("refused=\"exclusion\""), "{traces}");
     assert!(!traces.contains("request accepted"), "{traces}");
 }
 
@@ -303,7 +299,7 @@ fn the_traces_never_tell_where_an_exclusion_leads() {
     let sandbox = Sandbox::new();
     sandbox.file("var/crash/core.1");
     let elsewhere = sandbox.path("elsewhere");
-    // There, so that its identity is read as root would.
+    // There, so that its identity would be read if it were resolved.
     fs::create_dir_all(elsewhere.join("keep")).unwrap();
     std::os::unix::fs::symlink(&elsewhere, sandbox.path("var/crash/alias")).unwrap();
     let rules = sandbox.rules(&[("var/crash", "Crash", true)]);
@@ -328,7 +324,10 @@ fn the_traces_never_tell_where_an_exclusion_leads() {
         assert_eq!(answer.exit(), Exit::Success, "{answer:?}");
     });
     assert!(traces.contains("request accepted"), "{traces}");
-    assert!(traces.contains("exclusions: 1"), "{traces}");
+    assert!(
+        traces.contains("var/crash/alias/keep"),
+        "as received: {traces}"
+    );
     assert!(
         traces.contains("held back"),
         "the operation's traces are read too: {traces}"
@@ -337,18 +336,6 @@ fn the_traces_never_tell_where_an_exclusion_leads() {
     let metadata = fs::symlink_metadata(elsewhere.join("keep")).unwrap();
     let identity = format!("{:?}", okapi_platform::file_identity(&metadata).unwrap());
     assert!(!traces.contains(&identity), "{identity} in {traces}");
-}
-
-/// The trace of a request accepted says its exclusions by their number:
-/// never a form root resolved, nor an identity (`/` has one).
-#[test]
-fn a_request_is_traced_without_its_exclusions_resolved() {
-    let request = read(&json!({ "exclusions": ["/var/crash/keep", "/"] })).unwrap();
-    let traced = format!("{request:?}");
-    assert!(traced.contains("exclusions: 2"), "{traced}");
-    for hidden in ["keep", "prefixes", "identities", "device", "inode"] {
-        assert!(!traced.contains(hidden), "{hidden} in {traced}");
-    }
 }
 
 /// A Linux target that needs the administrator and holds a variable could
@@ -449,12 +436,6 @@ fn each_refusal_keeps_its_name() {
                 error: okapi_engine::ExclusionError::Empty,
             },
             "exclusion",
-        ),
-        (
-            Refusal::ExclusionElsewhere {
-                path: PathBuf::from("/root"),
-            },
-            "exclusionElsewhere",
         ),
     ];
     for (refusal, name) in refusals {
@@ -1010,7 +991,7 @@ fn the_request_line_the_caller_writes_is_the_one_the_helper_reads() {
         ScanOptions::new(
             now,
             Duration::from_mins(90),
-            Exclusions::new(exclusions.clone()).unwrap()
+            Exclusions::as_written(exclusions.clone()).unwrap()
         )
     );
     assert!(targets.iter().all(|target| {

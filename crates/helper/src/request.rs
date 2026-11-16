@@ -3,9 +3,8 @@
 
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
-use std::fmt;
 use std::io::{self, BufRead, Read};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use okapi_engine::{ExclusionError, Exclusions, Origin, ScanOptions, settings_min_age};
@@ -35,9 +34,10 @@ pub enum Operation {
 }
 
 /// The request as written, one JSON object on one line:
-/// `{"version": 2, "operation": "clean", "targets": ["/var/crash"],
-/// "minAgeMinutes": 60, "exclusions": ["/var/crash/keep"]}`. The caller
-/// writes it with the type the helper reads it with ([`request_line`]).
+/// `{"version": 3, "operation": "clean", "targets": ["/var/crash"],
+/// "minAgeMinutes": 60, "exclusions": ["/var/crash/keep"]}`, the exclusions
+/// as the caller resolved them. The caller writes it with the type the
+/// helper reads it with ([`request_line`]).
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Written {
@@ -117,9 +117,6 @@ pub enum Refusal {
 
     #[error("an exclusion cannot be used: {error}")]
     Exclusion { error: ExclusionError },
-
-    #[error("`{}` lies neither at, above nor below a target of the helper", path.display())]
-    ExclusionElsewhere { path: PathBuf },
 }
 
 impl Refusal {
@@ -136,7 +133,6 @@ impl Refusal {
             Self::AgeBelowFloor { .. } => "ageBelowFloor",
             Self::AgeBeyondClock { .. } => "ageBeyondClock",
             Self::Exclusion { .. } => "exclusion",
-            Self::ExclusionElsewhere { .. } => "exclusionElsewhere",
         }
     }
 
@@ -151,8 +147,7 @@ impl Refusal {
             | Self::NoTarget
             | Self::AgeBelowFloor { .. }
             | Self::AgeBeyondClock { .. }
-            | Self::Exclusion { .. }
-            | Self::ExclusionElsewhere { .. } => None,
+            | Self::Exclusion { .. } => None,
         }
     }
 }
@@ -236,32 +231,15 @@ pub fn admin_targets(rules: &RuleSet) -> BTreeMap<String, Origin> {
 }
 
 /// A request checked against the rules: what to do, on which targets, with
-/// which age and exclusions.
-#[derive(Clone, PartialEq, Eq)]
+/// which age and exclusions. Its exclusions are those received, never read
+/// ([`Exclusions::as_written`]): tracing them tells the caller nothing it
+/// did not write.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
     operation: Operation,
     selection: Selection,
     min_age: Duration,
     exclusions: Exclusions,
-    /// How many exclusions were written ([`Exclusions`] keeps two forms of
-    /// a path).
-    exclusion_count: usize,
-}
-
-/// The exclusions by their number alone: their real locations and
-/// identities, read as root, would tell the caller (who reads the helper's
-/// traces) where a link it placed below a target leads, and the identity of
-/// what it leads to. Whether it leads somewhere still shows, as a refusal.
-impl fmt::Debug for Request {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("Request")
-            .field("operation", &self.operation)
-            .field("selection", &self.selection)
-            .field("min_age", &self.min_age)
-            .field("exclusions", &self.exclusion_count)
-            .finish()
-    }
 }
 
 impl Request {
@@ -282,8 +260,8 @@ impl Request {
     ///
     /// [`Refusal`]: the request asks for anything but targets of the rules
     /// that need the administrator, for an age below the floor, or names an
-    /// exclusion that touches none of the helper's targets as written, or
-    /// that cannot be used (empty, holding `..`, or that cannot be located).
+    /// exclusion of a form that cannot be used (as `Exclusions::new` refuses
+    /// one: empty, relative, holding `..`, a wildcard in its extension).
     pub fn read(line: &[u8], rules: &RuleSet, now: SystemTime) -> Result<Self, Refusal> {
         Self::checked(line, rules, now)
             .inspect(|request| tracing::info!(?request, "request accepted"))
@@ -310,28 +288,16 @@ impl Request {
         if min_age < HELPER_MIN_AGE_FLOOR {
             return Err(Refusal::AgeBelowFloor { minutes });
         }
-        // Every one placed, as written, before any is read: root never
-        // resolves a path the caller names away from its targets (where a
-        // link leads, whether a file exists). Below a target, a link the
-        // caller made may still lead anywhere: root reads only whether it
-        // leads somewhere.
-        let targets = admin_targets(rules);
-        if let Some(path) = written.exclusions.iter().find(|exclusion| {
-            !targets
-                .keys()
-                .any(|target| Exclusions::touches_lexically(exclusion, Path::new(target)))
-        }) {
-            return Err(Refusal::ExclusionElsewhere { path: path.clone() });
-        }
-        let exclusion_count = written.exclusions.len();
-        let exclusions =
-            Exclusions::new(written.exclusions).map_err(|error| Refusal::Exclusion { error })?;
+        // Received resolved (the interface sends their real locations), never
+        // read: resolving them as root would tell the caller, by the answer,
+        // where any link it placed leads and whether any file exists.
+        let exclusions = Exclusions::as_written(written.exclusions)
+            .map_err(|error| Refusal::Exclusion { error })?;
         Ok(Self {
             operation: written.operation,
             selection,
             min_age,
             exclusions,
-            exclusion_count,
         })
     }
 

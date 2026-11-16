@@ -297,7 +297,7 @@ mod tests {
 
     /// A scan answer of no group, as the helper writes it.
     const EMPTY_SCAN: &str =
-        r#"{"version":2,"operation":"scan","stops":[],"groups":[],"issues":[]}"#;
+        r#"{"version":3,"operation":"scan","stops":[],"groups":[],"issues":[]}"#;
 
     fn run(script: &str, cancel: &Cancel) -> (Result<Reply, ElevationFailure>, Vec<ElevationStep>) {
         let (sender, steps) = mpsc::channel();

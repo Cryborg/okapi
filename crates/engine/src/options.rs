@@ -53,11 +53,51 @@ pub enum ExclusionError {
     Unresolvable { path: PathBuf, error: io::ErrorKind },
 }
 
+/// Whether the exclusion `entry` is written as an extension pattern
+/// (`*.log`), whatever follows its prefix.
+fn is_extension_pattern(entry: &Path) -> bool {
+    entry
+        .to_str()
+        .is_some_and(|text| text.starts_with(EXTENSION_PATTERN_PREFIX))
+}
+
+/// An exclusion as written, its form checked.
+enum Form {
+    /// The suffix it matches names by, lower case, its dot included.
+    Extension(String),
+    /// An absolute path without `..`.
+    Path(PathBuf),
+}
+
+impl Form {
+    /// The form of `entry`.
+    fn of(entry: PathBuf) -> Result<Self, ExclusionError> {
+        if entry.as_os_str().is_empty() {
+            return Err(ExclusionError::Empty);
+        }
+        let pattern = entry
+            .to_str()
+            .and_then(|text| text.strip_prefix(EXTENSION_PATTERN_PREFIX));
+        let plain_path = entry.is_absolute()
+            && !entry
+                .components()
+                .any(|component| component == Component::ParentDir);
+        match pattern {
+            Some(extension) if !extension.is_empty() && !extension.contains(['/', '\\', '*']) => {
+                Ok(Self::Extension(format!(".{}", lowercase(extension))))
+            }
+            None if plain_path => Ok(Self::Path(entry)),
+            _ => Err(ExclusionError::Invalid { path: entry }),
+        }
+    }
+}
+
 /// What the user never wants cleaned: paths (and everything below them), and
 /// extensions written `*.log` (files, and directories with everything below
 /// them, such as a `*.default-release` browser profile). Matching ignores case,
 /// which can only exclude more; Unicode normalization forms are not folded.
-/// An excluded directory that exists is also known by its identity, which
+/// Read by [`Exclusions::new`], an excluded directory that exists is also
+/// known by its identity, which
 /// sees through a bind mount that shows it at another path.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Exclusions {
@@ -78,21 +118,23 @@ impl Exclusions {
     /// at, above or below `root`, ignoring case.
     #[must_use]
     pub fn touches_lexically(entry: &Path, root: &Path) -> bool {
-        entry
-            .to_str()
-            .is_some_and(|text| text.starts_with(EXTENSION_PATTERN_PREFIX))
+        is_extension_pattern(entry)
             || starts_with_ignoring_case(entry, root)
             || starts_with_ignoring_case(root, entry)
     }
 
-    /// Where the exclusion path `entry` really lies, as [`Self::new`] reads
-    /// it: through its links, the part that does not exist yet kept as
-    /// written.
+    /// Where the exclusion `entry` really lies, as [`Self::new`] reads it:
+    /// through its links, the part that does not exist yet kept as written;
+    /// an extension pattern as written (never a path of the current
+    /// directory).
     ///
     /// # Errors
     ///
     /// Any error but absence, and a dangling link in the path.
     pub fn real_location(entry: &Path) -> io::Result<PathBuf> {
+        if is_extension_pattern(entry) {
+            return Ok(entry.to_path_buf());
+        }
         canonicalize_longest_prefix(entry)
     }
 
@@ -108,25 +150,9 @@ impl Exclusions {
     pub fn new(entries: impl IntoIterator<Item = PathBuf>) -> Result<Self, ExclusionError> {
         let mut exclusions = Self::none();
         for entry in entries {
-            if entry.as_os_str().is_empty() {
-                return Err(ExclusionError::Empty);
-            }
-            let pattern = entry
-                .to_str()
-                .and_then(|text| text.strip_prefix(EXTENSION_PATTERN_PREFIX));
-            let plain_path = entry.is_absolute()
-                && !entry
-                    .components()
-                    .any(|component| component == Component::ParentDir);
-            match pattern {
-                Some(extension)
-                    if !extension.is_empty() && !extension.contains(['/', '\\', '*']) =>
-                {
-                    exclusions
-                        .extensions
-                        .push(format!(".{}", lowercase(extension)));
-                }
-                None if plain_path => {
+            match Form::of(entry)? {
+                Form::Extension(extension) => exclusions.extensions.push(extension),
+                Form::Path(entry) => {
                     let real = canonicalize_longest_prefix(&entry).map_err(|error| {
                         ExclusionError::Unresolvable {
                             path: entry.clone(),
@@ -142,7 +168,28 @@ impl Exclusions {
                     exclusions.prefixes.push(real);
                     exclusions.prefixes.push(entry);
                 }
-                _ => return Err(ExclusionError::Invalid { path: entry }),
+            }
+        }
+        Ok(exclusions)
+    }
+
+    /// The exclusions as received, resolved already by whoever sent them:
+    /// nothing is read, no identity known. For the privileged helper, which
+    /// never reads a path its caller names: the interface sends it the real
+    /// locations of the user's exclusions, and the engine compares only real
+    /// locations. Without identities, another name of an excluded file (a
+    /// hard link, whose data stays all the same) and an excluded directory
+    /// shown below a root by a bind mount are not excluded.
+    ///
+    /// # Errors
+    ///
+    /// [`ExclusionError`] for an entry of a form [`Self::new`] refuses.
+    pub fn as_written(entries: impl IntoIterator<Item = PathBuf>) -> Result<Self, ExclusionError> {
+        let mut exclusions = Self::none();
+        for entry in entries {
+            match Form::of(entry)? {
+                Form::Extension(extension) => exclusions.extensions.push(extension),
+                Form::Path(entry) => exclusions.prefixes.push(entry),
             }
         }
         Ok(exclusions)
@@ -426,6 +473,37 @@ mod tests {
         assert!(!touches("/var/crashes"), "a name beside it");
         assert!(!touches("/home/ana/keep"));
         assert!(!touches("/root/x"));
+    }
+
+    /// Received resolved, an exclusion is never read again: a dangling link
+    /// is no error, a live one protects only its own path, never where it
+    /// leads nor that place's identity.
+    #[cfg(unix)]
+    #[test]
+    fn exclusions_as_written_read_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(directory.path()).unwrap();
+        std::fs::create_dir(real.join("elsewhere")).unwrap();
+        std::os::unix::fs::symlink(real.join("elsewhere"), real.join("live")).unwrap();
+        std::os::unix::fs::symlink(real.join("nowhere"), real.join("dangling")).unwrap();
+        let exclusions =
+            Exclusions::as_written([real.join("live"), real.join("dangling/x"), "*.LOG".into()])
+                .unwrap();
+        assert!(exclusions.excludes(&real.join("live/x")));
+        assert!(exclusions.excludes(&real.join("a.log")));
+        assert!(
+            !exclusions.excludes(&real.join("elsewhere/x")),
+            "never where it leads"
+        );
+        let identity =
+            file_identity(&std::fs::symlink_metadata(real.join("elsewhere")).unwrap()).unwrap();
+        assert!(!exclusions.excludes_identity(identity));
+        for refused in ["", "relative", "/a/../b", "*."] {
+            assert!(
+                Exclusions::as_written([PathBuf::from(refused)]).is_err(),
+                "{refused}"
+            );
+        }
     }
 
     #[cfg(unix)]

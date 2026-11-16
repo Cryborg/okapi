@@ -58,7 +58,7 @@ Numérotés, jamais renumérotés (des agents et des tests les citent par numér
 
 ## Git
 
-- Conventional Commits `type(scope): description`, en français, un commit par sujet.
+- Conventional Commits `type(scope): description`, en anglais (depuis le 2026-11-16, l'emporte sur la consigne globale), un commit par sujet.
 - Jamais d'attribution à l'IA (ni Co-Authored-By, ni « Generated with »).
 - Commit et push via la skill `socle:push-own`. Jamais `stash`, `reset`, `restore`, `checkout -- <fichier>`, `clean`, `add -A`, `commit -a`, `commit --amend` : d'autres sessions travaillent peut-être sur la même copie.
 - Une entrée de `docs/TODO.md` livrée est supprimée dans le commit qui la livre.

@@ -25,16 +25,27 @@ const SNAP_VARIABLE: &str = "SNAP";
 /// A bare chroot says nothing a user can read: it is not told.
 #[must_use]
 pub fn confinement() -> Option<String> {
-    let program = std::env::current_exe().ok();
+    let program = std::env::current_exe()
+        .inspect_err(|error| tracing::warn!(%error, "Okapi's own program unknown"))
+        .ok();
     confinement_from(
         &|name| std::env::var_os(name),
-        &|path| match std::fs::symlink_metadata(path) {
-            Ok(_) => Ok(true),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(error),
-        },
+        &present_on_disk,
         program.as_deref(),
     )
+}
+
+/// Whether something is at `path`, a link not followed.
+///
+/// # Errors
+///
+/// The system's error, but for nothing there.
+fn present_on_disk(path: &Path) -> io::Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 /// [`confinement`], the environment read through `variable`, the files
@@ -57,7 +68,14 @@ pub(crate) fn confinement_from(
     }
     let snap = PathBuf::from(set(SNAP_VARIABLE)?);
     match program {
-        Some(program) if !program.starts_with(&snap) => None,
+        Some(program) if !program.starts_with(&snap) => {
+            tracing::debug!(
+                ?snap,
+                ?program,
+                "a snap's folder passed on: Okapi runs outside it"
+            );
+            None
+        }
         _ => Some(format!("variable {SNAP_VARIABLE}")),
     }
 }
@@ -96,9 +114,9 @@ mod tests {
             assert_eq!(confined(&[file], &[], program).as_deref(), Some(file));
         }
         for name in MARK_VARIABLES {
-            assert!(
-                confined(&[], &[(name, "podman")], program).is_some(),
-                "{name}"
+            assert_eq!(
+                confined(&[], &[(name, "podman")], program),
+                Some(format!("variable {name}"))
             );
             assert_eq!(confined(&[], &[(name, "")], program), None, "{name} empty");
         }
@@ -115,8 +133,34 @@ mod tests {
             confined(&[], &snap, Some("/snap/okapi/123/okapi-app")),
             None
         );
+        // Empty, it names no folder (every program would be under it).
+        assert_eq!(
+            confined(&[], &[("SNAP", "")], Some("/usr/bin/okapi-app")),
+            None
+        );
         // Its program unknown: confined, the safe side.
         assert!(confined(&[], &snap, None).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_mark_is_there_or_not_and_unsure_when_it_cannot_be_looked_at() {
+        // Catches nothing there taken for a mark (every system confined:
+        // no leftover ever proposed), and a link followed.
+        let root = tempfile::tempdir().unwrap();
+        let mark = root.path().join(".containerenv");
+        assert!(!present_on_disk(&mark).unwrap());
+        std::os::unix::fs::symlink(root.path().join("nowhere"), &mark).unwrap();
+        assert!(
+            present_on_disk(&mark).unwrap(),
+            "a link leading nowhere is there"
+        );
+        let file = root.path().join("file");
+        std::fs::write(&file, b"").unwrap();
+        assert!(
+            present_on_disk(&file.join("below")).is_err(),
+            "below a file"
+        );
     }
 
     #[test]

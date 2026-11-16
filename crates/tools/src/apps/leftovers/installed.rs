@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use okapi_rules::Language;
 
-use crate::apps::flatpak::{Installation, app_ids, deployments};
+use crate::apps::flatpak::{Installation, app_ids, deployments, key_file_groups};
 use crate::apps::names_a_folder;
 
 /// Where snapd keeps the files of the snaps installed.
@@ -21,7 +21,7 @@ const SNAP_FILE_SUFFIX: &str = ".snap";
 const RUNNING: &str = ".flatpak";
 const INSTANCE_INFO: &str = "info";
 const INFO_LIMIT: usize = 64 * 1024;
-const APPLICATION_GROUP: &str = "[Application]";
+const APPLICATION_GROUP: &str = "Application";
 const KEY_NAME: &str = "name";
 /// Where a deployment exports its launchers.
 const EXPORTED_LAUNCHERS: &str = "export/share/applications";
@@ -103,7 +103,8 @@ pub fn snaps_now(snap_files: &Path) -> Known {
 }
 
 /// What is installed, the snaps being `snaps` (read once by [`snaps_now`]
-/// for whoever needs them), the flatpaks as `places` hold them.
+/// for whoever needs them), the flatpaks as `places` hold them; nothing
+/// known, both unread, when Okapi runs confined.
 #[must_use]
 pub fn installed_with(places: &InstalledPlaces, snaps: Known) -> Installed {
     installed_reading(places, || snaps)
@@ -251,14 +252,15 @@ pub(crate) fn flatpaks(installations: &[Installation], runtime: Option<&Path>) -
 
 /// The ids the application `id` was renamed from, as its exported launchers
 /// say (`X-Flatpak-RenamedFrom`, each `<former-id><suffix>`, the suffix being
-/// the launcher's own after its id). A byte not in UTF-8 elsewhere in a
-/// launcher never keeps them unread: one application would hide every
-/// flatpak's leftovers.
+/// the launcher's own after its id). A byte not in UTF-8 in a launcher that
+/// does not name its former ids never keeps them unread: one application
+/// would hide every flatpak's leftovers.
 ///
 /// # Errors
 ///
-/// A folder or a launcher unreadable, too long, or damaged where it names
-/// its groups, its keys or the former ids: the launcher is named.
+/// A folder or a launcher unreadable, too long, named or written not in
+/// UTF-8 where it may hide the former ids
+/// ([`okapi_platform::desktop_entry_lossy`]): the launcher is named.
 fn renamed_from(installation: &Path, id: &str) -> io::Result<Vec<String>> {
     let mut former = Vec::new();
     for deployment in deployments(installation, id)? {
@@ -270,30 +272,23 @@ fn renamed_from(installation: &Path, id: &str) -> io::Result<Vec<String>> {
         };
         for entry in entries {
             let entry = entry?;
-            let file = entry.file_name();
-            let Some(suffix) = file
-                .to_str()
-                .filter(|name| name.ends_with(LAUNCHER_SUFFIX))
-                .and_then(|name| name.strip_prefix(id))
-            else {
-                continue;
-            };
             let path = entry.path();
             let named = |error: io::Error| {
                 io::Error::new(error.kind(), format!("{}: {error}", path.display()))
             };
-            let launcher =
-                okapi_platform::desktop_entry_lossy(&path, Language::English).map_err(named)?;
-            if launcher
-                .renamed_from
-                .iter()
-                .any(|name| name.contains(char::REPLACEMENT_CHARACTER))
-            {
+            let file = entry.file_name();
+            let bytes = file.as_encoded_bytes();
+            if !bytes.starts_with(id.as_bytes()) || !bytes.ends_with(LAUNCHER_SUFFIX.as_bytes()) {
+                continue;
+            }
+            let Some(suffix) = file.to_str().and_then(|name| name.strip_prefix(id)) else {
                 return Err(named(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "its former ids not in UTF-8",
+                    "a launcher's name not in UTF-8",
                 )));
-            }
+            };
+            let launcher =
+                okapi_platform::desktop_entry_lossy(&path, Language::English).map_err(named)?;
             former.extend(
                 launcher
                     .renamed_from
@@ -334,18 +329,15 @@ fn running(runtime: Option<&Path>) -> io::Result<Vec<String>> {
             }
             Err(error) => return Err(error),
         };
-        let mut in_application = false;
-        for line in text.lines().map(str::trim) {
-            if line.starts_with('[') {
-                in_application = line == APPLICATION_GROUP;
-            } else if in_application
-                && let Some((key, value)) = line.split_once('=')
-                && key.trim() == KEY_NAME
-                && names_a_folder(value.trim())
-            {
-                running.push(value.trim().to_owned());
-            }
-        }
+        // Every name of every `[Application]` group: one more protects more.
+        running.extend(
+            key_file_groups(&text)
+                .iter()
+                .filter(|group| group.name == APPLICATION_GROUP)
+                .flat_map(|group| group.values(KEY_NAME))
+                .filter(|name| names_a_folder(name))
+                .map(str::to_owned),
+        );
     }
     Ok(running)
 }

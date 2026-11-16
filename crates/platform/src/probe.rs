@@ -4,7 +4,8 @@
 //! Okapi runs confined (a container, a sandbox). Each reader
 //! has a pure parser, tested on samples; those of `/proc`, `/sys`, `/dev` and
 //! the mounts work on Linux and say [`std::io::ErrorKind::Unsupported`]
-//! elsewhere (a `.desktop` file is read anywhere).
+//! elsewhere (a `.desktop` file is read anywhere, and so are the marks of a
+//! confinement).
 
 // Outside Linux, the parsers serve no reader (the tests still run them).
 #![cfg_attr(

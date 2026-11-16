@@ -11,6 +11,8 @@ const DESKTOP_LIMIT: usize = 1024 * 1024;
 /// The group that describes the application (its actions have their own
 /// names).
 const ENTRY_GROUP: &str = "[Desktop Entry]";
+/// The names a flatpak's launcher had before it was renamed.
+const KEY_RENAMED_FROM: &str = "X-Flatpak-RenamedFrom";
 
 /// The name of the application whose `.desktop` identifier is `identifier`
 /// (`google-chrome`), from the first folder of applications whose file
@@ -112,32 +114,37 @@ pub fn desktop_entry(path: &Path, language: Language) -> io::Result<DesktopEntry
     read_capped(path, DESKTOP_LIMIT).map(|text| parse_desktop_entry(&text, names_in(language)))
 }
 
-/// [`desktop_entry`], a byte not in UTF-8 in a value read as
+/// [`desktop_entry`], a byte not in UTF-8 read as
 /// [`char::REPLACEMENT_CHARACTER`]: for a launcher read for what it says of
-/// its application, not for a menu (which would refuse its value).
+/// its application, not for a menu (which would refuse the file).
 ///
 /// # Errors
 ///
-/// Those of [`desktop_entry`] but UTF-8 in values: a group's header or a
-/// key's name holding such a byte is refused
-/// ([`io::ErrorKind::InvalidData`]), the group or the key it is being lost
-/// unseen.
+/// Those of [`desktop_entry`], except for UTF-8. A file not in UTF-8 is
+/// refused ([`io::ErrorKind::InvalidData`]) when a group's header or a key's
+/// name holds such a byte, or when it names `X-Flatpak-RenamedFrom`: one
+/// byte damaged in place of a `[`, a `=` or a line's end hides a group or a
+/// key, and the former names would be lost unseen. Two bytes damaged may
+/// still hide them: a launcher is not checked against every damage.
 pub fn desktop_entry_lossy(path: &Path, language: Language) -> io::Result<DesktopEntry> {
     let bytes = read_capped_bytes(path, DESKTOP_LIMIT)?;
     let text = String::from_utf8_lossy(&bytes);
-    if let Cow::Owned(text) = &text
-        && text.lines().map(str::trim).any(|line| {
+    if let Cow::Owned(text) = &text {
+        let refused = |why: &str| Err(io::Error::new(io::ErrorKind::InvalidData, why));
+        let damaged_name = text.lines().map(str::trim).any(|line| {
             line.contains(char::REPLACEMENT_CHARACTER)
+                && !line.starts_with('#')
                 && (line.starts_with('[')
                     || line
                         .split_once('=')
                         .is_some_and(|(key, _)| key.contains(char::REPLACEMENT_CHARACTER)))
-        })
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "a group's header or a key's name not in UTF-8",
-        ));
+        });
+        if damaged_name {
+            return refused("a group's header or a key's name not in UTF-8");
+        }
+        if text.contains(KEY_RENAMED_FROM) {
+            return refused("not in UTF-8 while it names its former names");
+        }
     }
     Ok(parse_desktop_entry(&text, names_in(language)))
 }
@@ -171,7 +178,7 @@ pub(crate) fn parse_desktop_entry(text: &str, languages: &[&str]) -> DesktopEntr
             "StartupWMClass" => {
                 entry.wm_class = Some(value.to_owned()).filter(|class| !class.is_empty());
             }
-            "X-Flatpak-RenamedFrom" => entry.renamed_from = list(value),
+            KEY_RENAMED_FROM => entry.renamed_from = list(value),
             "Icon" => entry.icon = Some(value.to_owned()).filter(|icon| !icon.is_empty()),
             "Type" => entry.application = value == "Application",
             "NoDisplay" => entry.no_display = value == "true",
@@ -323,10 +330,11 @@ Name[fr]=Nouvelle fenêtre de navigation privée
     }
 
     #[test]
-    fn a_byte_not_in_utf8_is_read_in_a_value_only() {
+    fn a_byte_not_in_utf8_is_read_unless_it_may_hide_a_group_or_a_former_name() {
         // Catches a launcher refused whole for one byte of a value, and,
-        // read anyway, a group's header or a key's name damaged so that what
-        // it held would be lost unseen.
+        // read anyway, one byte in place of a `[`, a `=`, a line's end, or
+        // inside a header or a key's name: a group or a key would be lost
+        // unseen, the former names with it.
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("app.desktop");
         let with = |bytes: &[u8]| {
@@ -334,18 +342,24 @@ Name[fr]=Nouvelle fenêtre de navigation privée
             desktop_entry_lossy(&path, Language::English)
         };
         let entry =
-            with(b"[Desktop Entry]\nName=Caf\xe9\n# \xff\nX-Flatpak-RenamedFrom=old.desktop;\n")
-                .unwrap();
+            with(b"[Desktop Entry]\nName=Caf\xe9\n# Fran\xe7ais = oui\nIcon=app\n").unwrap();
         assert_eq!(entry.name.as_deref(), Some("Caf\u{FFFD}"));
-        assert_eq!(entry.renamed_from, ["old.desktop"]);
+        assert_eq!(entry.icon.as_deref(), Some("app"));
         assert_eq!(
             desktop_entry(&path, Language::English).unwrap_err().kind(),
             io::ErrorKind::InvalidData,
             "the menu's reading stays strict"
         );
+        // Each the high bit of one byte flipped in a well-formed launcher.
         for damaged in [
-            &b"[Desktop Entr\xff]\nX-Flatpak-RenamedFrom=old.desktop;\n"[..],
-            b"[Desktop Entry]\nX-Flatpak-Renamed\xffFrom=old.desktop;\n",
+            &b"[Desktop Entr\xf9]\nName=x\n"[..],
+            b"[Desktop Entry]\nN\xe1me=x\n",
+            b"\xdbDesktop Entry]\nX-Flatpak-RenamedFrom=old.desktop;\n",
+            b"[Desktop Entry]\nX-Flatpak-RenamedFrom\xbdold.desktop;\n",
+            b"[Desktop Entry]\nName=x\x8aX-Flatpak-RenamedFrom=old.desktop;\n",
+            b"[Desktop Entry]\nX-Flatpak-RenamedFrom=old\xae.desktop;\n",
+            // The former names intact, but who can tell: refused all the same.
+            b"[Desktop Entry]\nName=Caf\xe9\nX-Flatpak-RenamedFrom=old.desktop;\n",
         ] {
             assert_eq!(
                 with(damaged).unwrap_err().kind(),

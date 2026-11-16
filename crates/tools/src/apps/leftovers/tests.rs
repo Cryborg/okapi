@@ -515,23 +515,28 @@ fn nothing_installed_is_known_when_okapi_runs_confined() {
     // A system seen whole without them: none installed, as before.
     let seen = installed::installed_with(&visible, read(&[]));
     assert_eq!(seen, installed(&[], &[]));
-    assert_eq!(sandbox.find(&seen).leftovers().len(), 2);
+    let analysed = sandbox.find(&seen);
+    assert_eq!(analysed.leftovers().len(), 2);
     let confined = InstalledPlaces {
         confined: Some("/run/.containerenv".to_owned()),
         ..visible
     };
+    let named =
+        |known: &Known| matches!(known, Known::Unread(why) if why.contains("/run/.containerenv"));
     for installed in [
         installed::installed_with(&confined, read(&[])),
         installed::installed_now(&confined),
     ] {
-        assert!(matches!(installed.snaps, Known::Unread(_)), "{installed:?}");
-        assert!(
-            matches!(installed.flatpaks, Known::Unread(_)),
-            "{installed:?}"
-        );
+        assert!(named(&installed.snaps), "{installed:?}");
+        assert!(named(&installed.flatpaks), "{installed:?}");
         let report = sandbox.find(&installed);
         assert_eq!(report.leftovers(), []);
         assert_eq!(report.unread(), [LeftoverKind::Snap, LeftoverKind::Flatpak]);
+        // Found before, read again confined: kept (invariant 7).
+        assert_eq!(
+            moved(&sandbox, &analysed, &installed),
+            TrashResult::Kept(KeepReason::SourceUnread)
+        );
     }
 }
 
@@ -604,7 +609,8 @@ fn flatpaks_installed_are_those_of_every_installation_their_former_ids_and_those
     fs::create_dir_all(&instance).unwrap();
     fs::write(
         instance.join("info"),
-        "[Application]\nname=org.still.Running\nruntime=runtime/x\n\n[Instance]\nname=other\n",
+        "[Application]\nname=org.still.Running\nname=org.also.Running\nruntime=runtime/x\n\n\
+         [Instance]\nname=other\n\n[Application]\nname=org.third.Running\nname=../evil\nname=\n",
     )
     .unwrap();
     let known = installed::flatpaks(
@@ -621,6 +627,9 @@ fn flatpaks_installed_are_those_of_every_installation_their_former_ids_and_those
             "org.hidden.App",
             "org.on.Card",
             "org.still.Running",
+            // Every name of every `[Application]` group, a path never.
+            "org.also.Running",
+            "org.third.Running",
         ])
     );
     // A declared installation unplugged: unread, never none.
@@ -644,31 +653,49 @@ fn flatpaks_installed_are_those_of_every_installation_their_former_ids_and_those
 }
 
 #[test]
-fn one_launcher_not_in_utf8_never_hides_every_flatpak_s_leftovers() {
-    // Catches a byte not in UTF-8 in one launcher's value taken for an
-    // unreadable source (no flatpak's leftover proposed while it is
-    // installed), and, read anyway, damage where the former ids are said
+fn a_launcher_not_in_utf8_hides_nothing_unless_it_may_hide_former_ids() {
+    // Catches a byte not in UTF-8 in one launcher taken for an unreadable
+    // source (no flatpak's leftover proposed while it is installed), and,
+    // read anyway, one byte that may hide where the former ids are said
     // passed over: a renamed application's data would be proposed.
     let root = tempfile::tempdir().unwrap();
     let system = root.path().join("system");
-    deployed(&system, "org.new.App", "");
-    let launcher = system
-        .join("app/org.new.App/x86_64/stable/abc123/export/share/applications/org.new.App.desktop");
-    let runtime = root.path().join("run");
-    let with = |bytes: &[u8]| {
-        fs::write(&launcher, bytes).unwrap();
-        installed::flatpaks(&[installation(&system, false)], Some(&runtime))
-    };
-    assert_eq!(
-        with(b"[Desktop Entry]\nName=Caf\xe9\nX-Flatpak-RenamedFrom=org.old.App.desktop;\n"),
-        read(&["org.new.App", "org.old.App"])
+    deployed(&system, "org.other.App", "");
+    deployed(
+        &system,
+        "org.new.App",
+        "X-Flatpak-RenamedFrom=org.old.App.desktop;",
     );
+    let launcher = |id: &str| {
+        system.join(format!(
+            "app/{id}/x86_64/stable/abc123/export/share/applications/{id}.desktop"
+        ))
+    };
+    let runtime = root.path().join("run");
+    let known = || installed::flatpaks(&[installation(&system, false)], Some(&runtime));
+    fs::write(
+        launcher("org.other.App"),
+        b"[Desktop Entry]\nName=Caf\xe9\nNoDisplay=true\n",
+    )
+    .unwrap();
+    assert_eq!(
+        known(),
+        read(&["org.new.App", "org.old.App", "org.other.App"])
+    );
+    // Each the high bit of one byte flipped in the renamed application's
+    // launcher.
     for damaged in [
-        &b"[Desktop Entr\xff]\nX-Flatpak-RenamedFrom=org.old.App.desktop;\n"[..],
-        b"[Desktop Entry]\nX-Flatpak-Renamed\xffFrom=org.old.App.desktop;\n",
-        b"[Desktop Entry]\nX-Flatpak-RenamedFrom=org.ol\xff.App.desktop;\n",
+        &b"[Desktop Entr\xf9]\nX-Flatpak-RenamedFrom=org.old.App.desktop;\n"[..],
+        b"\xdbDesktop Entry]\nX-Flatpak-RenamedFrom=org.old.App.desktop;\n",
+        b"[Desktop Entry]\nX-Flatpak-Renamed\xc6rom=org.old.App.desktop;\n",
+        b"[Desktop Entry]\nX-Flatpak-RenamedFrom\xbdorg.old.App.desktop;\n",
+        b"[Desktop Entry]\nName=x\x8aX-Flatpak-RenamedFrom=org.old.App.desktop;\n",
+        b"[Desktop Entry]\nX-Flatpak-RenamedFrom=org.ol\xe4.App.desktop;\n",
+        // Its former ids intact, but who can tell: refused all the same.
+        b"[Desktop Entry]\nName=Caf\xe9\nX-Flatpak-RenamedFrom=org.old.App.desktop;\n",
     ] {
-        let Known::Unread(why) = with(damaged) else {
+        fs::write(launcher("org.new.App"), damaged).unwrap();
+        let Known::Unread(why) = known() else {
             panic!("{damaged:?} read");
         };
         assert!(
@@ -679,10 +706,27 @@ fn one_launcher_not_in_utf8_never_hides_every_flatpak_s_leftovers() {
     // Far too long, as only a launcher made so is: unread, named.
     let mut long = b"[Desktop Entry]\nName=x\n".to_vec();
     long.resize(2 * 1024 * 1024, b'#');
-    let Known::Unread(why) = with(&long) else {
+    fs::write(launcher("org.new.App"), &long).unwrap();
+    let Known::Unread(why) = known() else {
         panic!("a launcher too long read");
     };
     assert!(why.contains("org.new.App.desktop"), "{why}");
+    // Files not in UTF-8 that are not its launchers: passed over.
+    fs::write(launcher("org.new.App"), b"[Desktop Entry]\nName=x\n").unwrap();
+    let odd = |name: &[u8]| {
+        launcher("org.new.App")
+            .with_file_name(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(name))
+    };
+    fs::write(odd(b"\xff.desktop"), b"").unwrap();
+    fs::write(odd(b"org.new.App\xff.png"), b"").unwrap();
+    assert_eq!(known(), read(&["org.new.App", "org.other.App"]));
+    // A launcher of its own whose name is not in UTF-8: unread, said so.
+    fs::write(odd(b"org.new.App\xff.desktop"), b"").unwrap();
+    assert!(
+        matches!(known(), Known::Unread(why) if why.contains("a launcher's name not in UTF-8")),
+        "{:?}",
+        known()
+    );
 }
 
 #[test]

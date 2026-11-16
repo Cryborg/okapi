@@ -283,6 +283,30 @@ fn checked(name: &str) -> Result<&str, SnapdError> {
     }
 }
 
+/// `id`, if it may name a change of snapd: digits only, as snapd numbers
+/// them, so that it is safe in a request's path; refused, traced, before
+/// anything is asked.
+fn checked_change(id: &str) -> Result<&str, SnapdError> {
+    if !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()) {
+        Ok(id)
+    } else {
+        tracing::error!(change = id, "a change of snapd refused: not a number");
+        Err(SnapdError::Malformed("a change that is not a number"))
+    }
+}
+
+/// The change an asynchronous answer of snapd started.
+///
+/// # Errors
+/// The answer names none, or one that is not a number.
+fn started(envelope: Envelope) -> Result<String, SnapdError> {
+    let change = envelope.change.ok_or(SnapdError::Malformed(
+        "an asynchronous answer without its change",
+    ))?;
+    checked_change(&change)?;
+    Ok(change)
+}
+
 /// snapd, reached on a socket.
 #[derive(Debug, Clone)]
 pub struct Snapd {
@@ -360,9 +384,7 @@ impl Snapd {
             interactive: true,
             wait: ASKING_WAIT,
         })?;
-        envelope.change.ok_or(SnapdError::Malformed(
-            "an asynchronous answer without its change",
-        ))
+        started(envelope)
     }
 
     /// Removes the snap `name`, its data with it when `purge` (no copy
@@ -380,9 +402,7 @@ impl Snapd {
             interactive: true,
             wait: ASKING_WAIT,
         })?;
-        envelope.change.ok_or(SnapdError::Malformed(
-            "an asynchronous answer without its change",
-        ))
+        started(envelope)
     }
 
     /// Refreshes the snaps `names` to their newer revision, polkit asking
@@ -407,9 +427,7 @@ impl Snapd {
             interactive: true,
             wait: ASKING_WAIT,
         })?;
-        envelope.change.ok_or(SnapdError::Malformed(
-            "an asynchronous answer without its change",
-        ))
+        started(envelope)
     }
 
     /// Whether the snap `name` (a name checked by the caller) is installed.
@@ -428,8 +446,10 @@ impl Snapd {
     /// Where the change `id` stands.
     ///
     /// # Errors
-    /// Whatever kept snapd from answering, or its refusal.
+    /// An id that is not a number (nothing asked), whatever kept snapd from
+    /// answering, or its refusal.
     pub fn change(&self, id: &str) -> Result<Change, SnapdError> {
+        let id = checked_change(id)?;
         Ok(serde_json::from_value(
             self.get(&format!("/v2/changes/{id}"))?,
         )?)

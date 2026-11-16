@@ -350,6 +350,44 @@ fn a_name_that_is_no_snap_s_is_never_asked() {
     ));
 }
 
+/// A request that starts a change of snapd.
+type Starting<'a> = dyn Fn(&Snapd) -> Result<String, SnapdError> + 'a;
+
+#[test]
+fn a_change_that_is_not_a_number_is_refused_and_never_asked() {
+    // Catches a change id put as it came in a request's path: each request
+    // that starts one checks it, and so does a look at one.
+    let started = |change: &str| {
+        with_length(
+            "202 Accepted",
+            &format!(
+                r#"{{"type":"async","status-code":202,"status":"Accepted","result":null,"change":"{change}"}}"#
+            ),
+        )
+    };
+    let names = ["firefox".to_owned()];
+    for change in ["../x", "", "7?select=all", "７"] {
+        let starting: [(&str, &Starting<'_>); 3] = [
+            ("forget", &|snapd| snapd.forget(3, "firefox")),
+            ("remove", &|snapd| snapd.remove("firefox", false)),
+            ("refresh", &|snapd| snapd.refresh(&names)),
+        ];
+        for (what, start) in starting {
+            let (_directory, snapd, _) = serving(started(change));
+            assert!(
+                matches!(start(&snapd), Err(SnapdError::Malformed(_))),
+                "{what} {change:?}"
+            );
+        }
+    }
+    let (_directory, snapd, _) = serving(started("42"));
+    assert_eq!(snapd.remove("firefox", false).unwrap(), "42");
+    // No socket: anything asked would fail as `Absent`.
+    let directory = tempfile::tempdir().unwrap();
+    let snapd = Snapd::at(&directory.path().join("none"), Duration::from_secs(1));
+    assert!(matches!(snapd.change("1/2"), Err(SnapdError::Malformed(_))));
+}
+
 #[test]
 fn a_refresh_asks_polkit_for_the_snaps_named_and_never_for_none() {
     // Catches a refresh that cannot ask for the rights, or names the snaps

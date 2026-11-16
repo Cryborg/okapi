@@ -22,7 +22,7 @@ use super::{
     stop_shown,
 };
 use crate::elevation::{ElevationFailure, ElevationStep};
-use crate::receipt::{Ending, Kept, LineKind, OutcomeFacts, Receipt};
+use crate::receipt::{Ending, Kept, LineKind, OutcomeFacts, Receipt, ReceiptLine};
 use crate::shown::{show, shown, size};
 use crate::ui;
 
@@ -1172,40 +1172,42 @@ fn show_receipt(
     cleaner.set_partial(shown(receipt.partial));
     cleaner.set_gone(shown(receipt.gone));
     cleaner.set_kept(shown(receipt.kept));
-    let lines = receipt
-        .lines
-        .iter()
-        .map(|line| ui::ReceiptLineShown {
-            kind: match line.kind {
-                LineKind::Removed => ui::ReceiptKind::Removed,
-                LineKind::Partial => ui::ReceiptKind::Partial,
-                LineKind::Gone => ui::ReceiptKind::Gone,
-                LineKind::Kept(Kept::Recent) => ui::ReceiptKind::Recent,
-                LineKind::Kept(Kept::Changed) => ui::ReceiptKind::Changed,
-                LineKind::Kept(Kept::Replaced) => ui::ReceiptKind::Replaced,
-                LineKind::Kept(Kept::Excluded) => ui::ReceiptKind::Excluded,
-                LineKind::Kept(Kept::Protected) => ui::ReceiptKind::Protected,
-                LineKind::Kept(Kept::Denied) => ui::ReceiptKind::Denied,
-                LineKind::Kept(Kept::Refused) => ui::ReceiptKind::Refused,
-                LineKind::Kept(Kept::Cancelled) => ui::ReceiptKind::Cancelled,
-                LineKind::Kept(Kept::BrowserOpen) => ui::ReceiptKind::BrowserOpen,
-                LineKind::Kept(Kept::Unknown) => ui::ReceiptKind::Unknown,
-            },
-            count: shown(line.count),
-            size: size(line.bytes),
-            paths: slint::ModelRc::new(slint::VecModel::from(
-                line.paths
-                    .iter()
-                    .map(|(path, blocked)| ui::PathShown {
-                        path: path.as_str().into(),
-                        blocked: blocked.as_deref().unwrap_or_default().into(),
-                    })
-                    .collect::<Vec<_>>(),
-            )),
-            more: shown(line.more),
-        })
-        .collect();
-    show(model, lines);
+    show(model, receipt.lines.iter().map(line_shown).collect());
+}
+
+/// A line of a receipt as the window shows it, the cleaner's or the
+/// history's.
+pub(crate) fn line_shown(line: &ReceiptLine) -> ui::ReceiptLineShown {
+    ui::ReceiptLineShown {
+        kind: match line.kind {
+            LineKind::Removed => ui::ReceiptKind::Removed,
+            LineKind::Partial => ui::ReceiptKind::Partial,
+            LineKind::Gone => ui::ReceiptKind::Gone,
+            LineKind::Kept(Kept::Recent) => ui::ReceiptKind::Recent,
+            LineKind::Kept(Kept::Changed) => ui::ReceiptKind::Changed,
+            LineKind::Kept(Kept::Replaced) => ui::ReceiptKind::Replaced,
+            LineKind::Kept(Kept::Excluded) => ui::ReceiptKind::Excluded,
+            LineKind::Kept(Kept::Protected) => ui::ReceiptKind::Protected,
+            LineKind::Kept(Kept::Denied) => ui::ReceiptKind::Denied,
+            LineKind::Kept(Kept::Refused) => ui::ReceiptKind::Refused,
+            LineKind::Kept(Kept::Cancelled) => ui::ReceiptKind::Cancelled,
+            LineKind::Kept(Kept::BrowserOpen) => ui::ReceiptKind::BrowserOpen,
+            LineKind::Kept(Kept::Unknown) => ui::ReceiptKind::Unknown,
+        },
+        count: shown(line.count),
+        sized: line.bytes.is_some(),
+        size: size(line.bytes.unwrap_or_default()),
+        paths: slint::ModelRc::new(slint::VecModel::from(
+            line.paths
+                .iter()
+                .map(|(path, blocked)| ui::PathShown {
+                    path: path.as_str().into(),
+                    blocked: blocked.as_deref().unwrap_or_default().into(),
+                })
+                .collect::<Vec<_>>(),
+        )),
+        more: shown(line.more),
+    }
 }
 
 #[cfg(test)]
@@ -3297,7 +3299,7 @@ mod tests {
             }),
             path: Some(PathBuf::from("/tmp/kept")),
             blocked: None,
-            scanned_bytes: 1,
+            scanned_bytes: Some(1),
         };
         let note = "Elles appartiennent à un autre compte ou au système : Okapi ne les force pas.";
         let show = |kinds: &[ErrorKind]| {

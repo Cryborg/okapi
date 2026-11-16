@@ -3825,3 +3825,195 @@ msgstr "Cancel"
 msgctxt "LeftoversConfirm"
 msgid "Mettre à la corbeille"
 msgstr "Move to the trash"
+
+msgctxt "Sidebar"
+msgid "Historique"
+msgstr "History"
+
+msgctxt "ReceiptLine"
+msgid "Éléments : {}."
+msgstr "Items: {}."
+
+msgctxt "HistoryWords"
+msgid "Aujourd'hui"
+msgstr "Today"
+
+msgctxt "HistoryWords"
+msgid "Hier"
+msgstr "Yesterday"
+
+msgctxt "HistoryWords"
+msgid "Désinstallation"
+msgstr "Uninstallation"
+
+msgctxt "HistoryWords"
+msgid "Nettoyage arrêté"
+msgstr "Cleaning stopped"
+
+msgctxt "HistoryWords"
+msgid "Nettoyage"
+msgstr "Cleaning"
+
+msgctxt "HistoryWords"
+msgid "{}, partie administrateur, {}, {}"
+msgstr "{}, administrator part, {}, {}"
+
+msgctxt "HistoryWords"
+msgid "{}, {}, {}"
+msgstr "{}, {}, {}"
+
+msgctxt "HistoryWords"
+msgid "{} libérés"
+msgstr "{} freed"
+
+msgctxt "HistoryWords"
+msgid "Libéré : inconnu"
+msgstr "Freed: unknown"
+
+msgctxt "HistoryWords"
+msgid "{} · {}"
+msgstr "{} · {}"
+
+msgctxt "HistoryWords"
+msgid "Rien n'a été touché"
+msgstr "Nothing was touched"
+
+msgctxt "HistoryWords"
+msgid "{} · gardées : {}"
+msgstr "{} · kept: {}"
+
+msgctxt "HistoryWords"
+msgid "Ce système ne permet pas de distinguer les points de montage et les fichiers remplacés."
+msgstr "This system cannot tell mount points and replaced files apart."
+
+msgctxt "HistoryWords"
+msgid "Un dossier de la session n'était pas défini : ce qu'il protège ne pouvait pas être garanti."
+msgstr "A folder of the session was not set: what it protects could not be vouched for."
+
+msgctxt "HistoryWords"
+msgid "Un dossier de la session était illisible : ce qu'il protège ne pouvait pas être garanti."
+msgstr "A folder of the session could not be read: what it protects could not be vouched for."
+
+msgctxt "HistoryWords"
+msgid "L'âge minimal remontait avant l'horloge : rien n'était assez ancien."
+msgstr "The minimum age reached before the clock's origin: nothing was old enough."
+
+msgctxt "HistoryWords"
+msgid "Le nettoyage a été annulé avant de commencer."
+msgstr "The cleaning was cancelled before it started."
+
+msgctxt "HistoryWords"
+msgid "Arrêté pour une raison que cette version d'Okapi ne connaît pas."
+msgstr "Stopped for a reason this version of Okapi does not know."
+
+msgctxt "OperationRow"
+msgid "Administrateur"
+msgstr "Administrator"
+
+msgctxt "Operations"
+msgid "Opérations, de la plus récente à la plus ancienne"
+msgstr "Operations, newest first"
+
+msgctxt "CleaningDetail"
+msgid "Espace libéré"
+msgstr "Space freed"
+
+msgctxt "CleaningDetail"
+msgid "Inconnu"
+msgstr "Unknown"
+
+msgctxt "CleaningDetail"
+msgid "Retirées"
+msgstr "Removed"
+
+msgctxt "CleaningDetail"
+msgid "En partie"
+msgstr "In part"
+
+msgctxt "CleaningDetail"
+msgid "Déjà parties"
+msgstr "Already gone"
+
+msgctxt "CleaningDetail"
+msgid "Gardées"
+msgstr "Kept"
+
+msgctxt "CleaningDetail"
+msgid "La partie administrateur s'est terminée."
+msgstr "The administrator part finished."
+
+msgctxt "CleaningDetail"
+msgid "La partie administrateur ne s'est pas terminée. {}"
+msgstr "The administrator part did not finish. {}"
+
+msgctxt "CleaningDetail"
+msgid "Le détail par élément n'est gardé que si le journal des suppressions est activé dans Réglages."
+msgstr "The detail of each item is kept only when the deletion log is on in Settings."
+
+msgctxt "CleaningDetail"
+msgid "Le journal des suppressions de ce nettoyage ne se lit plus : le détail par élément est perdu."
+msgstr "The deletion log of this cleaning can no longer be read: the detail of each item is lost."
+
+msgctxt "CleaningDetail"
+msgid "{n} élément du journal des suppressions ne se lit plus : compté parmi les gardés."
+msgid_plural "{n} éléments du journal des suppressions ne se lisent plus : comptés parmi les gardés."
+msgstr[0] "{n} item of the deletion log can no longer be read: counted as kept."
+msgstr[1] "{n} items of the deletion log can no longer be read: counted as kept."
+
+msgctxt "CleaningDetail"
+msgid "Détail par résultat"
+msgstr "Detail by result"
+
+msgctxt "CleaningDetail"
+msgid "Autres : {}. Les fichiers de l'historique les listent toutes."
+msgstr "Others: {}. The history files list them all."
+
+msgctxt "UninstallDetail"
+msgid "{}, {}"
+msgstr "{}, {}"
+
+msgctxt "UninstallDetail"
+msgid "Espace libéré inconnu."
+msgstr "Space freed unknown."
+
+msgctxt "UninstallDetail"
+msgid "Ses données ont été supprimées avec elle."
+msgstr "Its data went with it."
+
+msgctxt "UninstallDetail"
+msgid "Ses données ont été gardées."
+msgstr "Its data was kept."
+
+msgctxt "UninstallDetail"
+msgid "Retiré :"
+msgstr "Removed:"
+
+msgctxt "HistoryPage"
+msgid "Historique"
+msgstr "History"
+
+msgctxt "HistoryPage"
+msgid "Ce qu'Okapi a nettoyé et désinstallé sur cet ordinateur, le plus récent d'abord. Les plus anciennes opérations partent au-delà de la taille gardée."
+msgstr "What Okapi cleaned and uninstalled on this computer, newest first. The oldest operations go beyond the size kept."
+
+msgctxt "HistoryPage"
+msgid "L'historique ne peut pas être lu. Le détail est dans le journal."
+msgstr "The history cannot be read. The detail is in the log."
+
+msgctxt "HistoryPage"
+msgid "{n} ligne de l'historique, illisible ou incomplète, est ignorée."
+msgid_plural "{n} lignes de l'historique, illisibles ou incomplètes, sont ignorées."
+msgstr[0] "{n} line of the history, unreadable or incomplete, is ignored."
+msgstr[1] "{n} lines of the history, unreadable or incomplete, are ignored."
+
+msgctxt "HistoryPage"
+msgid "Lecture de l'historique…"
+msgstr "Reading the history…"
+
+msgctxt "HistoryPage"
+msgid "Aucune opération pour l'instant"
+msgstr "No operation yet"
+
+msgctxt "HistoryPage"
+msgid "Chaque nettoyage et chaque désinstallation s'ajoutent ici, avec leur reçu."
+msgstr "Each cleaning and each uninstallation is added here, with its receipt."

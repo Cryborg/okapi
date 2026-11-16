@@ -1,0 +1,63 @@
+// What the History screen shows, set by Rust (`src/history.rs`).
+import { ReceiptLineShown, RightsProblem, Size } from "cleaner-model.slint";
+import { Moment } from "dashboard-model.slint";
+import { AppSource } from "apps-model.slint";
+
+export enum HistoryReading { reading, read, unreadable }
+
+export enum HistoryKind { cleaning, uninstall }
+
+// What kept a cleaning from touching anything, by the name its line keeps.
+export enum HistoryStop {
+    unsupported-system, missing-variable, unreadable-variable, min-age-beyond-clock, cancelled,
+    unknown,
+}
+
+// What is known of a cleaning's deletion log.
+export enum DeletionLog { not-kept, unreadable, read }
+
+// A cleaning's part that needed the administrator: none, or how it ended.
+export enum HistoryAdmin { none, done, not-done }
+
+// One operation, newest first.
+export struct HistoryRow {
+    kind: HistoryKind,
+    at: Moment,
+    // The first of its day: the day is said above it.
+    day-first: bool,
+    // How many days are said above its line in the list, its own included.
+    days-above: int,
+    // What it freed, when known.
+    freed-known: bool,
+    freed: Size,
+    // A cleaning: what became of its entries, what stopped it, and its
+    // administrator's part, if it had one.
+    removed: int,
+    partial: int,
+    gone: int,
+    kept: int,
+    stops: [HistoryStop],
+    admin: HistoryAdmin,
+    // Why it did not finish, when it did not.
+    admin-problem: RightsProblem,
+    deletion-log: DeletionLog,
+    // Entries of its deletion log that could not be read back.
+    unreadable-entries: int,
+    // An uninstallation.
+    name: string,
+    source: AppSource,
+    packages: [string],
+    data-removed: bool,
+}
+
+export global History {
+    in property <HistoryReading> reading;
+    in property <[HistoryRow]> rows;
+    // Lines of the history that could not be read, skipped.
+    in property <int> skipped;
+    // The row shown in detail.
+    in property <int> chosen;
+    // The chosen cleaning's entries by result, from its deletion log.
+    in property <[ReceiptLineShown]> lines;
+    callback choose(index: int);
+}

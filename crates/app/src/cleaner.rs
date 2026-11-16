@@ -87,6 +87,9 @@ mod browsers;
 mod cleaning;
 mod rights;
 
+pub(crate) use cleaning::line_shown;
+pub(crate) use rights::problem_of_key;
+
 /// One analysis to run.
 #[derive(Debug)]
 pub struct Job {
@@ -126,6 +129,8 @@ pub struct Seams {
     pub updates: crate::updates::UpdatesSeams,
     /// What the applications screen reads and asks of the machine.
     pub apps: crate::apps::AppsSeams,
+    /// Where the History screen reads the history.
+    pub history: crate::history::HistorySeams,
 }
 
 impl std::fmt::Debug for Seams {
@@ -170,6 +175,7 @@ impl Seams {
             apps: crate::apps::AppsSeams::system(disk.home.clone()),
             disk,
             updates: crate::updates::UpdatesSeams::system(),
+            history: crate::history::HistorySeams::system(),
         }
     }
 }
@@ -1938,6 +1944,8 @@ pub mod tests {
             updates: crate::updates::tests::nothing(),
             // Nothing read, nothing uninstalled.
             apps: crate::apps::tests::inert(),
+            // No history read.
+            history: crate::history::tests::nowhere(),
             ..Seams::system()
         }
     }
@@ -3362,7 +3370,7 @@ pub mod tests {
     }
 
     /// The entries of the sidebar, each a stop of Tab.
-    pub const SIDEBAR_ENTRIES: usize = 8;
+    pub const SIDEBAR_ENTRIES: usize = 9;
     /// The stops of Tab in the sidebar of a wide window: its fold button,
     /// then its entries.
     pub const SIDEBAR_STOPS: usize = SIDEBAR_ENTRIES + 1;

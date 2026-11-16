@@ -19,6 +19,7 @@ mod disk_usage;
 mod duplicates;
 mod elevation;
 mod file_manager;
+mod history;
 mod kept_selections;
 #[cfg(target_os = "linux")]
 mod portal;
@@ -35,6 +36,7 @@ use cleaner::{CleanerEvent, CleanerScreen, Seams};
 use dashboard::{DashboardScreen, DashboardSeams};
 use disk_usage::DiskUsageScreen;
 use duplicates::DuplicatesScreen;
+use history::HistoryScreen;
 use settings::SettingsScreen;
 use updates::UpdatesScreen;
 
@@ -164,6 +166,7 @@ fn window(
         language,
     );
     let updates = UpdatesScreen::attach(&window, seams.updates.clone());
+    let history = HistoryScreen::attach(&window, seams.history.clone());
     // The same settings: never a leftover where the user excluded. Read in
     // the background, they leave a failure to be said to the cleaner.
     let apps = AppsScreen::attach(
@@ -200,30 +203,47 @@ fn window(
         let scale = window.as_ref().map(|window| window.window().scale_factor());
         tracing::debug!(chosen_folded, narrow, ?size, ?scale, "sidebar shown");
     });
-    let dashboard = attach_home(&window, &screen, &disk, &duplicates, &updates, &apps, home);
+    let followers = Followers {
+        disk,
+        duplicates: duplicates.clone(),
+        updates,
+        apps: apps.clone(),
+        history,
+    };
+    let dashboard = attach_home(&window, &screen, followers, home);
     Ok((window, screen, dashboard, settings, apps, duplicates))
+}
+
+/// The screens that follow the page shown, beside the Home page.
+struct Followers {
+    disk: DiskUsageScreen,
+    duplicates: DuplicatesScreen,
+    updates: UpdatesScreen,
+    apps: AppsScreen,
+    history: HistoryScreen,
 }
 
 /// Binds the Home page to `window`: it follows the page shown, its
 /// "Analyser" asks `cleaner`, and it hears what `cleaner` does. The other
-/// screens follow the page shown too.
+/// screens follow the page shown too, and the History hears a cleaning end.
 fn attach_home(
     window: &AppWindow,
     screen: &CleanerScreen,
-    disk: &DiskUsageScreen,
-    duplicates: &DuplicatesScreen,
-    updates: &UpdatesScreen,
-    apps: &AppsScreen,
+    followers: Followers,
     home: DashboardSeams,
 ) -> DashboardScreen {
     let dashboard = DashboardScreen::attach(window, home);
     let volumes = dashboard.clone();
-    disk.read_volumes_from(Rc::new(move || volumes.volumes()));
     // Held here, by the page's callback, as long as the window is.
-    let disk = disk.clone();
-    let duplicates = duplicates.clone();
-    let updates = updates.clone();
-    let apps = apps.clone();
+    let Followers {
+        disk,
+        duplicates,
+        updates,
+        apps,
+        history,
+    } = followers;
+    disk.read_volumes_from(Rc::new(move || volumes.volumes()));
+    let history_told = history.clone();
     let heard = dashboard.clone();
     let cleaner = screen.clone();
     let shown_home = dashboard.clone();
@@ -238,6 +258,7 @@ fn attach_home(
         duplicates.page_shown(page);
         updates.page_shown(page);
         apps.page_shown(page);
+        history.page_shown(page);
     });
     let analyzing = screen.clone();
     window
@@ -245,7 +266,10 @@ fn attach_home(
         .on_analyze(move || analyzing.analyze_default());
     screen.listen(Rc::new(move |event| match event {
         CleanerEvent::AnalysisDone(summary) => heard.analysis_done(summary),
-        CleanerEvent::CleaningDone { freed, at } => heard.cleaning_done(freed, at),
+        CleanerEvent::CleaningDone { freed, at } => {
+            heard.cleaning_done(freed, at);
+            history_told.cleaning_done();
+        }
     }));
     dashboard
 }
@@ -631,6 +655,7 @@ mod tests {
                 "Chaque changement est enregistré tout de suite.",
             ),
             ("Mises à jour", "Mises à jour"),
+            ("Historique", "Historique"),
             ("Applications", "Applications"),
             ("À propos", "À propos"),
         ] {
@@ -962,6 +987,12 @@ mod tests {
         "DuplicateResult",
         "KeptLine",
         "DuplicateReceipt",
+        "HistoryWords",
+        "OperationRow",
+        "Operations",
+        "CleaningDetail",
+        "UninstallDetail",
+        "HistoryPage",
     ];
 
     #[test]

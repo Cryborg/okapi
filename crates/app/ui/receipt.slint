@@ -169,7 +169,7 @@ export component CleaningPage inherits VerticalLayout {
 }
 
 // A figure of the receipt.
-component Stat inherits VerticalLayout {
+export component Stat inherits VerticalLayout {
     in property <string> label;
     in property <string> value;
     horizontal-stretch: 1;
@@ -192,9 +192,11 @@ component Stat inherits VerticalLayout {
 }
 
 // A line of the receipt: a result, or why entries were kept; unfolded, its
-// entries.
-component ReceiptLine inherits VerticalLayout {
+// entries, and where to find those beyond them. Its size is said when
+// known.
+export component ReceiptLine inherits VerticalLayout {
     in property <ReceiptLineShown> line;
+    in property <string> more-text: @tr("Autres : {}. Le journal les liste toutes.", line.more);
     property <bool> open;
     property <string> name: line.kind == ReceiptKind.removed ? @tr("Retirées")
         : line.kind == ReceiptKind.partial ? @tr("Retirées en partie")
@@ -216,7 +218,8 @@ component ReceiptLine inherits VerticalLayout {
         background: touch.has-hover ? Theme.surface-hover : transparent;
         accessible-role: button;
         accessible-label: root.open ? @tr("Replier {}", root.name) : @tr("Déplier {}", root.name);
-        accessible-description: @tr("Éléments : {}. Taille : {}.", line.count, Words.size(line.size));
+        accessible-description: line.sized ? @tr("Éléments : {}. Taille : {}.", line.count, Words.size(line.size))
+            : @tr("Éléments : {}.", line.count);
         accessible-expandable: true;
         accessible-expanded: root.open;
         accessible-action-default => {
@@ -272,7 +275,7 @@ component ReceiptLine inherits VerticalLayout {
             }
             Line {
                 width: Theme.results-size-width;
-                text: Words.size(line.size);
+                text: line.sized ? Words.size(line.size) : "";
                 accessible-role: none;
                 horizontal-alignment: right;
                 vertical-alignment: center;
@@ -306,7 +309,7 @@ component ReceiptLine inherits VerticalLayout {
             }
         }
         if line.more > 0: Detail {
-            text: @tr("Autres : {}. Le journal les liste toutes.", line.more);
+            text: root.more-text;
         }
     }
 }

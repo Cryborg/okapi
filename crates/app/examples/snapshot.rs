@@ -248,6 +248,7 @@ fn receipt(window: &ui::AppWindow) {
     let line = |kind, count| ui::ReceiptLineShown {
         kind,
         count,
+        sized: true,
         size: size(31, 2, ui::SizeUnit::Megabyte),
         paths: ModelRc::new(VecModel::from(vec![ui::PathShown {
             path: "/home/ana/.cache/thumbnails/large".into(),
@@ -289,6 +290,138 @@ fn receipt(window: &ui::AppWindow) {
     }
     cleaner.set_step(ui::CleanerStep::Receipt);
     window.set_page(ui::Page::Cleaner);
+}
+
+/// The History screen: a few days of cleanings and uninstallations, the
+/// newest chosen with its deletion log; none at all when `empty`.
+fn history(window: &ui::AppWindow, empty: bool, language: Language) {
+    window.set_page(ui::Page::History);
+    let history = window.global::<ui::History>();
+    history.set_reading(ui::HistoryReading::Read);
+    if empty {
+        return;
+    }
+    history.set_rows(ModelRc::new(VecModel::from(history_rows())));
+    history.set_skipped(1);
+    history.set_lines(ModelRc::new(VecModel::from(history_lines(language))));
+}
+
+/// The operations the History screen shows, newest first.
+fn history_rows() -> Vec<ui::HistoryRow> {
+    let at = |day: ui::DayKind, day_of_month: i32, hour: i32, minute: i32| ui::Moment {
+        day,
+        day_of_month,
+        month: 11,
+        year: 0,
+        hour,
+        minute,
+    };
+    let cleaning = |at: ui::Moment, freed: ui::Size, kept: i32| ui::HistoryRow {
+        kind: ui::HistoryKind::Cleaning,
+        at,
+        freed_known: true,
+        freed,
+        removed: 14_870,
+        partial: 3,
+        gone: 21,
+        kept,
+        deletion_log: ui::DeletionLog::Read,
+        ..ui::HistoryRow::default()
+    };
+    vec![
+        ui::HistoryRow {
+            day_first: true,
+            days_above: 1,
+            ..cleaning(
+                at(ui::DayKind::Today, 0, 9, 41),
+                size(1, 9, ui::SizeUnit::Gigabyte),
+                12,
+            )
+        },
+        ui::HistoryRow {
+            kind: ui::HistoryKind::Uninstall,
+            at: at(ui::DayKind::Today, 0, 9, 5),
+            days_above: 1,
+            freed_known: true,
+            freed: size(312, 0, ui::SizeUnit::Megabyte),
+            name: "GIMP".into(),
+            source: ui::AppSource::Flatpak,
+            packages: ModelRc::new(VecModel::from(vec![slint::SharedString::from(
+                "org.gimp.GIMP",
+            )])),
+            data_removed: false,
+            ..ui::HistoryRow::default()
+        },
+        ui::HistoryRow {
+            day_first: true,
+            days_above: 2,
+            stops: ModelRc::new(VecModel::from(vec![ui::HistoryStop::MissingVariable])),
+            removed: 0,
+            partial: 0,
+            gone: 0,
+            deletion_log: ui::DeletionLog::NotKept,
+            ..cleaning(
+                at(ui::DayKind::Other, 8, 18, 12),
+                size(0, 0, ui::SizeUnit::Byte),
+                0,
+            )
+        },
+        ui::HistoryRow {
+            days_above: 2,
+            deletion_log: ui::DeletionLog::NotKept,
+            ..cleaning(
+                at(ui::DayKind::Other, 8, 8, 20),
+                size(1, 8, ui::SizeUnit::Gigabyte),
+                0,
+            )
+        },
+        ui::HistoryRow {
+            day_first: true,
+            days_above: 3,
+            admin: ui::HistoryAdmin::Done,
+            ..cleaning(
+                at(ui::DayKind::Other, 4, 20, 47),
+                size(1, 1, ui::SizeUnit::Gigabyte),
+                2,
+            )
+        },
+    ]
+}
+
+/// The entries by result of the cleaning chosen on the History screen.
+fn history_lines(language: Language) -> Vec<ui::ReceiptLineShown> {
+    let line = |kind, count, sized, paths: &[&str], more| ui::ReceiptLineShown {
+        kind,
+        count,
+        sized,
+        size: size(1, 9, ui::SizeUnit::Gigabyte),
+        paths: ModelRc::new(VecModel::from(
+            paths
+                .iter()
+                .map(|path| ui::PathShown {
+                    path: (*path).into(),
+                    blocked: "".into(),
+                })
+                .collect::<Vec<_>>(),
+        )),
+        more,
+    };
+    let trash = said(language, "Corbeille", "Trash");
+    let in_trash = format!("/home/ana/.local/share/{trash}/files/rapport.pdf");
+    vec![
+        line(
+            ui::ReceiptKind::Removed,
+            14_870,
+            true,
+            &["/home/ana/.cache/thumbnails/large", &in_trash],
+            14_868,
+        ),
+        line(ui::ReceiptKind::Partial, 3, true, &[], 0),
+        line(ui::ReceiptKind::Gone, 21, false, &[], 0),
+        line(ui::ReceiptKind::Recent, 5, false, &[], 0),
+        line(ui::ReceiptKind::Denied, 2, false, &[], 0),
+        line(ui::ReceiptKind::Refused, 5, false, &[], 0),
+    ]
 }
 
 /// The steps of a cleaning: kind, state, entries done of all.
@@ -1206,8 +1339,10 @@ fn main() {
         "apps-leftovers" => apps_leftovers(&app, false, language),
         "apps-leftovers-empty" => apps_leftovers(&app, true, language),
         "settings" => settings(&app),
+        "history" | "history-small" => history(&app, false, language),
+        "history-empty" => history(&app, true, language),
         other => panic!(
-            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings"
+            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings, history, history-small, history-empty"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

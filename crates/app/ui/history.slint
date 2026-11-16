@@ -1,0 +1,463 @@
+// The History screen: every cleaning and uninstallation Okapi keeps in its
+// history, newest first, and the receipt of the one chosen. Drawn from
+// docs/design/maquette/project/History.dc.html.
+import { ListView, ScrollView } from "std-widgets.slint";
+import { Theme, Screen } from "theme.slint";
+import { Badge, Banner, Card, Detail, FocusRing, Icon, Line, Title } from "widgets.slint";
+import { Words } from "cleaner-model.slint";
+import { DashboardWords } from "dashboard-widgets.slint";
+import { DayKind, Moment } from "dashboard-model.slint";
+import { AppWords } from "apps.slint";
+import { ReceiptLine, Stat } from "receipt.slint";
+import { DeletionLog, History, HistoryAdmin, HistoryKind, HistoryReading, HistoryRow, HistoryStop } from "history-model.slint";
+
+global HistoryWords {
+    // The day said above its first line: "Aujourd'hui", "Hier", "8 novembre".
+    pure public function day(at: Moment) -> string {
+        if at.day == DayKind.today {
+            return @tr("Aujourd'hui");
+        }
+        if at.day == DayKind.yesterday {
+            return @tr("Hier");
+        }
+        return DashboardWords.date(at);
+    }
+
+    pure public function name(operation: HistoryRow) -> string {
+        if operation.kind == HistoryKind.uninstall {
+            return @tr("Désinstallation");
+        }
+        return operation.stops.length > 0 ? @tr("Nettoyage arrêté") : @tr("Nettoyage");
+    }
+
+    // What a line is read as: its name, its badge, its summary, when.
+    pure public function spoken(operation: HistoryRow) -> string {
+        if operation.admin != HistoryAdmin.none {
+            return @tr("{}, partie administrateur, {}, {}", name(operation), summary(operation), DashboardWords.moment(operation.at));
+        }
+        return @tr("{}, {}, {}", name(operation), summary(operation), DashboardWords.moment(operation.at));
+    }
+
+    pure public function freed(operation: HistoryRow) -> string {
+        return operation.freed-known ? @tr("{} libérés", Words.size(operation.freed)) : @tr("Libéré : inconnu");
+    }
+
+    // What a line says under its name.
+    pure public function summary(operation: HistoryRow) -> string {
+        if operation.kind == HistoryKind.uninstall {
+            return operation.freed-known ? @tr("{} · {}", operation.name, freed(operation)) : operation.name;
+        }
+        // Root's part may have removed entries before the user's stopped.
+        if operation.stops.length > 0 && operation.removed + operation.partial == 0 && operation.admin == HistoryAdmin.none {
+            return @tr("Rien n'a été touché");
+        }
+        return @tr("{} · gardées : {}", freed(operation), operation.kept);
+    }
+
+    // Why a cleaning touched nothing, by what its line keeps (never the
+    // variable's name).
+    pure public function stop(stop: HistoryStop) -> string {
+        if stop == HistoryStop.unsupported-system {
+            return @tr("Ce système ne permet pas de distinguer les points de montage et les fichiers remplacés.");
+        }
+        if stop == HistoryStop.missing-variable {
+            return @tr("Un dossier de la session n'était pas défini : ce qu'il protège ne pouvait pas être garanti.");
+        }
+        if stop == HistoryStop.unreadable-variable {
+            return @tr("Un dossier de la session était illisible : ce qu'il protège ne pouvait pas être garanti.");
+        }
+        if stop == HistoryStop.min-age-beyond-clock {
+            return @tr("L'âge minimal remontait avant l'horloge : rien n'était assez ancien.");
+        }
+        if stop == HistoryStop.cancelled {
+            return @tr("Le nettoyage a été annulé avant de commencer.");
+        }
+        return @tr("Arrêté pour une raison que cette version d'Okapi ne connaît pas.");
+    }
+}
+
+// One operation of the list: a button that shows it in detail, the day it
+// fell on above it when it is the first of that day.
+component OperationRow inherits VerticalLayout {
+    in property <HistoryRow> operation;
+    in property <int> index;
+    in property <bool> focused;
+    property <bool> chosen: History.chosen == root.index;
+
+    if operation.day-first: HorizontalLayout {
+        height: Theme.history-day-height;
+        padding-left: Theme.spacing-l;
+        padding-bottom: Theme.spacing-xs;
+        Text {
+            text: HistoryWords.day(operation.at);
+            // The line itself says its day.
+            accessible-role: none;
+            color: Theme.text-3;
+            font-size: Theme.font-caption;
+            font-weight: Theme.weight-medium;
+            vertical-alignment: bottom;
+        }
+    }
+    Rectangle {
+        height: Theme.history-row-height;
+        background: root.chosen ? Theme.accent-soft : touch.has-hover ? Theme.surface-hover : transparent;
+        accessible-role: list-item;
+        accessible-label: HistoryWords.spoken(operation);
+        accessible-item-selectable: true;
+        accessible-item-selected: root.chosen;
+        accessible-action-default => {
+            History.choose(root.index);
+        }
+        touch := TouchArea {
+            clicked => {
+                History.choose(root.index);
+            }
+        }
+        Rectangle {
+            y: parent.height - self.height;
+            height: Theme.border-width;
+            background: Theme.border;
+        }
+        // The chosen one marked on its edge too: never by colour alone.
+        if root.chosen: Rectangle {
+            x: 0;
+            width: Theme.sidebar-mark-width;
+            height: parent.height - 2 * Theme.spacing-s;
+            y: Theme.spacing-s;
+            border-radius: self.width / 2;
+            background: Theme.accent;
+        }
+        FocusRing {
+            shown: root.focused;
+            border-radius: Theme.radius-small;
+        }
+        HorizontalLayout {
+            padding-left: Theme.spacing-l;
+            padding-right: Theme.spacing-l;
+            spacing: Theme.spacing-m;
+            Rectangle {
+                width: Theme.history-icon-box;
+                height: Theme.history-icon-box;
+                cross-axis-self-alignment: center;
+                border-radius: Theme.radius-medium;
+                background: root.chosen ? Theme.surface : Theme.surface-2;
+                Icon {
+                    source: operation.kind == HistoryKind.uninstall ? @image-url("../assets/icons/package.svg") : @image-url("../assets/icons/sparkles.svg");
+                    colorize: Theme.text-2;
+                    width: Theme.icon-small;
+                    height: Theme.icon-small;
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: Theme.spacing-xxs;
+                HorizontalLayout {
+                    spacing: Theme.spacing-s;
+                    alignment: start;
+                    Text {
+                        text: HistoryWords.name(operation);
+                        accessible-role: none;
+                        color: Theme.text;
+                        font-size: Theme.font-label;
+                        font-weight: root.chosen ? Theme.weight-semibold : Theme.weight-medium;
+                        min-width: self.preferred-width;
+                    }
+                    if operation.admin != HistoryAdmin.none: Badge {
+                        text: @tr("Administrateur");
+                        icon: @image-url("../assets/icons/shield.svg");
+                        tone: Theme.admin;
+                        tone-soft: Theme.admin-soft;
+                        cross-axis-self-alignment: center;
+                        elide: true;
+                    }
+                }
+                Text {
+                    text: HistoryWords.summary(operation);
+                    accessible-role: none;
+                    color: Theme.text-2;
+                    font-size: Theme.font-small;
+                    overflow: elide;
+                }
+            }
+            Text {
+                text: DashboardWords.time(operation.at);
+                accessible-role: none;
+                color: Theme.text-2;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// The operations, by the keyboard too: the arrows, Home and End choose.
+component Operations inherits FocusScope {
+    accessible-role: list;
+    accessible-label: @tr("Opérations, de la plus récente à la plus ancienne");
+    init => {
+        self.focus();
+    }
+
+    // Brings the line `index` into view: each line before it takes a line's height,
+    // and each day said before it, or above it, a day's height.
+    function show(index: int) {
+        let place = index * Theme.history-row-height + History.rows[index].days-above * Theme.history-day-height;
+        let top = History.rows[index].day-first ? place - Theme.history-day-height : place;
+        if top < -view.content-y {
+            view.content-y = -top;
+        } else if place + Theme.history-row-height > -view.content-y + view.visible-height {
+            view.content-y = view.visible-height - place - Theme.history-row-height;
+        }
+    }
+
+    function move(index: int) {
+        if History.rows.length == 0 {
+            return;
+        }
+        let chosen = clamp(index, 0, History.rows.length - 1);
+        History.choose(chosen);
+        root.show(chosen);
+    }
+
+    key-pressed(event) => {
+        if event.text == Key.DownArrow {
+            root.move(History.chosen + 1);
+            return accept;
+        }
+        if event.text == Key.UpArrow {
+            root.move(History.chosen - 1);
+            return accept;
+        }
+        if event.text == Key.Home {
+            root.move(0);
+            return accept;
+        }
+        if event.text == Key.End {
+            root.move(History.rows.length - 1);
+            return accept;
+        }
+        reject
+    }
+
+    view := ListView {
+        for operation[index] in History.rows: OperationRow {
+            operation: operation;
+            index: index;
+            focused: root.has-focus && History.chosen == index;
+        }
+    }
+}
+
+// The chosen cleaning: its figures, what stopped it, its administrator's
+// part, and its entries by result when its deletion log was kept.
+component CleaningDetail inherits VerticalLayout {
+    in property <HistoryRow> operation;
+    spacing: Theme.spacing-m;
+    HorizontalLayout {
+        padding-left: Theme.spacing-s;
+        padding-right: Theme.spacing-s;
+        Stat {
+            label: @tr("Espace libéré");
+            value: operation.freed-known ? Words.size(operation.freed) : @tr("Inconnu");
+        }
+        Stat {
+            label: @tr("Retirées");
+            value: operation.removed;
+        }
+        Stat {
+            label: @tr("En partie");
+            value: operation.partial;
+        }
+        Stat {
+            label: @tr("Déjà parties");
+            value: operation.gone;
+        }
+        Stat {
+            label: @tr("Gardées");
+            value: operation.kept;
+        }
+    }
+    VerticalLayout {
+        padding-left: Theme.spacing-l;
+        padding-right: Theme.spacing-l;
+        spacing: Theme.spacing-xs;
+        for stop in operation.stops: Line {
+            text: HistoryWords.stop(stop);
+            color: Theme.warning;
+        }
+        if operation.admin != HistoryAdmin.none: Line {
+            text: operation.admin == HistoryAdmin.done ? @tr("La partie administrateur s'est terminée.")
+                : @tr("La partie administrateur ne s'est pas terminée. {}", Words.rights(operation.admin-problem));
+            color: operation.admin == HistoryAdmin.done ? Theme.text : Theme.warning;
+        }
+        if operation.deletion-log == DeletionLog.not-kept: Detail {
+            text: @tr("Le détail par élément n'est gardé que si le journal des suppressions est activé dans Réglages.");
+        }
+        if operation.deletion-log == DeletionLog.unreadable: Detail {
+            text: @tr("Le journal des suppressions de ce nettoyage ne se lit plus : le détail par élément est perdu.");
+            color: Theme.warning;
+        }
+        if operation.unreadable-entries > 0: Detail {
+            text: @tr("{n} élément du journal des suppressions ne se lit plus : compté parmi les gardés." | "{n} éléments du journal des suppressions ne se lisent plus : comptés parmi les gardés." % operation.unreadable-entries);
+            color: Theme.warning;
+        }
+    }
+    if History.lines.length > 0: lines-view := ScrollView {
+        vertical-stretch: 1;
+        accessible-role: list;
+        accessible-label: @tr("Détail par résultat");
+        content-width: self.visible-width;
+        content-height: receipt-lines.preferred-height;
+        receipt-lines := VerticalLayout {
+            width: lines-view.visible-width;
+            padding: Theme.spacing-s;
+            alignment: start;
+            for line in History.lines: ReceiptLine {
+                line: line;
+                more-text: @tr("Autres : {}. Les fichiers de l'historique les listent toutes.", line.more);
+            }
+        }
+    }
+    if History.lines.length == 0: Rectangle {
+        vertical-stretch: 1;
+    }
+}
+
+// The chosen uninstallation: what went, what it freed, its data.
+component UninstallDetail inherits VerticalLayout {
+    in property <HistoryRow> operation;
+    padding-left: Theme.spacing-xl;
+    padding-right: Theme.spacing-xl;
+    spacing: Theme.spacing-s;
+    Line {
+        text: @tr("{}, {}", operation.name, AppWords.source(operation.source));
+    }
+    Detail {
+        text: operation.freed-known ? HistoryWords.freed(operation) : @tr("Espace libéré inconnu.");
+    }
+    Detail {
+        text: operation.data-removed ? @tr("Ses données ont été supprimées avec elle.") : @tr("Ses données ont été gardées.");
+    }
+    if operation.packages.length > 0: Detail {
+        text: @tr("Retiré :");
+    }
+    for package in operation.packages: HorizontalLayout {
+        padding-left: Theme.spacing-l;
+        Detail {
+            text: package;
+            color: Theme.text;
+            overflow: elide;
+        }
+    }
+    Rectangle {
+        vertical-stretch: 1;
+    }
+}
+
+// The operation chosen, in detail.
+component Chosen inherits Card {
+    in property <HistoryRow> operation;
+    accessible-role: groupbox;
+    accessible-label: HistoryWords.name(operation);
+    VerticalLayout {
+        padding-top: Theme.spacing-l;
+        padding-bottom: Theme.spacing-s;
+        spacing: Theme.spacing-m;
+        VerticalLayout {
+            padding-left: Theme.spacing-xl;
+            padding-right: Theme.spacing-xl;
+            spacing: Theme.spacing-xxs;
+            Text {
+                text: HistoryWords.name(operation);
+                color: Theme.text;
+                font-size: Theme.font-title;
+                font-weight: Theme.weight-semibold;
+            }
+            Detail {
+                text: DashboardWords.moment-first(operation.at);
+            }
+        }
+        if operation.kind == HistoryKind.cleaning: CleaningDetail {
+            vertical-stretch: 1;
+            operation: root.operation;
+        }
+        if operation.kind == HistoryKind.uninstall: UninstallDetail {
+            vertical-stretch: 1;
+            operation: root.operation;
+        }
+    }
+}
+
+export component HistoryPage inherits VerticalLayout {
+    property <bool> shows-rows: History.reading != HistoryReading.unreadable && History.rows.length > 0;
+    padding: Screen.page-margin;
+    spacing: Theme.spacing-l;
+
+    VerticalLayout {
+        vertical-stretch: 0;
+        spacing: Theme.spacing-xs;
+        Title {
+            text: @tr("Historique");
+        }
+        Detail {
+            text: @tr("Ce qu'Okapi a nettoyé et désinstallé sur cet ordinateur, le plus récent d'abord. Les plus anciennes opérations partent au-delà de la taille gardée.");
+        }
+    }
+    if History.reading == HistoryReading.unreadable: Banner {
+        warning: true;
+        text: @tr("L'historique ne peut pas être lu. Le détail est dans le journal.");
+    }
+    if History.reading != HistoryReading.unreadable && History.skipped > 0: Banner {
+        text: @tr("{n} ligne de l'historique, illisible ou incomplète, est ignorée." | "{n} lignes de l'historique, illisibles ou incomplètes, sont ignorées." % History.skipped);
+    }
+    if History.reading == HistoryReading.reading && History.rows.length == 0: Detail {
+        text: @tr("Lecture de l'historique…");
+        accessible-live-region: polite;
+    }
+    if History.reading == HistoryReading.read && History.rows.length == 0: Card {
+        VerticalLayout {
+            padding: Theme.spacing-xxl;
+            spacing: Theme.spacing-s;
+            alignment: center;
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    width: Theme.updates-empty-icon;
+                    height: Theme.updates-empty-icon;
+                    border-radius: Theme.radius-pill;
+                    background: Theme.surface-2;
+                    Icon {
+                        source: @image-url("../assets/icons/history.svg");
+                        colorize: Theme.text-2;
+                        width: Theme.icon-large;
+                        height: Theme.icon-large;
+                    }
+                }
+            }
+            Line {
+                text: @tr("Aucune opération pour l'instant");
+                horizontal-alignment: center;
+            }
+            Detail {
+                text: @tr("Chaque nettoyage et chaque désinstallation s'ajoutent ici, avec leur reçu.");
+                horizontal-alignment: center;
+            }
+        }
+    }
+    if root.shows-rows: HorizontalLayout {
+        vertical-stretch: 1;
+        spacing: Theme.spacing-l;
+        Card {
+            width: Screen.narrow ? Theme.history-list-width-narrow : Theme.history-list-width;
+            Operations { }
+        }
+        Chosen {
+            horizontal-stretch: 1;
+            operation: History.rows[History.chosen];
+        }
+    }
+    if !root.shows-rows: Rectangle {
+        vertical-stretch: 1;
+    }
+}

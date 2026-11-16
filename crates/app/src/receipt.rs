@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use okapi_engine::{CleanOutcome, CleanReceipt, CleanResult, KeepReason, ScanReport};
 use okapi_helper::OutcomeAnswer;
+use okapi_store::HistoryOutcome;
 
 /// How many paths a line of the receipt lists; the journal has them all.
 pub const PATHS_SHOWN: usize = 20;
@@ -17,8 +18,8 @@ pub struct OutcomeFacts {
     pub result: CleanResult,
     pub path: Option<PathBuf>,
     pub blocked: Option<PathBuf>,
-    /// Its size when the analysis saw it.
-    pub scanned_bytes: u64,
+    /// Its size when the analysis saw it; unknown to a history.
+    pub scanned_bytes: Option<u64>,
 }
 
 impl OutcomeFacts {
@@ -29,8 +30,27 @@ impl OutcomeFacts {
             result: outcome.result(),
             path: outcome.path().map(PathBuf::from),
             blocked: outcome.blocked().map(PathBuf::from),
-            scanned_bytes: report.size_of(outcome.id()).unwrap_or_default(),
+            scanned_bytes: Some(report.size_of(outcome.id()).unwrap_or_default()),
         }
+    }
+
+    /// One entry of a deletion log the history keeps: `Err` when its result
+    /// cannot be read back, then counted as [`HistoryOutcome::UNREADABLE`]
+    /// without a trace of its own (a log may hold thousands).
+    ///
+    /// # Errors
+    ///
+    /// The entry counted kept by the system, its result unreadable.
+    pub fn of_history(kept: &HistoryOutcome) -> Result<Self, Self> {
+        let facts = |result| Self {
+            result,
+            path: kept.path.as_ref().map(PathBuf::from),
+            blocked: kept.blocked.as_ref().map(PathBuf::from),
+            scanned_bytes: None,
+        };
+        kept.clean_result()
+            .map(facts)
+            .ok_or_else(|| facts(HistoryOutcome::UNREADABLE))
     }
 
     /// What root's part of a cleaning answered for one entry. A result that
@@ -44,7 +64,7 @@ impl OutcomeFacts {
             result: outcome.clean_result_or_refused(),
             path: outcome.path.as_ref().map(PathBuf::from),
             blocked: outcome.blocked.as_ref().map(PathBuf::from),
-            scanned_bytes: answered.scanned_bytes(),
+            scanned_bytes: Some(answered.scanned_bytes()),
         }
     }
 
@@ -128,8 +148,8 @@ pub struct ReceiptLine {
     pub kind: LineKind,
     pub count: usize,
     /// Freed for the removed ones, in part or whole; their size at the
-    /// analysis for the others.
-    pub bytes: u64,
+    /// analysis for the others, unknown when one of them has none.
+    pub bytes: Option<u64>,
     /// Up to [`PATHS_SHOWN`], each with what blocked it, if anything.
     pub paths: Vec<(String, Option<String>)>,
     /// How many more there are than those listed.
@@ -148,54 +168,82 @@ pub struct Receipt {
     pub lines: Vec<ReceiptLine>,
 }
 
-impl Receipt {
-    /// The receipt of a cleaning that `stopped`, or did what `outcomes` say.
-    #[must_use]
-    pub fn new(stopped: bool, outcomes: &[OutcomeFacts]) -> Self {
-        let kind = |result: CleanResult| match result {
+/// The lines of a receipt, made one outcome at a time: never more than
+/// [`PATHS_SHOWN`] paths a line, however many outcomes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReceiptLines {
+    lines: Vec<ReceiptLine>,
+    freed: u64,
+}
+
+impl ReceiptLines {
+    /// Counts `outcome` in its line.
+    pub fn add(&mut self, outcome: &OutcomeFacts) {
+        let line_kind = match outcome.result {
             CleanResult::Removed { .. } => LineKind::Removed,
             CleanResult::Partial { .. } => LineKind::Partial,
             CleanResult::Gone => LineKind::Gone,
             CleanResult::Kept(reason) => LineKind::Kept(Kept::of(reason)),
         };
-        let mut lines: Vec<ReceiptLine> = Vec::new();
-        for outcome in outcomes {
-            let line_kind = kind(outcome.result);
-            let position = match lines.binary_search_by_key(&line_kind, |line| line.kind) {
-                Ok(position) => position,
-                Err(position) => {
-                    lines.insert(
-                        position,
-                        ReceiptLine {
-                            kind: line_kind,
-                            count: 0,
-                            bytes: 0,
-                            paths: Vec::new(),
-                            more: 0,
-                        },
-                    );
-                    position
-                }
-            };
-            let line = &mut lines[position];
-            line.count += 1;
-            let bytes = match outcome.result {
-                CleanResult::Removed { .. } | CleanResult::Partial { .. } => {
-                    outcome.result.removed_bytes()
-                }
-                CleanResult::Gone | CleanResult::Kept(_) => outcome.scanned_bytes,
-            };
-            line.bytes = line.bytes.saturating_add(bytes);
-            if line.paths.len() < PATHS_SHOWN {
-                let lossy = |path: &PathBuf| path.display().to_string();
-                line.paths.push((
-                    outcome.path.as_ref().map(lossy).unwrap_or_default(),
-                    outcome.blocked.as_ref().map(lossy),
-                ));
-            } else {
-                line.more += 1;
+        let position = match self
+            .lines
+            .binary_search_by_key(&line_kind, |line| line.kind)
+        {
+            Ok(position) => position,
+            Err(position) => {
+                self.lines.insert(
+                    position,
+                    ReceiptLine {
+                        kind: line_kind,
+                        count: 0,
+                        bytes: Some(0),
+                        paths: Vec::new(),
+                        more: 0,
+                    },
+                );
+                position
             }
+        };
+        let line = &mut self.lines[position];
+        line.count += 1;
+        let bytes = match outcome.result {
+            CleanResult::Removed { .. } | CleanResult::Partial { .. } => {
+                Some(outcome.result.removed_bytes())
+            }
+            CleanResult::Gone | CleanResult::Kept(_) => outcome.scanned_bytes,
+        };
+        line.bytes = line
+            .bytes
+            .zip(bytes)
+            .map(|(sum, bytes)| sum.saturating_add(bytes));
+        if line.paths.len() < PATHS_SHOWN {
+            let lossy = |path: &PathBuf| path.display().to_string();
+            line.paths.push((
+                outcome.path.as_ref().map(lossy).unwrap_or_default(),
+                outcome.blocked.as_ref().map(lossy),
+            ));
+        } else {
+            line.more += 1;
         }
+        self.freed = self.freed.saturating_add(outcome.result.removed_bytes());
+    }
+
+    /// The lines, by result, the kept ones by reason.
+    #[must_use]
+    pub fn lines(&self) -> &[ReceiptLine] {
+        &self.lines
+    }
+}
+
+impl Receipt {
+    /// The receipt of a cleaning that `stopped`, or did what `outcomes` say.
+    #[must_use]
+    pub fn new(stopped: bool, outcomes: &[OutcomeFacts]) -> Self {
+        let mut made = ReceiptLines::default();
+        for outcome in outcomes {
+            made.add(outcome);
+        }
+        let ReceiptLines { lines, freed } = made;
         let count = |wanted: fn(&LineKind) -> bool| {
             lines
                 .iter()
@@ -214,10 +262,7 @@ impl Receipt {
             } else {
                 Ending::Done
             },
-            freed: outcomes
-                .iter()
-                .map(|outcome| outcome.result.removed_bytes())
-                .fold(0, u64::saturating_add),
+            freed,
             removed: count(|kind| *kind == LineKind::Removed),
             partial: count(|kind| *kind == LineKind::Partial),
             gone: count(|kind| *kind == LineKind::Gone),
@@ -254,7 +299,7 @@ mod tests {
                 },
                 path: Some(PathBuf::from("/var/crash")),
                 blocked: Some(PathBuf::from("/var/crash/locked")),
-                scanned_bytes: 9,
+                scanned_bytes: Some(9),
             }
         );
         let unreadable: OutcomeAnswer = serde_json::from_str(
@@ -275,7 +320,7 @@ mod tests {
             result,
             path: Some(PathBuf::from(path)),
             blocked: None,
-            scanned_bytes,
+            scanned_bytes: Some(scanned_bytes),
         }
     }
 
@@ -319,11 +364,11 @@ mod tests {
         assert_eq!(
             lines,
             [
-                (LineKind::Removed, 2, 8),
-                (LineKind::Partial, 1, 4),
-                (LineKind::Gone, 1, 7),
-                (LineKind::Kept(Kept::Recent), 1, 11),
-                (LineKind::Kept(Kept::Denied), 1, 13),
+                (LineKind::Removed, 2, Some(8)),
+                (LineKind::Partial, 1, Some(4)),
+                (LineKind::Gone, 1, Some(7)),
+                (LineKind::Kept(Kept::Recent), 1, Some(11)),
+                (LineKind::Kept(Kept::Denied), 1, Some(13)),
             ]
         );
         assert_eq!(
@@ -368,6 +413,78 @@ mod tests {
         assert_eq!(Kept::of(unknown), Kept::Refused);
     }
 
+    /// The history says what the receipt said: a refused permission it keeps
+    /// by its number is one Okapi never forces (D-19).
+    #[test]
+    fn a_refusal_the_history_keeps_is_read_back_by_its_number() {
+        for (code, kept) in [
+            (Some(1), Kept::Denied),
+            (Some(13), Kept::Denied),
+            (Some(5), Kept::Refused),
+            (None, Kept::Refused),
+        ] {
+            let entry = HistoryOutcome {
+                path: Some("/var/crash/locked".to_owned()),
+                result: "kept".to_owned(),
+                bytes: None,
+                reason: Some("failed".to_owned()),
+                error: None,
+                code,
+                blocked: None,
+                inexact: false,
+            };
+            let mut lines = ReceiptLines::default();
+            lines.add(&OutcomeFacts::of_history(&entry).unwrap());
+            assert_eq!(lines.lines()[0].kind, LineKind::Kept(kept), "{code:?}");
+        }
+    }
+
+    /// What a history keeps of an entry: its result, never its size at the
+    /// analysis; a result it cannot read back is kept by the system.
+    #[test]
+    fn an_entry_of_the_history_has_no_size_at_the_analysis() {
+        let kept = |result: &str, bytes: Option<u64>, reason: Option<&str>| HistoryOutcome {
+            path: Some("/var/tmp/x".to_owned()),
+            result: result.to_owned(),
+            bytes,
+            reason: reason.map(str::to_owned),
+            error: None,
+            code: None,
+            blocked: Some("/var/tmp/x/in-use".to_owned()),
+            inexact: false,
+        };
+        let removed = OutcomeFacts::of_history(&kept("removed", Some(4), None)).unwrap();
+        assert_eq!(
+            removed,
+            OutcomeFacts {
+                result: CleanResult::Removed { bytes: 4 },
+                path: Some(PathBuf::from("/var/tmp/x")),
+                blocked: Some(PathBuf::from("/var/tmp/x/in-use")),
+                scanned_bytes: None,
+            }
+        );
+        let odd = OutcomeFacts::of_history(&kept("vanished", None, None)).unwrap_err();
+        assert_eq!(odd.result, HistoryOutcome::UNREADABLE);
+        let recent = OutcomeFacts::of_history(&kept("kept", None, Some("recent"))).unwrap();
+        let mut lines = ReceiptLines::default();
+        for facts in [&removed, &removed, &recent] {
+            lines.add(facts);
+        }
+        let read: Vec<_> = lines
+            .lines()
+            .iter()
+            .map(|line| (line.kind, line.count, line.bytes))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (LineKind::Removed, 2, Some(8)),
+                (LineKind::Kept(Kept::Recent), 1, None)
+            ],
+            "what was removed is known, what was kept is not"
+        );
+    }
+
     #[test]
     fn the_kept_entries_are_sorted_by_their_own_reason() {
         let reasons = [
@@ -401,7 +518,7 @@ mod tests {
                     result: CleanResult::Kept(reason),
                     path: None,
                     blocked: None,
-                    scanned_bytes: 1,
+                    scanned_bytes: Some(1),
                 }],
             );
             assert_eq!(receipt.lines[0].kind, LineKind::Kept(kept), "{reason:?}");

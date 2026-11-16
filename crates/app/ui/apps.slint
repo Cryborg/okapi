@@ -12,7 +12,7 @@ import { Size, Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
 import { AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, AppsTab, CopyLine, ForgetOutcome, LeftoverLine, Leftovers, LeftoversBlock, SourceShown, UninstallStep, UninstallWhy } from "apps-model.slint";
 
-global AppWords {
+export global AppWords {
     pure public function source(source: AppSource) -> string {
         source == AppSource.deb ? @tr("Ubuntu") : source == AppSource.snap ? @tr("Snap") : @tr("Flatpak")
     }

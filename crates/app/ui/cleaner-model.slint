@@ -161,6 +161,9 @@ export struct PathShown {
 export struct ReceiptLineShown {
     kind: ReceiptKind,
     count: int,
+    // Unknown for the entries a history keeps without their size at the
+    // analysis (gone or kept).
+    sized: bool,
     size: Size,
     paths: [PathShown],
     // How many more than the paths listed.

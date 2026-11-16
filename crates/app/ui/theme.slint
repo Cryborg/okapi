@@ -285,6 +285,13 @@ export global Theme {
     out property <length> app-tab-height: 40px;
     // How many copies of snapd show before their list scrolls.
     out property <int> copies-shown: 4;
+    // The history screen (maquette History.dc.html): its list of operations,
+    // a line of it, the day said above a line, the icon of a line.
+    out property <length> history-list-width: 380px;
+    out property <length> history-list-width-narrow: 320px;
+    out property <length> history-row-height: 56px;
+    out property <length> history-day-height: 34px;
+    out property <length> history-icon-box: 32px;
 }
 
 // What the window's width decides for every page. Set by `AppWindow` alone.

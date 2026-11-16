@@ -390,6 +390,47 @@ pub(super) const fn problem_key(problem: ui::RightsProblem) -> &'static str {
     }
 }
 
+/// Every reason, each at its place in [`PROBLEMS`] (`problem_place` makes
+/// the compiler name a reason left out).
+const PROBLEMS: [ui::RightsProblem; 10] = [
+    ui::RightsProblem::None,
+    ui::RightsProblem::Cancelled,
+    ui::RightsProblem::Dismissed,
+    ui::RightsProblem::NotAuthorized,
+    ui::RightsProblem::NotInstalled,
+    ui::RightsProblem::Outdated,
+    ui::RightsProblem::Failed,
+    ui::RightsProblem::Stopped,
+    ui::RightsProblem::Changed,
+    ui::RightsProblem::Unknown,
+];
+
+/// Where `problem` is in [`PROBLEMS`]; a reason added to the enumeration
+/// fails to compile here until it is placed there too.
+#[cfg(test)]
+const fn problem_place(problem: ui::RightsProblem) -> usize {
+    match problem {
+        ui::RightsProblem::None => 0,
+        ui::RightsProblem::Cancelled => 1,
+        ui::RightsProblem::Dismissed => 2,
+        ui::RightsProblem::NotAuthorized => 3,
+        ui::RightsProblem::NotInstalled => 4,
+        ui::RightsProblem::Outdated => 5,
+        ui::RightsProblem::Failed => 6,
+        ui::RightsProblem::Stopped => 7,
+        ui::RightsProblem::Changed => 8,
+        ui::RightsProblem::Unknown => 9,
+    }
+}
+
+/// The reason a history names by `key` ([`problem_key`]); `None` for a name
+/// this version does not know.
+pub(crate) fn problem_of_key(key: &str) -> Option<ui::RightsProblem> {
+    PROBLEMS
+        .into_iter()
+        .find(|problem| problem_key(*problem) == key)
+}
+
 impl CleanerScreen {
     /// Asks for the rights: root's scan of the groups waiting for them.
     pub(super) fn obtain_rights(&self) {
@@ -965,6 +1006,15 @@ mod tests {
             },
             &groups
         ));
+    }
+
+    #[test]
+    fn every_reason_comes_back_from_the_name_the_history_keeps() {
+        for (place, problem) in PROBLEMS.into_iter().enumerate() {
+            assert_eq!(problem_place(problem), place, "{problem:?}");
+            assert_eq!(problem_of_key(problem_key(problem)), Some(problem));
+        }
+        assert_eq!(problem_of_key("odd"), None);
     }
 
     fn inputs(minutes: Option<u64>, exclusions: &[&str]) -> Inputs {

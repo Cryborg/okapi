@@ -2911,8 +2911,8 @@ msgid "Sans copie identique à sa place, celle-ci reste."
 msgstr "With no identical copy in its place, this one stays."
 
 msgctxt "DuplicateWords"
-msgid "Les autres copies sont peut-être ce même fichier vu ailleurs : celle-ci reste."
-msgstr "The other copies may be this very file seen elsewhere: this one stays."
+msgid "Aucune autre copie n'est sûre de rester : dans une corbeille, à un autre compte, sur un disque, une clé ou une carte au format FAT, ou peut-être ce même fichier vu ailleurs. Celle-ci reste."
+msgstr "No other copy is sure to stay: in a trash, another account's, on a FAT-formatted disk, drive or card, or maybe this very file seen elsewhere. This one stays."
 
 msgctxt "DuplicateWords"
 msgid "Okapi ne supprime jamais sans corbeille."
@@ -3183,8 +3183,8 @@ msgid "Sélection rapide"
 msgstr "Quick selection"
 
 msgctxt "DuplicateResult"
-msgid "Déjà coché : dans chaque groupe, on garde la copie qui a d'autres noms, sinon celle hors des Téléchargements et du Bureau, sinon la plus ancienne, sinon le chemin le plus court. Hors de vos dossiers personnels, rien n'est coché."
-msgstr "Already checked: in each group, the copy with other names is kept, else the one outside Downloads and the Desktop, else the oldest, else the shortest path. Outside your personal folders, nothing is checked."
+msgid "Déjà coché : dans chaque groupe, on garde la copie hors des Téléchargements et du Bureau (sinon celle du Bureau), sinon celle qui a d'autres noms, sinon la plus ancienne, sinon le chemin le plus court. Hors de vos dossiers personnels, rien n'est coché."
+msgstr "Already checked: in each group, the copy outside Downloads and the Desktop is kept (else the one on the Desktop), else the one with other names, else the oldest, else the shortest path. Outside your personal folders, nothing is checked."
 
 msgctxt "DuplicateResult"
 msgid "Aucun dossier personnel connu : rien n'est coché d'avance."

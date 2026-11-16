@@ -119,7 +119,7 @@ global DuplicateWords {
             return @tr("Sans copie identique à sa place, celle-ci reste.");
         }
         if kept.why == ReceiptWhy.no-sure-keeper {
-            return @tr("Les autres copies sont peut-être ce même fichier vu ailleurs : celle-ci reste.");
+            return @tr("Aucune autre copie n'est sûre de rester : dans une corbeille, à un autre compte, sur un disque, une clé ou une carte au format FAT, ou peut-être ce même fichier vu ailleurs. Celle-ci reste.");
         }
         if kept.why == ReceiptWhy.other-device {
             return @tr("Okapi ne supprime jamais sans corbeille.");
@@ -1111,7 +1111,7 @@ component DuplicateResult inherits VerticalLayout {
             Detail {
                 horizontal-stretch: 1;
                 vertical-alignment: center;
-                text: Duplicates.rule-said ? @tr("Déjà coché : dans chaque groupe, on garde la copie qui a d'autres noms, sinon celle hors des Téléchargements et du Bureau, sinon la plus ancienne, sinon le chemin le plus court. Hors de vos dossiers personnels, rien n'est coché.")
+                text: Duplicates.rule-said ? @tr("Déjà coché : dans chaque groupe, on garde la copie hors des Téléchargements et du Bureau (sinon celle du Bureau), sinon celle qui a d'autres noms, sinon la plus ancienne, sinon le chemin le plus court. Hors de vos dossiers personnels, rien n'est coché.")
                     : @tr("Aucun dossier personnel connu : rien n'est coché d'avance.");
                 wrap: word-wrap;
             }

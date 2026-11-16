@@ -105,35 +105,54 @@ pub(crate) struct Totals {
     pub groups: usize,
 }
 
-/// Whether the copy lies in Downloads or on the Desktop, where copies come
-/// to and are left.
-fn passing_through(copy: &Facts<'_>, folders: &[Folder]) -> bool {
-    copy.folder
-        .and_then(|rank| folders.get(rank))
-        .is_some_and(|folder| matches!(folder.kind, PersonalKind::Download | PersonalKind::Desktop))
+/// Where a copy lies, from the place the user chose most surely to the one
+/// copies come to and are left: Downloads last, where applications write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Place {
+    Settled,
+    Desktop,
+    Downloads,
 }
 
-/// The copy the rule keeps among `copies`, and why: one with other names,
-/// else one outside Downloads and the Desktop, else the oldest, else the one
-/// of the shortest path, each step among those the previous one left; the
-/// reason is the step that left one alone, none when only the order of the
-/// paths did. `None` without copies.
+fn place(copy: &Facts<'_>, folders: &[Folder]) -> Place {
+    match copy
+        .folder
+        .and_then(|rank| folders.get(rank))
+        .map(|folder| folder.kind)
+    {
+        Some(PersonalKind::Download) => Place::Downloads,
+        Some(PersonalKind::Desktop) => Place::Desktop,
+        // A kind to come is placed here by a decision, never by default.
+        Some(
+            PersonalKind::Documents
+            | PersonalKind::Pictures
+            | PersonalKind::Music
+            | PersonalKind::Videos,
+        )
+        | None => Place::Settled,
+    }
+}
+
+/// The copy the rule keeps among `copies`, and why: one outside Downloads
+/// and the Desktop (else one on the Desktop rather than in Downloads), else
+/// one with other names, else the oldest, else the one of the shortest
+/// path, each step among those the previous one left; the reason is the
+/// step that left one alone, none when only the order of the paths did.
+/// `None` without copies. Where a copy lies comes before its names and its
+/// date: an application that sees only Downloads may give its copy there a
+/// second name or an older date, and never makes a copy outside it go.
 pub(crate) fn keeper(copies: &[Facts<'_>], folders: &[Folder]) -> Option<(usize, Option<Reason>)> {
     let mut left: Vec<usize> = (0..copies.len()).collect();
     if left.len() < 2 {
         return left.first().map(|&alone| (alone, None));
     }
-    let other_names = left
+    let best = left
         .iter()
-        .copied()
-        .filter(|&index| !copies[index].frees)
-        .collect();
-    if narrowed(&mut left, other_names) {
-        return Some((left[0], Some(Reason::OtherNames)));
-    }
+        .map(|&index| place(&copies[index], folders))
+        .min();
     let (kept, aside): (Vec<usize>, Vec<usize>) = left
         .iter()
-        .partition(|&&index| !passing_through(&copies[index], folders));
+        .partition(|&&index| Some(place(&copies[index], folders)) == best);
     let mut ranks: Vec<usize> = aside
         .iter()
         .filter_map(|&index| copies[index].folder)
@@ -142,6 +161,14 @@ pub(crate) fn keeper(copies: &[Facts<'_>], folders: &[Folder]) -> Option<(usize,
     ranks.dedup();
     if narrowed(&mut left, kept) {
         return Some((left[0], Some(Reason::Outside(ranks))));
+    }
+    let other_names = left
+        .iter()
+        .copied()
+        .filter(|&index| !copies[index].frees)
+        .collect();
+    if narrowed(&mut left, other_names) {
+        return Some((left[0], Some(Reason::OtherNames)));
     }
     let oldest = left.iter().map(|&index| copies[index].modified).min();
     let oldest = left
@@ -444,13 +471,62 @@ mod tests {
     }
 
     #[test]
-    fn a_copy_of_other_names_is_kept_before_an_older_one_outside_downloads() {
+    fn a_copy_outside_downloads_is_kept_before_one_of_other_names_in_them() {
+        let folders = folders();
+        // An application that sees only Downloads gave its copy a second
+        // name there: the user's copy stays, nothing is checked.
+        let copies = [
+            copy("/home/ana/Documents/contrat.pdf", 1),
+            linked("/home/ana/Téléchargements/contrat.pdf", 1),
+        ];
+        assert_eq!(
+            kept(&copies),
+            Some((0, Some(Reason::Outside(vec![DOWNLOAD]))))
+        );
+        let chosen = preselected(&facts(&copies, &folders), &folders);
+        assert_eq!(checked(&chosen), [false, false]);
+        // Among the copies outside them, other names still come first.
         let copies = [
             copy("/home/ana/Documents/a.mp4", 1),
-            linked("/home/ana/Téléchargements/a.mp4", 9),
-            copy("/home/ana/Images/long/way/a.mp4", 5),
+            linked("/home/ana/Images/long/way/a.mp4", 9),
+            copy("/home/ana/Téléchargements/a.mp4", 5),
         ];
         assert_eq!(kept(&copies), Some((1, Some(Reason::OtherNames))));
+        let chosen = preselected(&facts(&copies, &folders), &folders);
+        assert_eq!(checked(&chosen), [true, false, true]);
+    }
+
+    #[test]
+    fn a_copy_on_the_desktop_is_kept_before_one_in_downloads_however_named_or_dated() {
+        let folders = folders();
+        let linked_there = [
+            copy("/home/ana/Bureau/contrat.pdf", 5),
+            linked("/home/ana/Téléchargements/contrat.pdf", 5),
+        ];
+        assert_eq!(
+            kept(&linked_there),
+            Some((0, Some(Reason::Outside(vec![DOWNLOAD]))))
+        );
+        let older_there = [
+            copy("/home/ana/Bureau/contrat.pdf", 5),
+            copy("/home/ana/Téléchargements/contrat.pdf", 1),
+        ];
+        assert_eq!(
+            kept(&older_there),
+            Some((0, Some(Reason::Outside(vec![DOWNLOAD]))))
+        );
+        let chosen = preselected(&facts(&older_there, &folders), &folders);
+        assert_eq!(checked(&chosen), [false, true]);
+        // Kept outside both: the reason names both.
+        let three = [
+            copy("/home/ana/Téléchargements/a.pdf", 1),
+            copy("/home/ana/Documents/a.pdf", 9),
+            copy("/home/ana/Bureau/a.pdf", 2),
+        ];
+        assert_eq!(
+            kept(&three),
+            Some((1, Some(Reason::Outside(vec![DOWNLOAD, DESKTOP]))))
+        );
     }
 
     #[test]
@@ -694,7 +770,7 @@ mod tests {
         let folders = folders();
         let all_passing = [
             copy("/home/ana/Téléchargements/b/a.zip", 4),
-            copy("/home/ana/Bureau/a.zip", 2),
+            copy("/home/ana/Téléchargements/a.zip", 2),
         ];
         let facts_passing = facts(&all_passing, &folders);
         assert_eq!(
@@ -719,7 +795,12 @@ mod tests {
     #[test]
     fn one_copy_of_every_group_always_stays_unchecked() {
         let folders = folders();
-        let places = [None, Some("Documents"), Some("Téléchargements")];
+        let places = [
+            None,
+            Some("Documents"),
+            Some("Bureau"),
+            Some("Téléchargements"),
+        ];
         let mut kinds = Vec::new();
         for frees in [true, false] {
             for trashable in [true, false] {
@@ -759,6 +840,21 @@ mod tests {
             let facts = facts(copies, &folders);
             let mut chosen = preselected(&facts, &folders);
             assert!(some_left(&chosen));
+            // No copy is checked beforehand for a keeper in a place less
+            // surely chosen (Downloads, an application's reach).
+            let kept_places: Vec<Place> = facts
+                .iter()
+                .zip(&chosen)
+                .filter(|(copy, choice)| copy.folder.is_some() && !choice.is_checked())
+                .map(|(copy, _)| place(copy, &folders))
+                .collect();
+            for (copy, choice) in facts.iter().zip(&chosen) {
+                let here = place(copy, &folders);
+                assert!(
+                    !choice.is_checked() || kept_places.iter().any(|kept| *kept <= here),
+                    "a copy checked for a keeper in a worse place"
+                );
+            }
             for quick in [
                 Quick::Oldest,
                 Quick::Newest,

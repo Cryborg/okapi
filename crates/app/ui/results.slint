@@ -118,7 +118,8 @@ component ResultLine inherits VerticalLayout {
     // Where the focused line sits, for the list to bring it into view.
     callback focused(length, length);
 
-    // A group left to the user has no badge: its note, a warning, says why.
+    // A group left to the user has no badge: its note says why (a warning
+    // for a cache reset).
     property <string> badge-text: line.badge == ResultBadge.preselected ? @tr("Présélectionné")
         : @tr("Administrateur");
     property <bool> is-group: line.kind == RowKind.group;
@@ -130,6 +131,8 @@ component ResultLine inherits VerticalLayout {
         ? @tr("Le prochain démarrage sera plus lent, le temps de recréer ce cache.")
         : line.note == RowNote.operation
         ? @tr("Opération du système : à cocher vous-même.")
+        : line.note == RowNote.yours
+        ? @tr("Votre dossier : à cocher vous-même à chaque nettoyage.")
         : line.note == RowNote.rights-obtained
         ? @tr("Droits obtenus : à cocher vous-même.")
         : line.note == RowNote.to-choose
@@ -291,10 +294,15 @@ component ResultLine inherits VerticalLayout {
                     padding-left: Theme.spacing-xs + Theme.checkbox + Theme.spacing-m;
                     VerticalLayout {
                         spacing: Theme.spacing-xxs;
-                        if line.badge == ResultBadge.to-choose: IconNote {
+                        if line.badge == ResultBadge.to-choose && line.note != RowNote.yours: IconNote {
                             text: root.note;
                             icon: @image-url("../assets/icons/triangle-alert.svg");
                             tone: Theme.warning;
+                        }
+                        if line.note == RowNote.yours: IconNote {
+                            text: root.note;
+                            icon: @image-url("../assets/icons/folder.svg");
+                            tone: Theme.text-2;
                         }
                         if line.badge == ResultBadge.admin: Detail {
                             text: root.note;
@@ -372,6 +380,7 @@ component NoteLine inherits HorizontalLayout {
             : note.kind == IssueKind.unsafe-root ? @tr("Dossier qui n'est pas ce que la règle attend, laissé de côté : {}", note.path)
             : note.kind == IssueKind.protected-root ? @tr("Dossier qui contient un dossier protégé, laissé de côté : {}", note.path)
             : note.kind == IssueKind.excluded ? @tr("Dossier exclu par vos réglages : {}", note.path)
+            : note.kind == IssueKind.custom-folder-refused ? @tr("Dossier à nettoyer refusé, Réglages dit pourquoi : {}", note.path)
             : note.kind == IssueKind.depth-limit ? @tr("Profondeur maximale atteinte, la suite n'est pas comptée : {}", note.path)
             : note.kind == IssueKind.entries-limit ? @tr("Trop d'éléments parcourus, la suite n'est pas comptée : {}", note.path)
             : note.kind == IssueKind.age-beyond-clock ? @tr("Une règle demande un âge qui remonte avant l'horloge : elle ne propose rien.")

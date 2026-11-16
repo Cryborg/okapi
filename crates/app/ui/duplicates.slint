@@ -119,7 +119,7 @@ global DuplicateWords {
             return @tr("Sans copie identique à sa place, celle-ci reste.");
         }
         if kept.why == ReceiptWhy.no-sure-keeper {
-            return @tr("Aucune autre copie n'est sûre de rester : dans une corbeille, à un autre compte, sur un disque, une clé ou une carte au format FAT, ou peut-être ce même fichier vu ailleurs. Celle-ci reste.");
+            return @tr("Aucune autre copie n'est sûre de rester : dans une corbeille, à un autre compte, sur un disque, une clé ou une carte au format FAT ou exFAT, ou peut-être ce même fichier vu ailleurs. Celle-ci reste.");
         }
         if kept.why == ReceiptWhy.other-device {
             return @tr("Okapi ne supprime jamais sans corbeille.");

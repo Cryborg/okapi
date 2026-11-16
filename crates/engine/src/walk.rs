@@ -33,6 +33,9 @@ pub(crate) struct Readers {
     /// Whether the entry at a path, its link never followed, is the root of
     /// a mount; `Ok(None)` when the system cannot tell (a test cannot mount).
     pub(crate) mount_root: fn(&Path) -> io::Result<Option<bool>>,
+    /// The type of the filesystem a real path lies on, none when no mount
+    /// holds it (a test cannot mount a FAT volume).
+    pub(crate) filesystem: fn(&Path) -> io::Result<Option<String>>,
 }
 
 impl Readers {
@@ -42,6 +45,7 @@ impl Readers {
         ownership: okapi_platform::ownership,
         entry_owner: status_owner,
         mount_root: okapi_platform::mount_root,
+        filesystem: okapi_platform::filesystem_of,
     };
 }
 
@@ -106,6 +110,10 @@ pub(crate) struct WalkContext<'a> {
     /// counted, is held back: removing one of its names frees nothing
     /// (`keepHardLinked`, snapd's cache).
     pub(crate) keep_hard_linked: bool,
+    /// A directory changed after the cutoff is held back whole, never
+    /// offered entry by entry: what was just moved there keeps the dates it
+    /// had elsewhere (a folder the user chose, where nothing is a cache).
+    pub(crate) recent_holds_below: bool,
 }
 
 /// Why an entry is held back, which keeps its parent directory open.
@@ -213,8 +221,8 @@ impl WalkContext<'_> {
     /// `device`. `own_root` is the scan root the entry itself is, which the
     /// check against the other roots skips (a single file target). A
     /// directory's own date is judged by the caller: the scan after its
-    /// contents (it may still offer them one by one), the cleaning before it
-    /// touches them.
+    /// contents (it may still offer them one by one; under a folder the user
+    /// chose, before), the cleaning before it touches them.
     pub(crate) fn by_status(
         &self,
         observed: &Observed,
@@ -613,6 +621,11 @@ impl Walker<'_, '_, '_> {
         // Cancelled while this entry was read: not even opened.
         if self.progress.watch.is_cancelled() {
             self.cancelled = true;
+            return Resolved::held_back();
+        }
+        if self.context.recent_holds_below && modified > self.context.cutoff {
+            tracing::trace!(path = ?path, "directory recent, held back whole");
+            self.walk.stats.recent += 1;
             return Resolved::held_back();
         }
         let (entries, ownership) = match self.open_directory(path, identity) {

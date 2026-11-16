@@ -8,9 +8,9 @@ use okapi_rules::{
     BrowserKind, CleanTarget, Label, RelativePath, RuleId, TemplateError, TemplatePath, Variable,
 };
 
+use crate::custom::{CustomFolder, CustomFolderRefusal};
 use crate::maintenance::MaintenanceFound;
 use crate::preconditions::Stop;
-
 use crate::walk::{Found, HoldBack};
 
 /// Whether an offered entry is a file or a whole directory.
@@ -62,6 +62,8 @@ pub enum Origin {
         browser: BrowserKind,
         directory: RelativePath,
     },
+    /// A folder the user chose to have emptied.
+    Custom { folder: CustomFolder },
 }
 
 impl Origin {
@@ -77,7 +79,8 @@ impl Origin {
     /// Its name in what the user's choices keep, from the rules' own texts
     /// (never a translation nor an index): its kind, then what tells it
     /// apart. An application's identifier is unique across its files, so a
-    /// rule moved from one to another keeps its key.
+    /// rule moved from one to another keeps its key. A folder the user chose
+    /// is named by its path as written.
     #[must_use]
     pub fn key(&self) -> OriginKey {
         match self {
@@ -101,6 +104,10 @@ impl Origin {
                 browser.key().to_owned(),
                 directory.to_string(),
             ],
+            Self::Custom { folder } => vec![
+                "custom".to_owned(),
+                folder.path().to_string_lossy().into_owned(),
+            ],
         }
     }
 
@@ -111,6 +118,7 @@ impl Origin {
             Self::SystemTarget { .. } | Self::SystemFile { .. } => Category::System,
             Self::App { file, .. } => Category::of_file(*file),
             Self::Browser { .. } => Category::Browsers,
+            Self::Custom { .. } => Category::Custom,
         }
     }
 }
@@ -129,15 +137,18 @@ pub enum Category {
     Gaming,
     /// `gpu-cache.json`.
     Gpu,
+    /// The folders the user chose, after the rules.
+    Custom,
 }
 
 impl Category {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::System,
         Self::Browsers,
         Self::Apps,
         Self::Gaming,
         Self::Gpu,
+        Self::Custom,
     ];
 
     /// The category of the rules of `file`.
@@ -171,6 +182,7 @@ impl Category {
             Self::Apps => "apps",
             Self::Gaming => "gaming",
             Self::Gpu => "gpu",
+            Self::Custom => "custom",
         }
     }
 }
@@ -238,6 +250,12 @@ pub enum ScanIssue {
         root: PathBuf,
         limit: Limit,
     },
+    /// A folder the user chose is not scanned: why, even when it is only
+    /// absent (unlike a rule's root): the user named it.
+    CustomFolderRefused {
+        origin: Origin,
+        refusal: CustomFolderRefusal,
+    },
 }
 
 impl ScanIssue {
@@ -261,6 +279,7 @@ impl ScanIssue {
             Self::ProtectedRoot { .. } => "protectedRoot",
             Self::Excluded { .. } => "excluded",
             Self::LimitReached { .. } => "limitReached",
+            Self::CustomFolderRefused { .. } => "customFolderRefused",
         }
     }
 
@@ -271,7 +290,8 @@ impl ScanIssue {
             Self::Stopped(_) => &[],
             Self::AgeBeyondClock { origin }
             | Self::Unsupported { origin }
-            | Self::Unresolvable { origin, .. } => std::slice::from_ref(origin),
+            | Self::Unresolvable { origin, .. }
+            | Self::CustomFolderRefused { origin, .. } => std::slice::from_ref(origin),
             Self::UnreadableRoot { origins, .. }
             | Self::UnsafeRoot { origins, .. }
             | Self::ProtectedRoot { origins, .. }
@@ -524,6 +544,23 @@ impl ScanGroup {
         }
     }
 
+    /// Whether one of its rules is a folder the user chose.
+    #[must_use]
+    pub fn holds_a_custom_folder(&self) -> bool {
+        self.attributes.holds_a_custom_folder()
+    }
+
+    /// The folder the user chose whose contents the group is, when its label
+    /// is that folder's: that of its first rule, which gives the label. Its
+    /// label is then a path, never translated.
+    #[must_use]
+    pub fn custom_folder(&self) -> Option<&CustomFolder> {
+        match self.attributes.origins.first() {
+            Some(Origin::Custom { folder }) => Some(folder),
+            _ => None,
+        }
+    }
+
     /// The locks of the browsers whose caches the group holds.
     #[must_use]
     pub const fn locks(&self) -> &BTreeSet<BrowserLock> {
@@ -749,6 +786,13 @@ pub(crate) struct GroupAttributes {
 }
 
 impl GroupAttributes {
+    /// Whether one of its rules is a folder the user chose.
+    pub(crate) fn holds_a_custom_folder(&self) -> bool {
+        self.origins
+            .iter()
+            .any(|origin| matches!(origin, Origin::Custom { .. }))
+    }
+
     /// Merges the rules of another group sharing a root: the group is
     /// unselected and a cache reset if either rule is, and keeps the files
     /// with other names if either rule does.
@@ -948,7 +992,10 @@ mod tests {
             .iter()
             .map(|category| category.name())
             .collect();
-        assert_eq!(names, ["system", "browsers", "apps", "gaming", "gpu"]);
+        assert_eq!(
+            names,
+            ["system", "browsers", "apps", "gaming", "gpu", "custom"]
+        );
     }
 
     #[test]
@@ -1023,6 +1070,7 @@ mod tests {
             (failed, "failed"),
             (KeepReason::Cancelled, "cancelled"),
             (KeepReason::BrowserOpen, "browser_open"),
+            (KeepReason::NoLongerChosen, "no_longer_chosen"),
         ];
         // Every reason is listed: one added does not compile here, then
         // fails until it is listed, and read back by `from_key`.
@@ -1036,10 +1084,11 @@ mod tests {
             KeepReason::Failed { .. } => 6,
             KeepReason::Cancelled => 7,
             KeepReason::BrowserOpen => 8,
+            KeepReason::NoLongerChosen => 9,
         };
         assert_eq!(
             reasons.map(|(reason, _)| place(reason)),
-            [0, 1, 2, 3, 4, 5, 6, 7, 8]
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
         );
         for (reason, name) in reasons {
             assert_eq!(reason.key(), name);

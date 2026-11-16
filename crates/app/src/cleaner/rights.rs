@@ -1029,6 +1029,7 @@ mod tests {
             variables: okapi_rules::TemplateVariables::new(),
             min_age_minutes: minutes,
             exclusions: exclusions.iter().map(PathBuf::from).collect(),
+            custom_folders: Vec::new(),
             deletion_log: false,
             state_directory: None,
         }

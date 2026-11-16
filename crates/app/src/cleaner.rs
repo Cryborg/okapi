@@ -14,9 +14,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 use okapi_engine::{
-    Cancel, Category, CleanReceipt, DEFAULT_MIN_AGE, DEFAULT_MIN_AGE_MINUTES, DefaultChoice,
-    Exclusions, Limit, Origin, Progress, ScanIssue, ScanOptions, ScanReport, Stop, Watch,
-    clean_watched, scan_watched, settings_min_age,
+    Cancel, Category, CleanReceipt, CustomFolder, DEFAULT_MIN_AGE, DEFAULT_MIN_AGE_MINUTES,
+    DefaultChoice, Exclusions, Limit, Origin, Progress, ScanIssue, ScanOptions, ScanReport, Stop,
+    Watch, clean_watched, scan_watched, settings_min_age,
 };
 use okapi_rules::{CleanupAction, Language, Os, RuleSet, TemplateVariables};
 use okapi_store::{LastAnalysis, Settings};
@@ -53,6 +53,8 @@ pub struct Inputs {
     pub variables: TemplateVariables,
     pub min_age_minutes: Option<u64>,
     pub exclusions: Vec<PathBuf>,
+    /// The folders the user chose to have emptied, as written.
+    pub custom_folders: Vec<PathBuf>,
     /// Every entry of a cleaning is kept in the history.
     pub deletion_log: bool,
     /// Where the history lives; none when no state directory is known.
@@ -68,6 +70,8 @@ pub enum Problem {
     Settings,
     MinAge,
     Exclusion,
+    /// A folder to clean of the settings is not written as one.
+    CustomFolder,
     /// The deletion log asked for cannot be kept: nothing is removed.
     History,
     /// A task could not start: its thread, or what it would take.
@@ -197,6 +201,11 @@ fn read_system() -> Result<Inputs, Problem> {
         variables,
         min_age_minutes: settings.min_age_minutes,
         exclusions: settings.exclusions.into_iter().map(PathBuf::from).collect(),
+        custom_folders: settings
+            .custom_folders
+            .into_iter()
+            .map(PathBuf::from)
+            .collect(),
         deletion_log: settings.deletion_log,
         state_directory: okapi_platform::state_directory(),
     })
@@ -214,6 +223,29 @@ fn min_age(inputs: &Inputs, now: SystemTime) -> Result<Duration, Problem> {
     }
 }
 
+/// The folders to clean the settings `inputs` name, as the engine takes
+/// them. It does no I/O, so the window may check it.
+fn custom_folders(inputs: &Inputs) -> Result<Vec<CustomFolder>, Problem> {
+    inputs
+        .custom_folders
+        .iter()
+        .map(|folder| {
+            CustomFolder::new(folder.clone()).map_err(|error| {
+                tracing::warn!(%error, "settings folder to clean refused");
+                Problem::CustomFolder
+            })
+        })
+        .collect()
+}
+
+/// What the window checks of the settings `inputs` at `now` before an
+/// analysis: what needs no I/O.
+fn settings_problem(inputs: &Inputs, now: SystemTime) -> Option<Problem> {
+    min_age(inputs, now)
+        .err()
+        .or_else(|| custom_folders(inputs).err())
+}
+
 /// The options of an analysis started at `now` over `chosen`: the
 /// exclusions resolved at this instant, as each scan needs. Resolving reads
 /// where each one really lies, which waits on a mount that stopped
@@ -224,6 +256,7 @@ fn options(
     chosen: BTreeSet<Category>,
 ) -> Result<ScanOptions, Problem> {
     let min_age = min_age(inputs, now)?;
+    let custom_folders = custom_folders(inputs)?;
     tracing::debug!(exclusions = inputs.exclusions.len(), "resolving exclusions");
     let started = Instant::now();
     let exclusions = Exclusions::new(inputs.exclusions.iter().cloned()).map_err(|error| {
@@ -231,7 +264,9 @@ fn options(
         Problem::Exclusion
     })?;
     tracing::info!(elapsed = ?started.elapsed(), "exclusions resolved");
-    Ok(ScanOptions::new(now, min_age, exclusions).with_categories(chosen))
+    Ok(ScanOptions::new(now, min_age, exclusions)
+        .with_categories(chosen)
+        .with_custom_folders(custom_folders))
 }
 
 /// One category offered before the analysis.
@@ -243,16 +278,19 @@ struct Choice {
 }
 
 /// The categories offered, in the order of the rules, and which are checked.
+/// The user's own folders are offered only when the settings name some.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Choices(Vec<Choice>);
 
 impl Choices {
-    /// Checked as the rules say (invariant 5); without rules, none is.
+    /// Checked as the rules say (invariant 5); without rules, none is. The
+    /// user's folders are not offered until [`Self::offer_custom_folders`].
     #[must_use]
     pub fn of(rules: Option<&RuleSet>) -> Self {
         Self(
             Category::ALL
                 .iter()
+                .filter(|&&category| category != Category::Custom)
                 .map(|&category| {
                     let to_choose = rules.is_none_or(|rules| {
                         category.default_choice(rules) == DefaultChoice::ToChoose
@@ -265,6 +303,30 @@ impl Choices {
                 })
                 .collect(),
         )
+    }
+
+    /// Offers the user's folders when the settings name some (`any`),
+    /// unchecked as they come (never chosen beforehand); withdraws them
+    /// otherwise. Last, as in the rules' order: the other indices hold.
+    pub fn offer_custom_folders(&mut self, any: bool) {
+        let offered = self
+            .0
+            .last()
+            .is_some_and(|choice| choice.category == Category::Custom);
+        if any && !offered {
+            self.0.push(Choice {
+                category: Category::Custom,
+                checked: false,
+                // Nothing in it is checked beforehand: no cost to warn of.
+                to_choose: false,
+            });
+        } else if !any && offered {
+            let withdrawn = self.0.pop();
+            tracing::debug!(
+                checked = withdrawn.is_some_and(|choice| choice.checked),
+                "no folder to clean: their card withdrawn"
+            );
+        }
     }
 
     pub fn toggle(&mut self, index: usize) {
@@ -581,6 +643,7 @@ const fn kind(category: Category) -> ui::CategoryKind {
         Category::Apps => ui::CategoryKind::Apps,
         Category::Gaming => ui::CategoryKind::Gaming,
         Category::Gpu => ui::CategoryKind::Gpu,
+        Category::Custom => ui::CategoryKind::Custom,
     }
 }
 
@@ -592,6 +655,7 @@ const fn problem(problem: Option<Problem>) -> ui::SetupProblem {
         Some(Problem::Settings) => ui::SetupProblem::Settings,
         Some(Problem::MinAge) => ui::SetupProblem::MinAge,
         Some(Problem::Exclusion) => ui::SetupProblem::Exclusion,
+        Some(Problem::CustomFolder) => ui::SetupProblem::CustomFolder,
         Some(Problem::History) => ui::SetupProblem::History,
         Some(Problem::Start) => ui::SetupProblem::Start,
         Some(Problem::RightsChanged) => ui::SetupProblem::RightsChanged,
@@ -737,6 +801,8 @@ fn badge_of(group: &GroupFacts) -> ui::ResultBadge {
 fn note_of(group: &GroupFacts) -> ui::RowNote {
     match badge_of(group) {
         ui::ResultBadge::Preselected => ui::RowNote::None,
+        // Its own folder, whatever a rule it joins says.
+        ui::ResultBadge::ToChoose if group.custom => ui::RowNote::Yours,
         ui::ResultBadge::ToChoose if group.preselection == Preselection::CacheReset => {
             ui::RowNote::CacheReset
         }
@@ -767,6 +833,14 @@ fn note_shown(issue: &ScanIssue) -> Option<ui::IssueShown> {
         ScanIssue::UnsafeRoot { path: at, .. } => (ui::IssueKind::UnsafeRoot, path(at)),
         ScanIssue::ProtectedRoot { path: at, .. } => (ui::IssueKind::ProtectedRoot, path(at)),
         ScanIssue::Excluded { path: at, .. } => (ui::IssueKind::Excluded, path(at)),
+        // Its path as written in the settings, where it is said why.
+        ScanIssue::CustomFolderRefused { origin, .. } => {
+            let Origin::Custom { folder } = origin else {
+                tracing::error!(?origin, "a custom folder refused names another rule");
+                return None;
+            };
+            (ui::IssueKind::CustomFolderRefused, path(folder.path()))
+        }
         ScanIssue::LimitReached { root, limit, .. } => (
             match limit {
                 Limit::Depth => ui::IssueKind::DepthLimit,
@@ -1154,7 +1228,7 @@ impl CleanerScreen {
             inputs
                 .as_ref()
                 .ok()
-                .and_then(|inputs| min_age(inputs, SystemTime::now()).err())
+                .and_then(|inputs| settings_problem(inputs, SystemTime::now()))
         });
         // A problem of the settings read now comes first.
         let found = found.or(self.still_refused(&inputs).then_some(Problem::Exclusion));
@@ -1167,13 +1241,21 @@ impl CleanerScreen {
                         inputs.exclusions.len(),
                     )
                 });
-        tracing::debug!(problem = ?found, minutes, exclusions, "cleaner settings read");
+        let custom_folders = inputs
+            .as_ref()
+            .map_or(0, |inputs| inputs.custom_folders.len());
+        tracing::debug!(problem = ?found, minutes, exclusions, custom_folders, "cleaner settings read");
         self.with_window(|window, _| {
             let cleaner = window.global::<ui::Cleaner>();
             cleaner.set_problem(problem(found));
             cleaner.set_min_age_minutes(shown(minutes));
             cleaner.set_exclusion_count(shown(exclusions));
         });
+        self.0
+            .borrow_mut()
+            .choices
+            .offer_custom_folders(custom_folders > 0);
+        self.show_choices();
     }
 
     fn toggle(&self, index: i32) {
@@ -1193,11 +1275,18 @@ impl CleanerScreen {
         let state = self.0.borrow();
         let rules = state.rules.as_ref().ok_or(Problem::Rules)?;
         let inputs = (state.seams.read)()?;
-        // Only the age is checked here: an exclusion is met, and said, on
-        // the task's thread.
-        min_age(&inputs, SystemTime::now())?;
+        // Only what needs no I/O is checked here: an exclusion is met, and
+        // said, on the task's thread.
+        if let Some(problem) = settings_problem(&inputs, SystemTime::now()) {
+            return Err(problem);
+        }
         let by_default = Choices::of(Some(rules)).chosen();
-        let target = if by_default.is_subset(chosen) {
+        let target = if chosen.contains(&Category::Custom) {
+            // What the user's folders hold, and the room they take from the
+            // rules' roots above them, would make it no estimate to compare.
+            tracing::info!("analysis of the user's folders: its summary is not kept");
+            None
+        } else if by_default.is_subset(chosen) {
             if inputs.state_directory.is_none() {
                 tracing::warn!("no state directory: the summary of the analysis is not written");
             }
@@ -1583,7 +1672,14 @@ impl CleanerScreen {
         let groups: Vec<GroupFacts> = report
             .groups()
             .iter()
-            .map(|group| GroupFacts::of(group, language, &state.helper_targets))
+            .map(|group| {
+                GroupFacts::of(
+                    group,
+                    language,
+                    &state.helper_targets,
+                    state.seams.disk.home.as_deref(),
+                )
+            })
             .chain(lines)
             .collect();
         let notes: Vec<_> = report
@@ -1894,6 +1990,7 @@ pub mod tests {
             targets: Some(BTreeSet::from(["/var/crash".to_owned()])),
             admin: AdminState::Locked,
             checked_by_default: false,
+            custom: false,
             keys: BTreeSet::new(),
             seen: Seen::Counted {
                 entries: 1,
@@ -2016,6 +2113,7 @@ pub mod tests {
             variables: TemplateVariables::new(),
             min_age_minutes: None,
             exclusions: Vec::new(),
+            custom_folders: Vec::new(),
             deletion_log: false,
             state_directory: None,
         }
@@ -2582,6 +2680,7 @@ pub mod tests {
                 variables: self.variables(),
                 min_age_minutes: Some(0),
                 exclusions: Self::excluded(),
+                custom_folders: Vec::new(),
                 deletion_log: true,
                 state_directory: state_directory.map(Path::to_path_buf),
             }
@@ -2910,10 +3009,11 @@ pub mod tests {
         button(&window, "Analyser").invoke_accessible_default_action();
         let options = scan.started.recv().unwrap();
         assert_eq!(reads.get(), before + 1, "the settings read at the click");
-        let all_but_gpu = Category::ALL
+        // Neither a reset nor the user's folders, none of which is named.
+        let by_default = Category::ALL
             .into_iter()
-            .filter(|category| *category != Category::Gpu);
-        assert_eq!(*options.categories(), all_but_gpu.collect());
+            .filter(|category| ![Category::Gpu, Category::Custom].contains(category));
+        assert_eq!(*options.categories(), by_default.collect());
         assert_eq!(step(&window), ui::CleanerStep::Planning);
         assert_eq!(
             rows(&window),
@@ -3559,5 +3659,107 @@ pub mod tests {
         assert!(live, "the categories done are said as they change");
         scan.go.send(()).unwrap();
         watch_until(&window, |window| step(window) == ui::CleanerStep::Outcome);
+    }
+
+    #[test]
+    fn the_user_s_folders_are_offered_unchecked_only_when_the_settings_name_some() {
+        let rules = embedded();
+        let mut choices = Choices::of(Some(&rules));
+        let by_default = choices.chosen();
+        assert_eq!(choices.0.len(), Category::ALL.len() - 1, "none named");
+        choices.offer_custom_folders(true);
+        choices.offer_custom_folders(true);
+        assert_eq!(choices.0.len(), Category::ALL.len(), "offered once");
+        assert_eq!(choices.chosen(), by_default, "never chosen beforehand");
+        choices.toggle(Category::ALL.len() - 1);
+        assert!(choices.chosen().contains(&Category::Custom));
+        choices.offer_custom_folders(false);
+        assert_eq!(choices.chosen(), by_default, "withdrawn, not chosen");
+    }
+
+    #[test]
+    fn a_folder_to_clean_not_written_absolute_stops_everything() {
+        let inputs = |folders: &[&str]| Inputs {
+            custom_folders: folders.iter().map(PathBuf::from).collect(),
+            ..defaults()
+        };
+        let now = SystemTime::now();
+        assert_eq!(settings_problem(&inputs(&["/data/build"]), now), None);
+        for written in ["relatif", "/data/../etc", ""] {
+            let refused = inputs(&["/data/build", written]);
+            assert_eq!(
+                settings_problem(&refused, now),
+                Some(Problem::CustomFolder),
+                "{written}"
+            );
+            assert_eq!(
+                options(&refused, now, BTreeSet::new()),
+                Err(Problem::CustomFolder)
+            );
+        }
+        let (window, screen) = on_cleaner(Seams {
+            read: Rc::new(move || Ok(inputs(&["relatif"]))),
+            ..seams_never_scanning()
+        });
+        screen.refresh();
+        let cleaner = window.global::<ui::Cleaner>();
+        assert_eq!(cleaner.get_problem(), ui::SetupProblem::CustomFolder);
+        assert!(!cleaner.get_analysis_allowed());
+        assert_eq!(
+            cleaner.get_choices().row_count(),
+            Category::ALL.len(),
+            "its card offered, to be seen with the problem"
+        );
+    }
+
+    #[test]
+    fn a_folder_to_clean_shows_by_its_path_unchecked_and_outside_the_estimate() {
+        let sandbox = Sandbox::new();
+        sandbox.file("work/build/old.o");
+        let build = sandbox.root.join("work/build");
+        settle_files();
+        let inputs = Inputs {
+            custom_folders: vec![build],
+            ..sandbox.inputs(Some(&sandbox.root.join("state")))
+        };
+        let never = seams_never_scanning();
+        let (window, screen) = on_cleaner(Seams {
+            read: Rc::new(move || Ok(inputs.clone())),
+            // `~` is the folder above it.
+            disk: crate::disk_usage::DiskSeams {
+                home: Some(sandbox.root.join("work")),
+                ..never.disk.clone()
+            },
+            ..never
+        });
+        screen.refresh();
+        let cleaner = window.global::<ui::Cleaner>();
+        let custom = Category::ALL.len() - 1;
+        assert_eq!(
+            cleaner
+                .get_choices()
+                .row_data(custom)
+                .map(|choice| choice.kind),
+            Some(ui::CategoryKind::Custom)
+        );
+        cleaner.invoke_toggle(i32::try_from(custom).unwrap());
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
+        let row = cleaner
+            .get_results()
+            .iter()
+            .find(|row| row.kind == ui::RowKind::Group && row.category == ui::CategoryKind::Custom)
+            .expect("the folder's group");
+        assert_eq!(row.label, "~/build", "its path, never translated");
+        assert_eq!(row.badge, ui::ResultBadge::ToChoose);
+        assert_eq!(row.note, ui::RowNote::Yours);
+        assert_eq!(
+            row.state,
+            ui::CheckState::Unchecked,
+            "nothing checked beforehand"
+        );
+        assert!(row.enabled, "the user's to check");
+        // No estimate kept from an analysis of them.
+        assert_eq!(summary(&sandbox), None);
     }
 }

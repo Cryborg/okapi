@@ -7,12 +7,13 @@
 //! another window): it is read again then, and that is said.
 //! What reads the settings elsewhere waits for the writes under way first
 //! (`wait_for_writes`), and is refused while one is stuck, or once after
-//! one failed: an exclusion just added is never missed by the next cleaning
-//! without a word.
+//! one failed: an exclusion just added, or a folder to clean just taken
+//! out, is never missed by the next cleaning without a word.
 //!
-//! Where an exclusion lies is read on a thread of its own
-//! (a mount that stopped answering would hold the window): waited for a
-//! little as it is added, in the background for the lines shown.
+//! Two lists of paths are edited alike: the exclusions and the folders to
+//! clean. Where a line of either lies is read on a thread of its own (a
+//! mount that stopped answering would hold the window): waited for a little
+//! as it is added, in the background for the lines shown.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -22,7 +23,9 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError};
 use std::time::{Duration, Instant};
 
-use okapi_engine::{DEFAULT_MIN_AGE_MINUTES, ExclusionError, Exclusions};
+use okapi_engine::{
+    CustomFolder, CustomFolderRefusal, DEFAULT_MIN_AGE_MINUTES, ExclusionError, Exclusions,
+};
 use okapi_rules::Language;
 use okapi_store::{Replaced, Settings, Theme, journal};
 use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
@@ -37,7 +40,7 @@ const SAVER_NAME: &str = "okapi-settings-save";
 /// The minimum ages offered, in minutes.
 const MIN_AGE_CHOICES: [u64; 4] = [30, 60, 120, 1440];
 /// The thread that reads where one exclusion lies.
-const EXAMINER_NAME: &str = "okapi-exclusion-read";
+const EXAMINER_NAME: &str = "okapi-path-read";
 /// How long an exclusion added is waited for: one whose place does not
 /// answer by then cannot be read.
 const EXAMINE_WAIT: Duration = Duration::from_secs(1);
@@ -48,10 +51,10 @@ const EXAMINE_EVERY: Duration = Duration::from_millis(100);
 /// are looked at every `EXAMINE_PATIENCE`.
 const EXAMINE_PATIENCE: Duration = Duration::from_secs(5);
 
-/// What an exclusion is, read where it lies; or why it is not added.
-pub type Examined = Result<ui::ExclusionKind, ui::EntryError>;
-/// Reads what an exclusion is, off the interface's thread: the engine and
-/// the disk, or a test's stand-in.
+/// What a line of a list is, read where it lies; or why it cannot be added.
+pub type Examined = Result<ui::PathKind, ui::EntryError>;
+/// Reads what a line of a list is, off the interface's thread: the engine
+/// and the disk, or a test's stand-in.
 pub type Examine = Arc<dyn Fn(&str) -> Examined + Send + Sync>;
 
 /// Why what reads the settings would miss the user's last change.
@@ -121,7 +124,10 @@ pub struct SettingsSeams {
     pub save: Save,
     pub choose_folder: ChooseFolder,
     pub desktop_theme: DesktopTheme,
+    /// What an exclusion is.
     pub examine: Examine,
+    /// What a folder to clean is.
+    pub examine_folder: Examine,
 }
 
 impl std::fmt::Debug for SettingsSeams {
@@ -146,6 +152,7 @@ impl SettingsSeams {
             choose_folder: Rc::new(portal::choose_folder),
             desktop_theme: Rc::new(portal::desktop_theme),
             examine: Arc::new(examine),
+            examine_folder: Arc::new(examine_folder),
         }
     }
 }
@@ -199,7 +206,7 @@ mod portal {
         let asked = async move {
             match portal::choose_folder(&title).await {
                 Ok(folder) => {
-                    tracing::info!(folder = %folder.display(), "folder chosen to exclude");
+                    tracing::info!(folder = %folder.display(), "folder chosen");
                     Chosen::Folder(folder)
                 }
                 Err(portal::Refusal::Cancelled) => {
@@ -263,7 +270,8 @@ struct State {
     /// None when it did not start, or is gone: nothing can be kept then.
     saver: Option<Saver<Change, Written>>,
     check: slint::Timer,
-    exclusions: Rc<VecModel<ui::ExclusionRow>>,
+    exclusions: ListState,
+    folders: ListState,
     /// The theme the interface shows: none while it follows the desktop,
     /// as it does from the start until a theme is forced.
     theme_shown: Option<Theme>,
@@ -272,13 +280,70 @@ struct State {
     untold: bool,
     /// Told once the writes under way are done, whatever they said.
     when_written: Option<Rc<dyn Fn()>>,
-    /// What each exclusion was last read to be: one not read yet shows as
-    /// being read.
-    kinds: HashMap<String, ui::ExclusionKind>,
+    /// Looks at the lines being read, of either list.
+    examine_check: slint::Timer,
+}
+
+/// What the screen holds of one list of paths, besides the settings.
+struct ListState {
+    rows: Rc<VecModel<ui::PathRow>>,
+    /// What each line was last read to be: one not read yet shows as being
+    /// read.
+    kinds: HashMap<String, ui::PathKind>,
     /// The lines being read, each on its thread: since when, and its answer.
     examining: HashMap<String, (Instant, Receiver<Examined>)>,
-    /// Looks at the lines being read.
-    examine_check: slint::Timer,
+}
+
+impl ListState {
+    fn new() -> Self {
+        Self {
+            rows: Rc::new(VecModel::default()),
+            kinds: HashMap::new(),
+            examining: HashMap::new(),
+        }
+    }
+}
+
+impl State {
+    fn list(&self, list: ui::PathList) -> &ListState {
+        match list {
+            ui::PathList::Exclusions => &self.exclusions,
+            ui::PathList::Folders => &self.folders,
+        }
+    }
+
+    fn list_mut(&mut self, list: ui::PathList) -> &mut ListState {
+        match list {
+            ui::PathList::Exclusions => &mut self.exclusions,
+            ui::PathList::Folders => &mut self.folders,
+        }
+    }
+
+    /// What reads a line of `list`.
+    fn examine(&self, list: ui::PathList) -> Examine {
+        Arc::clone(match list {
+            ui::PathList::Exclusions => &self.seams.examine,
+            ui::PathList::Folders => &self.seams.examine_folder,
+        })
+    }
+}
+
+/// The two lists, in the order the screen shows them.
+const LISTS: [ui::PathList; 2] = [ui::PathList::Exclusions, ui::PathList::Folders];
+
+/// The lines of `list` the settings hold, as written.
+fn entries(settings: &Settings, list: ui::PathList) -> &Vec<String> {
+    match list {
+        ui::PathList::Exclusions => &settings.exclusions,
+        ui::PathList::Folders => &settings.custom_folders,
+    }
+}
+
+fn entries_mut(settings: &mut Settings, list: ui::PathList) -> &mut Vec<String> {
+    match list {
+        ui::PathList::Exclusions => &mut settings.exclusions,
+        ui::PathList::Folders => &mut settings.custom_folders,
+    }
 }
 
 /// The settings screen.
@@ -322,9 +387,10 @@ impl SettingsScreen {
                 })
                 .ok()
         });
-        let exclusions = Rc::new(VecModel::default());
+        let (exclusions, folders) = (ListState::new(), ListState::new());
         let preferences = window.global::<ui::Preferences>();
-        preferences.set_exclusions(ModelRc::from(Rc::clone(&exclusions)));
+        preferences.set_exclusions(ModelRc::from(Rc::clone(&exclusions.rows)));
+        preferences.set_folders(ModelRc::from(Rc::clone(&folders.rows)));
         let options: Vec<SharedString> = MIN_AGE_CHOICES
             .iter()
             .map(|&minutes| preferences.invoke_age(count(minutes)))
@@ -352,11 +418,10 @@ impl SettingsScreen {
             saver,
             check: slint::Timer::default(),
             exclusions,
+            folders,
             theme_shown: None,
             untold: false,
             when_written: None,
-            kinds: HashMap::new(),
-            examining: HashMap::new(),
             examine_check: slint::Timer::default(),
         })));
         screen.bind(&preferences);
@@ -366,11 +431,11 @@ impl SettingsScreen {
 
     fn bind(&self, preferences: &ui::Preferences<'_>) {
         let screen = self.clone();
-        preferences.on_add(move |typed| screen.add(&typed));
+        preferences.on_add(move |list, typed| screen.add(list, &typed));
         let screen = self.clone();
-        preferences.on_remove(move |index| screen.remove(index));
+        preferences.on_remove(move |list, index| screen.remove(list, index));
         let screen = self.clone();
-        preferences.on_browse(move || screen.browse());
+        preferences.on_browse(move |list| screen.browse(list));
         let screen = self.clone();
         preferences.on_choose_min_age(move |index| {
             let Some(&minutes) = usize::try_from(index)
@@ -537,20 +602,25 @@ impl SettingsScreen {
             // A chooser that never answered no longer keeps "Parcourir" off.
             preferences.set_browsing(false);
         }
-        let entries = state.settings.exclusions.clone();
+        let lines = LISTS.map(|list| (list, entries(&state.settings, list).clone()));
         // As the file is read, only its lines are known or waited for: one
         // written again is read again.
-        state.kinds.retain(|entry, _| entries.contains(entry));
-        state.examining.retain(|entry, _| entries.contains(entry));
+        for (list, lines) in &lines {
+            let held = state.list_mut(*list);
+            held.kinds.retain(|entry, _| lines.contains(entry));
+            held.examining.retain(|entry, _| lines.contains(entry));
+        }
         state.show();
         drop(state);
         // What each line is, read again: answers come in first, then what is
         // not being read any more is.
         self.take_examined();
-        for entry in entries {
-            self.examine_line(entry);
+        for (list, lines) in lines {
+            for entry in lines {
+                self.examine_line(list, entry);
+            }
         }
-        if !self.0.borrow().examining.is_empty() {
+        if self.reads_lines() {
             self.watch_examined(EXAMINE_EVERY);
         }
         // Settings that cannot be read say nothing of the theme: the one
@@ -560,34 +630,38 @@ impl SettingsScreen {
         }
     }
 
-    /// Reads what the line `entry` is on a thread of its own, unless it is
-    /// being read already.
-    fn examine_line(&self, entry: String) {
-        if self.0.borrow().examining.contains_key(&entry) {
+    /// Reads what the line `entry` of `list` is on a thread of its own,
+    /// unless it is being read already.
+    fn examine_line(&self, list: ui::PathList, entry: String) {
+        if self.0.borrow().list(list).examining.contains_key(&entry) {
             return;
         }
-        let examine = Arc::clone(&self.0.borrow().seams.examine);
-        match examine_off(&examine, entry.clone()) {
+        let examine = self.0.borrow().examine(list);
+        match examine_off(&examine, list, entry.clone()) {
             Ok(answer) => {
                 self.0
                     .borrow_mut()
+                    .list_mut(list)
                     .examining
                     .insert(entry, (Instant::now(), answer));
             }
             Err(error) => {
-                tracing::error!(%entry, %error, "exclusion not read: no thread, shown as invalid");
+                tracing::error!(%entry, ?list, %error, "line not read: no thread, shown as unreadable");
                 self.0
                     .borrow_mut()
+                    .list_mut(list)
                     .kinds
-                    .insert(entry, kind_shown(Err(ui::EntryError::Unreadable)));
+                    .insert(entry, kind_shown(list, Err(ui::EntryError::Unreadable)));
             }
         }
     }
 
-    /// Whether a line shown is still being read.
-    #[cfg(test)]
+    /// Whether a line shown, of either list, is still being read.
     fn reads_lines(&self) -> bool {
-        !self.0.borrow().examining.is_empty()
+        let state = self.0.borrow();
+        LISTS
+            .iter()
+            .any(|list| !state.list(*list).examining.is_empty())
     }
 
     /// Looks at the lines being read `every` so often.
@@ -608,27 +682,36 @@ impl SettingsScreen {
     /// [`EXAMINE_PATIENCE`], and stop once none is.
     fn take_examined(&self) {
         let mut state = self.0.borrow_mut();
-        let mut answered = Vec::new();
-        state.examining.retain(|entry, (_, answer)| {
-            let examined = match answer.try_recv() {
-                Ok(examined) => examined,
-                Err(TryRecvError::Empty) => return true,
-                Err(TryRecvError::Disconnected) => {
-                    tracing::error!(%entry, "exclusion reader ended without word: shown as invalid");
-                    Err(ui::EntryError::Unreadable)
-                }
-            };
-            answered.push((entry.clone(), examined));
-            false
-        });
-        let any_answered = !answered.is_empty();
-        for (entry, examined) in answered {
-            state.kinds.insert(entry, kind_shown(examined));
+        let mut any_answered = false;
+        for list in LISTS {
+            let held = state.list_mut(list);
+            let mut answered = Vec::new();
+            held.examining.retain(|entry, (_, answer)| {
+                let examined = match answer.try_recv() {
+                    Ok(examined) => examined,
+                    Err(TryRecvError::Empty) => return true,
+                    Err(TryRecvError::Disconnected) => {
+                        tracing::error!(%entry, ?list, "line reader ended without word: shown as unreadable");
+                        Err(ui::EntryError::Unreadable)
+                    }
+                };
+                answered.push((entry.clone(), examined));
+                false
+            });
+            any_answered |= !answered.is_empty();
+            for (entry, examined) in answered {
+                held.kinds.insert(entry, kind_shown(list, examined));
+            }
         }
         if any_answered {
             state.show();
         }
-        let waited = || state.examining.values().map(|(since, _)| since.elapsed());
+        let waited = || {
+            LISTS
+                .iter()
+                .flat_map(|list| state.list(*list).examining.values())
+                .map(|(since, _)| since.elapsed())
+        };
         let Some(youngest) = waited().min() else {
             state.examine_check.stop();
             return;
@@ -640,7 +723,11 @@ impl SettingsScreen {
         };
         if state.examine_check.interval() != every {
             if every == EXAMINE_PATIENCE {
-                tracing::info!(entries = ?state.examining.keys().collect::<Vec<_>>(), oldest = ?waited().max(), "exclusions still being read: shown as such, looked at less often");
+                let entries: Vec<&String> = LISTS
+                    .iter()
+                    .flat_map(|list| state.list(*list).examining.keys())
+                    .collect();
+                tracing::info!(?entries, oldest = ?waited().max(), "lines still being read: shown as such, looked at less often");
             }
             drop(state);
             self.watch_examined(every);
@@ -787,101 +874,116 @@ impl SettingsScreen {
         editable
     }
 
-    /// Adds what the user typed (spaces around it dropped, `~` standing for
-    /// the home folder), and empties the field once it is added.
-    fn add(&self, typed: &str) {
+    /// Adds to `list` what the user typed (spaces around it dropped, `~`
+    /// standing for the home folder), and empties the field once it is
+    /// added.
+    fn add(&self, list: ui::PathList, typed: &str) {
         let entry = expanded(typed.trim(), self.0.borrow().seams.home.as_deref());
-        if !self.add_entry(entry) {
+        if !self.add_entry(list, entry) {
             return;
         }
-        if let Some(window) = self.0.borrow().window.upgrade() {
-            let preferences = window.global::<ui::Preferences>();
-            preferences.set_entry(SharedString::new());
-            preferences.set_entry_error(ui::EntryError::None);
-        }
+        self.set_entry(list, SharedString::new(), ui::EntryError::None);
     }
 
-    /// Adds `entry` to the exclusions, as it is, if the engine takes it and
-    /// it is not there yet; says why not otherwise. Whether it is added.
+    /// Adds `entry` to `list`, as it is, if what reads its lines takes it
+    /// and it is not there yet; says why not otherwise. Whether it is added.
     /// Where it lies is read on a thread of its own, waited for
     /// [`EXAMINE_WAIT`] at most: a place that does not answer by then
     /// cannot be read (its thread is left to end alone, if it ever does).
-    fn add_entry(&self, entry: String) -> bool {
-        if entry.is_empty() || !self.editable("exclusion added") {
+    fn add_entry(&self, list: ui::PathList, entry: String) -> bool {
+        if entry.is_empty() || !self.editable("line added") {
             return false;
         }
-        let duplicate = self
-            .0
-            .borrow()
-            .settings
-            .exclusions
+        let duplicate = entries(&self.0.borrow().settings, list)
             .iter()
-            .any(|kept| same(kept, &entry));
+            .any(|kept| same(list, kept, &entry));
         let refused = if duplicate {
             Some(ui::EntryError::Duplicate)
         } else {
-            match self.examine_added(&entry) {
+            match self
+                .examine_added(list, &entry)
+                .and_then(|kind| admitted(list, kind))
+            {
                 Err(refused) => Some(refused),
                 Ok(kind) => {
                     // Never shown as being read: it was, now. An older
                     // reading of it (removed, then added again) is stale.
                     let mut state = self.0.borrow_mut();
-                    state.kinds.insert(entry.clone(), kind);
-                    state.examining.remove(&entry);
+                    let held = state.list_mut(list);
+                    held.kinds.insert(entry.clone(), kind);
+                    held.examining.remove(&entry);
                     None
                 }
             }
         };
         if let Some(refused) = refused {
-            tracing::warn!(%entry, ?refused, "exclusion not added");
-            self.refuse(refused);
+            tracing::warn!(%entry, ?list, ?refused, "line not added");
+            self.refuse(list, refused);
             return false;
         }
-        self.change("exclusion added", |settings| {
-            settings.exclusions.push(entry);
+        self.change(added(list), |settings| {
+            entries_mut(settings, list).push(entry);
         })
     }
 
-    /// What `entry`, being added, is: read on a thread of its own, waited
-    /// for [`EXAMINE_WAIT`] at most.
-    fn examine_added(&self, entry: &str) -> Examined {
-        let examine = Arc::clone(&self.0.borrow().seams.examine);
-        let answer = examine_off(&examine, entry.to_owned()).map_err(|error| {
-            tracing::error!(%entry, %error, "exclusion not read: no thread");
+    /// What `entry`, being added to `list`, is: read on a thread of its
+    /// own, waited for [`EXAMINE_WAIT`] at most.
+    fn examine_added(&self, list: ui::PathList, entry: &str) -> Examined {
+        let examine = self.0.borrow().examine(list);
+        let answer = examine_off(&examine, list, entry.to_owned()).map_err(|error| {
+            tracing::error!(%entry, ?list, %error, "line not read: no thread");
             ui::EntryError::Unreadable
         })?;
         answer
             .recv_timeout(EXAMINE_WAIT)
             .unwrap_or_else(|error| {
                 match error {
-                    RecvTimeoutError::Timeout => tracing::warn!(%entry, waited = ?EXAMINE_WAIT, "exclusion not read in time: its place does not answer"),
-                    RecvTimeoutError::Disconnected => tracing::error!(%entry, "exclusion reader ended without word"),
+                    RecvTimeoutError::Timeout => tracing::warn!(%entry, ?list, waited = ?EXAMINE_WAIT, "line not read in time: its place does not answer"),
+                    RecvTimeoutError::Disconnected => tracing::error!(%entry, ?list, "line reader ended without word"),
                 }
                 Err(ui::EntryError::Unreadable)
             })
     }
 
-    fn refuse(&self, error: ui::EntryError) {
+    /// Says why what was offered to `list` is not added.
+    fn refuse(&self, list: ui::PathList, error: ui::EntryError) {
         if let Some(window) = self.0.borrow().window.upgrade() {
-            window.global::<ui::Preferences>().set_entry_error(error);
+            let preferences = window.global::<ui::Preferences>();
+            match list {
+                ui::PathList::Exclusions => preferences.set_entry_error(error),
+                ui::PathList::Folders => preferences.set_folder_entry_error(error),
+            }
         }
     }
 
-    fn remove(&self, index: i32) {
+    /// Sets the field of `list` and what it says of it.
+    fn set_entry(&self, list: ui::PathList, text: SharedString, error: ui::EntryError) {
+        if let Some(window) = self.0.borrow().window.upgrade() {
+            let preferences = window.global::<ui::Preferences>();
+            match list {
+                ui::PathList::Exclusions => preferences.set_entry(text),
+                ui::PathList::Folders => preferences.set_folder_entry(text),
+            }
+        }
+        self.refuse(list, error);
+    }
+
+    fn remove(&self, list: ui::PathList, index: i32) {
         let Some(index) = usize::try_from(index)
             .ok()
-            .filter(|&index| index < self.0.borrow().settings.exclusions.len())
+            .filter(|&index| index < entries(&self.0.borrow().settings, list).len())
         else {
-            tracing::error!(index, "exclusion to remove out of the list");
+            tracing::error!(index, ?list, "line to remove out of the list");
             return;
         };
-        self.change("exclusion removed", |settings| {
-            settings.exclusions.remove(index);
+        self.change(removed(list), |settings| {
+            entries_mut(settings, list).remove(index);
         });
     }
 
-    /// Asks the folder chooser for a folder to exclude, one at a time.
-    fn browse(&self) {
+    /// Asks the folder chooser for a folder to add to `list`, one at a
+    /// time whatever the list.
+    fn browse(&self, list: ui::PathList) {
         if !self.editable("folder chooser") {
             return;
         }
@@ -895,10 +997,14 @@ impl SettingsScreen {
             return;
         }
         preferences.set_browsing(true);
-        preferences.set_entry_error(ui::EntryError::None);
-        let title = preferences.get_chooser_title().to_string();
+        let title = match list {
+            ui::PathList::Exclusions => preferences.get_chooser_title(),
+            ui::PathList::Folders => preferences.get_folder_chooser_title(),
+        }
+        .to_string();
         let choose = Rc::clone(&state.seams.choose_folder);
         drop(state);
+        self.refuse(list, ui::EntryError::None);
         let screen = self.clone();
         choose(
             title,
@@ -911,15 +1017,15 @@ impl SettingsScreen {
                     // typed in the field stays there.
                     Chosen::Folder(folder) => match folder.into_os_string().into_string() {
                         Ok(folder) => {
-                            screen.add_entry(folder);
+                            screen.add_entry(list, folder);
                         }
                         Err(folder) => {
                             tracing::warn!(folder = %folder.display(), "folder chosen not UTF-8: the settings cannot hold it");
-                            screen.refuse(ui::EntryError::NotText);
+                            screen.refuse(list, ui::EntryError::NotText);
                         }
                     },
                     Chosen::Cancelled => {}
-                    Chosen::Unavailable => screen.refuse(ui::EntryError::Chooser),
+                    Chosen::Unavailable => screen.refuse(list, ui::EntryError::Chooser),
                 }
             }),
         );
@@ -934,21 +1040,22 @@ impl State {
         };
         let preferences = window.global::<ui::Preferences>();
         let home = self.seams.home.as_deref();
-        let rows: Vec<ui::ExclusionRow> = self
-            .settings
-            .exclusions
-            .iter()
-            .map(|entry| ui::ExclusionRow {
-                text: from_home(Path::new(entry), home).into(),
-                kind: self
-                    .kinds
-                    .get(entry)
-                    .copied()
-                    .unwrap_or(ui::ExclusionKind::Reading),
-            })
-            .collect();
-        // In place: the line that keeps the focus after a removal stays.
-        crate::shown::show(&self.exclusions, rows);
+        for list in LISTS {
+            let held = self.list(list);
+            let rows: Vec<ui::PathRow> = entries(&self.settings, list)
+                .iter()
+                .map(|entry| ui::PathRow {
+                    text: from_home(Path::new(entry), home).into(),
+                    kind: held
+                        .kinds
+                        .get(entry)
+                        .copied()
+                        .unwrap_or(ui::PathKind::Reading),
+                })
+                .collect();
+            // In place: the line that keeps the focus after a removal stays.
+            crate::shown::show(&held.rows, rows);
+        }
         let minutes = self
             .settings
             .min_age_minutes
@@ -1025,10 +1132,33 @@ fn expanded(typed: &str, home: Option<&Path>) -> String {
     }
 }
 
-/// Whether two exclusions are the same to the engine, which matches paths
-/// and extensions ignoring case: `/data/` is `/data`, `*.LOG` is `*.log`.
-fn same(one: &str, other: &str) -> bool {
-    Path::new(&one.to_lowercase()) == Path::new(&other.to_lowercase())
+/// Whether two lines of `list` are the same to the engine. It matches
+/// exclusions, paths and extensions, ignoring case: `/data/` is `/data`,
+/// `*.LOG` is `*.log`; a folder to clean is the path it names: `/data/` is
+/// `/data`, `/Data` is another.
+fn same(list: ui::PathList, one: &str, other: &str) -> bool {
+    match list {
+        ui::PathList::Exclusions => {
+            Path::new(&one.to_lowercase()) == Path::new(&other.to_lowercase())
+        }
+        ui::PathList::Folders => Path::new(one) == Path::new(other),
+    }
+}
+
+/// What the screen traces when a line is added to `list`.
+const fn added(list: ui::PathList) -> &'static str {
+    match list {
+        ui::PathList::Exclusions => "exclusion added",
+        ui::PathList::Folders => "folder to clean added",
+    }
+}
+
+/// What the screen traces when a line is taken out of `list`.
+const fn removed(list: ui::PathList) -> &'static str {
+    match list {
+        ui::PathList::Exclusions => "exclusion removed",
+        ui::PathList::Folders => "folder to clean removed",
+    }
 }
 
 /// What an exclusion is: refused by the engine (its place unreadable, or
@@ -1050,23 +1180,85 @@ fn examine(entry: &str) -> Examined {
     }
     // Taken by the engine and not absolute: an extension (`*.log`).
     if !path.is_absolute() {
-        return Ok(ui::ExclusionKind::Extension);
+        return Ok(ui::PathKind::Extension);
     }
     Ok(match std::fs::metadata(path) {
-        Ok(metadata) if metadata.is_dir() => ui::ExclusionKind::Folder,
-        Ok(_) => ui::ExclusionKind::File,
+        Ok(metadata) if metadata.is_dir() => ui::PathKind::Folder,
+        Ok(_) => ui::PathKind::File,
         Err(error) => {
             if error.kind() != std::io::ErrorKind::NotFound {
                 tracing::debug!(%entry, %error, "exclusion not read: shown as absent");
             }
-            ui::ExclusionKind::Absent
+            ui::PathKind::Absent
         }
     })
 }
 
+/// What a folder to clean is, as the engine judges it for a scan
+/// ([`CustomFolder::check`]): a folder it walks, or why it would leave it
+/// alone; invalid as written (it stops every analysis). Reading it waits on
+/// a mount that stopped answering: called on a thread of its own
+/// ([`examine_off`]).
+fn examine_folder(entry: &str) -> Examined {
+    let folder = CustomFolder::new(PathBuf::from(entry)).map_err(|error| {
+        tracing::debug!(%entry, %error, "folder to clean the engine refuses");
+        ui::EntryError::Invalid
+    })?;
+    let variables = okapi_platform::template_variables().map_err(|error| {
+        tracing::warn!(%entry, ?error, "variables unavailable: folder to clean not judged");
+        ui::EntryError::Unreadable
+    })?;
+    Ok(match folder.check(&variables) {
+        Ok(()) => ui::PathKind::Folder,
+        Err(refusal) => {
+            tracing::debug!(%entry, ?refusal, "folder to clean an analysis would leave alone");
+            match refusal {
+                CustomFolderRefusal::Absent => ui::PathKind::Absent,
+                CustomFolderRefusal::Link => ui::PathKind::Link,
+                CustomFolderRefusal::NotADirectory => ui::PathKind::NotFolder,
+                CustomFolderRefusal::Replaced | CustomFolderRefusal::Unreadable(_) => {
+                    ui::PathKind::Unreadable
+                }
+                CustomFolderRefusal::PersonalUnknown(_) => ui::PathKind::Unverifiable,
+                CustomFolderRefusal::NotOwned => ui::PathKind::NotOwned,
+                CustomFolderRefusal::Protected(_) => ui::PathKind::Protected,
+                CustomFolderRefusal::Personal => ui::PathKind::Personal,
+                CustomFolderRefusal::UnsureFilesystem => ui::PathKind::Unsure,
+            }
+        }
+    })
+}
+
+/// Whether a line of `list` read to be `kind` may be added: any exclusion
+/// the engine takes (an absent path still protects what will come there),
+/// only a folder to clean an analysis would walk. Why not otherwise.
+fn admitted(list: ui::PathList, kind: ui::PathKind) -> Examined {
+    match (list, kind) {
+        (ui::PathList::Exclusions, _) | (ui::PathList::Folders, ui::PathKind::Folder) => Ok(kind),
+        (ui::PathList::Folders, refused) => Err(match refused {
+            ui::PathKind::Absent => ui::EntryError::Absent,
+            ui::PathKind::Link => ui::EntryError::Link,
+            ui::PathKind::NotFolder | ui::PathKind::File => ui::EntryError::NotFolder,
+            ui::PathKind::Protected => ui::EntryError::Protected,
+            ui::PathKind::Personal => ui::EntryError::Personal,
+            ui::PathKind::NotOwned => ui::EntryError::NotOwned,
+            ui::PathKind::Unsure => ui::EntryError::Unsure,
+            ui::PathKind::Unverifiable => ui::EntryError::Unverifiable,
+            ui::PathKind::Unreadable | ui::PathKind::Reading => ui::EntryError::Unreadable,
+            ui::PathKind::Folder | ui::PathKind::Extension | ui::PathKind::Invalid => {
+                ui::EntryError::Invalid
+            }
+        }),
+    }
+}
+
 /// Runs `examine` on `entry` on a thread of its own; its answer comes on
 /// the receiver returned, or never when the place does not answer.
-fn examine_off(examine: &Examine, entry: String) -> std::io::Result<Receiver<Examined>> {
+fn examine_off(
+    examine: &Examine,
+    list: ui::PathList,
+    entry: String,
+) -> std::io::Result<Receiver<Examined>> {
     let (sender, answer) = mpsc::channel();
     let examine = Arc::clone(examine);
     let span = tracing::Span::current();
@@ -1074,24 +1266,28 @@ fn examine_off(examine: &Examine, entry: String) -> std::io::Result<Receiver<Exa
         .name(EXAMINER_NAME.to_owned())
         .spawn(move || {
             span.in_scope(|| {
-                tracing::debug!(%entry, "exclusion being read");
+                tracing::debug!(%entry, ?list, "line being read");
                 let started = Instant::now();
                 let examined = examine(&entry);
-                tracing::debug!(%entry, ?examined, elapsed = ?started.elapsed(), "exclusion read");
+                tracing::debug!(%entry, ?list, ?examined, elapsed = ?started.elapsed(), "line read");
                 if sender.send(examined).is_err() {
-                    tracing::info!(%entry, elapsed = ?started.elapsed(), "exclusion read too late: no one waits for it");
+                    tracing::info!(%entry, ?list, elapsed = ?started.elapsed(), "line read too late: no one waits for it");
                 }
             });
         })?;
     Ok(answer)
 }
 
-/// How a line read is shown: one the engine refuses, whatever why, stops
-/// every analysis, which says why.
-const fn kind_shown(examined: Examined) -> ui::ExclusionKind {
-    match examined {
-        Ok(kind) => kind,
-        Err(_) => ui::ExclusionKind::Invalid,
+/// How a line of `list` read is shown. An exclusion the engine refuses,
+/// whatever why, stops every analysis, which says why; a folder to clean
+/// does so only when it is invalid as written, and is otherwise left alone,
+/// as unreadable.
+const fn kind_shown(list: ui::PathList, examined: Examined) -> ui::PathKind {
+    match (list, examined) {
+        (_, Ok(kind)) => kind,
+        (ui::PathList::Exclusions, Err(_))
+        | (ui::PathList::Folders, Err(ui::EntryError::Invalid)) => ui::PathKind::Invalid,
+        (ui::PathList::Folders, Err(_)) => ui::PathKind::Unreadable,
     }
 }
 

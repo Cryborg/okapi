@@ -4,9 +4,12 @@
 //! its identifiers, stay with the screen (invariant 1).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use okapi_engine::{Category, MaintenanceFound, Origin, OriginKey, ScanGroup};
 use okapi_rules::{BrowserKind, Effect, Label, Language, RuleSet};
+
+use crate::shown::from_home;
 
 /// What sets the description of one rule apart from the next, in a group
 /// that joins several.
@@ -27,6 +30,10 @@ fn described(language: Language, descriptions: &[Label]) -> String {
 /// may read ([`GroupFacts::unseen`]), or of a maintenance root runs
 /// ([`GroupFacts::maintenance`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one flag per fact of the group, each read on its own by the lines shown"
+)]
 pub struct GroupFacts {
     /// Its label: under its browser's line, a browser's cache needs no more.
     pub label: String,
@@ -49,6 +56,10 @@ pub struct GroupFacts {
     pub admin: AdminState,
     /// Checked before the user chooses: the engine's one rule.
     pub checked_by_default: bool,
+    /// It holds a folder the user chose: left to the user each time, said
+    /// so. One that shares a rule's root keeps the rule's name (the
+    /// folder's own, never translated, only when it names the group).
+    pub custom: bool,
     /// The keys of all its rules. The user's choice of it is kept by them
     /// only when it is checked by default: a group left to choose or the
     /// administrator's always starts unchecked (D-13).
@@ -112,16 +123,33 @@ pub enum AdminState {
 }
 
 impl GroupFacts {
-    /// What the results need of `group`, its label in `language`; `targets`
-    /// names each rule the privileged helper may be asked for.
+    /// What the results need of `group`, its label in `language` (a folder
+    /// the user chose by its path, `~` standing for `home`, never
+    /// translated); `targets` names each rule the privileged helper may be
+    /// asked for.
     #[must_use]
-    pub fn of(group: &ScanGroup, language: Language, targets: &BTreeMap<Origin, String>) -> Self {
+    pub fn of(
+        group: &ScanGroup,
+        language: Language,
+        targets: &BTreeMap<Origin, String>,
+        home: Option<&Path>,
+    ) -> Self {
         let english = group.label().as_str();
         let needs_admin = group.needs_admin();
         let checked_by_default = group.is_checked_by_default();
+        let (label, label_alone) = match group.custom_folder() {
+            Some(folder) => {
+                let shown = from_home(folder.path(), home);
+                (shown.clone(), shown)
+            }
+            None => (
+                okapi_rules::label(language, english).to_owned(),
+                okapi_rules::group_label(language, group.browser(), english),
+            ),
+        };
         Self {
-            label: okapi_rules::label(language, english).to_owned(),
-            label_alone: okapi_rules::group_label(language, group.browser(), english),
+            label,
+            label_alone,
             description: described(language, group.descriptions()),
             browser: group.browser(),
             categories: Category::of_group(group.origins()),
@@ -148,6 +176,7 @@ impl GroupFacts {
                 }),
             admin: AdminState::Locked,
             checked_by_default,
+            custom: group.holds_a_custom_folder(),
             keys: group.origins().iter().map(Origin::key).collect(),
             seen: Seen::Counted {
                 entries: group.items().len(),
@@ -260,6 +289,7 @@ impl GroupFacts {
                 preselection.is_preselected(),
                 needs_admin,
             ),
+            custom: false,
             keys: BTreeSet::from([origin.key()]),
             seen,
         }
@@ -832,6 +862,7 @@ mod tests {
             targets: None,
             admin: AdminState::Locked,
             checked_by_default: okapi_engine::checked_by_default(preselected, needs_admin),
+            custom: false,
             keys: BTreeSet::new(),
             seen: Seen::Counted {
                 entries: 2,

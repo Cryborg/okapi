@@ -12,8 +12,8 @@ pub enum Decision {
     Selected,
     /// Shown, but outside the categories asked for.
     OutsideCategories,
-    /// Never removed unless chosen: a cache reset or a maintenance operation
-    /// (invariant 5).
+    /// Never removed unless chosen: a cache reset, a maintenance operation
+    /// or a folder the user chose (invariant 5); a run never chooses one.
     NotPreselected,
     /// Its removal needs the administrator, through the privileged helper.
     NeedsAdmin,
@@ -39,7 +39,7 @@ pub fn decide(
 }
 
 /// A rule as the rules name it: the subcategory of a system target, the
-/// identifier of an application rule.
+/// identifier of an application rule; a folder the user chose by its path.
 pub fn rule_name(origin: &Origin) -> String {
     match origin {
         Origin::SystemTarget { subcategory, .. } | Origin::SystemFile { subcategory, .. } => {
@@ -47,6 +47,7 @@ pub fn rule_name(origin: &Origin) -> String {
         }
         Origin::App { id, .. } => id.to_string(),
         Origin::Browser { browser, directory } => format!("{}/{directory}", browser.key()),
+        Origin::Custom { folder } => folder.path().display().to_string(),
     }
 }
 

@@ -3,8 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
 use okapi_platform::{IDENTITY_SUPPORTED, ROOT_USER};
-use okapi_rules::{MiscRules, RuleSet, TemplateVariables};
+use okapi_rules::{RuleSet, TemplateVariables};
 
+use crate::custom::PersonalFolders;
 use crate::maintenance;
 use crate::options::ScanOptions;
 use crate::paths::is_absent_kind;
@@ -14,15 +15,17 @@ use crate::report::{
     AppFile, Category, FoundItem, GroupAttributes, Origin, ReportBuilder, ScanIssue, ScanReport,
     ScanStats, UnsafeReason,
 };
-use crate::roots::{BrowserRule, PlannedKind, PlannedRoot, Planner, RuleEntry};
+use crate::roots::{BrowserRule, PlannedKind, PlannedRoot, Planner, Planning, RuleEntry};
 use crate::walk::{Found, Limits, Readers, RootProblem, ScanProgress, WalkContext, walk};
 use crate::watch::{Progress, Watch};
 
 /// Scans the system targets and the application rules of `rules` for what
 /// can be cleaned, without changing anything.
 ///
-/// Only directories the rules name are walked, by their real location (the
-/// rule's own path is resolved first, links in its ancestors included). Below
+/// Only directories the rules name are walked, and the folders the user
+/// chose ([`ScanOptions::with_custom_folders`]) when their category is, by
+/// their real location (the path is resolved first, links in its ancestors
+/// included). Below
 /// a root, no link is followed and no other device is entered, and a root
 /// never equals or holds a variable's directory, `${TMPDIR}`'s own directory
 /// excepted (invariant 6).
@@ -52,16 +55,27 @@ pub fn scan_watched(
     let started = Instant::now();
     let stops = stops_before_reading(IDENTITY_SUPPORTED, rules.os(), variables);
     let report = if stops.is_empty() {
-        scan_entries(
-            &entries_of(rules),
-            rules.misc(),
+        let mut entries = entries_of(rules);
+        // Planned only when chosen: a folder on a mount that stopped
+        // answering never holds another analysis, and never joins a rule's
+        // root in one that does not show it.
+        let custom_folders = options.chosen_custom_folders();
+        entries.extend(custom_folders.iter().copied().map(RuleEntry::Custom));
+        // Read only when a custom folder is to be judged against them.
+        let personal = if custom_folders.is_empty() {
+            PersonalFolders::none()
+        } else {
+            PersonalFolders::read(variables, Readers::SYSTEM.identity)
+        };
+        let planning = Planning {
+            misc: rules.misc(),
             variables,
             options,
-            Readers::SYSTEM,
-            Limits::DEFAULT,
+            readers: Readers::SYSTEM,
             user,
-            watch,
-        )
+            personal: &personal,
+        };
+        scan_entries(&entries, &planning, Limits::DEFAULT, watch)
     } else {
         let mut report = ReportBuilder::new();
         for stop in stops {
@@ -162,20 +176,13 @@ fn browser_entries(rules: &RuleSet) -> impl Iterator<Item = RuleEntry<'_>> {
     chromium.chain(firefox)
 }
 
-/// [`scan_watched`] over an explicit list of rules, with the metadata
-/// readers, the limits and the user who will remove what is offered given.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each one a seam the tests set apart; a struct would only rename them"
-)]
+/// [`scan_watched`] over an explicit list of rules, with what plans them
+/// (the metadata readers and the user who will remove what is offered
+/// included) and the limits given.
 pub(crate) fn scan_entries(
     entries: &[RuleEntry<'_>],
-    misc: &MiscRules,
-    variables: &TemplateVariables,
-    options: &ScanOptions,
-    readers: Readers,
+    planning: &Planning<'_>,
     limits: Limits,
-    user: Option<u32>,
     watch: &Watch,
 ) -> ScanReport {
     let mut report = ReportBuilder::new();
@@ -183,9 +190,7 @@ pub(crate) fn scan_entries(
         report.cancel(0, 0, 0);
         return report.finish();
     }
-    let Some((protected, roots_by_rule)) =
-        plan(entries, misc, variables, options, readers, &mut report)
-    else {
+    let Some((protected, roots_by_rule)) = plan(entries, planning, &mut report) else {
         return report.finish();
     };
 
@@ -198,7 +203,7 @@ pub(crate) fn scan_entries(
     // Every root reserves its place, chosen or not: the walks of the chosen
     // ones skip the others below them.
     let root_identities: BTreeSet<_> = roots.iter().map(|(_, root)| root.identity).collect();
-    let roots = chosen_roots(roots, &attributes, &mut groups, options);
+    let roots = chosen_roots(roots, &attributes, &mut groups, planning.options);
     let roots_total = roots
         .iter()
         .filter(|(_, root, _)| root.kind != PlannedKind::Withheld)
@@ -223,7 +228,7 @@ pub(crate) fn scan_entries(
         // What needs the administrator will be removed by root, through the
         // privileged helper.
         let needs_admin = group_attributes.is_some_and(|attributes| attributes.needs_admin);
-        let remover = if needs_admin { Some(ROOT_USER) } else { user };
+        let remover = needs_admin.then_some(ROOT_USER).or(planning.user);
         let keep_hard_linked =
             group_attributes.is_some_and(|attributes| attributes.keep_hard_linked);
         let withheld = root.kind == PlannedKind::Withheld;
@@ -236,15 +241,17 @@ pub(crate) fn scan_entries(
             PlannedKind::Directory => {
                 let context = WalkContext {
                     cutoff: root.cutoff,
-                    exclusions: options.exclusions(),
-                    misc,
+                    exclusions: planning.options.exclusions(),
+                    misc: planning.misc,
                     protected: &protected,
                     roots: &root_identities,
-                    readers,
+                    readers: planning.readers,
                     limits,
                     remover,
                     root_owner: None,
                     keep_hard_linked,
+                    recent_holds_below: group_attributes
+                        .is_some_and(GroupAttributes::holds_a_custom_folder),
                 };
                 walk_root(&mut report, &root, &origins, context, &mut progress)
             }
@@ -277,7 +284,11 @@ pub(crate) fn scan_entries(
         return report.finish();
     }
     report.roots(root_identities);
-    report.maintenances(maintenance::found(entries, variables, options));
+    report.maintenances(maintenance::found(
+        entries,
+        planning.variables,
+        planning.options,
+    ));
     for (group, attributes) in attributes {
         report.group(
             attributes,
@@ -305,13 +316,14 @@ fn found_below(found: Found, root: &PlannedRoot, keep_hard_linked: bool) -> Foun
 /// directories cannot be told (the scan then stops).
 fn plan(
     entries: &[RuleEntry<'_>],
-    misc: &MiscRules,
-    variables: &TemplateVariables,
-    options: &ScanOptions,
-    readers: Readers,
+    planning: &Planning<'_>,
     report: &mut ReportBuilder,
 ) -> Option<(ProtectedRoots, Vec<(usize, PlannedRoot)>)> {
-    let protected = match protection(variables, options, readers.identity) {
+    let protected = match protection(
+        planning.variables,
+        planning.options,
+        planning.readers.identity,
+    ) {
         Ok((_, protected)) => protected,
         Err(stop) => {
             report.issue(ScanIssue::Stopped(stop));
@@ -319,11 +331,8 @@ fn plan(
         }
     };
     let mut planner = Planner {
-        variables,
-        options,
-        misc,
+        planning: *planning,
         protected: &protected,
-        readers,
         issues: Vec::new(),
         stats: ScanStats::default(),
         browsers: BTreeMap::new(),
@@ -609,8 +618,10 @@ mod tests {
                 DefaultChoice::Chosen,
                 DefaultChoice::Chosen,
                 DefaultChoice::Chosen,
+                DefaultChoice::ToChoose,
                 DefaultChoice::ToChoose
-            ]
+            ],
+            "GPU caches are all resets; the user's folders are never chosen beforehand"
         );
         assert!(
             rules

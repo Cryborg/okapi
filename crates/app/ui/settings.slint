@@ -1,11 +1,16 @@
 // The settings screen (docs/design/maquette/project/Settings.dc.html):
-// the exclusions, and the general settings, each change written at once.
+// the exclusions, the folders to clean and the general settings, each change
+// written at once.
+import { ScrollView } from "std-widgets.slint";
 import { Theme, Screen } from "theme.slint";
 import {
     ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, IconButton, Line,
     ScrolledList, Title,
 } from "widgets.slint";
-import { EntryError, ExclusionKind, LanguageChoice, Preferences, SaveRefusal, SettingsState, ThemeChoice } from "settings-model.slint";
+import {
+    EntryError, LanguageChoice, PathKind, PathList, PathRow, Preferences, SaveRefusal, SettingsState,
+    ThemeChoice,
+} from "settings-model.slint";
 
 // One choice among a few, its segments side by side, the one chosen raised.
 // Each segment is a radio button; Tab reaches each, Enter or Space chooses.
@@ -253,28 +258,85 @@ component Separator inherits Rectangle {
     background: Theme.border;
 }
 
-component Exclusions inherits Card {
+// A list of paths the settings hold (the exclusions, the folders to clean):
+// its lines, each with what it is and a cross to take it out, and a field to
+// add one, typed or chosen. What differs from one list to the other is said
+// by its properties; the words of the kinds and refusals are said here once.
+component PathListCard inherits Card {
     in property <bool> enabled;
-    property <bool> refused: Preferences.entry-error != EntryError.none;
+    in property <string> heading;
+    // Every line is a folder, whatever is read of it.
+    in property <bool> folders-only;
+    in property <string> detail;
+    in property <string> empty;
+    // The field's name, read with it and shown above it.
+    in property <string> add-label;
+    in property <string> placeholder;
+    // What a path the list refuses as written must be.
+    in property <string> invalid;
+    // What "Parcourir" and "Ajouter" do, read with them.
+    in property <string> browse-label;
+    in property <string> add-button-label;
+    in property <[PathRow]> rows;
+    in-out property <string> entry;
+    in-out property <EntryError> entry-error;
+    // Takes the line out, as a screen reader names it: `Retirer … de …`.
+    pure callback remove-label(string) -> string;
+    callback add(string);
+    callback remove(int);
+    callback browse();
+    property <bool> refused: entry-error != EntryError.none;
 
-    // What its badge says of an exclusion, read with its line.
-    pure function kind-word(kind: ExclusionKind) -> string {
-        if kind == ExclusionKind.folder {
+    // What its badge says of a line, read with it.
+    pure function kind-word(kind: PathKind) -> string {
+        if kind == PathKind.folder {
             return @tr("Dossier");
         }
-        if kind == ExclusionKind.file {
+        if kind == PathKind.file {
             return @tr("Fichier");
         }
-        if kind == ExclusionKind.extension {
+        if kind == PathKind.extension {
             return @tr("Extension");
         }
-        if kind == ExclusionKind.absent {
+        if kind == PathKind.absent {
             return @tr("Absent");
         }
-        if kind == ExclusionKind.reading {
+        if kind == PathKind.reading {
             return @tr("Lecture…");
         }
+        if kind == PathKind.link {
+            return @tr("Lien");
+        }
+        if kind == PathKind.not-folder {
+            return @tr("Pas un dossier");
+        }
+        if kind == PathKind.protected {
+            return @tr("Protégé");
+        }
+        if kind == PathKind.personal {
+            return @tr("Dossier personnel");
+        }
+        if kind == PathKind.not-owned {
+            return @tr("Autre compte");
+        }
+        if kind == PathKind.unsure {
+            return @tr("Dates peu sûres");
+        }
+        if kind == PathKind.unverifiable {
+            return @tr("Invérifiable");
+        }
+        if kind == PathKind.unreadable {
+            return @tr("Illisible");
+        }
         @tr("Invalide")
+    }
+
+    // Whether a line is left alone by the analyses (a folder to clean):
+    // said as a warning; an invalid one stops them, said as a danger.
+    pure function left-alone(kind: PathKind) -> bool {
+        kind == PathKind.link || kind == PathKind.not-folder || kind == PathKind.protected
+            || kind == PathKind.personal || kind == PathKind.not-owned
+            || kind == PathKind.unsure || kind == PathKind.unreadable || kind == PathKind.unverifiable
     }
 
     VerticalLayout {
@@ -284,36 +346,33 @@ component Exclusions inherits Card {
         VerticalLayout {
             spacing: Theme.spacing-xs;
             Text {
-                text: @tr("Exclusions");
+                text: root.heading;
                 color: Theme.text;
                 font-size: Theme.font-heading;
                 font-weight: Theme.weight-semibold;
             }
             Detail {
-                text: @tr("Okapi ne touche jamais à ce qui est listé ici. Un dossier exclut tout ce qu'il contient ; une extension s'écrit *.ext.");
+                text: root.detail;
             }
         }
 
-        if Preferences.exclusions.length == 0: Detail {
-            text: @tr("Aucune exclusion.");
+        if root.rows.length == 0: Detail {
+            text: root.empty;
         }
-        // As high as its lines, scrolled when the window is lower.
-        if Preferences.exclusions.length > 0: Rectangle {
-            vertical-stretch: 1;
-            min-height: Theme.exclusion-row-height;
-            preferred-height: self.max-height;
-            max-height: Preferences.exclusions.length * Theme.exclusion-row-height + 2 * Theme.border-width;
+        // As high as its lines: the page scrolls when the window is lower.
+        if root.rows.length > 0: Rectangle {
+            height: root.rows.length * Theme.path-row-height + 2 * Theme.border-width;
             border-radius: Theme.radius-medium;
             border-width: Theme.border-width;
             border-color: Theme.border;
             clip: true;
             ScrolledList {
-                label: @tr("Exclusions");
+                label: root.heading;
                 ring-radius: Theme.radius-medium;
-                content-height: Preferences.exclusions.length * Theme.exclusion-row-height;
+                content-height: root.rows.length * Theme.path-row-height;
                 VerticalLayout {
-                    for row[index] in Preferences.exclusions: Rectangle {
-                        height: Theme.exclusion-row-height;
+                    for row[index] in root.rows: Rectangle {
+                        height: Theme.path-row-height;
                         accessible-role: list-item;
                         accessible-label: row.text;
                         accessible-description: root.kind-word(row.kind);
@@ -322,7 +381,7 @@ component Exclusions inherits Card {
                             padding-right: Theme.spacing-s;
                             spacing: Theme.spacing-m;
                             Icon {
-                                source: row.kind == ExclusionKind.folder ? @image-url("../assets/icons/folder.svg") : @image-url("../assets/icons/file.svg");
+                                source: row.kind == PathKind.folder || root.folders-only ? @image-url("../assets/icons/folder.svg") : @image-url("../assets/icons/file.svg");
                                 colorize: Theme.text-2;
                                 cross-axis-self-alignment: center;
                             }
@@ -340,22 +399,24 @@ component Exclusions inherits Card {
                                 alignment: center;
                                 Badge {
                                     text: root.kind-word(row.kind);
-                                    tone: row.kind == ExclusionKind.invalid ? Theme.danger : Theme.text-2;
-                                    tone-soft: row.kind == ExclusionKind.invalid ? Theme.danger-soft : Theme.surface-2;
+                                    tone: row.kind == PathKind.invalid ? Theme.danger
+                                        : root.left-alone(row.kind) ? Theme.warning : Theme.text-2;
+                                    tone-soft: row.kind == PathKind.invalid ? Theme.danger-soft
+                                        : root.left-alone(row.kind) ? Theme.warning-soft : Theme.surface-2;
                                 }
                             }
                             VerticalLayout {
                                 alignment: center;
                                 if root.enabled: IconButton {
                                     icon: @image-url("../assets/icons/x.svg");
-                                    label: @tr("Retirer {} des exclusions", row.text);
+                                    label: root.remove-label(row.text);
                                     clicked => {
-                                        Preferences.remove(index);
+                                        root.remove(index);
                                     }
                                 }
                             }
                         }
-                        if index < Preferences.exclusions.length - 1: Separator {
+                        if index < root.rows.length - 1: Separator {
                             y: parent.height - self.height;
                         }
                     }
@@ -366,7 +427,7 @@ component Exclusions inherits Card {
         VerticalLayout {
             spacing: Theme.spacing-s;
             Line {
-                text: @tr("Ajouter une exclusion");
+                text: root.add-label;
                 // The field reads it.
                 accessible-role: none;
             }
@@ -374,40 +435,50 @@ component Exclusions inherits Card {
                 spacing: Theme.spacing-s;
                 EntryField {
                     horizontal-stretch: 1;
-                    label: @tr("Ajouter une exclusion");
-                    placeholder: @tr("Chemin ou *.ext");
-                    text <=> Preferences.entry;
+                    label: root.add-label;
+                    placeholder: root.placeholder;
+                    text <=> root.entry;
                     refused: root.refused;
                     enabled: root.enabled;
                     accepted(text) => {
-                        Preferences.add(text);
+                        root.add(text);
                     }
                     edited => {
-                        Preferences.entry-error = EntryError.none;
+                        root.entry-error = EntryError.none;
                     }
                 }
                 ActionButton {
                     text: @tr("Parcourir");
+                    spoken: root.browse-label;
                     icon: @image-url("../assets/icons/folder.svg");
                     enabled: root.enabled && !Preferences.browsing;
                     clicked => {
-                        Preferences.browse();
+                        root.browse();
                     }
                 }
                 ActionButton {
                     text: @tr("Ajouter");
+                    spoken: root.add-button-label;
                     icon: @image-url("../assets/icons/plus.svg");
                     enabled: root.enabled;
                     clicked => {
-                        Preferences.add(Preferences.entry);
+                        root.add(root.entry);
                     }
                 }
             }
             if root.refused: Text {
-                text: Preferences.entry-error == EntryError.invalid ? @tr("Un chemin absolu (/… ou ~/…) ou une extension *.ext.")
-                    : Preferences.entry-error == EntryError.unreadable ? @tr("Cet emplacement ne se lit pas.")
-                    : Preferences.entry-error == EntryError.duplicate ? @tr("Déjà dans la liste.")
-                    : Preferences.entry-error == EntryError.not-text ? @tr("Ce chemin a des caractères que les réglages ne savent pas écrire.")
+                text: root.entry-error == EntryError.invalid ? root.invalid
+                    : root.entry-error == EntryError.unreadable ? @tr("Cet emplacement ne se lit pas.")
+                    : root.entry-error == EntryError.duplicate ? @tr("Déjà dans la liste.")
+                    : root.entry-error == EntryError.not-text ? @tr("Ce chemin a des caractères que les réglages ne savent pas écrire.")
+                    : root.entry-error == EntryError.absent ? @tr("Ce dossier n'existe pas.")
+                    : root.entry-error == EntryError.link ? @tr("C'est un lien : choisissez le dossier vers lequel il mène.")
+                    : root.entry-error == EntryError.not-folder ? @tr("Ce n'est pas un dossier.")
+                    : root.entry-error == EntryError.protected ? @tr("Okapi ne vide jamais ce dossier : il est ou contient un dossier dont votre session ou vos applis dépendent (dossier utilisateur, réglages, caches...).")
+                    : root.entry-error == EntryError.personal ? @tr("Okapi ne vide jamais un dossier personnel (Documents, Images, Téléchargements...) ni ce qui en contient un : choisissez un dossier à l'intérieur.")
+                    : root.entry-error == EntryError.not-owned ? @tr("Ce dossier appartient à un autre compte ou au système : Okapi ne le vide pas.")
+                    : root.entry-error == EntryError.unsure ? @tr("Sur une clé FAT ou exFAT, un partage réseau ou d'une machine virtuelle, un système FUSE ou superposé, ou un système qu'Okapi ne sait pas dire, l'âge des fichiers n'est pas sûr : Okapi ne les vide pas.")
+                    : root.entry-error == EntryError.unverifiable ? @tr("Okapi ne sait pas lire la liste de vos dossiers personnels (user-dirs.dirs) : il ne peut vérifier aucun dossier à nettoyer.")
                     : @tr("Le sélecteur de dossiers n'a pas pu s'ouvrir : écrivez le chemin.");
                 accessible-live-region: polite;
                 color: Theme.danger;
@@ -415,6 +486,61 @@ component Exclusions inherits Card {
                 wrap: word-wrap;
             }
         }
+    }
+}
+
+// What Okapi never touches.
+component Exclusions inherits PathListCard {
+    heading: @tr("Exclusions");
+    detail: @tr("Okapi ne touche jamais à ce qui est listé ici. Un dossier exclut tout ce qu'il contient ; une extension s'écrit *.ext.");
+    empty: @tr("Aucune exclusion.");
+    add-label: @tr("Ajouter une exclusion");
+    placeholder: @tr("Chemin ou *.ext");
+    invalid: @tr("Un chemin absolu (/… ou ~/…) ou une extension *.ext.");
+    browse-label: Preferences.chooser-title;
+    add-button-label: @tr("Ajouter l'exclusion");
+    rows: Preferences.exclusions;
+    entry <=> Preferences.entry;
+    entry-error <=> Preferences.entry-error;
+    remove-label(text) => {
+        @tr("Retirer {} des exclusions", text)
+    }
+    add(text) => {
+        Preferences.add(PathList.exclusions, text);
+    }
+    remove(index) => {
+        Preferences.remove(PathList.exclusions, index);
+    }
+    browse => {
+        Preferences.browse(PathList.exclusions);
+    }
+}
+
+// The folders the user chose to have emptied.
+component Folders inherits PathListCard {
+    heading: @tr("Dossiers à nettoyer");
+    folders-only: true;
+    detail: @tr("À chaque analyse de « Mes dossiers », Okapi propose ce qu'ils contiennent depuis plus longtemps que l'âge minimal, jamais le dossier lui-même. Leurs groupes ne sont jamais cochés d'avance, et ce que vous cochez est supprimé définitivement.");
+    empty: @tr("Aucun dossier à nettoyer.");
+    add-label: @tr("Ajouter un dossier à nettoyer");
+    placeholder: @tr("Chemin d'un dossier");
+    invalid: @tr("Un chemin absolu sans .. (/… ou ~/…).");
+    browse-label: Preferences.folder-chooser-title;
+    add-button-label: @tr("Ajouter le dossier à nettoyer");
+    rows: Preferences.folders;
+    entry <=> Preferences.folder-entry;
+    entry-error <=> Preferences.folder-entry-error;
+    remove-label(text) => {
+        @tr("Retirer {} des dossiers à nettoyer", text)
+    }
+    add(text) => {
+        Preferences.add(PathList.folders, text);
+    }
+    remove(index) => {
+        Preferences.remove(PathList.folders, index);
+    }
+    browse => {
+        Preferences.browse(PathList.folders);
     }
 }
 
@@ -508,71 +634,83 @@ export component SettingsPage inherits VerticalLayout {
         Preferences.reload();
     }
 
-    padding: Screen.page-margin;
-    spacing: Theme.spacing-xl;
-
-    VerticalLayout {
-        spacing: Theme.spacing-xs;
-        Title {
-            text: @tr("Réglages");
-        }
-        Detail {
-            text: @tr("Chaque changement est enregistré tout de suite.");
-        }
-    }
-
-    if Preferences.state == SettingsState.linked: Banner {
-        text: @tr("Vos réglages sont un lien : modifiez-les à la main.");
-    }
-    if Preferences.state == SettingsState.no-writer: Banner {
-        warning: true;
-        text: @tr("Okapi ne peut pas enregistrer ses réglages : le détail est dans le journal.");
-    }
-    if Preferences.state == SettingsState.no-directory: Banner {
-        warning: true;
-        text: @tr("Okapi ne sait pas où ranger ses réglages : ni XDG_CONFIG_HOME ni HOME ne sont utilisables.");
-    }
-    if Preferences.state == SettingsState.unreadable: HorizontalLayout {
-        spacing: Theme.spacing-m;
-        Banner {
-            horizontal-stretch: 1;
-            warning: true;
-            text: @tr("{} ne se lit pas : corrigez-le ou supprimez-le. Okapi ne le remplace pas.", Preferences.settings-file);
-        }
+    // The page scrolls when the window is too low for both lists and the
+    // general settings: each list then shows all its lines.
+    ScrollView {
+        vertical-stretch: 1;
         VerticalLayout {
-            alignment: center;
-            ActionButton {
-                text: @tr("Relire");
-                icon: @image-url("../assets/icons/rotate-ccw.svg");
-                clicked => {
-                    Preferences.read-again();
+            padding: Screen.page-margin;
+            spacing: Theme.spacing-xl;
+            alignment: start;
+
+            VerticalLayout {
+                spacing: Theme.spacing-xs;
+                Title {
+                    text: @tr("Réglages");
+                }
+                Detail {
+                    text: @tr("Chaque changement est enregistré tout de suite.");
                 }
             }
-        }
-    }
-    if Preferences.save-refused != SaveRefusal.none: Banner {
-        warning: true;
-        text: Preferences.save-refused == SaveRefusal.changed-elsewhere
-            ? @tr("Vos réglages ont été modifiés hors de cet écran : vos derniers changements n'ont pas été enregistrés, pour ne pas effacer ceux faits ailleurs. Refaites-les si besoin.")
-            : @tr("Ce réglage n'a pas pu être enregistré (le détail est dans le journal).");
-    }
 
-    HorizontalLayout {
-        vertical-stretch: 1;
-        spacing: Theme.spacing-l;
-        alignment: stretch;
-        VerticalLayout {
-            horizontal-stretch: 1;
-            alignment: start;
-            Exclusions {
-                enabled: root.enabled;
+            if Preferences.state == SettingsState.linked: Banner {
+                text: @tr("Vos réglages sont un lien : modifiez-les à la main.");
             }
-        }
-        VerticalLayout {
-            horizontal-stretch: 1;
-            alignment: start;
-            General {
-                enabled: root.enabled;
+            if Preferences.state == SettingsState.no-writer: Banner {
+                warning: true;
+                text: @tr("Okapi ne peut pas enregistrer ses réglages : le détail est dans le journal.");
+            }
+            if Preferences.state == SettingsState.no-directory: Banner {
+                warning: true;
+                text: @tr("Okapi ne sait pas où ranger ses réglages : ni XDG_CONFIG_HOME ni HOME ne sont utilisables.");
+            }
+            if Preferences.state == SettingsState.unreadable: HorizontalLayout {
+                spacing: Theme.spacing-m;
+                Banner {
+                    horizontal-stretch: 1;
+                    warning: true;
+                    text: @tr("{} ne se lit pas : corrigez-le ou supprimez-le. Okapi ne le remplace pas.", Preferences.settings-file);
+                }
+                VerticalLayout {
+                    alignment: center;
+                    ActionButton {
+                        text: @tr("Relire");
+                        icon: @image-url("../assets/icons/rotate-ccw.svg");
+                        clicked => {
+                            Preferences.read-again();
+                        }
+                    }
+                }
+            }
+            if Preferences.save-refused != SaveRefusal.none: Banner {
+                warning: true;
+                text: Preferences.save-refused == SaveRefusal.changed-elsewhere
+                    ? @tr("Vos réglages ont été modifiés hors de cet écran : vos derniers changements n'ont pas été enregistrés, pour ne pas effacer ceux faits ailleurs. Refaites-les si besoin.")
+                    : @tr("Ce réglage n'a pas pu être enregistré (le détail est dans le journal).");
+            }
+
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: Theme.spacing-l;
+                alignment: stretch;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: start;
+                    spacing: Theme.spacing-l;
+                    Exclusions {
+                        enabled: root.enabled;
+                    }
+                    Folders {
+                        enabled: root.enabled;
+                    }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: start;
+                    General {
+                        enabled: root.enabled;
+                    }
+                }
             }
         }
     }

@@ -1,7 +1,9 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+
+use crate::walk::IdentityReader;
 
 /// Whether a failed lookup only means the path is not there.
 pub(crate) fn is_absent(error: &io::Error) -> bool {
@@ -11,6 +13,83 @@ pub(crate) fn is_absent(error: &io::Error) -> bool {
 /// [`is_absent`], for an error already reduced to its kind.
 pub(crate) const fn is_absent_kind(kind: io::ErrorKind) -> bool {
     matches!(kind, io::ErrorKind::NotFound | io::ErrorKind::NotADirectory)
+}
+
+/// Whether `path`, as the user wrote it, names one place: absolute, without
+/// `..` (which would name another place than the one read).
+pub(crate) fn is_plain_absolute(path: &Path) -> bool {
+    path.is_absolute()
+        && !path
+            .components()
+            .any(|component| component == Component::ParentDir)
+}
+
+/// Why a path is not a real directory a walk may start from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NotADirectory {
+    Absent,
+    /// The path itself is a link (its ancestors may be).
+    Link,
+    /// It is something else than a directory.
+    Other,
+    /// Under its real name, it is no longer what was read first: a link
+    /// swapped in since, or another directory.
+    Replaced {
+        real: PathBuf,
+    },
+    /// `path` cannot be read, or its identity is unknown.
+    Unreadable {
+        path: PathBuf,
+        error: io::ErrorKind,
+    },
+}
+
+/// The real location of the directory `path` names, and what was read of
+/// it there: its last component is never a link (an ancestor may be), and
+/// it is read again under its real name, so a link swapped in meanwhile is
+/// seen. The one way a scan opens a directory root by its path, before
+/// the roots are read again by identity.
+///
+/// # Errors
+///
+/// [`NotADirectory`], with the path at fault.
+pub(crate) fn real_directory(
+    path: &Path,
+    identity_of: IdentityReader,
+) -> Result<(PathBuf, fs::Metadata), NotADirectory> {
+    let unreadable = |path: &Path, error: io::ErrorKind| NotADirectory::Unreadable {
+        path: path.to_path_buf(),
+        error,
+    };
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if is_absent(&error) => return Err(NotADirectory::Absent),
+        Err(error) => return Err(unreadable(path, error.kind())),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(NotADirectory::Link);
+    }
+    if !metadata.is_dir() {
+        return Err(NotADirectory::Other);
+    }
+    let real = match fs::canonicalize(path) {
+        Ok(real) => real,
+        Err(error) if is_absent(&error) => return Err(NotADirectory::Absent),
+        Err(error) => return Err(unreadable(path, error.kind())),
+    };
+    let again = match fs::symlink_metadata(&real) {
+        Ok(again) => again,
+        Err(error) if is_absent(&error) => return Err(NotADirectory::Absent),
+        Err(error) => return Err(unreadable(&real, error.kind())),
+    };
+    if !again.is_dir() {
+        return Err(NotADirectory::Replaced { real });
+    }
+    match (identity_of(&metadata), identity_of(&again)) {
+        (Some(first), Some(second)) if first == second => Ok((real, again)),
+        (Some(_), Some(_)) => Err(NotADirectory::Replaced { real }),
+        _ => Err(unreadable(&real, io::ErrorKind::Unsupported)),
+    }
 }
 
 /// The real location of `path`, resolving its longest existing prefix when the

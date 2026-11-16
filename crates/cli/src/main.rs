@@ -16,8 +16,8 @@ use std::process::ExitCode;
 use std::time::{Instant, SystemTime};
 
 use okapi_engine::{
-    CleanOutcome, CleanReceipt, DEFAULT_MIN_AGE, Exclusions, ItemId, ScanIssue, ScanOptions,
-    ScanReport, Stop, clean_watched, scan_watched, settings_min_age,
+    Category, CleanOutcome, CleanReceipt, CustomFolder, DEFAULT_MIN_AGE, Exclusions, ItemId,
+    ScanIssue, ScanOptions, ScanReport, Stop, clean_watched, scan_watched, settings_min_age,
 };
 use okapi_rules::{
     Language, Os, RuleSet, SESSION_VARIABLES, THIRD_PARTY_NOTICES, TemplateVariables,
@@ -245,11 +245,31 @@ fn prepare(run: &Run, language: Language) -> Result<Prepared, u8> {
             })?,
         (None, None) => DEFAULT_MIN_AGE,
     };
-    tracing::info!(?min_age, exclusions = ?written, deletion_log = settings.deletion_log, "effective options");
+    let custom_folders = settings
+        .custom_folders
+        .iter()
+        .map(|folder| CustomFolder::new(PathBuf::from(folder)))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            tracing::warn!(?error, path = %settings_path.display(), "settings folder to clean refused");
+            error_line(&say(&Message::SettingsCustomFolder(&settings_path, &error)));
+            exit::INVALID_ARGUMENTS
+        })?;
+    // Walked only when asked for by name: a run never reads the user's own
+    // folders unasked (and never cleans them, left to choose).
+    let custom_folders = if run.categories.contains(&Category::Custom) {
+        if custom_folders.is_empty() {
+            tracing::info!(path = %settings_path.display(), "user's folders asked for, none in the settings");
+        }
+        custom_folders
+    } else {
+        Vec::new()
+    };
+    tracing::info!(?min_age, exclusions = ?written, ?custom_folders, deletion_log = settings.deletion_log, "effective options");
     Ok(Prepared {
         variables,
         rules,
-        options: ScanOptions::new(now, min_age, exclusions),
+        options: ScanOptions::new(now, min_age, exclusions).with_custom_folders(custom_folders),
         deletion_log: settings.deletion_log,
     })
 }

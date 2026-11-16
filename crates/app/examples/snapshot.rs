@@ -211,16 +211,18 @@ fn results(window: &ui::AppWindow, folded: bool, language: Language) {
         }
         line
     }));
-    rows.push(header(Browsers, false));
-    let browser = |name: &str, folded| ui::ResultRow {
+    // Folded, the browsers and the applications too: the user's folders show.
+    rows.push(header(Browsers, folded));
+    let browser = |name: &str, closed| ui::ResultRow {
         kind: ui::RowKind::Browser,
         label: name.into(),
-        folded,
+        folded: closed,
+        hidden: folded,
         ..header(Browsers, false)
     };
     let cache = |label, badge, checked, hidden| ui::ResultRow {
         nested: true,
-        hidden,
+        hidden: hidden || folded,
         ..row(Browsers, label, badge, checked, language)
     };
     rows.extend([
@@ -231,12 +233,27 @@ fn results(window: &ui::AppWindow, folded: bool, language: Language) {
         browser("Opera GX", true),
         cache("Cache", Preselected, true, true),
     ]);
-    rows.push(header(Apps, false));
-    rows.extend([
-        row(Apps, "npm Cache", Preselected, true, language),
-        row(Apps, "pip Cache", Preselected, true, language),
-        row(Apps, "Hugging Face Xet Cache", ToChoose, false, language),
-    ]);
+    rows.push(header(Apps, folded));
+    rows.extend(
+        [
+            row(Apps, "npm Cache", Preselected, true, language),
+            row(Apps, "pip Cache", Preselected, true, language),
+            row(Apps, "Hugging Face Xet Cache", ToChoose, false, language),
+        ]
+        .map(|line| ui::ResultRow {
+            hidden: folded,
+            ..line
+        }),
+    );
+    // A folder of the user's, named by its path (never translated).
+    rows.push(header(ui::CategoryKind::Custom, false));
+    rows.push(ui::ResultRow {
+        category: ui::CategoryKind::Custom,
+        label: "~/Projets/okapi/target".into(),
+        description: slint::SharedString::new(),
+        note: ui::RowNote::Yours,
+        ..row(Apps, "pip Cache", ToChoose, false, language)
+    });
     let cleaner = window.global::<ui::Cleaner>();
     cleaner.set_results(ModelRc::new(VecModel::from(rows)));
     cleaner.set_selected_entries(4);
@@ -450,7 +467,7 @@ fn steps(steps: &[(ui::CleanStepKind, ui::RowState, i32, i32)]) -> ModelRc<ui::C
 
 /// The categories, before the analysis.
 fn choosing(window: &ui::AppWindow) {
-    use ui::CategoryKind::{Apps, Browsers, Gaming, Gpu, System};
+    use ui::CategoryKind::{Apps, Browsers, Custom, Gaming, Gpu, System};
     let choice = |kind, checked, to_choose| ui::CategoryChoice {
         kind,
         checked,
@@ -463,6 +480,7 @@ fn choosing(window: &ui::AppWindow) {
         choice(Apps, true, false),
         choice(Gaming, true, false),
         choice(Gpu, false, true),
+        choice(Custom, false, false),
     ])));
     cleaner.set_chosen_count(4);
     cleaner.set_min_age_minutes(60);
@@ -1256,6 +1274,21 @@ fn settings(window: &ui::AppWindow) {
         "24 h".into(),
     ])));
     preferences.set_min_age_chosen(1);
+    let path = |text: &str, kind| ui::PathRow {
+        text: text.into(),
+        kind,
+    };
+    preferences.set_exclusions(ModelRc::new(VecModel::from(vec![
+        path("~/Projets/garder", ui::PathKind::Folder),
+        path("*.kdbx", ui::PathKind::Extension),
+    ])));
+    preferences.set_folders(ModelRc::new(VecModel::from(vec![
+        path("~/Projets/okapi/target", ui::PathKind::Folder),
+        path("/media/ana/CLE/tmp", ui::PathKind::Unsure),
+        path("~/Téléchargements/vieux", ui::PathKind::Absent),
+    ])));
+    preferences.set_folder_entry("~/Documents".into());
+    preferences.set_folder_entry_error(ui::EntryError::Personal);
 }
 
 fn main() {

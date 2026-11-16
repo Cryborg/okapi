@@ -97,7 +97,10 @@ pub(crate) fn found(
                     ),
                     Effect::Delete(_) => return None,
                 },
-                RuleEntry::File(_) | RuleEntry::Browser { .. } => return None,
+                // A folder of the user's is emptied, never maintained.
+                RuleEntry::File(_) | RuleEntry::Browser { .. } | RuleEntry::Custom(_) => {
+                    return None;
+                }
             };
             if !options.chooses(std::slice::from_ref(&origin)) {
                 return None;

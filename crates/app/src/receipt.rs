@@ -109,6 +109,8 @@ pub enum Kept {
     Cancelled,
     /// Its browser was open.
     BrowserOpen,
+    /// The folder the user chose it is in was taken out of the settings.
+    NoLongerChosen,
     /// An identifier from another report: a fault of the interface.
     Unknown,
 }
@@ -128,6 +130,7 @@ impl Kept {
             KeepReason::Failed { .. } => Self::Refused,
             KeepReason::Cancelled => Self::Cancelled,
             KeepReason::BrowserOpen => Self::BrowserOpen,
+            KeepReason::NoLongerChosen => Self::NoLongerChosen,
             KeepReason::UnknownItem => Self::Unknown,
         }
     }
@@ -509,6 +512,7 @@ mod tests {
             ),
             (KeepReason::Cancelled, Kept::Cancelled),
             (KeepReason::BrowserOpen, Kept::BrowserOpen),
+            (KeepReason::NoLongerChosen, Kept::NoLongerChosen),
             (KeepReason::UnknownItem, Kept::Unknown),
         ];
         for (reason, kept) in reasons {

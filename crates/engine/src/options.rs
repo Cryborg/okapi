@@ -8,7 +8,10 @@ use std::time::{Duration, SystemTime};
 use okapi_platform::{FileIdentity, file_identity};
 use thiserror::Error;
 
-use crate::paths::{canonicalize_longest_prefix, lowercase, starts_with_ignoring_case};
+use crate::custom::CustomFolder;
+use crate::paths::{
+    canonicalize_longest_prefix, is_plain_absolute, lowercase, starts_with_ignoring_case,
+};
 use crate::report::{Category, Origin};
 use crate::walk::IdentityReader;
 
@@ -78,10 +81,7 @@ impl Form {
         let pattern = entry
             .to_str()
             .and_then(|text| text.strip_prefix(EXTENSION_PATTERN_PREFIX));
-        let plain_path = entry.is_absolute()
-            && !entry
-                .components()
-                .any(|component| component == Component::ParentDir);
+        let plain_path = is_plain_absolute(&entry);
         match pattern {
             Some(extension) if !extension.is_empty() && !extension.contains(['/', '\\', '*']) => {
                 Ok(Self::Extension(format!(".{}", lowercase(extension))))
@@ -264,6 +264,8 @@ pub struct ScanOptions {
     /// The rules walked, when they are chosen one by one: an empty set walks
     /// nothing, never all.
     origins: Option<BTreeSet<Origin>>,
+    /// The folders the user chose to have emptied, planned after the rules.
+    custom_folders: Vec<CustomFolder>,
 }
 
 impl ScanOptions {
@@ -277,7 +279,36 @@ impl ScanOptions {
             exclusions,
             categories: BTreeSet::new(),
             origins: None,
+            custom_folders: Vec::new(),
         }
+    }
+
+    /// Plans `folders` too, after the rules: each one's contents a group of
+    /// the [`Category::Custom`], never checked by default, walked as the
+    /// categories chosen say ([`Self::with_categories`]).
+    #[must_use]
+    pub fn with_custom_folders(mut self, folders: Vec<CustomFolder>) -> Self {
+        self.custom_folders = folders;
+        self
+    }
+
+    /// The folders the user chose, as they stand now: what a cleaning
+    /// still empties.
+    pub(crate) fn custom_folders(&self) -> &[CustomFolder] {
+        &self.custom_folders
+    }
+
+    /// The folders the user chose that the categories and rules chosen
+    /// choose ([`Self::chooses`]): what a scan plans.
+    pub(crate) fn chosen_custom_folders(&self) -> Vec<&CustomFolder> {
+        self.custom_folders
+            .iter()
+            .filter(|folder| {
+                self.chooses(&[Origin::Custom {
+                    folder: (*folder).clone(),
+                }])
+            })
+            .collect()
     }
 
     /// Walks only the roots of a group with one of `categories` (none: all).
@@ -530,6 +561,40 @@ mod tests {
     fn a_final_sigma_extension_still_matches() {
         let exclusions = exclusions(&["*.Σ"]).unwrap();
         assert!(exclusions.excludes(Path::new("/cache/foo.Σ")));
+    }
+
+    #[test]
+    fn the_user_s_folders_are_planned_only_when_chosen() {
+        let build = CustomFolder::new(PathBuf::from("/data/build")).unwrap();
+        let other = CustomFolder::new(PathBuf::from("/data/other")).unwrap();
+        let options = ScanOptions::new(SystemTime::now(), DEFAULT_MIN_AGE, Exclusions::none())
+            .with_custom_folders(vec![build.clone(), other.clone()]);
+        assert_eq!(
+            options.chosen_custom_folders(),
+            [&build, &other],
+            "no category: all"
+        );
+        let without = options
+            .clone()
+            .with_categories(BTreeSet::from([Category::System, Category::Browsers]));
+        assert_eq!(without.chosen_custom_folders(), Vec::<&CustomFolder>::new());
+        assert_eq!(
+            without.custom_folders(),
+            [build.clone(), other.clone()],
+            "still in force for a cleaning"
+        );
+        let with = options
+            .clone()
+            .with_categories(BTreeSet::from([Category::System, Category::Custom]));
+        assert_eq!(with.chosen_custom_folders(), [&build, &other]);
+        let one = options.with_origins(BTreeSet::from([Origin::Custom {
+            folder: other.clone(),
+        }]));
+        assert_eq!(
+            one.chosen_custom_folders(),
+            [&other],
+            "rules chosen one by one"
+        );
     }
 
     #[test]

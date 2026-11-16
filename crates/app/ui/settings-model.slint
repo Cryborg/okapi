@@ -15,13 +15,19 @@ export enum SettingsState {
     no-writer,
 }
 
-// What an exclusion is, read on the disk as it shows; until then, being read.
-export enum ExclusionKind { folder, file, extension, absent, invalid, reading }
+// What a path of a list is, read on the disk as it shows; until then, being
+// read. An exclusion: a folder, a file, an extension, absent, or invalid (it
+// stops every analysis). A folder to clean: a folder, absent, invalid (it
+// stops every analysis too), or why the analyses leave it alone.
+export enum PathKind {
+    folder, file, extension, absent, invalid, reading,
+    link, not-folder, protected, personal, not-owned, unsure, unreadable, unverifiable,
+}
 
-export struct ExclusionRow {
+export struct PathRow {
     // As written, a path below the home folder as `~/…`.
     text: string,
-    kind: ExclusionKind,
+    kind: PathKind,
 }
 
 export enum LanguageChoice { system, french, english }
@@ -29,7 +35,14 @@ export enum LanguageChoice { system, french, english }
 export enum ThemeChoice { system, light, dark }
 
 // Why what was typed is not added.
-export enum EntryError { none, invalid, unreadable, duplicate, not-text, chooser }
+export enum EntryError {
+    none, invalid, unreadable, duplicate, not-text, chooser,
+    // Why a folder to clean is refused.
+    absent, link, not-folder, protected, personal, not-owned, unsure, unverifiable,
+}
+
+// The two lists of paths the settings hold.
+export enum PathList { exclusions, folders }
 
 // Why the last change was not written.
 export enum SaveRefusal {
@@ -45,7 +58,9 @@ export global Preferences {
     // A change could not be written: said until one is, or until the
     // user reads the file again.
     in property <SaveRefusal> save-refused;
-    in property <[ExclusionRow]> exclusions;
+    in property <[PathRow]> exclusions;
+    // The folders the user chose to have emptied.
+    in property <[PathRow]> folders;
     // The ages offered, as `age` says them; the one chosen (-1: the file
     // holds another); the one the file holds, and the engine's default.
     in property <[string]> min-age-options;
@@ -62,17 +77,21 @@ export global Preferences {
     in property <string> cli-journal;
     in property <LanguageChoice> language;
     in property <ThemeChoice> theme;
-    // What is typed to add, cleared by Rust once added.
+    // What is typed to add to each list, cleared by Rust once added, and
+    // why it is not.
     in-out property <string> entry;
     in-out property <EntryError> entry-error;
-    // The folder chooser is open.
+    in-out property <string> folder-entry;
+    in-out property <EntryError> folder-entry-error;
+    // The folder chooser is open, for either list: one at a time.
     in property <bool> browsing;
-    // The title of the folder chooser, read by Rust.
+    // The titles of the folder chooser, for each list, read by Rust.
     out property <string> chooser-title: @tr("Choisir un dossier à exclure");
+    out property <string> folder-chooser-title: @tr("Choisir un dossier à nettoyer");
 
-    callback add(string);
-    callback remove(int);
-    callback browse();
+    callback add(PathList, string);
+    callback remove(PathList, int);
+    callback browse(PathList);
     callback choose-min-age(int);
     callback toggle-deletion-log();
     callback choose-language(LanguageChoice);

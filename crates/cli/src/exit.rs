@@ -71,7 +71,8 @@ pub fn exit_code<'a>(
             | KeepReason::Changed
             | KeepReason::Excluded
             | KeepReason::Protected
-            | KeepReason::BrowserOpen => PARTIAL,
+            | KeepReason::BrowserOpen
+            | KeepReason::NoLongerChosen => PARTIAL,
             KeepReason::Cancelled => {
                 interrupted = true;
                 PARTIAL

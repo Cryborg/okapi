@@ -31,6 +31,9 @@ mod watch;
 mod browsers;
 #[cfg(target_os = "linux")]
 mod firefox;
+// Its cleaning test shares the cleaning's helpers.
+#[cfg(target_os = "linux")]
+mod custom;
 
 const HOUR: Duration = Duration::from_hours(1);
 
@@ -132,6 +135,8 @@ struct Run<'a> {
     limits: Limits,
     /// Who will remove what is offered.
     user: Option<u32>,
+    /// The personal folders no custom folder may be.
+    personal: crate::custom::PersonalFolders,
     /// Who watches the scan and the cleaning.
     watch: crate::watch::Watch,
 }
@@ -176,6 +181,42 @@ fn marked_entry_owner(status: &okapi_platform::EntryStatus) -> u32 {
     }
 }
 
+/// A folder named so lies on a FAT volume.
+const FAT_NAME: &str = "fat-key";
+/// A folder named so lies on a FUSE filesystem.
+const FUSE_NAME: &str = "fuse-share";
+/// A folder named so lies on a stacked filesystem.
+const OVERLAY_NAME: &str = "overlay-root";
+/// No mount holds a folder named so.
+const UNMOUNTED_NAME: &str = "no-mount";
+/// The table of mounts cannot be read for a folder named so.
+const UNREADABLE_MOUNTS_NAME: &str = "mounts-unreadable";
+
+/// The filesystem of `path`, as its name says ([`FAT_NAME`]...); ext4
+/// otherwise.
+fn fat_when_named(path: &Path) -> std::io::Result<Option<String>> {
+    let named = |name: &str| {
+        path.components()
+            .any(|component| component.as_os_str() == name)
+    };
+    if named(UNREADABLE_MOUNTS_NAME) {
+        return Err(std::io::ErrorKind::InvalidData.into());
+    }
+    if named(UNMOUNTED_NAME) {
+        return Ok(None);
+    }
+    let filesystem = if named(FAT_NAME) {
+        "vfat"
+    } else if named(FUSE_NAME) {
+        "fuse.sshfs"
+    } else if named(OVERLAY_NAME) {
+        "overlay"
+    } else {
+        "ext4"
+    };
+    Ok(Some(filesystem.to_owned()))
+}
+
 impl<'a> Run<'a> {
     fn new(fixture: &Fixture, entries: Vec<RuleEntry<'a>>) -> Self {
         Self {
@@ -191,24 +232,25 @@ impl<'a> Run<'a> {
                 ownership: marked_ownership,
                 entry_owner: marked_entry_owner,
                 mount_root: okapi_platform::mount_root,
+                filesystem: fat_when_named,
             },
             limits: Limits::DEFAULT,
             user: Some(TEST_USER),
+            personal: crate::custom::PersonalFolders::none(),
             watch: crate::watch::Watch::none(),
         }
     }
 
     fn scan(&self) -> ScanReport {
-        scan_entries(
-            &self.entries,
-            &self.misc,
-            &self.variables,
-            &self.options,
-            self.readers,
-            self.limits,
-            self.user,
-            &self.watch,
-        )
+        let planning = crate::roots::Planning {
+            misc: &self.misc,
+            variables: &self.variables,
+            options: &self.options,
+            readers: self.readers,
+            user: self.user,
+            personal: &self.personal,
+        };
+        scan_entries(&self.entries, &planning, self.limits, &self.watch)
     }
 }
 
@@ -1454,6 +1496,7 @@ fn a_root_replaced_after_its_check_is_reported() {
         remover: None,
         root_owner: None,
         keep_hard_linked: false,
+        recent_holds_below: false,
     };
     // The identity checked before does not match what is opened now.
     let watch = crate::watch::Watch::none();
@@ -2738,6 +2781,7 @@ fn an_entry_whose_date_or_identity_is_unknown_is_held_back() {
             ownership: marked_ownership,
             entry_owner: marked_entry_owner,
             mount_root: okapi_platform::mount_root,
+            filesystem: fat_when_named,
         },
         Readers {
             identity: file_identity,
@@ -2745,6 +2789,7 @@ fn an_entry_whose_date_or_identity_is_unknown_is_held_back() {
             ownership: marked_ownership,
             entry_owner: marked_entry_owner,
             mount_root: okapi_platform::mount_root,
+            filesystem: fat_when_named,
         },
     ] {
         let mut run = Run::new(&fixture, vec![RuleEntry::Target(&rule)]);
@@ -3087,6 +3132,7 @@ fn the_policy_holds_back_mount_roots_links_and_recent_files() {
         remover: None,
         root_owner: None,
         keep_hard_linked: false,
+        recent_holds_below: false,
     };
     let observed = |kind, identity, last_change, mount_root| Observed {
         kind,
@@ -3176,6 +3222,7 @@ fn the_policy_holds_back_a_file_of_several_names_only_where_they_are_kept() {
         remover: None,
         root_owner: None,
         keep_hard_linked: true,
+        recent_holds_below: false,
     };
     let named = |kind, links| Observed {
         kind,
@@ -3234,6 +3281,7 @@ fn the_policy_holds_back_an_excluded_directory_by_identity() {
         remover: None,
         root_owner: None,
         keep_hard_linked: false,
+        recent_holds_below: false,
     };
     // Met at another path (a bind mount shows it elsewhere): the same object.
     let identity = file_identity(&fs::symlink_metadata(&kept).unwrap()).unwrap();
@@ -3274,6 +3322,7 @@ fn the_policy_holds_back_a_variable_directory_and_what_cannot_be_read() {
         remover: None,
         root_owner: None,
         keep_hard_linked: false,
+        recent_holds_below: false,
     };
     let identity = file_identity(&fs::symlink_metadata(&home).unwrap()).unwrap();
     let observed = Observed {
@@ -3513,6 +3562,7 @@ fn the_policy_lets_root_enter_only_directories_of_root_or_the_roots_owner() {
         remover: Some(ROOT_USER),
         root_owner: Some(TEST_USER),
         keep_hard_linked: false,
+        recent_holds_below: false,
     };
     let entry = |kind, owner| Observed {
         kind,

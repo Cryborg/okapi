@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use okapi_platform::FileIdentity;
 use okapi_rules::{TemplateVariables, Variable};
@@ -56,24 +56,13 @@ impl ProtectedRoots {
             directories: BTreeSet::new(),
         };
         for (variable, value) in variables.iter() {
-            let unreadable = |path: PathBuf, error: &io::Error| UnreadableVariable {
-                variable,
-                path,
-                error: error.kind(),
-            };
-            let canonical = canonicalize_longest_prefix(value)
-                .map_err(|error| unreadable(value.to_path_buf(), &error))?;
-            for (depth, ancestor) in canonical.ancestors().enumerate() {
-                let metadata = match fs::metadata(ancestor) {
-                    Ok(metadata) => metadata,
-                    // The part of a value that does not exist yet.
-                    Err(error) if is_absent(&error) => continue,
-                    Err(error) => return Err(unreadable(ancestor.to_path_buf(), &error)),
-                };
-                let Some(identity) = identity_of(&metadata) else {
-                    let error = io::Error::from(io::ErrorKind::Unsupported);
-                    return Err(unreadable(ancestor.to_path_buf(), &error));
-                };
+            let identities =
+                identities_up(value, identity_of).map_err(|(path, error)| UnreadableVariable {
+                    variable,
+                    path,
+                    error,
+                })?;
+            for (depth, identity) in identities {
                 if depth == 0 {
                     protected.directories.insert(identity);
                 }
@@ -100,6 +89,36 @@ impl ProtectedRoots {
     pub fn is_protected_directory(&self, identity: FileIdentity) -> bool {
         self.directories.contains(&identity) || self.ancestors.contains_key(&identity)
     }
+}
+
+/// The identity of `value`, its links followed, and of each of its
+/// ancestors, with their depth (0: `value` itself): what a directory that
+/// must never be emptied whole protects. The part of `value` that does not
+/// exist yet has none.
+///
+/// # Errors
+///
+/// The path that cannot be located or read, or whose identity is unknown,
+/// with why.
+pub(crate) fn identities_up(
+    value: &Path,
+    identity_of: IdentityReader,
+) -> Result<Vec<(usize, FileIdentity)>, (PathBuf, io::ErrorKind)> {
+    let canonical =
+        canonicalize_longest_prefix(value).map_err(|error| (value.to_path_buf(), error.kind()))?;
+    let mut identities = Vec::new();
+    for (depth, ancestor) in canonical.ancestors().enumerate() {
+        let metadata = match fs::metadata(ancestor) {
+            Ok(metadata) => metadata,
+            // The part of a value that does not exist yet.
+            Err(error) if is_absent(&error) => continue,
+            Err(error) => return Err((ancestor.to_path_buf(), error.kind())),
+        };
+        let identity = identity_of(&metadata)
+            .ok_or_else(|| (ancestor.to_path_buf(), io::ErrorKind::Unsupported))?;
+        identities.push((depth, identity));
+    }
+    Ok(identities)
 }
 
 #[cfg(test)]

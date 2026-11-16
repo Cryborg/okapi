@@ -3,7 +3,7 @@
 import { Theme } from "theme.slint";
 import { Banner } from "widgets.slint";
 
-export enum CategoryKind { system, browsers, apps, gaming, gpu }
+export enum CategoryKind { system, browsers, apps, gaming, gpu, custom }
 
 export struct CategoryChoice {
     kind: CategoryKind,
@@ -13,7 +13,7 @@ export struct CategoryChoice {
 }
 
 // Why an analysis or a cleaning cannot start; the detail is in the journal.
-export enum SetupProblem { none, variables, rules, settings, min-age, exclusion, history, start, rights-changed, settings-saving, settings-unsaved }
+export enum SetupProblem { none, variables, rules, settings, min-age, exclusion, custom-folder, history, start, rights-changed, settings-saving, settings-unsaved }
 
 export enum CleanerStep { idle, planning, scanning, cancelling, outcome, results, cleaning, receipt }
 
@@ -54,7 +54,8 @@ export struct StopShown {
 export enum CheckState { checked, unchecked, partial }
 
 // What a group of the results is: offered checked, left to the user (a
-// cache reset, invariant 5), or out of reach without the administrator.
+// cache reset, invariant 5, a maintenance, a folder of the user's), or out
+// of reach without the administrator.
 export enum ResultBadge { preselected, to-choose, admin }
 
 // What a line of the results is: a category, a browser under the browsers'
@@ -62,14 +63,14 @@ export enum ResultBadge { preselected, to-choose, admin }
 export enum RowKind { category, browser, group }
 
 // What the note under a group says. Left to the user: a cache reset; a
-// maintenance of the system; one of the administrator's that root's scan
-// unlocked; or a temporary folder outside /tmp. Out of reach without the
-// administrator: waiting for the rights; waiting for them, unreadable to the
-// user, or a maintenance measured by root only, what it holds unknown; never
-// the helper's to clean; nothing for root to clean. None for a group
-// preselected.
+// maintenance of the system; a folder of the user's; one of the
+// administrator's that root's scan unlocked; or a temporary folder outside
+// /tmp. Out of reach without the administrator: waiting for the rights;
+// waiting for them, unreadable to the user, or a maintenance measured by
+// root only, what it holds unknown; never the helper's to clean; nothing
+// for root to clean. None for a group preselected.
 export enum RowNote {
-    none, cache-reset, operation, rights-obtained, to-choose,
+    none, cache-reset, operation, yours, rights-obtained, to-choose,
     locked, unseen, unmeasured, unreachable, nothing,
 }
 
@@ -127,7 +128,7 @@ export struct ResultRow {
 
 export enum IssueKind {
     age-beyond-clock, unsupported, unresolvable, unreadable-root, unsafe-root, protected-root,
-    excluded, depth-limit, entries-limit,
+    excluded, depth-limit, entries-limit, custom-folder-refused,
 }
 
 // A note of the analysis, and the path it is about (none for a rule).
@@ -155,7 +156,7 @@ export enum HistoryState { recorded, failed, unavailable, not-written }
 
 export enum ReceiptKind {
     removed, partial, gone, recent, changed, replaced, excluded, protected, denied, refused,
-    cancelled, browser-open, unknown,
+    cancelled, browser-open, no-longer-chosen, unknown,
 }
 
 // An entry of a receipt line, and what kept it, or part of it, if anything.
@@ -294,6 +295,9 @@ export global Words {
         if kind == CategoryKind.gaming {
             return @tr("Jeux");
         }
+        if kind == CategoryKind.custom {
+            return @tr("Mes dossiers");
+        }
         // The GPU caches, the one kind left.
         return @tr("Caches GPU");
     }
@@ -311,6 +315,9 @@ export global Words {
         if kind == CategoryKind.gaming {
             return @tr("Steam, Heroic, Lutris et itch.io : journaux et caches.");
         }
+        if kind == CategoryKind.custom {
+            return @tr("Les dossiers ajoutés dans Réglages. Rien n'y est coché d'avance.");
+        }
         return @tr("Shaders Mesa et NVIDIA. Recréés ensuite : le prochain lancement des jeux sera plus lent.");
     }
 
@@ -326,6 +333,9 @@ export global Words {
         }
         if kind == CategoryKind.gaming {
             return @image-url("../assets/icons/gamepad.svg");
+        }
+        if kind == CategoryKind.custom {
+            return @image-url("../assets/icons/folder.svg");
         }
         return @image-url("../assets/icons/cpu.svg");
     }
@@ -412,6 +422,8 @@ export component ProblemBanner inherits Banner {
         ? @tr("Le dernier changement des réglages n'a pas pu être enregistré : rien ne démarre. Refaites-le dans Réglages.")
         : Cleaner.problem == SetupProblem.min-age
         ? @tr("L'âge minimal des réglages remonte avant l'horloge : rien ne serait assez ancien.")
+        : Cleaner.problem == SetupProblem.custom-folder
+        ? @tr("Un dossier à nettoyer des réglages n'est pas un chemin absolu sans .. : rien ne peut démarrer. Corrigez-le ou retirez-le dans Réglages.")
         : Cleaner.problem == SetupProblem.start
         ? @tr("Le travail n'a pas pu démarrer : rien n'est supprimé. Le détail est dans le journal.")
         : Cleaner.problem == SetupProblem.rights-changed

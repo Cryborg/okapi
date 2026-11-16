@@ -16,6 +16,10 @@ use crate::text::{Message, text};
 
 /// A group as the command line shows it and decides about it.
 #[derive(Debug, Serialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one flag per fact of the group, each read alone by the JSON or the text"
+)]
 pub struct GroupSummary {
     /// The browser whose cache it is, by its key.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -28,6 +32,9 @@ pub struct GroupSummary {
     pub cache_reset: bool,
     pub needs_admin: bool,
     pub decision: Decision,
+    /// Its label is the path of a folder the user chose, never translated.
+    #[serde(skip)]
+    pub custom_folder: bool,
     #[serde(skip)]
     pub ids: Vec<ItemId>,
 }
@@ -74,6 +81,7 @@ fn summary(group: &ScanGroup, categories: &BTreeSet<Category>) -> GroupSummary {
             group.needs_admin(),
             categories,
         ),
+        custom_folder: group.custom_folder().is_some(),
         ids: group
             .items()
             .iter()
@@ -183,6 +191,7 @@ impl Shown<'_> {
                 output.line(&say(&Message::Group {
                     browser: group.browser,
                     label: &group.label,
+                    custom_folder: group.custom_folder,
                     entries: group.entries.len(),
                     bytes: group.bytes,
                     decision: group.decision,

@@ -30,6 +30,7 @@ pub fn nowhere() -> SettingsSeams {
         choose_folder: Rc::new(|_, done| done(Chosen::Unavailable)),
         desktop_theme: Rc::new(|done| done(None)),
         examine: Arc::new(examine),
+        examine_folder: Arc::new(examine_folder),
     }
 }
 
@@ -149,6 +150,7 @@ impl Sandbox {
                 }
             }),
             examine: Arc::new(examine),
+            examine_folder: Arc::new(examine_folder),
         }
     }
 
@@ -199,11 +201,11 @@ fn save_refused(window: &ui::AppWindow, refusal: ui::SaveRefusal) -> bool {
 /// Types `text` in the field, and presses "Ajouter".
 fn type_and_add(window: &ui::AppWindow, text: &str) {
     preferences(window).set_entry(text.into());
-    button(window, "Ajouter").invoke_accessible_default_action();
+    button(window, "Ajouter l'exclusion").invoke_accessible_default_action();
 }
 
 /// The exclusions shown, and what each is.
-fn rows(window: &ui::AppWindow) -> Vec<(String, ui::ExclusionKind)> {
+fn rows(window: &ui::AppWindow) -> Vec<(String, ui::PathKind)> {
     preferences(window)
         .get_exclusions()
         .iter()
@@ -271,7 +273,7 @@ fn an_exclusion_typed_is_written_absolute_and_shown_from_home() {
     );
     assert_eq!(
         rows(&window),
-        [("~/Projets".to_owned(), ui::ExclusionKind::Absent)]
+        [("~/Projets".to_owned(), ui::PathKind::Absent)]
     );
     assert_eq!(preferences(&window).get_entry(), "", "the field emptied");
     assert_eq!(preferences(&window).get_entry_error(), ui::EntryError::None);
@@ -281,7 +283,7 @@ fn an_exclusion_typed_is_written_absolute_and_shown_from_home() {
     examined(&screens);
     assert_eq!(
         rows(&window),
-        [("~/Projets".to_owned(), ui::ExclusionKind::Folder)]
+        [("~/Projets".to_owned(), ui::PathKind::Folder)]
     );
     // `~` alone is the home folder; a folder whose name only starts like
     // it is not below it.
@@ -292,9 +294,9 @@ fn an_exclusion_typed_is_written_absolute_and_shown_from_home() {
     assert_eq!(
         rows(&window)[1..],
         [
-            ("~".to_owned(), ui::ExclusionKind::Folder),
-            (beside, ui::ExclusionKind::Absent),
-            ("*.blend".to_owned(), ui::ExclusionKind::Extension),
+            ("~".to_owned(), ui::PathKind::Folder),
+            (beside, ui::PathKind::Absent),
+            ("*.blend".to_owned(), ui::PathKind::Extension),
         ]
     );
 }
@@ -373,11 +375,11 @@ fn an_exclusion_written_by_hand_is_shown_as_the_engine_takes_it() {
             .map(|(_, kind)| kind)
             .collect::<Vec<_>>(),
         [
-            ui::ExclusionKind::Invalid,
-            ui::ExclusionKind::Invalid,
-            ui::ExclusionKind::Invalid,
-            ui::ExclusionKind::Extension,
-            ui::ExclusionKind::File,
+            ui::PathKind::Invalid,
+            ui::PathKind::Invalid,
+            ui::PathKind::Invalid,
+            ui::PathKind::Extension,
+            ui::PathKind::File,
         ]
     );
     // Read with its line, as its badge shows it.
@@ -620,11 +622,14 @@ fn settings_that_are_a_link_are_shown_and_never_written() {
         "Vos réglages sont un lien : modifiez-les à la main."
     ));
     assert!(preferences(&window).get_deletion_log(), "its values shown");
-    assert_eq!(button(&window, "Ajouter").accessible_enabled(), Some(false));
+    assert_eq!(
+        button(&window, "Ajouter l'exclusion").accessible_enabled(),
+        Some(false)
+    );
     // Even asked directly, nothing changes.
     preferences(&window).invoke_toggle_deletion_log();
-    preferences(&window).invoke_add("/x".into());
-    preferences(&window).invoke_browse();
+    preferences(&window).invoke_add(ui::PathList::Exclusions, "/x".into());
+    preferences(&window).invoke_browse(ui::PathList::Exclusions);
     written(&screens);
     assert!(
         save_refused(&window, ui::SaveRefusal::None),
@@ -701,7 +706,7 @@ fn a_folder_chosen_is_added_as_it_is() {
     let folder = sandbox.home.path().join(" espacé ");
     fs::create_dir(&folder).unwrap();
     sandbox.chosen.replace(Some(Chosen::Folder(folder.clone())));
-    button(&window, "Parcourir").invoke_accessible_default_action();
+    button(&window, "Choisir un dossier à exclure").invoke_accessible_default_action();
     written(&screens);
     assert_eq!(
         sandbox.settings().exclusions,
@@ -711,10 +716,10 @@ fn a_folder_chosen_is_added_as_it_is() {
     assert!(!preferences(&window).get_browsing());
 
     sandbox.chosen.replace(Some(Chosen::Cancelled));
-    button(&window, "Parcourir").invoke_accessible_default_action();
+    button(&window, "Choisir un dossier à exclure").invoke_accessible_default_action();
     assert_eq!(preferences(&window).get_entry_error(), ui::EntryError::None);
     sandbox.chosen.replace(Some(Chosen::Unavailable));
-    button(&window, "Parcourir").invoke_accessible_default_action();
+    button(&window, "Choisir un dossier à exclure").invoke_accessible_default_action();
     assert_eq!(
         preferences(&window).get_entry_error(),
         ui::EntryError::Chooser
@@ -736,7 +741,7 @@ fn a_folder_chosen_whose_name_is_not_text_is_refused() {
     let (window, screens) = sandbox.window();
     let folder = PathBuf::from(std::ffi::OsString::from_vec(b"/data/\xff".to_vec()));
     sandbox.chosen.replace(Some(Chosen::Folder(folder)));
-    button(&window, "Parcourir").invoke_accessible_default_action();
+    button(&window, "Choisir un dossier à exclure").invoke_accessible_default_action();
     assert_eq!(
         preferences(&window).get_entry_error(),
         ui::EntryError::NotText
@@ -993,14 +998,14 @@ fn reading_again_lets_go_of_a_chooser_that_never_answered() {
         ..sandbox.seams()
     };
     let (window, _screens) = Sandbox::window_from(Rc::new(|| Ok(defaults())), seams);
-    button(&window, "Parcourir").invoke_accessible_default_action();
+    button(&window, "Choisir un dossier à exclure").invoke_accessible_default_action();
     assert!(preferences(&window).get_browsing());
     // Asked again, past the button the window greys out.
-    preferences(&window).invoke_browse();
+    preferences(&window).invoke_browse(ui::PathList::Exclusions);
     assert_eq!(asked.get(), 1, "one at a time");
     preferences(&window).invoke_reload();
     assert!(!preferences(&window).get_browsing());
-    button(&window, "Parcourir").invoke_accessible_default_action();
+    button(&window, "Choisir un dossier à exclure").invoke_accessible_default_action();
     assert_eq!(asked.get(), 2);
 }
 
@@ -1058,7 +1063,7 @@ fn without_a_settings_directory_nothing_can_be_changed() {
         preferences(&window).get_state(),
         ui::SettingsState::NoDirectory
     );
-    preferences(&window).invoke_add("/x".into());
+    preferences(&window).invoke_add(ui::PathList::Exclusions, "/x".into());
     preferences(&window).invoke_toggle_deletion_log();
     assert_eq!(rows(&window), []);
     assert!(!preferences(&window).get_deletion_log());
@@ -1101,7 +1106,7 @@ fn a_folder_chosen_leaves_what_is_typed() {
     sandbox
         .chosen
         .replace(Some(Chosen::Folder(PathBuf::from("/mnt/x"))));
-    button(&window, "Parcourir").invoke_accessible_default_action();
+    button(&window, "Choisir un dossier à exclure").invoke_accessible_default_action();
     assert_eq!(rows(&window).len(), 1);
     assert_eq!(preferences(&window).get_entry(), "/data/a");
 }
@@ -1341,4 +1346,243 @@ fn an_exclusion_the_engine_takes_as_one_already_there_is_said() {
     );
     written(&screens);
     assert_eq!(sandbox.settings().exclusions, ["/data", "*.log"]);
+}
+
+/// What a folder to clean is, by its name, as the engine would judge it:
+/// `/lien` a link, `/autre` another account's... any other a folder.
+fn folder_by_name(entry: &str) -> Examined {
+    if !entry.starts_with('/') {
+        return Err(ui::EntryError::Invalid);
+    }
+    Ok(match entry {
+        "/absent" => ui::PathKind::Absent,
+        "/lien" => ui::PathKind::Link,
+        "/fichier" => ui::PathKind::NotFolder,
+        "/home" => ui::PathKind::Protected,
+        "/documents" => ui::PathKind::Personal,
+        "/autre" => ui::PathKind::NotOwned,
+        "/cle" => ui::PathKind::Unsure,
+        _ => ui::PathKind::Folder,
+    })
+}
+
+/// Types `text` in the field of the folders to clean, and adds it.
+fn type_and_add_folder(window: &ui::AppWindow, text: &str) {
+    preferences(window).set_folder_entry(text.into());
+    button(window, "Ajouter le dossier à nettoyer").invoke_accessible_default_action();
+}
+
+/// The folders to clean shown, and what each is.
+fn folder_rows(window: &ui::AppWindow) -> Vec<(String, ui::PathKind)> {
+    preferences(window)
+        .get_folders()
+        .iter()
+        .map(|row| (row.text.to_string(), row.kind))
+        .collect()
+}
+
+impl Sandbox {
+    /// The window, its folders to clean judged by [`folder_by_name`].
+    fn window_judging_folders(&self) -> (ui::AppWindow, Screens) {
+        let seams = SettingsSeams {
+            examine_folder: Arc::new(folder_by_name),
+            ..self.seams()
+        };
+        Self::window_from(Rc::new(|| Ok(defaults())), seams)
+    }
+}
+
+#[test]
+fn a_folder_to_clean_is_added_only_when_an_analysis_would_walk_it() {
+    let sandbox = Sandbox::new();
+    let (window, screens) = sandbox.window_judging_folders();
+    assert!(shows(&window, "Aucun dossier à nettoyer."));
+    type_and_add_folder(&window, " ~/build ");
+    let build = sandbox.home.path().join("build");
+    assert_eq!(
+        preferences(&window).get_folder_entry_error(),
+        ui::EntryError::None
+    );
+    assert_eq!(
+        preferences(&window).get_folder_entry(),
+        "",
+        "the field emptied"
+    );
+    for (typed, refused) in [
+        ("/absent", ui::EntryError::Absent),
+        ("/lien", ui::EntryError::Link),
+        ("/fichier", ui::EntryError::NotFolder),
+        ("/home", ui::EntryError::Protected),
+        ("/documents", ui::EntryError::Personal),
+        ("/autre", ui::EntryError::NotOwned),
+        ("/cle", ui::EntryError::Unsure),
+        ("relatif", ui::EntryError::Invalid),
+    ] {
+        type_and_add_folder(&window, typed);
+        assert_eq!(
+            preferences(&window).get_folder_entry_error(),
+            refused,
+            "{typed}"
+        );
+        assert_eq!(
+            preferences(&window).get_folder_entry(),
+            typed,
+            "kept to fix"
+        );
+        assert_eq!(
+            preferences(&window).get_entry_error(),
+            ui::EntryError::None,
+            "never said by the exclusions' field"
+        );
+    }
+    type_and_add_folder(&window, "/data/a");
+    type_and_add_folder(&window, "/data/b");
+    // The same folder, written otherwise; another one, by its case.
+    type_and_add_folder(&window, "/data/a/");
+    assert_eq!(
+        preferences(&window).get_folder_entry_error(),
+        ui::EntryError::Duplicate
+    );
+    type_and_add_folder(&window, "/Data/a");
+    written(&screens);
+    let settings = sandbox.settings();
+    assert_eq!(
+        settings.custom_folders,
+        [build.to_str().unwrap(), "/data/a", "/data/b", "/Data/a"],
+        "absolute, as the engine takes it"
+    );
+    assert_eq!(
+        settings.exclusions,
+        Vec::<String>::new(),
+        "never an exclusion"
+    );
+    assert_eq!(
+        folder_rows(&window)[0],
+        ("~/build".to_owned(), ui::PathKind::Folder)
+    );
+    // The second of the three, by its own cross.
+    button(&window, "Retirer /data/b des dossiers à nettoyer").invoke_accessible_default_action();
+    written(&screens);
+    assert_eq!(
+        sandbox.settings().custom_folders,
+        [build.to_str().unwrap(), "/data/a", "/Data/a"]
+    );
+}
+
+#[test]
+fn a_folder_to_clean_written_by_hand_says_why_analyses_leave_it_alone() {
+    let sandbox = Sandbox::new();
+    sandbox.write(
+        r#"{"version": 1, "exclusions": ["/lien"], "customFolders": ["relatif", "/lien", "/cle", "/ok"]}"#,
+    );
+    let (window, screens) = sandbox.window_judging_folders();
+    examined(&screens);
+    assert_eq!(
+        folder_rows(&window),
+        [
+            ("relatif".to_owned(), ui::PathKind::Invalid),
+            ("/lien".to_owned(), ui::PathKind::Link),
+            ("/cle".to_owned(), ui::PathKind::Unsure),
+            ("/ok".to_owned(), ui::PathKind::Folder),
+        ]
+    );
+    // The same path in the other list is read by that list's reader.
+    assert_eq!(rows(&window), [("/lien".to_owned(), ui::PathKind::Absent)]);
+    // Taken out, the one an analysis would refuse.
+    button(&window, "Retirer relatif des dossiers à nettoyer").invoke_accessible_default_action();
+    written(&screens);
+    assert_eq!(sandbox.settings().custom_folders, ["/lien", "/cle", "/ok"]);
+    assert_eq!(sandbox.settings().exclusions, ["/lien"], "untouched");
+}
+
+#[test]
+fn a_folder_chosen_to_clean_goes_to_its_own_list() {
+    let sandbox = Sandbox::new();
+    let (window, screens) = sandbox.window_judging_folders();
+    sandbox
+        .chosen
+        .replace(Some(Chosen::Folder(PathBuf::from("/data/x"))));
+    button(&window, "Choisir un dossier à nettoyer").invoke_accessible_default_action();
+    written(&screens);
+    assert_eq!(sandbox.settings().custom_folders, ["/data/x"]);
+    assert_eq!(sandbox.settings().exclusions, Vec::<String>::new());
+    sandbox
+        .chosen
+        .replace(Some(Chosen::Folder(PathBuf::from("/lien"))));
+    button(&window, "Choisir un dossier à nettoyer").invoke_accessible_default_action();
+    assert_eq!(
+        preferences(&window).get_folder_entry_error(),
+        ui::EntryError::Link
+    );
+    sandbox.chosen.replace(Some(Chosen::Unavailable));
+    button(&window, "Choisir un dossier à nettoyer").invoke_accessible_default_action();
+    assert_eq!(
+        preferences(&window).get_folder_entry_error(),
+        ui::EntryError::Chooser
+    );
+    assert_eq!(preferences(&window).get_entry_error(), ui::EntryError::None);
+}
+
+/// The system's reader: only what the machine's filesystem cannot change
+/// (the engine tests the rest with stand-in readers).
+#[test]
+fn the_engine_judges_a_folder_to_clean_as_a_scan_would() {
+    if okapi_platform::running_as_root() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let mine = sandbox.home.path().join("build");
+    fs::create_dir(&mine).unwrap();
+    assert_eq!(examine_folder("relatif"), Err(ui::EntryError::Invalid));
+    assert_eq!(
+        examine_folder(mine.join("nothing").to_str().unwrap()),
+        Ok(ui::PathKind::Absent)
+    );
+    let home = std::env::var("HOME").unwrap();
+    assert_eq!(
+        examine_folder(&home),
+        Ok(ui::PathKind::Protected),
+        "the session's home folder"
+    );
+}
+
+#[test]
+fn a_folder_line_whose_reading_fails_is_unreadable_never_invalid() {
+    let sandbox = Sandbox::new();
+    sandbox.write(r#"{"version": 1, "customFolders": ["/panne", "/ok"]}"#);
+    let seams = SettingsSeams {
+        examine_folder: Arc::new(|entry| {
+            if entry == "/panne" {
+                Err(ui::EntryError::Unreadable)
+            } else {
+                folder_by_name(entry)
+            }
+        }),
+        ..sandbox.seams()
+    };
+    let (window, screens) = Sandbox::window_from(Rc::new(|| Ok(defaults())), seams);
+    examined(&screens);
+    assert_eq!(
+        folder_rows(&window),
+        [
+            ("/panne".to_owned(), ui::PathKind::Unreadable),
+            ("/ok".to_owned(), ui::PathKind::Folder),
+        ],
+        "it stops nothing: only one invalid as written does"
+    );
+}
+
+#[test]
+fn an_exclusion_refused_says_nothing_in_the_field_of_the_folders() {
+    let sandbox = Sandbox::new();
+    let (window, _screens) = sandbox.window_judging_folders();
+    type_and_add(&window, "relatif");
+    assert_eq!(
+        preferences(&window).get_entry_error(),
+        ui::EntryError::Invalid
+    );
+    assert_eq!(
+        preferences(&window).get_folder_entry_error(),
+        ui::EntryError::None
+    );
 }

@@ -5,8 +5,8 @@ use std::io;
 use std::path::Path;
 
 use okapi_engine::{
-    ByteSize, CleanResult, ExclusionError, KeepReason, Limit, Origin, ScanIssue, SizeUnit, Stop,
-    UnsafeReason,
+    ByteSize, CleanResult, CustomFolderError, CustomFolderRefusal, ExclusionError, KeepReason,
+    Limit, Origin, ScanIssue, SizeUnit, Stop, UnsafeReason,
 };
 use okapi_platform::VariablesError;
 use okapi_rules::{BrowserKind, Language, TemplateError, Variable};
@@ -52,6 +52,8 @@ pub enum Message<'a> {
     HistoryNotRecorded(&'a StoreError),
     Store(&'a StoreError),
     SettingsExclusion(&'a Path, &'a ExclusionError),
+    /// A folder to clean of the settings file (first) that names none.
+    SettingsCustomFolder(&'a Path, &'a CustomFolderError),
     SettingsMinAge(&'a Path, u64),
     DeletionLogUnavailable,
     SettingsDirectoryUnknown,
@@ -67,7 +69,10 @@ pub enum Message<'a> {
     Issue(&'a ScanIssue),
     Group {
         browser: Option<BrowserKind>,
+        /// A text of the rules; the path of a folder the user chose when
+        /// `custom_folder`, never translated.
         label: &'a str,
+        custom_folder: bool,
         entries: usize,
         bytes: u64,
         decision: Decision,
@@ -129,6 +134,9 @@ pub fn text(language: Language, message: &Message<'_>) -> String {
         }
         Message::Store(error) => store_text(language, error),
         Message::SettingsExclusion(path, error) => settings_exclusion(language, path, error),
+        Message::SettingsCustomFolder(path, error) => {
+            settings_custom_folder(language, path, error)
+        }
         Message::SettingsMinAge(path, minutes) => settings_min_age(language, path, *minutes),
         Message::SettingsDirectoryUnknown => pick(
             "Dossier des réglages inconnu (ni XDG_CONFIG_HOME ni HOME absolu) : rien n'est fait.".to_owned(),
@@ -171,11 +179,19 @@ pub fn text(language: Language, message: &Message<'_>) -> String {
         Message::Group {
             browser,
             label,
+            custom_folder,
             entries,
             bytes,
             decision,
             clean,
-        } => group_text(language, *browser, label, *entries, *bytes, *decision, *clean),
+        } => {
+            let label = if *custom_folder {
+                shown(label)
+            } else {
+                okapi_rules::group_label(language, *browser, label)
+            };
+            group_text(language, &label, *entries, *bytes, *decision, *clean)
+        }
         Message::Entry { path, bytes } => {
             format!("    {} ({})", shown(path), size(language, *bytes))
         }
@@ -296,6 +312,30 @@ fn in_settings(language: Language, path: &Path, message: &str) -> String {
 
 fn settings_exclusion(language: Language, path: &Path, error: &ExclusionError) -> String {
     in_settings(language, path, &exclusion(language, error))
+}
+
+fn settings_custom_folder(
+    language: Language,
+    settings: &Path,
+    error: &CustomFolderError,
+) -> String {
+    let message = match (error, language) {
+        (CustomFolderError::Empty, Language::French) => {
+            "un dossier à nettoyer ne peut pas être vide.".to_owned()
+        }
+        (CustomFolderError::Empty, Language::English) => {
+            "a folder to clean cannot be empty.".to_owned()
+        }
+        (CustomFolderError::Invalid { path }, Language::French) => format!(
+            "dossier à nettoyer refusé : {} (un chemin absolu sans ..).",
+            shown(path)
+        ),
+        (CustomFolderError::Invalid { path }, Language::English) => format!(
+            "folder to clean refused: {} (an absolute path without ..).",
+            shown(path)
+        ),
+    };
+    in_settings(language, settings, &message)
 }
 
 fn settings_min_age(language: Language, path: &Path, minutes: u64) -> String {
@@ -424,16 +464,15 @@ fn failure(
     }
 }
 
+/// A group, `label` as shown.
 fn group_text(
     language: Language,
-    browser: Option<BrowserKind>,
     label: &str,
     entries: usize,
     bytes: u64,
     decision: Decision,
     clean: bool,
 ) -> String {
-    let label = okapi_rules::group_label(language, browser, label);
     let size = size(language, bytes);
     let mark = decision_mark(language, decision, clean);
     let count = entries_text(language, entries);
@@ -500,10 +539,11 @@ Utilisation :
 
 Options :
   --clean              nettoie les groupes présélectionnés (jamais les réinitialisations
-                       de cache ni ce qui exige l'administrateur)
+                       de cache, ce qui exige l'administrateur, ni les groupes de vos dossiers)
   --json               un document JSON sur la sortie standard
   {categories}
-                       seulement ces catégories (toutes par défaut)
+                       seulement ces catégories (toutes par défaut, sauf --custom,
+                       vos dossiers à nettoyer, analysés seulement s'il est donné)
   --exclude CHEMIN     ne jamais toucher à ce chemin, ou à *.ext (répétable)
   --min-age MINUTES    âge minimal de ce qui est retiré ; l'emporte sur minAgeMinutes
                        des réglages (défaut : {default_minutes})
@@ -513,7 +553,7 @@ Options :
   -V, --version        la version
 
 Réglages : {settings}
-  (exclusions, ajoutées à --exclude ; minAgeMinutes ; deletionLog ;
+  (exclusions, ajoutées à --exclude ; customFolders ; minAgeMinutes ; deletionLog ;
   language, \"fr\" ou \"en\", sinon celle de la session)
 Historique (nettoyages et désinstallations) : {history}
   (mis de côté dans history.1.jsonl avant un nettoyage quand il dépasse la
@@ -534,11 +574,12 @@ Usage:
   okapi licenses       licenses of Okapi and of the material it embeds
 
 Options:
-  --clean              clean the preselected groups (never cache resets nor what
-                       needs the administrator)
+  --clean              clean the preselected groups (never cache resets, what
+                       needs the administrator, nor the groups of your folders)
   --json               one JSON document on standard output
   {categories}
-                       only these categories (all by default)
+                       only these categories (all by default but --custom, your
+                       folders to clean, scanned only when it is given)
   --exclude PATH       never touch this path, or *.ext (repeatable)
   --min-age MINUTES    minimum age of what is removed; wins over the settings'
                        minAgeMinutes (default: {default_minutes})
@@ -548,7 +589,7 @@ Options:
   -V, --version        the version
 
 Settings: {settings}
-  (exclusions, added to --exclude; minAgeMinutes; deletionLog;
+  (exclusions, added to --exclude; customFolders; minAgeMinutes; deletionLog;
   language, \"fr\" or \"en\", else the session's)
 History (cleanings and uninstallations): {history}
   (set aside as history.1.jsonl before a cleaning once beyond the size
@@ -719,6 +760,7 @@ fn shown_rule(language: Language, origin: &Origin) -> String {
         // The directory, as an application's identifier: its label is the
         // group's, not the rule's.
         Origin::Browser { browser, directory } => format!("{}/{directory}", browser.name()),
+        Origin::Custom { folder } => shown(folder.path()),
     }
 }
 
@@ -816,18 +858,89 @@ fn issue_text(language: Language, issue: &ScanIssue) -> String {
             limit,
         } => {
             let (origins, root) = (origins_text(language, origins), shown(root));
-            let limit = match (limit, french) {
-                (Limit::Depth, true) => "trop de niveaux de dossiers",
-                (Limit::Depth, false) => "too many directory levels",
-                (Limit::Entries, true) => "trop d'entrées",
-                (Limit::Entries, false) => "too many entries",
-            };
+            let limit = limit_text(language, *limit);
             if french {
                 format!("{origins} : {root} parcouru en partie ({limit}).")
             } else {
                 format!("{origins}: {root} only partly scanned ({limit}).")
             }
         }
+        ScanIssue::CustomFolderRefused { origin, refusal } => {
+            left_alone(language, origin, *refusal)
+        }
+    }
+}
+
+/// What a walking limit held back.
+const fn limit_text(language: Language, limit: Limit) -> &'static str {
+    match (limit, language) {
+        (Limit::Depth, Language::French) => "trop de niveaux de dossiers",
+        (Limit::Depth, Language::English) => "too many directory levels",
+        (Limit::Entries, Language::French) => "trop d'entrées",
+        (Limit::Entries, Language::English) => "too many entries",
+    }
+}
+
+/// The folder to clean of `origin` left alone by the scan, and why.
+fn left_alone(language: Language, origin: &Origin, refusal: CustomFolderRefusal) -> String {
+    let (origin, refusal) = (
+        shown_rule(language, origin),
+        custom_folder_refusal(language, refusal),
+    );
+    match language {
+        Language::French => format!("{origin} : dossier à nettoyer écarté, {refusal}."),
+        Language::English => format!("{origin}: folder to clean left alone, {refusal}."),
+    }
+}
+
+/// Why a folder to clean is left alone, as a clause.
+fn custom_folder_refusal(language: Language, refusal: CustomFolderRefusal) -> String {
+    let french = language == Language::French;
+    let pick = |fr: &str, en: &str| if french { fr } else { en }.to_owned();
+    match refusal {
+        CustomFolderRefusal::Absent => pick("il n'existe pas", "it does not exist"),
+        // As a rule's root would be left alone.
+        CustomFolderRefusal::Link => unsafe_reason(language, UnsafeReason::Link).to_owned(),
+        CustomFolderRefusal::NotADirectory => {
+            unsafe_reason(language, UnsafeReason::NotADirectory).to_owned()
+        }
+        CustomFolderRefusal::Replaced => unsafe_reason(language, UnsafeReason::Replaced).to_owned(),
+        CustomFolderRefusal::Unreadable(error) => {
+            let error = error_text(language, error, None);
+            if french {
+                format!("illisible ({error})")
+            } else {
+                format!("it cannot be read ({error})")
+            }
+        }
+        CustomFolderRefusal::NotOwned => pick(
+            "il appartient à un autre compte ou au système",
+            "it belongs to another account or to the system",
+        ),
+        CustomFolderRefusal::Protected(variable) => {
+            let name = variable.name();
+            if french {
+                format!("c'est le dossier de {name} ou il le contient")
+            } else {
+                format!("it is or holds the directory of {name}")
+            }
+        }
+        CustomFolderRefusal::Personal => pick(
+            "c'est un dossier personnel (Documents, Images...) ou il en contient un",
+            "it is or holds a personal folder (Documents, Pictures...)",
+        ),
+        CustomFolderRefusal::PersonalUnknown(error) => {
+            let error = error_text(language, error, None);
+            if french {
+                format!("les dossiers personnels sont illisibles ({error})")
+            } else {
+                format!("the personal folders cannot be read ({error})")
+            }
+        }
+        CustomFolderRefusal::UnsureFilesystem => pick(
+            "sur une clé FAT ou exFAT, un partage réseau ou d'une machine virtuelle, un système FUSE ou superposé, ou un système qu'Okapi ne sait pas dire, l'âge des fichiers n'est pas sûr",
+            "on a FAT or exFAT drive, a network or virtual machine share, a FUSE or stacked filesystem, or one Okapi cannot tell, the age of files cannot be trusted",
+        ),
     }
 }
 
@@ -918,6 +1031,8 @@ fn keep_reason(language: Language, reason: KeepReason) -> String {
         (KeepReason::Cancelled, false) => "cleaning cancelled before its turn",
         (KeepReason::BrowserOpen, true) => "le navigateur est ouvert",
         (KeepReason::BrowserOpen, false) => "the browser is open",
+        (KeepReason::NoLongerChosen, true) => "dossier retiré des réglages depuis l'analyse",
+        (KeepReason::NoLongerChosen, false) => "folder taken out of the settings since the scan",
     };
     text.to_owned()
 }
@@ -1170,6 +1285,13 @@ mod tests {
             Message::HistoryNotRecorded(&unwritable),
             Message::SettingsExclusionMissing(&path, &path),
             Message::SettingsExclusion(&path, &exclusion),
+            Message::SettingsCustomFolder(&path, &CustomFolderError::Empty),
+            Message::SettingsCustomFolder(
+                &path,
+                &CustomFolderError::Invalid {
+                    path: PathBuf::from("relative"),
+                },
+            ),
             Message::SettingsMinAge(&path, 1),
             Message::DeletionLogUnavailable,
             Message::SettingsDirectoryUnknown,
@@ -1193,10 +1315,20 @@ mod tests {
                     okapi_rules::ChromiumBrowserKind::Chrome,
                 )),
                 label: "pip Cache",
+                custom_folder: false,
                 entries: 1,
                 bytes: 10,
                 decision: Decision::NotPreselected,
                 clean: true,
+            },
+            Message::Group {
+                browser: None,
+                label: "/data/build",
+                custom_folder: true,
+                entries: 1,
+                bytes: 10,
+                decision: Decision::NotPreselected,
+                clean: false,
             },
             Message::Entry {
                 path: &path,
@@ -1234,6 +1366,67 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_folder_to_clean_left_alone_says_which_and_why() {
+        let origin = Origin::Custom {
+            folder: okapi_engine::CustomFolder::new(PathBuf::from("/data/build")).unwrap(),
+        };
+        let issue = |refusal| ScanIssue::CustomFolderRefused {
+            origin: origin.clone(),
+            refusal,
+        };
+        assert_eq!(
+            text(
+                Language::French,
+                &Message::Issue(&issue(CustomFolderRefusal::NotOwned))
+            ),
+            "/data/build : dossier à nettoyer écarté, il appartient à un autre compte ou au système."
+        );
+        assert_eq!(
+            text(
+                Language::English,
+                &Message::Issue(&issue(CustomFolderRefusal::Link))
+            ),
+            "/data/build: folder to clean left alone, it is a link."
+        );
+        let unreadable = std::io::ErrorKind::PermissionDenied;
+        for refusal in [
+            CustomFolderRefusal::Absent,
+            CustomFolderRefusal::NotADirectory,
+            CustomFolderRefusal::Replaced,
+            CustomFolderRefusal::Unreadable(unreadable),
+            CustomFolderRefusal::Protected(Variable::Home),
+            CustomFolderRefusal::Personal,
+            CustomFolderRefusal::PersonalUnknown(unreadable),
+            CustomFolderRefusal::UnsureFilesystem,
+        ] {
+            for language in [Language::French, Language::English] {
+                let said = custom_folder_refusal(language, refusal);
+                assert!(!said.is_empty(), "{refusal:?}");
+                assert!(!said.contains(['\u{2014}', '\u{2013}']), "{said}");
+            }
+        }
+        let group = |language| {
+            text(
+                language,
+                &Message::Group {
+                    browser: None,
+                    label: "/data/build",
+                    custom_folder: true,
+                    entries: 2,
+                    bytes: 10,
+                    decision: Decision::NotPreselected,
+                    clean: false,
+                },
+            )
+        };
+        assert!(
+            group(Language::French).starts_with("/data/build : "),
+            "its path, never translated: {}",
+            group(Language::French)
+        );
     }
 
     #[test]

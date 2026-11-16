@@ -191,6 +191,10 @@ impl IssueAnswer {
             ScanIssue::LimitReached { root, limit, .. } => {
                 (None, Some(root), Some(format!("{limit:?}")))
             }
+            // Never in root's scan, which plans no folder of the user's.
+            ScanIssue::CustomFolderRefused { refusal, .. } => {
+                (None, None, Some(format!("{refusal:?}")))
+            }
         };
         let inexact = path.is_some_and(|path| path.to_str().is_none());
         if inexact {

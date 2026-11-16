@@ -18,8 +18,8 @@ use okapi_store::{AdminRecord, History, HistoryEntry, HistoryOutcome, Opened, se
 use slint::ComponentHandle as _;
 
 use super::{
-    CleanerEvent, CleanerScreen, Inputs, Problem, Running, Task, min_age, options, problem, rights,
-    stop_shown,
+    CleanerEvent, CleanerScreen, Inputs, Problem, Running, Task, options, problem, rights,
+    settings_problem, stop_shown,
 };
 use crate::elevation::{ElevationFailure, ElevationStep};
 use crate::receipt::{Ending, Kept, LineKind, OutcomeFacts, Receipt, ReceiptLine};
@@ -630,9 +630,11 @@ impl CleanerScreen {
         let state = self.0.borrow();
         let rules = state.rules.as_ref().ok_or(Problem::Rules)?;
         let inputs = (state.seams.read)()?;
-        // Only the age is checked here: an exclusion is met, and said, on
-        // the task's thread.
-        min_age(&inputs, SystemTime::now())?;
+        // Only what needs no I/O is checked here: an exclusion is met, and
+        // said, on the task's thread.
+        if let Some(problem) = settings_problem(&inputs, SystemTime::now()) {
+            return Err(problem);
+        }
         let history = match History::open_for_cleaning(
             inputs.state_directory.as_deref(),
             inputs.deletion_log,
@@ -1192,6 +1194,7 @@ pub(crate) fn line_shown(line: &ReceiptLine) -> ui::ReceiptLineShown {
             LineKind::Kept(Kept::Refused) => ui::ReceiptKind::Refused,
             LineKind::Kept(Kept::Cancelled) => ui::ReceiptKind::Cancelled,
             LineKind::Kept(Kept::BrowserOpen) => ui::ReceiptKind::BrowserOpen,
+            LineKind::Kept(Kept::NoLongerChosen) => ui::ReceiptKind::NoLongerChosen,
             LineKind::Kept(Kept::Unknown) => ui::ReceiptKind::Unknown,
         },
         count: shown(line.count),

@@ -1794,42 +1794,6 @@ msgctxt "Sidebar"
 msgid "Réglages"
 msgstr "Settings"
 
-msgctxt "Exclusions"
-msgid "Dossier"
-msgstr "Folder"
-
-msgctxt "Exclusions"
-msgid "Fichier"
-msgstr "File"
-
-msgctxt "Exclusions"
-msgid "Extension"
-msgstr "Extension"
-
-msgctxt "Exclusions"
-msgid "Absent"
-msgstr "Missing"
-
-msgctxt "Exclusions"
-msgid "Lecture…"
-msgstr "Reading…"
-
-msgctxt "Exclusions"
-msgid "Invalide"
-msgstr "Invalid"
-
-msgctxt "Exclusions"
-msgid "Exclusions"
-msgstr "Exclusions"
-
-msgctxt "Exclusions"
-msgid "Okapi ne touche jamais à ce qui est listé ici. Un dossier exclut tout ce qu'il contient ; une extension s'écrit *.ext."
-msgstr "Okapi never touches what is listed here. A folder excludes everything in it; an extension is written *.ext."
-
-msgctxt "Exclusions"
-msgid "Aucune exclusion."
-msgstr "No exclusions."
-
 msgctxt "ProblemBanner"
 msgid "Le dernier changement des réglages s'enregistre encore : rien ne démarre avant qu'il soit écrit."
 msgstr "The last change of the settings is still being saved: nothing starts until it is."
@@ -1837,46 +1801,6 @@ msgstr "The last change of the settings is still being saved: nothing starts unt
 msgctxt "ProblemBanner"
 msgid "Le dernier changement des réglages n'a pas pu être enregistré : rien ne démarre. Refaites-le dans Réglages."
 msgstr "The last change of the settings could not be saved: nothing starts. Make it again in Settings."
-
-msgctxt "Exclusions"
-msgid "Retirer {} des exclusions"
-msgstr "Remove {} from the exclusions"
-
-msgctxt "Exclusions"
-msgid "Ajouter une exclusion"
-msgstr "Add an exclusion"
-
-msgctxt "Exclusions"
-msgid "Chemin ou *.ext"
-msgstr "Path or *.ext"
-
-msgctxt "Exclusions"
-msgid "Parcourir"
-msgstr "Browse"
-
-msgctxt "Exclusions"
-msgid "Ajouter"
-msgstr "Add"
-
-msgctxt "Exclusions"
-msgid "Un chemin absolu (/… ou ~/…) ou une extension *.ext."
-msgstr "An absolute path (/… or ~/…) or an extension *.ext."
-
-msgctxt "Exclusions"
-msgid "Cet emplacement ne se lit pas."
-msgstr "This location cannot be read."
-
-msgctxt "Exclusions"
-msgid "Déjà dans la liste."
-msgstr "Already in the list."
-
-msgctxt "Exclusions"
-msgid "Ce chemin a des caractères que les réglages ne savent pas écrire."
-msgstr "This path has characters the settings cannot hold."
-
-msgctxt "Exclusions"
-msgid "Le sélecteur de dossiers n'a pas pu s'ouvrir : écrivez le chemin."
-msgstr "The folder chooser could not open: type the path."
 
 msgctxt "General"
 msgid "Âge minimal des fichiers retirés"
@@ -2935,8 +2859,8 @@ msgid "Sans copie identique à sa place, celle-ci reste."
 msgstr "With no identical copy in its place, this one stays."
 
 msgctxt "DuplicateWords"
-msgid "Aucune autre copie n'est sûre de rester : dans une corbeille, à un autre compte, sur un disque, une clé ou une carte au format FAT, ou peut-être ce même fichier vu ailleurs. Celle-ci reste."
-msgstr "No other copy is sure to stay: in a trash, another account's, on a FAT-formatted disk, drive or card, or maybe this very file seen elsewhere. This one stays."
+msgid "Aucune autre copie n'est sûre de rester : dans une corbeille, à un autre compte, sur un disque, une clé ou une carte au format FAT ou exFAT, ou peut-être ce même fichier vu ailleurs. Celle-ci reste."
+msgstr "No other copy is sure to stay: in a trash, another account's, on a FAT- or exFAT-formatted disk, drive or card, or maybe this very file seen elsewhere. This one stays."
 
 msgctxt "DuplicateWords"
 msgid "Okapi ne supprime jamais sans corbeille."
@@ -4029,3 +3953,206 @@ msgstr "No operation yet"
 msgctxt "HistoryPage"
 msgid "Chaque nettoyage et chaque désinstallation s'ajoutent ici, avec leur reçu."
 msgstr "Each cleaning and each uninstallation is added here, with its receipt."
+msgctxt "PathListCard"
+msgid "Dossier"
+msgstr "Folder"
+
+msgctxt "PathListCard"
+msgid "Fichier"
+msgstr "File"
+
+msgctxt "PathListCard"
+msgid "Extension"
+msgstr "Extension"
+
+msgctxt "PathListCard"
+msgid "Absent"
+msgstr "Missing"
+
+msgctxt "PathListCard"
+msgid "Lecture…"
+msgstr "Reading…"
+
+msgctxt "PathListCard"
+msgid "Lien"
+msgstr "Link"
+
+msgctxt "PathListCard"
+msgid "Pas un dossier"
+msgstr "Not a folder"
+
+msgctxt "PathListCard"
+msgid "Protégé"
+msgstr "Protected"
+
+msgctxt "PathListCard"
+msgid "Dossier personnel"
+msgstr "Personal folder"
+
+msgctxt "PathListCard"
+msgid "Autre compte"
+msgstr "Other account"
+
+msgctxt "PathListCard"
+msgid "Dates peu sûres"
+msgstr "Unsure dates"
+
+msgctxt "PathListCard"
+msgid "Illisible"
+msgstr "Unreadable"
+
+msgctxt "PathListCard"
+msgid "Invalide"
+msgstr "Invalid"
+
+msgctxt "PathListCard"
+msgid "Parcourir"
+msgstr "Browse"
+
+msgctxt "PathListCard"
+msgid "Ajouter"
+msgstr "Add"
+
+msgctxt "PathListCard"
+msgid "Cet emplacement ne se lit pas."
+msgstr "This location cannot be read."
+
+msgctxt "PathListCard"
+msgid "Déjà dans la liste."
+msgstr "Already in the list."
+
+msgctxt "PathListCard"
+msgid "Ce chemin a des caractères que les réglages ne savent pas écrire."
+msgstr "This path has characters the settings cannot hold."
+
+msgctxt "PathListCard"
+msgid "Ce dossier n'existe pas."
+msgstr "This folder does not exist."
+
+msgctxt "PathListCard"
+msgid "C'est un lien : choisissez le dossier vers lequel il mène."
+msgstr "This is a link: choose the folder it leads to."
+
+msgctxt "PathListCard"
+msgid "Ce n'est pas un dossier."
+msgstr "This is not a folder."
+
+msgctxt "PathListCard"
+msgid "Okapi ne vide jamais ce dossier : il est ou contient un dossier dont votre session ou vos applis dépendent (dossier utilisateur, réglages, caches...)."
+msgstr "Okapi never empties this folder: it is or holds a folder your session or your apps rely on (user folder, settings, caches...)."
+
+msgctxt "PathListCard"
+msgid "Okapi ne vide jamais un dossier personnel (Documents, Images, Téléchargements...) ni ce qui en contient un : choisissez un dossier à l'intérieur."
+msgstr "Okapi never empties a personal folder (Documents, Pictures, Downloads...) nor what holds one: choose a folder inside it."
+
+msgctxt "PathListCard"
+msgid "Ce dossier appartient à un autre compte ou au système : Okapi ne le vide pas."
+msgstr "This folder belongs to another account or to the system: Okapi does not empty it."
+
+msgctxt "PathListCard"
+msgid "Sur une clé FAT ou exFAT, un partage réseau ou d'une machine virtuelle, un système FUSE ou superposé, ou un système qu'Okapi ne sait pas dire, l'âge des fichiers n'est pas sûr : Okapi ne les vide pas."
+msgstr "On a FAT or exFAT drive, a network or virtual machine share, a FUSE or stacked filesystem, or one Okapi cannot tell, the age of files is not sure: Okapi does not empty them."
+
+msgctxt "PathListCard"
+msgid "Le sélecteur de dossiers n'a pas pu s'ouvrir : écrivez le chemin."
+msgstr "The folder chooser could not open: type the path."
+
+msgctxt "Exclusions"
+msgid "Exclusions"
+msgstr "Exclusions"
+
+msgctxt "Exclusions"
+msgid "Okapi ne touche jamais à ce qui est listé ici. Un dossier exclut tout ce qu'il contient ; une extension s'écrit *.ext."
+msgstr "Okapi never touches what is listed here. A folder excludes everything in it; an extension is written *.ext."
+
+msgctxt "Exclusions"
+msgid "Aucune exclusion."
+msgstr "No exclusions."
+
+msgctxt "Exclusions"
+msgid "Ajouter une exclusion"
+msgstr "Add an exclusion"
+
+msgctxt "Exclusions"
+msgid "Chemin ou *.ext"
+msgstr "Path or *.ext"
+
+msgctxt "Exclusions"
+msgid "Un chemin absolu (/… ou ~/…) ou une extension *.ext."
+msgstr "An absolute path (/… or ~/…) or an extension *.ext."
+
+msgctxt "Exclusions"
+msgid "Ajouter l'exclusion"
+msgstr "Add the exclusion"
+
+msgctxt "Exclusions"
+msgid "Retirer {} des exclusions"
+msgstr "Remove {} from the exclusions"
+
+msgctxt "Folders"
+msgid "Dossiers à nettoyer"
+msgstr "Folders to clean"
+
+msgctxt "Folders"
+msgid "À chaque analyse de « Mes dossiers », Okapi propose ce qu'ils contiennent depuis plus longtemps que l'âge minimal, jamais le dossier lui-même. Leurs groupes ne sont jamais cochés d'avance, et ce que vous cochez est supprimé définitivement."
+msgstr "Each time \"My folders\" is analyzed, Okapi offers what they have held for longer than the minimum age, never the folder itself. Their groups are never checked beforehand, and what you check is deleted for good."
+
+msgctxt "Folders"
+msgid "Aucun dossier à nettoyer."
+msgstr "No folders to clean."
+
+msgctxt "Folders"
+msgid "Ajouter un dossier à nettoyer"
+msgstr "Add a folder to clean"
+
+msgctxt "Folders"
+msgid "Chemin d'un dossier"
+msgstr "Path of a folder"
+
+msgctxt "Folders"
+msgid "Un chemin absolu sans .. (/… ou ~/…)."
+msgstr "An absolute path without .. (/… or ~/…)."
+
+msgctxt "Folders"
+msgid "Ajouter le dossier à nettoyer"
+msgstr "Add the folder to clean"
+
+msgctxt "Folders"
+msgid "Retirer {} des dossiers à nettoyer"
+msgstr "Remove {} from the folders to clean"
+
+msgctxt "Preferences"
+msgid "Choisir un dossier à nettoyer"
+msgstr "Choose a folder to clean"
+
+msgctxt "Words"
+msgid "Mes dossiers"
+msgstr "My folders"
+
+msgctxt "Words"
+msgid "Les dossiers ajoutés dans Réglages. Rien n'y est coché d'avance."
+msgstr "The folders added in Settings. Nothing in them is checked beforehand."
+
+msgctxt "ProblemBanner"
+msgid "Un dossier à nettoyer des réglages n'est pas un chemin absolu sans .. : rien ne peut démarrer. Corrigez-le ou retirez-le dans Réglages."
+msgstr "A folder to clean in the settings is not an absolute path without ..: nothing can start. Fix it or remove it in Settings."
+
+msgctxt "ResultLine"
+msgid "Votre dossier : à cocher vous-même à chaque nettoyage."
+msgstr "Your folder: check it yourself at each cleaning."
+
+msgctxt "NoteLine"
+msgid "Dossier à nettoyer refusé, Réglages dit pourquoi : {}"
+msgstr "Folder to clean refused, Settings says why: {}"
+
+msgctxt "ReceiptLine"
+msgid "Gardées : dossier retiré des réglages depuis l'analyse"
+msgstr "Kept: folder taken out of the settings since the analysis"
+
+msgctxt "PathListCard"
+msgid "Invérifiable"
+msgstr "Unverifiable"
+
+msgctxt "PathListCard"
+msgid "Okapi ne sait pas lire la liste de vos dossiers personnels (user-dirs.dirs) : il ne peut vérifier aucun dossier à nettoyer."
+msgstr "Okapi cannot read the list of your personal folders (user-dirs.dirs): it cannot check any folder to clean."

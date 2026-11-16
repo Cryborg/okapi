@@ -141,6 +141,8 @@ export enum ButtonKind { primary, secondary, ghost, danger }
 // skipped and says so.
 export component ActionButton inherits Rectangle {
     in property <string> text;
+    // What a screen reader says of it, when its text alone is not enough.
+    in property <string> spoken: text;
     in property <image> icon;
     in property <ButtonKind> kind: ButtonKind.secondary;
     in property <bool> large;
@@ -166,7 +168,7 @@ export component ActionButton inherits Rectangle {
     border-width: kind == ButtonKind.secondary ? Theme.border-width : 0;
     border-color: Theme.border-strong;
     accessible-role: button;
-    accessible-label: text;
+    accessible-label: spoken;
     accessible-enabled: enabled;
     accessible-action-default => {
         if enabled {

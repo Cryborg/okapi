@@ -906,3 +906,69 @@ fn the_cleaning_outcomes_keep_their_exact_form() {
         })
     );
 }
+
+#[test]
+fn the_user_s_folders_are_shown_when_asked_for_and_never_cleaned() {
+    if running_as_root() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let old = sandbox.file("work/build/old.o");
+    let build = sandbox.root.join("work/build");
+    sandbox.settings(&format!(
+        r#"{{"version": 1, "customFolders": ["{}"]}}"#,
+        build.display()
+    ));
+    settle();
+    let rule = format!("custom:{}", build.display());
+    let has_folder = |output: &Output| {
+        json(output)["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|group| {
+                group["rules"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|name| *name == *rule)
+            })
+    };
+    let unasked = sandbox.run(&["--json", "--min-age", "0"]);
+    assert!(!has_folder(&unasked), "never walked unasked");
+    let asked = sandbox.run(&["--json", "--custom", "--min-age", "0"]);
+    let document = json(&asked);
+    let folder = group(&document, &rule);
+    assert_eq!(folder["decision"], "not_preselected");
+    assert_eq!(folder["label"], build.display().to_string());
+    assert_eq!(folder["entries"].as_array().unwrap().len(), 1);
+    let cleaned = sandbox.run(&["--clean", "--json", "--custom", "--min-age", "0"]);
+    let document = json(&cleaned);
+    assert_eq!(
+        group(&document, &rule)["decision"],
+        "not_preselected",
+        "seen by the cleaning run, and left"
+    );
+    let outcomes = document["clean"]["outcomes"].as_array().unwrap();
+    assert!(
+        outcomes
+            .iter()
+            .all(|outcome| outcome["path"] != old.display().to_string()),
+        "never asked for: {outcomes:?}"
+    );
+    assert!(old.exists(), "left to the user, never cleaned by a run");
+}
+
+#[test]
+fn a_folder_to_clean_not_written_absolute_stops_before_any_scan() {
+    if running_as_root() {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    sandbox.settings(r#"{"version": 1, "customFolders": ["relatif"]}"#);
+    let output = sandbox.run(&["--json"]);
+    assert_eq!(output.status.code(), Some(2));
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(said.contains("relatif"), "{said}");
+    assert!(output.stdout.is_empty(), "nothing scanned");
+}

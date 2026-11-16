@@ -13,7 +13,7 @@ use okapi_rules::{MiscRules, RuleSet, TemplateVariables};
 use crate::options::ScanOptions;
 use crate::preconditions::{Stop, protection, stops_before_reading};
 use crate::protection::ProtectedRoots;
-use crate::report::{BrowserLock, EntryKind, FoundItem, ItemId, ScanReport};
+use crate::report::{BrowserLock, EntryKind, FoundItem, ItemId, Origin, ScanGroup, ScanReport};
 use crate::walk::{HoldBack, Limits, Observed, Readers, WalkContext, by_name};
 use crate::watch::{Progress, Watch};
 
@@ -52,6 +52,9 @@ pub enum KeepReason {
     /// The browser whose cache it is runs: its lock is in its user-data
     /// directory.
     BrowserOpen,
+    /// The folder the user chose whose contents it is was taken out of the
+    /// settings since the scan.
+    NoLongerChosen,
 }
 
 impl KeepReason {
@@ -68,6 +71,7 @@ impl KeepReason {
             Self::Failed { .. } => "failed",
             Self::Cancelled => "cancelled",
             Self::BrowserOpen => "browser_open",
+            Self::NoLongerChosen => "no_longer_chosen",
         }
     }
 
@@ -92,6 +96,7 @@ impl KeepReason {
             failed,
             Self::Cancelled,
             Self::BrowserOpen,
+            Self::NoLongerChosen,
         ]
         .into_iter()
         .find(|reason| reason.key() == key)
@@ -488,6 +493,11 @@ fn check_all<'r>(
                         Checked::Cancelled(item)
                     } else if let Some(outcome) = held(group.locks(), id) {
                         Checked::Refused(item, outcome)
+                    } else if no_longer_chosen(group, cleaner.options) {
+                        Checked::Refused(
+                            item,
+                            (CleanResult::Kept(KeepReason::NoLongerChosen), None),
+                        )
                     } else {
                         match cleaner.run(item, CleanPass::Check, dates) {
                             Ok(_) => Checked::Ready(item, group.locks()),
@@ -505,6 +515,24 @@ fn check_all<'r>(
             (id, checked)
         })
         .collect()
+}
+
+/// Whether `group` is only folders the user chose, none of which `options`
+/// still holds: taken out of the settings since the scan. The settings in
+/// force at the cleaning decide, as for the exclusions and the age.
+fn no_longer_chosen(group: &ScanGroup, options: &ScanOptions) -> bool {
+    let origins = group.origins();
+    let gone = !origins.is_empty()
+        && origins.iter().all(|origin| {
+            matches!(origin, Origin::Custom { folder } if !options.custom_folders().contains(folder))
+        });
+    if gone {
+        tracing::debug!(
+            ?origins,
+            "folder to clean no longer in the settings: entry kept"
+        );
+    }
+    gone
 }
 
 /// The two passes of a cleaning: every entry is first checked whole, then
@@ -584,6 +612,9 @@ impl Cleaner<'_> {
             // Read when the root is reached (`judge_entry`).
             root_owner: None,
             keep_hard_linked: item.keep_hard_linked,
+            // Only a scan offers entry by entry: what a cleaning removes was
+            // offered, and is judged whole.
+            recent_holds_below: false,
         }
     }
 

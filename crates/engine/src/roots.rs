@@ -10,12 +10,13 @@ use std::ffi::OsString;
 use okapi_platform::{CHROMIUM_LOCK, FIREFOX_LOCK, FileIdentity};
 use okapi_rules::{
     AgeDays, AppCacheRule, BrowserCacheDirectory, BrowserKind, ChromiumBrowser, CleanTarget,
-    Effect, FirefoxBrowser, MiscRules, Name, PathMatcher, RelativePath, SingleFileTarget,
+    Effect, FirefoxBrowser, Label, MiscRules, Name, PathMatcher, RelativePath, SingleFileTarget,
     TemplatePath, TemplateVariables, Variable,
 };
 
+use crate::custom::{CustomFolder, CustomFolderRefusal, Guard, PersonalFolders};
 use crate::options::ScanOptions;
-use crate::paths::{is_absent, is_system_temporary};
+use crate::paths::{NotADirectory, is_absent, is_system_temporary, real_directory};
 use crate::protection::ProtectedRoots;
 use crate::report::{
     AppFile, BrowserLock, Category, EntryKind, GroupAttributes, Origin, ScanIssue, ScanStats,
@@ -39,6 +40,8 @@ pub(crate) enum RuleEntry<'a> {
         directory: &'a BrowserCacheDirectory,
         shared: bool,
     },
+    /// A folder the user chose to have emptied.
+    Custom(&'a CustomFolder),
 }
 
 /// Where the rules say a browser keeps its data, by its family.
@@ -63,16 +66,20 @@ impl RuleEntry<'_> {
             Self::Target(_) | Self::File(_) => Category::System,
             Self::App { file, .. } => Category::of_file(*file),
             Self::Browser { .. } => Category::Browsers,
+            Self::Custom(_) => Category::Custom,
         }
     }
 
-    /// Whether the rule is selected before the user chooses (invariant 5).
+    /// Whether the rule is selected before the user chooses (invariant 5):
+    /// never a folder of the user's, whose contents are the user's to pick
+    /// each time.
     pub(crate) const fn is_selected_by_default(&self) -> bool {
         match self {
             Self::Target(target) => target.is_selected_by_default(),
             Self::File(target) => target.is_selected_by_default(),
             Self::App { rule, .. } => rule.is_selected_by_default(),
             Self::Browser { directory, .. } => directory.is_selected_by_default(),
+            Self::Custom(_) => false,
         }
     }
 }
@@ -167,13 +174,23 @@ pub(crate) struct PlannedRoot {
     pub(crate) kind: PlannedKind,
 }
 
-/// Turns rules into checked roots, recording why a root is not walked.
-pub(crate) struct Planner<'a> {
+/// What planning the roots reads: each one a seam the tests set apart.
+#[derive(Clone, Copy)]
+pub(crate) struct Planning<'a> {
+    pub(crate) misc: &'a MiscRules,
     pub(crate) variables: &'a TemplateVariables,
     pub(crate) options: &'a ScanOptions,
-    pub(crate) misc: &'a MiscRules,
-    pub(crate) protected: &'a ProtectedRoots,
     pub(crate) readers: Readers,
+    /// Who will remove what is offered, and must own a custom folder.
+    pub(crate) user: Option<u32>,
+    /// What no custom folder may be, besides the variables' directories.
+    pub(crate) personal: &'a PersonalFolders,
+}
+
+/// Turns rules into checked roots, recording why a root is not walked.
+pub(crate) struct Planner<'a> {
+    pub(crate) planning: Planning<'a>,
+    pub(crate) protected: &'a ProtectedRoots,
     pub(crate) issues: Vec<ScanIssue>,
     pub(crate) stats: ScanStats,
     /// The bases of each browser met, `None` when it has none to scan.
@@ -183,6 +200,7 @@ pub(crate) struct Planner<'a> {
 impl Planner<'_> {
     pub(crate) fn plan(&mut self, entry: RuleEntry<'_>) -> Vec<PlannedRoot> {
         match entry {
+            RuleEntry::Custom(folder) => self.plan_custom(folder),
             RuleEntry::Target(target) => self.plan_target(target),
             RuleEntry::File(target) => self.plan_file(target).into_iter().collect(),
             RuleEntry::App { file, rule } => self.plan_app(file, rule),
@@ -420,7 +438,9 @@ impl Planner<'_> {
     /// error when `base` is gone or unreadable (reported).
     fn device(&mut self, origin: &Origin, base: &Path) -> Result<Option<u64>, ()> {
         match fs::symlink_metadata(base) {
-            Ok(metadata) => Ok((self.readers.identity)(&metadata).map(FileIdentity::device)),
+            Ok(metadata) => {
+                Ok((self.planning.readers.identity)(&metadata).map(FileIdentity::device))
+            }
             Err(error) if is_absent(&error) => Err(()),
             Err(error) => {
                 self.unreadable::<()>(origin, base.to_path_buf(), error.kind());
@@ -461,6 +481,64 @@ impl Planner<'_> {
         };
         let rule_age = deletion.min_age().map(AgeDays::duration);
         self.check_roots(&origin, roots, rule_age, &attributes)
+    }
+
+    /// The folder's contents, if it is one a scan may walk
+    /// ([`CustomFolder::locate`]); and the user's exclusions, as for any root.
+    fn plan_custom(&mut self, folder: &CustomFolder) -> Vec<PlannedRoot> {
+        let origin = Origin::Custom {
+            folder: folder.clone(),
+        };
+        let guard = Guard {
+            protected: self.protected,
+            personal: self.planning.personal,
+            user: self.planning.user,
+            readers: self.planning.readers,
+        };
+        let refuse = |planner: &mut Self, refusal| {
+            planner.issues.push(ScanIssue::CustomFolderRefused {
+                origin: origin.clone(),
+                refusal,
+            });
+            Vec::new()
+        };
+        let (path, judged) = match folder.locate(&guard) {
+            Ok(located) => located,
+            Err(refusal) => return refuse(self, refusal),
+        };
+        // Its path is the user's, shown as written: never a text of the
+        // rules to translate.
+        let Ok(label) = Label::try_from(folder.path().to_string_lossy().into_owned()) else {
+            tracing::error!(folder = %folder.path().display(), "custom folder without a label: not scanned");
+            return refuse(
+                self,
+                CustomFolderRefusal::Unreadable(io::ErrorKind::InvalidData),
+            );
+        };
+        let attributes = GroupAttributes {
+            origins: vec![origin.clone()],
+            label,
+            descriptions: Vec::new(),
+            rule_group: None,
+            cache_reset: false,
+            selected_by_default: RuleEntry::Custom(folder).is_selected_by_default(),
+            needs_admin: false,
+            keep_hard_linked: false,
+            locks: BTreeSet::new(),
+        };
+        let issues = self.issues.len();
+        let planned = self.check_roots(&origin, vec![Candidate::walked(path)], None, &attributes);
+        // Gone since it was judged: said, as when it was not there.
+        if planned.is_empty() && self.issues.len() == issues {
+            return refuse(self, CustomFolderRefusal::Absent);
+        }
+        // Read again by `check_roots`: another folder put there since it was
+        // judged is never walked in its place.
+        if planned.iter().any(|root| root.identity != judged) {
+            tracing::info!(folder = %folder.path().display(), "custom folder replaced since it was judged");
+            return refuse(self, CustomFolderRefusal::Replaced);
+        }
+        planned
     }
 
     fn plan_app(&mut self, file: AppFile, rule: &AppCacheRule) -> Vec<PlannedRoot> {
@@ -533,14 +611,14 @@ impl Planner<'_> {
             Err(error) if is_absent(&error) => return None,
             Err(error) => return self.unreadable(&origin, canonical, error.kind()),
         };
-        let mount_root = match (self.readers.mount_root)(&canonical) {
+        let mount_root = match (self.planning.readers.mount_root)(&canonical) {
             Ok(mount_root) => mount_root == Some(true),
             Err(error) if is_absent(&error) => return None,
             Err(error) => return self.unreadable(&origin, canonical, error.kind()),
         };
         let (Some(last_change), Some(identity)) = (
-            (self.readers.last_change)(&metadata),
-            (self.readers.identity)(&metadata),
+            (self.planning.readers.last_change)(&metadata),
+            (self.planning.readers.identity)(&metadata),
         ) else {
             return self.unreadable(&origin, canonical, io::ErrorKind::Unsupported);
         };
@@ -552,20 +630,20 @@ impl Planner<'_> {
             });
             return None;
         }
-        if self.options.exclusions().excludes(&canonical) {
+        if self.planning.options.exclusions().excludes(&canonical) {
             self.issues.push(ScanIssue::Excluded {
                 origins: vec![origin],
                 path: canonical,
             });
             return None;
         }
-        if by_name(&canonical, false, true).is_some() || self.misc.protects(&canonical) {
+        if by_name(&canonical, false, true).is_some() || self.planning.misc.protects(&canonical) {
             tracing::debug!(path = ?canonical, "file target has a protected name");
             self.stats.protected_names += 1;
             return None;
         }
         // The global age was checked before planning: it is within the clock.
-        let cutoff = self.options.cutoff(None)?;
+        let cutoff = self.planning.options.cutoff(None)?;
         let attributes = GroupAttributes {
             origins: vec![origin],
             label: target.subcategory().clone(),
@@ -611,7 +689,7 @@ impl Planner<'_> {
     }
 
     fn resolve(&mut self, origin: &Origin, path: &TemplatePath) -> Option<PathBuf> {
-        match path.resolve(self.variables) {
+        match path.resolve(self.planning.variables) {
             Ok(resolved) => Some(resolved),
             Err(error) => {
                 self.issues.push(ScanIssue::Unresolvable {
@@ -634,35 +712,29 @@ impl Planner<'_> {
     /// refused or unreadable (an error, reported).
     fn read_base(&mut self, origin: &Origin, path: &TemplatePath) -> Result<Option<PathBuf>, ()> {
         let resolved = self.resolve(origin, path).ok_or(())?;
-        let metadata = match fs::symlink_metadata(&resolved) {
-            Ok(metadata) => metadata,
-            Err(error) if is_absent(&error) => return Ok(None),
-            Err(error) => return self.unreadable(origin, resolved, error.kind()).ok_or(()),
+        let unsafe_root = |reason| ScanIssue::UnsafeRoot {
+            origins: vec![origin.clone()],
+            path: resolved.clone(),
+            reason,
         };
-        if !metadata.is_dir() {
-            return self
-                .unsafe_root(origin, resolved, &metadata, UnsafeReason::NotADirectory)
-                .ok_or(());
-        }
-        let canonical = match fs::canonicalize(&resolved) {
-            Ok(canonical) => canonical,
-            Err(error) if is_absent(&error) => return Ok(None),
-            Err(error) => return self.unreadable(origin, resolved, error.kind()).ok_or(()),
-        };
-        // Read again under its canonical name: it must still be the directory
-        // read first, not a link swapped in since.
-        match fs::symlink_metadata(&canonical) {
-            Ok(again) if again.is_dir() => match self.same_object(&metadata, &again) {
-                Some(true) => Ok(Some(canonical)),
-                Some(false) => self.replaced(origin, canonical).ok_or(()),
-                None => self
-                    .unreadable(origin, canonical, io::ErrorKind::Unsupported)
-                    .ok_or(()),
+        let issue = match real_directory(&resolved, self.planning.readers.identity) {
+            Ok((real, _)) => return Ok(Some(real)),
+            Err(NotADirectory::Absent) => return Ok(None),
+            Err(NotADirectory::Link) => unsafe_root(UnsafeReason::Link),
+            Err(NotADirectory::Other) => unsafe_root(UnsafeReason::NotADirectory),
+            Err(NotADirectory::Replaced { real }) => ScanIssue::UnsafeRoot {
+                origins: vec![origin.clone()],
+                path: real,
+                reason: UnsafeReason::Replaced,
             },
-            Ok(_) => self.replaced(origin, canonical).ok_or(()),
-            Err(error) if is_absent(&error) => Ok(None),
-            Err(error) => self.unreadable(origin, canonical, error.kind()).ok_or(()),
-        }
+            Err(NotADirectory::Unreadable { path, error }) => ScanIssue::UnreadableRoot {
+                origins: vec![origin.clone()],
+                path,
+                error,
+            },
+        };
+        self.issues.push(issue);
+        Err(())
     }
 
     /// The directories `<base>/*/<subdirectory>`: walked when reached
@@ -766,9 +838,9 @@ impl Planner<'_> {
         }
         // Another device is enough: its mount status is then never read.
         let mut other_filesystem =
-            (self.readers.identity)(&metadata).map(FileIdentity::device) != device;
+            (self.planning.readers.identity)(&metadata).map(FileIdentity::device) != device;
         if !other_filesystem {
-            other_filesystem = match (self.readers.mount_root)(path) {
+            other_filesystem = match (self.planning.readers.mount_root)(path) {
                 Ok(mount_root) => mount_root == Some(true),
                 Err(error) if is_absent(&error) => return Segment::Missing,
                 Err(error) => {
@@ -792,10 +864,12 @@ impl Planner<'_> {
     /// directly would do so without this rule's restrictions.
     fn withheld_identity(&mut self, origin: &Origin, path: &Path) -> Option<FileIdentity> {
         match fs::metadata(path) {
-            Ok(metadata) if metadata.is_dir() => match (self.readers.identity)(&metadata) {
-                Some(identity) => Some(identity),
-                None => self.unreadable(origin, path.to_path_buf(), io::ErrorKind::Unsupported),
-            },
+            Ok(metadata) if metadata.is_dir() => {
+                match (self.planning.readers.identity)(&metadata) {
+                    Some(identity) => Some(identity),
+                    None => self.unreadable(origin, path.to_path_buf(), io::ErrorKind::Unsupported),
+                }
+            }
             Ok(_) => None,
             Err(error) if is_absent(&error) => None,
             Err(error) => self.unreadable(origin, path.to_path_buf(), error.kind()),
@@ -817,7 +891,7 @@ impl Planner<'_> {
         if roots.is_empty() {
             return Vec::new();
         }
-        let Some(cutoff) = self.options.cutoff(rule_age) else {
+        let Some(cutoff) = self.planning.options.cutoff(rule_age) else {
             self.issues.push(ScanIssue::AgeBeyondClock {
                 origin: origin.clone(),
             });
@@ -853,7 +927,7 @@ impl Planner<'_> {
                 self.unsafe_root::<()>(origin, root, &metadata, UnsafeReason::NotADirectory);
                 continue;
             }
-            let Some(identity) = (self.readers.identity)(&metadata) else {
+            let Some(identity) = (self.planning.readers.identity)(&metadata) else {
                 self.unreadable::<()>(origin, root, io::ErrorKind::Unsupported);
                 continue;
             };
@@ -865,9 +939,9 @@ impl Planner<'_> {
                 });
                 continue;
             }
-            let exclusions = self.options.exclusions();
+            let exclusions = self.planning.options.exclusions();
             if exclusions.excludes(&root)
-                || exclusions.excludes_by_identity(&root, self.readers.identity)
+                || exclusions.excludes_by_identity(&root, self.planning.readers.identity)
             {
                 self.issues.push(ScanIssue::Excluded {
                     origins: vec![origin.clone()],
@@ -889,7 +963,7 @@ impl Planner<'_> {
     /// Whether two reads saw the same object; `None` when an identity cannot
     /// be read, which says nothing either way.
     fn same_object(&self, first: &fs::Metadata, second: &fs::Metadata) -> Option<bool> {
-        Some((self.readers.identity)(first)? == (self.readers.identity)(second)?)
+        Some((self.planning.readers.identity)(first)? == (self.planning.readers.identity)(second)?)
     }
 
     fn replaced<T>(&mut self, origin: &Origin, path: PathBuf) -> Option<T> {

@@ -370,7 +370,7 @@ pub struct AppCacheRule {
     name: Label,
     group: Option<Label>,
     effect: Effect<AppDeletion, NonEmpty<TemplatePath>>,
-    description: Option<String>,
+    description: Option<Label>,
 }
 
 impl AppCacheRule {
@@ -406,8 +406,8 @@ impl AppCacheRule {
     }
 
     #[must_use]
-    pub fn description(&self) -> Option<&str> {
-        self.description.as_deref()
+    pub const fn description(&self) -> Option<&Label> {
+        self.description.as_ref()
     }
 
     /// Every path of the rule, deleted or only affected, for checks that do
@@ -434,7 +434,7 @@ struct RawAppCacheRule {
     #[serde(default)]
     cache_reset: bool,
     cleanup_action: Option<CleanupAction>,
-    description: Option<String>,
+    description: Option<Label>,
 }
 
 impl RawAppCacheRule {
@@ -575,6 +575,14 @@ mod tests {
     }
 
     #[test]
+    fn a_rule_never_describes_itself_with_a_blank() {
+        let error = error_of(
+            r#"{"id": "pip", "name": "pip Cache", "paths": ["${CACHE}/pip"], "description": "  "}"#,
+        );
+        assert!(error.contains("empty text"), "{error}");
+    }
+
+    #[test]
     fn reads_every_optional_field() {
         let rule = rule(
             r#"{"id": "shaders", "name": "Shaders", "paths": ["${CACHE}/a", "${CACHE}/b"], "group": "GPU",
@@ -590,7 +598,10 @@ mod tests {
             !rule.is_selected_by_default(),
             "a cache reset is never preselected"
         );
-        assert_eq!(rule.description(), Some("Rebuilt on demand"));
+        assert_eq!(
+            rule.description().map(Label::as_str),
+            Some("Rebuilt on demand")
+        );
     }
 
     #[test]

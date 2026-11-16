@@ -58,7 +58,7 @@ pub struct CleanTarget {
     subcategory: Label,
     needs_admin: bool,
     effect: Effect<TargetDeletion, TemplatePath>,
-    description: Option<String>,
+    description: Option<Label>,
 }
 
 impl CleanTarget {
@@ -89,8 +89,8 @@ impl CleanTarget {
     }
 
     #[must_use]
-    pub fn description(&self) -> Option<&str> {
-        self.description.as_deref()
+    pub const fn description(&self) -> Option<&Label> {
+        self.description.as_ref()
     }
 
     /// The target's path, deleted or only affected, for checks that do not
@@ -117,7 +117,7 @@ struct RawCleanTarget {
     #[serde(default)]
     cache_reset: bool,
     cleanup_action: Option<CleanupAction>,
-    description: Option<String>,
+    description: Option<Label>,
 }
 
 impl TryFrom<RawCleanTarget> for CleanTarget {
@@ -164,7 +164,7 @@ impl TryFrom<RawCleanTarget> for CleanTarget {
 pub struct SingleFileTarget {
     path: FilePath,
     subcategory: Label,
-    description: Option<String>,
+    description: Option<Label>,
 }
 
 impl SingleFileTarget {
@@ -179,8 +179,8 @@ impl SingleFileTarget {
     }
 
     #[must_use]
-    pub fn description(&self) -> Option<&str> {
-        self.description.as_deref()
+    pub const fn description(&self) -> Option<&Label> {
+        self.description.as_ref()
     }
 
     /// Whether the file is selected before the user chooses: always, as it
@@ -246,6 +246,23 @@ mod tests {
     }
 
     #[test]
+    fn a_target_never_describes_itself_with_a_blank() {
+        for json in [
+            r#"{"path": "/var/tmp", "subcategory": "Temp", "description": ""}"#,
+            r#"{"path": "/var/log/journal", "subcategory": "J", "cleanupAction": "journal-vacuum", "description": " "}"#,
+        ] {
+            let error = target(json).unwrap_err().to_string();
+            assert!(error.contains("empty text"), "{error}");
+        }
+        let error = serde_json::from_str::<SingleFileTarget>(
+            r#"{"path": "${HOME}/.xsession-errors.old", "subcategory": "X", "description": ""}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("empty text"), "{error}");
+    }
+
+    #[test]
     fn reads_every_optional_field_of_a_deletion() {
         let target = target(
             r#"{"path": "${HOME}/.var/app", "subcategory": "Flatpak", "needsAdmin": true,
@@ -258,7 +275,7 @@ mod tests {
             !target.is_selected_by_default(),
             "a cache reset is never preselected"
         );
-        assert_eq!(target.description(), Some("App caches"));
+        assert_eq!(target.description().map(Label::as_str), Some("App caches"));
         let Effect::Delete(deletion) = target.effect() else {
             panic!("expected a deletion");
         };

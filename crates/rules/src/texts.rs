@@ -1,7 +1,8 @@
 //! The texts of the rules as the user reads them (D-3): the French of each
-//! label shown, from `lang/fr.po`, keyed by the English the data write; the
-//! English is the data itself. And the language of the session, which both
-//! interfaces follow unless the user chose one in the settings.
+//! label and description shown, from `lang/fr.po`, keyed by the English the
+//! data write; the English is the data itself. And the language of the
+//! session, which both interfaces follow unless the user chose one in the
+//! settings.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -11,11 +12,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::BrowserKind;
 
-/// The French of the labels, as written by hand from the data.
+/// The French of the texts, as written by hand from the data.
 const FRENCH: &str = include_str!("../lang/fr.po");
 
 /// The context of a label's entry.
 const LABEL: &str = "label";
+
+/// The context of a description's entry.
+const DESCRIPTION: &str = "description";
 
 /// What gettext reads to choose a language, in its order of precedence: the
 /// list of languages, then the locale (D-7).
@@ -154,42 +158,83 @@ fn entries(catalogue: &str) -> Result<Vec<Entry>, Unreadable> {
     Ok(entries)
 }
 
-/// The labels among `entries`: those of their context that have a text.
-fn labels_of(entries: Vec<Entry>) -> HashMap<String, String> {
-    entries
-        .into_iter()
-        .filter(|entry| entry.context == LABEL && !entry.text.is_empty())
-        .map(|entry| (entry.key, entry.text))
-        .collect()
+/// The texts of a catalogue, by their key, one table per context.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Texts {
+    labels: HashMap<String, String>,
+    descriptions: HashMap<String, String>,
 }
 
-/// The French labels, read once.
-fn french_labels() -> &'static HashMap<String, String> {
-    static LABELS: OnceLock<HashMap<String, String>> = OnceLock::new();
-    LABELS.get_or_init(|| match entries(FRENCH) {
-        Ok(entries) => labels_of(entries),
+impl Texts {
+    /// Those of `entries` that have a text, each in its context's table;
+    /// any other context is not read.
+    fn of(entries: Vec<Entry>) -> Self {
+        let mut texts = Self::default();
+        for entry in entries.into_iter().filter(|entry| !entry.text.is_empty()) {
+            let table = match entry.context.as_str() {
+                LABEL => &mut texts.labels,
+                DESCRIPTION => &mut texts.descriptions,
+                context => {
+                    tracing::warn!(
+                        context,
+                        key = entry.key,
+                        "catalogue entry of no known context, ignored"
+                    );
+                    continue;
+                }
+            };
+            table.insert(entry.key, entry.text);
+        }
+        texts
+    }
+}
+
+/// The French texts, read once.
+fn french() -> &'static Texts {
+    static TEXTS: OnceLock<Texts> = OnceLock::new();
+    TEXTS.get_or_init(|| match entries(FRENCH) {
+        Ok(entries) => Texts::of(entries),
         Err(Unreadable { line }) => {
             // The tests read the same catalogue: never shipped this way.
             tracing::error!(line, "French catalogue of the rules unreadable");
-            HashMap::new()
+            Texts::default()
         }
     })
+}
+
+/// `english`, a text of the rules in the context `context`, in `language`
+/// from the French `table`: the English as is when it has no French, said.
+fn translated<'a>(
+    language: Language,
+    table: fn(&Texts) -> &HashMap<String, String>,
+    context: &str,
+    english: &'a str,
+) -> &'a str {
+    if language == Language::English {
+        return english;
+    }
+    table(french()).get(english).map_or_else(
+        || {
+            tracing::warn!(context, text = english, "rule text without its French");
+            english
+        },
+        String::as_str,
+    )
 }
 
 /// The label a rule writes as `english`, in `language`: the English as is
 /// when it has no French, said.
 #[must_use]
 pub fn label(language: Language, english: &str) -> &str {
-    if language == Language::English {
-        return english;
-    }
-    french_labels().get(english).map_or_else(
-        || {
-            tracing::warn!(label = english, "rule label without its French");
-            english
-        },
-        String::as_str,
-    )
+    translated(language, |texts| &texts.labels, LABEL, english)
+}
+
+/// The description a rule writes as `english` (what it removes and why
+/// that is safe), in `language`: the English as is when it has no French,
+/// said.
+#[must_use]
+pub fn description(language: Language, english: &str) -> &str {
+    translated(language, |texts| &texts.descriptions, DESCRIPTION, english)
 }
 
 /// The label of a group as shown: a browser's cache by the browser's name
@@ -210,23 +255,41 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::{Os, RuleSet};
+    use crate::{Effect, Label, Os, RuleSet};
 
-    /// Every label a cleaning shows on Linux: the subcategories of the system
-    /// targets, the names of the application rules and the labels of the
-    /// browsers' cache directories.
-    fn shown_on_linux() -> BTreeSet<String> {
+    /// A rule as a cleaning shows it: its label, whether it offers anything
+    /// to remove (a maintenance offers no group, so no description is shown
+    /// for it), and its description.
+    struct ShownRule {
+        label: String,
+        deletes: bool,
+        description: Option<String>,
+    }
+
+    /// Every rule a cleaning shows on Linux: the system targets and files,
+    /// the application rules and the browsers' cache directories.
+    fn rules_on_linux() -> Vec<ShownRule> {
+        let shown = |label: &Label, deletes, description: Option<&Label>| ShownRule {
+            label: label.to_string(),
+            deletes,
+            description: description.map(Label::to_string),
+        };
         let rules = RuleSet::embedded(Os::Linux).unwrap();
         let system = rules.system();
+        let browsers = rules.browsers();
+        let directories = browsers.chromium_cache_directories();
         system
             .clean_targets()
             .iter()
-            .map(|target| target.subcategory().to_string())
+            .map(|target| {
+                let deletes = matches!(target.effect(), Effect::Delete(_));
+                shown(target.subcategory(), deletes, target.description())
+            })
             .chain(
                 system
                     .single_file_targets()
                     .iter()
-                    .map(|target| target.subcategory().to_string()),
+                    .map(|target| shown(target.subcategory(), true, target.description())),
             )
             .chain(
                 rules
@@ -234,19 +297,53 @@ mod tests {
                     .iter()
                     .chain(rules.gaming())
                     .chain(rules.gpu_cache())
-                    .map(|rule| rule.name().to_string()),
+                    .map(|rule| {
+                        let deletes = matches!(rule.effect(), Effect::Delete(_));
+                        shown(rule.name(), deletes, rule.description())
+                    }),
             )
-            .chain({
-                let browsers = rules.browsers();
-                let directories = browsers.chromium_cache_directories();
+            .chain(
                 directories
                     .profile()
                     .iter()
                     .chain(directories.shared())
                     .chain(browsers.firefox_cache_directories())
-                    .map(|directory| directory.label().to_string())
-            })
+                    .map(|directory| shown(directory.label(), true, directory.description())),
+            )
             .collect()
+    }
+
+    /// Checks the catalogue's entries of `context` against the texts
+    /// `shown` in it: each has its French, each is there once, two told
+    /// apart in English are in French, none is left over.
+    fn check_context(entries: &[Entry], context: &str, shown: &BTreeSet<String>) {
+        let entries: Vec<&Entry> = entries
+            .iter()
+            .filter(|entry| entry.context == context)
+            .collect();
+        let keys: BTreeSet<&str> = entries.iter().map(|entry| entry.key.as_str()).collect();
+        assert_eq!(keys.len(), entries.len(), "each {context} once");
+        let texts: BTreeSet<&str> = entries.iter().map(|entry| entry.text.as_str()).collect();
+        assert_eq!(
+            texts.len(),
+            entries.len(),
+            "two {context}s told apart in English are in French"
+        );
+        let missing: Vec<String> = shown
+            .iter()
+            .filter(|text| !keys.contains(text.as_str()))
+            .map(|text| format!("msgctxt \"{context}\"\nmsgid \"{text}\"\nmsgstr \"\"\n"))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{context}s without their French, to add to lang/fr.po:\n{}",
+            missing.join("\n")
+        );
+        let left_over: Vec<&&str> = keys.iter().filter(|key| !shown.contains(**key)).collect();
+        assert!(
+            left_over.is_empty(),
+            "no rule shows the {context}s {left_over:?}"
+        );
     }
 
     #[test]
@@ -264,41 +361,77 @@ mod tests {
     }
 
     #[test]
-    fn every_label_shown_has_its_french_and_no_entry_is_left_over() {
+    fn every_text_shown_has_its_french_and_no_entry_is_left_over() {
         let entries = entries(FRENCH).unwrap();
         assert_eq!(
             entries.len(),
             FRENCH.matches("\nmsgctxt ").count(),
             "every entry read"
         );
-        let keys: BTreeSet<String> = entries.iter().map(|entry| entry.key.clone()).collect();
-        assert_eq!(keys.len(), entries.len(), "each label once");
-        let texts: BTreeSet<&str> = entries.iter().map(|entry| entry.text.as_str()).collect();
-        assert_eq!(
-            texts.len(),
-            entries.len(),
-            "two labels told apart in English are in French"
-        );
-        let shown = shown_on_linux();
-        let missing: Vec<String> = shown
-            .difference(&keys)
-            .map(|label| format!("msgctxt \"label\"\nmsgid \"{label}\"\nmsgstr \"\"\n"))
+        let rules = rules_on_linux();
+        let labels: BTreeSet<String> = rules.iter().map(|rule| rule.label.clone()).collect();
+        check_context(&entries, LABEL, &labels);
+        let descriptions: BTreeSet<String> = rules
+            .iter()
+            .filter(|rule| rule.deletes)
+            .filter_map(|rule| rule.description.clone())
             .collect();
-        assert!(
-            missing.is_empty(),
-            "labels without their French, to add to lang/fr.po:\n{}",
-            missing.join("\n")
-        );
-        let left_over: Vec<&String> = keys.difference(&shown).collect();
-        assert!(left_over.is_empty(), "no rule shows {left_over:?}");
+        check_context(&entries, DESCRIPTION, &descriptions);
+        for english in labels.iter().chain(&descriptions) {
+            assert!(
+                !english.contains(['\u{2014}', '\u{2013}']),
+                "no dash of that kind is shown in English either: {english}"
+            );
+        }
         for entry in &entries {
-            assert_eq!(entry.context, LABEL, "{entry:?}");
+            assert!(
+                [LABEL, DESCRIPTION].contains(&entry.context.as_str()),
+                "{entry:?}"
+            );
             assert!(!entry.text.is_empty(), "{entry:?}");
             assert!(
                 !entry.text.contains(['\u{2014}', '\u{2013}']),
                 "no dash of that kind is shown: {entry:?}"
             );
         }
+    }
+
+    #[test]
+    fn every_rule_shown_says_why_it_is_safe() {
+        let undescribed: Vec<String> = rules_on_linux()
+            .into_iter()
+            .filter(|rule| rule.deletes && rule.description.is_none())
+            .map(|rule| rule.label)
+            .collect();
+        assert!(
+            undescribed.is_empty(),
+            "rules shown without a description: {undescribed:?}"
+        );
+    }
+
+    #[test]
+    fn a_description_is_shown_in_the_language_of_the_session() {
+        let pip = "pip downloaded wheel and source distribution cache";
+        assert_eq!(
+            description(Language::French, pip),
+            "Paquets wheel et archives de sources téléchargés par pip."
+        );
+        assert_eq!(description(Language::English, pip), pip);
+        assert_eq!(
+            description(Language::French, "No such description"),
+            "No such description",
+            "the English when there is no French"
+        );
+        assert_eq!(
+            description(Language::French, "pip Cache"),
+            "pip Cache",
+            "a label is no description"
+        );
+        assert_eq!(
+            label(Language::French, pip),
+            pip,
+            "nor a description a label"
+        );
     }
 
     #[test]
@@ -394,21 +527,38 @@ mod tests {
     }
 
     #[test]
-    fn only_the_labels_with_a_text_are_kept() {
+    fn each_context_keeps_its_own_texts() {
         let entry = |context: &str, key: &str, text: &str| Entry {
             context: context.to_owned(),
             key: key.to_owned(),
             text: text.to_owned(),
         };
-        let labels = labels_of(vec![
+        let table = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+            pairs
+                .iter()
+                .map(|(key, text)| ((*key).to_owned(), (*text).to_owned()))
+                .collect()
+        };
+        let texts = Texts::of(vec![
             entry("label", "pip Cache", "Cache de pip"),
-            // Placed after the label: if kept, it would replace it.
+            // Placed after the label of the same key: if read as one, it
+            // would replace it.
             entry("description", "pip Cache", "Une description"),
-            entry("label", "npm Cache", ""),
+            entry("description", "npm cache", "Le cache de npm"),
+            // Before the label of the same key: it would be replaced.
+            entry("label", "npm cache", "Cache de npm"),
+            entry("label", "yarn Cache", ""),
+            entry("note", "pip Cache", "Une note"),
         ]);
         assert_eq!(
-            labels,
-            HashMap::from([(String::from("pip Cache"), String::from("Cache de pip"))])
+            texts,
+            Texts {
+                labels: table(&[("pip Cache", "Cache de pip"), ("npm cache", "Cache de npm")]),
+                descriptions: table(&[
+                    ("pip Cache", "Une description"),
+                    ("npm cache", "Le cache de npm")
+                ]),
+            }
         );
     }
 

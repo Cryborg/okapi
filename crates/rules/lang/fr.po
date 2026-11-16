@@ -1,6 +1,7 @@
-# French texts of the cleaning rules (D-3): one entry per label shown,
-# its English text as written in crates/rules/data as the key. Product
-# names stay as they are. Checked by the tests of crates/rules/src/texts.rs.
+# French texts of the cleaning rules (D-3): one entry per label and per
+# description shown, its English text as written in crates/rules/data as the
+# key, its context saying which. Product names stay as they are. Checked by
+# the tests of crates/rules/src/texts.rs.
 msgid ""
 msgstr ""
 "Language: fr\n"
@@ -557,3 +558,539 @@ msgstr "Cache GPU persistant"
 msgctxt "label"
 msgid "PNaCl Translation Cache"
 msgstr "Cache de traduction PNaCl"
+
+msgctxt "description"
+msgid "Temporary files created by applications and the current user session"
+msgstr "Fichiers temporaires créés par les applications et par votre session."
+
+msgctxt "description"
+msgid "System-wide temporary files; typically cleared on reboot by tmpfiles.d"
+msgstr "Fichiers temporaires communs à tout le système, que tmpfiles.d vide d'habitude au redémarrage."
+
+msgctxt "description"
+msgid "Temporary files that persist across reboots; safe to clean periodically"
+msgstr "Fichiers temporaires gardés d'un redémarrage à l'autre : on peut les vider de temps en temps sans risque."
+
+msgctxt "description"
+msgid "Thumbnails file managers make for previews (freedesktop spec): made again when a folder is opened again. The images themselves are not touched"
+msgstr "Miniatures que les gestionnaires de fichiers créent pour l'aperçu (norme freedesktop) : ils les recréent quand vous rouvrez un dossier. Vos images ne sont pas touchées."
+
+msgctxt "description"
+msgid "Kernel and application crash dump files collected by apport or similar"
+msgstr "Rapports de plantage du noyau et des applications, recueillis par apport ou un outil semblable."
+
+msgctxt "description"
+msgid "Downloaded .deb packages cached by APT (Debian/Ubuntu); equivalent to apt clean"
+msgstr "Paquets .deb téléchargés et gardés par APT (Debian, Ubuntu) : comme apt clean."
+
+msgctxt "description"
+msgid "Downloaded RPM packages and metadata cached by DNF (Fedora/RHEL)"
+msgstr "Paquets RPM et métadonnées téléchargés et gardés par DNF (Fedora, RHEL)."
+
+msgctxt "description"
+msgid "Downloaded packages cached by Pacman (Arch Linux); equivalent to pacman -Scc: every cached package goes, those of the installed versions too, which a downgrade without network needs"
+msgstr "Paquets téléchargés et gardés par Pacman (Arch Linux) : comme pacman -Scc. Tous partent, y compris ceux des versions installées, qui permettent de revenir en arrière sans réseau."
+
+msgctxt "description"
+msgid "Hard links snapd keeps to the snaps it downloaded, to reuse them without a download; snapd trims it itself. Most are the installed snaps themselves: emptying it frees much less than the size shown"
+msgstr "Liens durs que snapd garde vers les snaps téléchargés, pour les réutiliser sans téléchargement ; snapd le réduit lui-même. La plupart sont les snaps installés eux-mêmes : le vider libère bien moins que la taille affichée."
+
+msgctxt "description"
+msgid "Per-snap user cache directories inside the Snap sandbox. Close these apps first: an open browser's cache is emptied anyway"
+msgstr "Dossiers de cache de chaque snap, dans son bac à sable, pour votre compte. Fermez d'abord ces applications : le cache d'un navigateur ouvert est vidé quand même."
+
+msgctxt "description"
+msgid "Per-app cache directories for installed Flatpak applications. Close these apps first: an open browser's cache is emptied anyway"
+msgstr "Dossiers de cache de chaque application Flatpak installée. Fermez d'abord ces applications : le cache d'un navigateur ouvert est vidé quand même."
+
+msgctxt "description"
+msgid "Temporary files from Flatpak repository operations and downloads"
+msgstr "Fichiers temporaires laissés par les téléchargements et les opérations du dépôt Flatpak."
+
+msgctxt "description"
+msgid "Downloaded RPM packages cached by Zypper (openSUSE)"
+msgstr "Paquets RPM téléchargés et gardés par Zypper (openSUSE)."
+
+msgctxt "description"
+msgid "Application core dump files collected by systemd-coredump"
+msgstr "Images mémoire d'applications plantées, recueillies par systemd-coredump."
+
+msgctxt "description"
+msgid "Fontconfig font rendering cache; rebuilt automatically on demand"
+msgstr "Cache de rendu des polices de Fontconfig : recréé tout seul quand il manque."
+
+msgctxt "description"
+msgid "Log files from system installation and initial setup"
+msgstr "Journaux de l'installation du système et de sa première configuration."
+
+msgctxt "description"
+msgid "System-wide fontconfig cache; rebuilt automatically by fc-cache"
+msgstr "Cache Fontconfig commun à tout le système : fc-cache le recrée tout seul."
+
+msgctxt "description"
+msgid "Manual pages formatted for display and the man-db index. Pages are formatted again when read; the index that apropos and man -k search comes back only when man-db.timer next runs (daily) or a package is installed"
+msgstr "Pages de manuel mises en forme et index de man-db. Les pages sont remises en forme à la lecture ; l'index, où cherchent apropos et man -k, ne revient qu'au prochain passage de man-db.timer (chaque jour) ou à la prochaine installation d'un paquet."
+
+msgctxt "description"
+msgid "APT package manager history and terminal log files (Debian/Ubuntu)"
+msgstr "Historique et journaux de terminal du gestionnaire de paquets APT (Debian, Ubuntu)."
+
+msgctxt "description"
+msgid "GNOME Tracker file indexer and search database cache; rebuilt automatically"
+msgstr "Cache de l'indexeur de fichiers et de la recherche de GNOME Tracker : recréé tout seul."
+
+msgctxt "description"
+msgid "Legacy GNOME Tracker file indexer cache (pre-Tracker 3); rebuilt automatically"
+msgstr "Cache de l'ancien indexeur de fichiers de GNOME Tracker (avant Tracker 3) : recréé tout seul."
+
+msgctxt "description"
+msgid "GStreamer multimedia framework plugin registry cache; rebuilt automatically"
+msgstr "Registre des greffons de GStreamer, le moteur multimédia : recréé tout seul."
+
+msgctxt "description"
+msgid "stderr output from the previous X11 session"
+msgstr "Messages d'erreur de la session X11 précédente."
+
+msgctxt "description"
+msgid "Discord Electron app cache, compiled code cache, and GPU cache"
+msgstr "Caches de l'application Electron Discord : contenu web, code compilé et GPU."
+
+msgctxt "description"
+msgid "VS Code web, compiled code, GPU, and extension caches, downloaded extension packages, and logs"
+msgstr "Caches de VS Code (web, code compilé, GPU, extensions), paquets d'extensions téléchargés et journaux."
+
+msgctxt "description"
+msgid "Slack Electron app cache, compiled code cache, and GPU cache"
+msgstr "Caches de l'application Electron Slack : contenu web, code compilé et GPU."
+
+msgctxt "description"
+msgid "Microsoft Teams cached web content"
+msgstr "Contenu web gardé en cache par Microsoft Teams."
+
+msgctxt "description"
+msgid "Spotify's cache of streamed music, songs downloaded for offline listening included: downloaded again from Spotify when needed"
+msgstr "Musique gardée en cache par Spotify, titres téléchargés pour l'écoute hors ligne compris : retéléchargés depuis Spotify au besoin."
+
+msgctxt "description"
+msgid "npm downloaded package tarballs and metadata cache"
+msgstr "Archives et métadonnées des paquets téléchargés par npm."
+
+msgctxt "description"
+msgid "Homebrew (Linuxbrew) downloaded bottles and source archives"
+msgstr "Paquets précompilés (bottles) et archives de sources téléchargés par Homebrew (Linuxbrew)."
+
+msgctxt "description"
+msgid "Yarn downloaded package cache (yarn cache clean clears this)"
+msgstr "Paquets téléchargés par Yarn (ce que vide yarn cache clean)."
+
+msgctxt "description"
+msgid "pip downloaded wheel and source distribution cache"
+msgstr "Paquets wheel et archives de sources téléchargés par pip."
+
+msgctxt "description"
+msgid "Pipenv downloaded package and lock resolution cache; re-downloaded when needed"
+msgstr "Paquets téléchargés et résolutions de verrous de Pipenv : retéléchargés au besoin."
+
+msgctxt "description"
+msgid "Zoom cached data, GPU cache, and log files"
+msgstr "Données en cache, cache GPU et journaux de Zoom."
+
+msgctxt "description"
+msgid "Telegram cached user data and emoji assets"
+msgstr "Données d'utilisateur en cache et images des émojis de Telegram."
+
+msgctxt "description"
+msgid "OBS Studio log files and performance profiler data"
+msgstr "Journaux et données du profileur de performances d'OBS Studio."
+
+msgctxt "description"
+msgid "JetBrains IDE system folders (IntelliJ, PyCharm, WebStorm, etc.): caches and indexes rebuilt on restart, but the local history of the IDEs goes too"
+msgstr "Dossiers système des IDE de JetBrains (IntelliJ, PyCharm, WebStorm…) : caches et index recréés au redémarrage, mais l'historique local des IDE part aussi."
+
+msgctxt "description"
+msgid "Bun downloaded package cache"
+msgstr "Paquets téléchargés par Bun."
+
+msgctxt "description"
+msgid "Cargo downloaded crate archives, extracted source files, and git dependency checkouts (re-created from the git database on demand)"
+msgstr "Archives des crates téléchargées, sources extraites et copies des dépendances git de Cargo (recréées au besoin depuis la base git)."
+
+msgctxt "description"
+msgid "Go module download cache: downloaded again when a build needs it"
+msgstr "Cache des téléchargements de modules de Go : retéléchargés quand une construction en a besoin."
+
+msgctxt "description"
+msgid "Gradle caches, downloaded dependencies included, and the folder of its daemons: built or downloaded again on the next build, longer and needing the network; the daemons' logs go"
+msgstr "Caches de Gradle, dépendances téléchargées comprises, et dossier de ses démons : recréés ou retéléchargés à la prochaine construction, plus longue et qui demande le réseau ; les journaux des démons partent."
+
+msgctxt "description"
+msgid "Maven local repository: downloaded artifacts and dependencies, and what mvn install put there, which only a new mvn install brings back"
+msgstr "Dépôt local de Maven : artefacts et dépendances téléchargés, et ce que mvn install y a mis, que seul un nouveau mvn install remet."
+
+msgctxt "description"
+msgid "Composer downloaded PHP package cache"
+msgstr "Paquets PHP téléchargés par Composer."
+
+msgctxt "description"
+msgid "Cursor IDE cached data and compiled extension cache; preserves projects, history, sessions, and settings"
+msgstr "Données en cache et cache des extensions compilées de l'IDE Cursor ; projets, historique, sessions et réglages sont gardés."
+
+msgctxt "description"
+msgid "Signal Desktop Electron app cache, compiled code cache, and GPU cache"
+msgstr "Caches de l'application Electron Signal Desktop : contenu web, code compilé et GPU."
+
+msgctxt "description"
+msgid "Postman Electron app cache, compiled code cache, and GPU cache"
+msgstr "Caches de l'application Electron Postman : contenu web, code compilé et GPU."
+
+msgctxt "description"
+msgid "VLC cached album art and media thumbnails"
+msgstr "Pochettes d'albums et miniatures de médias gardées en cache par VLC."
+
+msgctxt "description"
+msgid "Thunderbird per-profile web content cache"
+msgstr "Cache du contenu web de chaque profil de Thunderbird."
+
+msgctxt "description"
+msgid "GIMP rendering and resource cache"
+msgstr "Cache du rendu et des ressources de GIMP."
+
+msgctxt "description"
+msgid "Blender thumbnail and script cache"
+msgstr "Cache des miniatures et des scripts de Blender."
+
+msgctxt "description"
+msgid "LibreOffice cached data including extension thumbnails"
+msgstr "Données en cache de LibreOffice, miniatures des extensions comprises."
+
+msgctxt "description"
+msgid "TeamViewer cache and session log files"
+msgstr "Cache et journaux de session de TeamViewer."
+
+msgctxt "description"
+msgid "Inkscape font and rendering cache"
+msgstr "Cache des polices et du rendu d'Inkscape."
+
+msgctxt "description"
+msgid "Krita resource and rendering cache"
+msgstr "Cache des ressources et du rendu de Krita."
+
+msgctxt "description"
+msgid "FileZilla directory listing cache"
+msgstr "Cache des listes de dossiers de FileZilla."
+
+msgctxt "description"
+msgid "Pidgin cached buddy icons"
+msgstr "Avatars des contacts gardés en cache par Pidgin."
+
+msgctxt "description"
+msgid "Transmission BitTorrent client cache"
+msgstr "Cache du client BitTorrent Transmission."
+
+msgctxt "description"
+msgid "Audacious audio player cache"
+msgstr "Cache du lecteur audio Audacious."
+
+msgctxt "description"
+msgid "Rhythmbox music player album art and metadata cache"
+msgstr "Pochettes et métadonnées gardées en cache par le lecteur de musique Rhythmbox."
+
+msgctxt "description"
+msgid "Temporary files inside the default Wine prefix"
+msgstr "Fichiers temporaires du préfixe Wine par défaut."
+
+msgctxt "description"
+msgid "Android Studio IDE caches (per-version caches folder); indexes and local history are left alone"
+msgstr "Caches de l'IDE Android Studio (dossier des caches de chaque version) ; les index et l'historique local sont laissés."
+
+msgctxt "description"
+msgid "Conda downloaded package cache: downloaded again when an environment needs it"
+msgstr "Paquets téléchargés par Conda : retéléchargés quand un environnement en a besoin."
+
+msgctxt "description"
+msgid "Unity global shader and GI cache (regenerated when projects are opened)"
+msgstr "Cache global des shaders et de l'éclairage global (GI) de Unity : recréé à l'ouverture des projets."
+
+msgctxt "description"
+msgid "Notion Electron app cache, compiled code cache, and GPU cache"
+msgstr "Caches de l'application Electron Notion : contenu web, code compilé et GPU."
+
+msgctxt "description"
+msgid "Obsidian Electron app cache, compiled code cache, and GPU cache"
+msgstr "Caches de l'application Electron Obsidian : contenu web, code compilé et GPU."
+
+msgctxt "description"
+msgid "WhatsApp Desktop Electron app cache"
+msgstr "Cache de l'application Electron WhatsApp Desktop."
+
+msgctxt "description"
+msgid "Bitwarden Electron app cache, compiled code cache, and GPU cache"
+msgstr "Caches de l'application Electron Bitwarden : contenu web, code compilé et GPU."
+
+msgctxt "description"
+msgid "1Password Electron app cache, compiled code cache, and GPU cache"
+msgstr "Caches de l'application Electron 1Password : contenu web, code compilé et GPU."
+
+msgctxt "description"
+msgid "Downloaded .gem file cache (reinstall regenerates as needed)"
+msgstr "Fichiers .gem téléchargés : une réinstallation les recrée au besoin."
+
+msgctxt "description"
+msgid "Deno module cache (re-downloaded on demand)"
+msgstr "Modules gardés en cache par Deno : retéléchargés au besoin."
+
+msgctxt "description"
+msgid "Claude Desktop and Claude Code caches, the downloaded copies of plugins included; preserves conversations, projects, checkpoints, configuration, backups, and shell snapshots"
+msgstr "Caches de Claude Desktop et de Claude Code, copies téléchargées des extensions comprises ; conversations, projets, points de reprise, configuration, sauvegardes et instantanés du shell sont gardés."
+
+msgctxt "description"
+msgid "Claude Desktop and Claude Code diagnostic logs older than one week; conversations, projects, file history, and session data are never scanned"
+msgstr "Journaux de diagnostic de Claude Desktop et de Claude Code de plus d'une semaine ; conversations, projets, historique des fichiers et données de session ne sont jamais parcourus."
+
+msgctxt "description"
+msgid "Codex app and connector metadata caches; preserves sessions, archives, memories, attachments, generated images, credentials, configuration, plugins, and installed runtimes"
+msgstr "Caches des métadonnées de l'application Codex et de ses connecteurs ; sessions, archives, mémoires, pièces jointes, images générées, identifiants, configuration, extensions et environnements installés sont gardés."
+
+msgctxt "description"
+msgid "Settled Codex command temporary files; preserves the plugin staging and backup area under .codex/.tmp"
+msgstr "Fichiers temporaires des commandes de Codex terminées ; la zone de préparation et de sauvegarde des extensions sous .codex/.tmp est gardée."
+
+msgctxt "description"
+msgid "Sublime Text index and asset cache"
+msgstr "Cache de l'index et des ressources de Sublime Text."
+
+msgctxt "description"
+msgid "Termius Electron app cache, compiled code cache, and GPU cache"
+msgstr "Caches de l'application Electron Termius : contenu web, code compilé et GPU."
+
+msgctxt "description"
+msgid "Ledger Live Electron app cache, compiled code cache, and GPU cache"
+msgstr "Caches de l'application Electron Ledger Live : contenu web, code compilé et GPU."
+
+msgctxt "description"
+msgid "Node.js native addon build header cache (re-downloaded on demand)"
+msgstr "En-têtes de construction des modules natifs de Node.js : retéléchargés au besoin."
+
+msgctxt "description"
+msgid "Electron builder download cache (re-downloaded on demand)"
+msgstr "Téléchargements gardés en cache par electron-builder : retéléchargés au besoin."
+
+msgctxt "description"
+msgid "Kodi media center temp files and thumbnail images (can be several GB; rebuilt on demand)"
+msgstr "Fichiers temporaires et miniatures du centre multimédia Kodi (parfois plusieurs Go) : recréés au besoin."
+
+msgctxt "description"
+msgid "qBittorrent cache files"
+msgstr "Fichiers de cache de qBittorrent."
+
+msgctxt "description"
+msgid "HandBrake video encoder log files from past encoding jobs (native and Flatpak)"
+msgstr "Journaux des encodages passés de l'encodeur vidéo HandBrake (natif et Flatpak)."
+
+msgctxt "description"
+msgid "Compiler cache for C/C++ (can grow to several GB; builds just take longer on next compile)"
+msgstr "Cache du compilateur pour C et C++ (parfois plusieurs Go) : la prochaine compilation est seulement plus longue."
+
+msgctxt "description"
+msgid "Shared compiler cache for Rust and C/C++ (can grow to several GB; builds just take longer on next compile)"
+msgstr "Cache de compilation partagé pour Rust, C et C++ (parfois plusieurs Go) : la prochaine compilation est seulement plus longue."
+
+msgctxt "description"
+msgid "Java Web Start and applet download cache (deprecated technology; safe to remove)"
+msgstr "Téléchargements de Java Web Start et des applets, une technologie abandonnée : sans risque à retirer."
+
+msgctxt "description"
+msgid "Windsurf IDE cached data and compiled extension cache; preserves projects, history, sessions, and settings"
+msgstr "Données en cache et cache des extensions compilées de l'IDE Windsurf ; projets, historique, sessions et réglages sont gardés."
+
+msgctxt "description"
+msgid "Hyper terminal Electron app cache, compiled code cache, and GPU cache"
+msgstr "Caches de l'application Electron Hyper (terminal) : contenu web, code compilé et GPU."
+
+msgctxt "description"
+msgid "Linear project management Electron app cache, compiled code cache, and GPU cache"
+msgstr "Caches de l'application Electron Linear (gestion de projets) : contenu web, code compilé et GPU."
+
+msgctxt "description"
+msgid "Todoist Electron app cache, compiled code cache, and GPU cache"
+msgstr "Caches de l'application Electron Todoist : contenu web, code compilé et GPU."
+
+msgctxt "description"
+msgid "Loom screen recorder Electron app cache, compiled code cache, and GPU cache"
+msgstr "Caches de l'application Electron Loom (enregistrement d'écran) : contenu web, code compilé et GPU."
+
+msgctxt "description"
+msgid "Zed code editor cache; rebuilt automatically"
+msgstr "Cache de l'éditeur de code Zed : recréé tout seul."
+
+msgctxt "description"
+msgid "AWS CLI cached API responses and temporary credentials: fetched again on the next command, which may ask for an MFA code again"
+msgstr "Réponses d'API et identifiants temporaires gardés en cache par AWS CLI : redemandés à la commande suivante, qui peut redemander un code MFA."
+
+msgctxt "description"
+msgid "Google Cloud CLI log files and cached API data"
+msgstr "Journaux et données d'API en cache de Google Cloud CLI."
+
+msgctxt "description"
+msgid "VS Code Insiders cached web content, compiled code cache, GPU cache, downloaded extension packages, and logs; preserves settings, extensions, and workspace state"
+msgstr "Contenu web en cache, cache du code compilé, cache GPU, paquets d'extensions téléchargés et journaux de VS Code Insiders ; réglages, extensions et état des espaces de travail sont gardés."
+
+msgctxt "description"
+msgid "VSCodium cached web content, compiled code cache, GPU cache, downloaded extension packages, and logs; preserves settings, extensions, and workspace state"
+msgstr "Contenu web en cache, cache du code compilé, cache GPU, paquets d'extensions téléchargés et journaux de VSCodium ; réglages, extensions et état des espaces de travail sont gardés."
+
+msgctxt "description"
+msgid "Discord PTB Electron app cache, compiled code cache, and GPU cache"
+msgstr "Caches de l'application Electron Discord PTB : contenu web, code compilé et GPU."
+
+msgctxt "description"
+msgid "Discord Canary Electron app cache, compiled code cache, and GPU cache"
+msgstr "Caches de l'application Electron Discord Canary : contenu web, code compilé et GPU."
+
+msgctxt "description"
+msgid "Type definitions the TypeScript language server downloads for JavaScript projects (automatic type acquisition); re-downloaded on demand"
+msgstr "Définitions de types que le serveur de langage TypeScript télécharge pour les projets JavaScript (acquisition automatique des types) : retéléchargées au besoin."
+
+msgctxt "description"
+msgid "Precompiled header cache from the Microsoft C/C++ extension; rebuilt automatically when files are reopened"
+msgstr "Cache des en-têtes précompilés de l'extension C/C++ de Microsoft : recréé tout seul quand les fichiers sont rouverts."
+
+msgctxt "description"
+msgid "Go compiler build cache (go clean -cache clears this); rebuilt on the next build"
+msgstr "Cache de construction du compilateur Go (ce que vide go clean -cache) : recréé à la prochaine construction."
+
+msgctxt "description"
+msgid "Poetry package metadata and downloaded distribution cache; the virtualenvs folder beside them is left alone"
+msgstr "Métadonnées des paquets et archives téléchargées par Poetry ; le dossier virtualenvs à côté est laissé."
+
+msgctxt "description"
+msgid "Downloaded Electron runtime archives older than one week; re-downloaded on demand. Preserves installed apps and recent downloads."
+msgstr "Archives de l'environnement Electron téléchargées il y a plus d'une semaine : retéléchargées au besoin. Les applications installées et les téléchargements récents sont gardés."
+
+msgctxt "description"
+msgid "Google Antigravity IDE cached data and compiled extension cache; preserves projects, history, sessions, and settings"
+msgstr "Données en cache et cache des extensions compilées de l'IDE Google Antigravity ; projets, historique, sessions et réglages sont gardés."
+
+msgctxt "description"
+msgid "Optional reset of Xet transfer caches older than seven days; preserves Hub models, datasets, and credentials. Future transfers may be slower."
+msgstr "Réinitialisation facultative des caches de transfert Xet de plus de sept jours ; modèles, jeux de données et identifiants du Hub sont gardés. Les prochains transferts peuvent être plus lents."
+
+msgctxt "description"
+msgid "LM Studio server diagnostic logs; preserves downloaded models, conversations, configuration, and application state"
+msgstr "Journaux de diagnostic du serveur de LM Studio ; modèles téléchargés, conversations, configuration et état de l'application sont gardés."
+
+msgctxt "description"
+msgid "Insomnia REST client web, compiled code, GPU cache, and diagnostic logs; preserves response history, collections, environments, and secrets"
+msgstr "Caches web, du code compilé et GPU, et journaux de diagnostic du client REST Insomnia ; historique des réponses, collections, environnements et secrets sont gardés."
+
+msgctxt "description"
+msgid "Figma Desktop Electron app cache, compiled code cache, and GPU cache"
+msgstr "Caches de l'application Electron Figma Desktop : contenu web, code compilé et GPU."
+
+msgctxt "description"
+msgid "DaVinci Resolve crash dumps and diagnostic logs; preserves project libraries, databases, timelines, and media"
+msgstr "Rapports de plantage et journaux de diagnostic de DaVinci Resolve ; bibliothèques de projets, bases de données, montages et médias sont gardés."
+
+msgctxt "description"
+msgid "Steam client log files and web download cache"
+msgstr "Journaux du client Steam et cache des téléchargements web."
+
+msgctxt "description"
+msgid "itch.io Electron app cache and log files"
+msgstr "Cache et journaux de l'application Electron itch.io."
+
+msgctxt "description"
+msgid "Heroic Games Launcher Electron app cache and GPU cache"
+msgstr "Cache de l'application Electron Heroic Games Launcher et cache GPU."
+
+msgctxt "description"
+msgid "Lutris download and installer cache"
+msgstr "Cache des téléchargements et des installateurs de Lutris."
+
+msgctxt "description"
+msgid "Minecraft logs, crash reports, and launcher web cache"
+msgstr "Journaux, rapports de plantage et cache web du lanceur de Minecraft."
+
+msgctxt "description"
+msgid "Per-game shader caches in the default Steam library; re-downloaded or recompiled the next time each game launches"
+msgstr "Caches de shaders de chaque jeu, dans la bibliothèque Steam par défaut : retéléchargés ou recompilés au prochain lancement de chaque jeu."
+
+msgctxt "description"
+msgid "Mesa OpenGL/Vulkan compiled shader cache, including the single-file database newer Mesa releases use; rebuilt automatically per-application"
+msgstr "Shaders OpenGL et Vulkan compilés par Mesa, y compris la base en un seul fichier des versions récentes : recréés tout seuls, application par application."
+
+msgctxt "description"
+msgid "NVIDIA compiled shader cache for OpenGL and Vulkan; rebuilt automatically per-game"
+msgstr "Shaders OpenGL et Vulkan compilés par le pilote NVIDIA : recréés tout seuls, jeu par jeu."
+
+msgctxt "description"
+msgid "Unity engine compiled shader cache; rebuilt when Unity projects are opened"
+msgstr "Shaders compilés par le moteur Unity : recréés à l'ouverture des projets Unity."
+
+msgctxt "description"
+msgid "CUDA JIT-compiled kernel cache; rebuilt automatically the next time CUDA apps run"
+msgstr "Noyaux CUDA compilés à la volée : recréés tout seuls au prochain lancement des applications CUDA."
+
+msgctxt "description"
+msgid "Pages, images, and scripts the browser keeps to load sites faster: downloaded again on the next visit. Logins, history, and bookmarks are not touched"
+msgstr "Pages, images et scripts que le navigateur garde pour charger les sites plus vite : retéléchargés à la prochaine visite. Identifiants, historique et favoris ne sont pas touchés."
+
+msgctxt "description"
+msgid "Scripts of the sites visited, compiled: compiled again on the next visit, which is a little slower"
+msgstr "Scripts des sites visités, une fois compilés : recompilés à la prochaine visite, un peu plus lente."
+
+msgctxt "description"
+msgid "Shaders compiled by the browser's GPU process: rebuilt on demand"
+msgstr "Shaders compilés par le processus GPU du navigateur : recréés au besoin."
+
+msgctxt "description"
+msgid "Shared-compression dictionary cache: downloaded content rebuilt on demand"
+msgstr "Dictionnaires de compression partagés : contenu téléchargé, recréé au besoin."
+
+msgctxt "description"
+msgid "Responses the sites' service workers keep, offline copies included: usually downloaded again on the next visit, but a web app used offline may lose its local data"
+msgstr "Réponses gardées par les service workers des sites, copies hors ligne comprises : en général retéléchargées à la prochaine visite, mais une application web utilisée hors ligne peut y perdre ses données locales."
+
+msgctxt "description"
+msgid "Dawn's compiled WebGPU shaders: rebuilt on demand"
+msgstr "Shaders WebGPU compilés par Dawn : recréés au besoin."
+
+msgctxt "description"
+msgid "Dawn/Skia Graphite pipeline cache: rebuilt on demand"
+msgstr "Cache des pipelines Graphite de Dawn et Skia : recréé au besoin."
+
+msgctxt "description"
+msgid "Downloaded CRX packages for component extensions: re-fetched on next update check, not the installed extensions themselves"
+msgstr "Paquets CRX téléchargés des extensions de composants : retéléchargés à la prochaine recherche de mises à jour. Les extensions installées ne sont pas touchées."
+
+msgctxt "description"
+msgid "Downloaded CRX packages awaiting install: re-fetched on next update check"
+msgstr "Paquets CRX téléchargés en attente d'installation : retéléchargés à la prochaine recherche de mises à jour."
+
+msgctxt "description"
+msgid "Skia GPU shader cache: rebuilt on demand"
+msgstr "Cache des shaders GPU de Skia : recréé au besoin."
+
+msgctxt "description"
+msgid "Legacy GPU shader cache: rebuilt on demand"
+msgstr "Ancien cache des shaders GPU : recréé au besoin."
+
+msgctxt "description"
+msgid "Where newer Chromium builds keep the Graphite pipeline cache: rebuilt on demand"
+msgstr "Là où les versions récentes de Chromium gardent le cache des pipelines Graphite : recréé au besoin."
+
+msgctxt "description"
+msgid "Where newer Chromium builds keep the on-disk GPU cache: rebuilt on demand"
+msgstr "Là où les versions récentes de Chromium gardent le cache GPU sur disque : recréé au besoin."
+
+msgctxt "description"
+msgid "Translated PNaCl modules: regenerated on demand"
+msgstr "Modules PNaCl traduits : recréés au besoin."
+
+msgctxt "description"
+msgid "Page thumbnails of the new tab page: rebuilt on demand"
+msgstr "Miniatures des pages affichées dans un nouvel onglet : recréées au besoin."
+
+msgctxt "description"
+msgid "Compiled scripts of the browser's own interface: rebuilt at the next launch, which is slower"
+msgstr "Scripts compilés de l'interface du navigateur : recréés au prochain lancement, qui est plus lent."

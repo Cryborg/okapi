@@ -17,7 +17,7 @@ pub struct BrowserCacheDirectory {
     /// (D-4, invariant 5).
     #[serde(default, rename = "cacheReset")]
     cache_reset: bool,
-    description: Option<String>,
+    description: Option<Label>,
 }
 
 impl BrowserCacheDirectory {
@@ -46,8 +46,8 @@ impl BrowserCacheDirectory {
     }
 
     #[must_use]
-    pub fn description(&self) -> Option<&str> {
-        self.description.as_deref()
+    pub const fn description(&self) -> Option<&Label> {
+        self.description.as_ref()
     }
 }
 
@@ -596,6 +596,14 @@ mod tests {
         )
         .unwrap();
         assert!(reset.is_cache_reset());
+    }
+
+    #[test]
+    fn a_cache_directory_never_describes_itself_with_a_blank() {
+        let error = error_of::<BrowserCacheDirectory>(
+            r#"{"dir": "Cache", "label": "Cache", "description": " "}"#,
+        );
+        assert!(error.contains("empty text"), "{error}");
     }
 
     #[test]

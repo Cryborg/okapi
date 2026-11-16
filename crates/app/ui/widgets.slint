@@ -144,6 +144,8 @@ export component ActionButton inherits Rectangle {
     in property <image> icon;
     in property <ButtonKind> kind: ButtonKind.secondary;
     in property <bool> large;
+    // As high as a badge, its words as small.
+    in property <bool> compact;
     in property <bool> enabled: true;
     // Its text goes to the line when it is too long, in a narrow panel.
     in property <bool> wrapped;
@@ -153,7 +155,8 @@ export component ActionButton inherits Rectangle {
 
     forward-focus: keys;
     height: wrapped ? max(Theme.control-height, content.preferred-height)
-        : large ? Theme.control-height-large : Theme.control-height;
+        : large ? Theme.control-height-large
+        : compact ? Theme.control-height-compact : Theme.control-height;
     border-radius: large ? Theme.radius-large : Theme.radius-medium;
     opacity: enabled ? 1 : Theme.disabled-opacity;
     background: kind == ButtonKind.danger ? (hovered ? Theme.danger-hover : Theme.danger)
@@ -201,15 +204,17 @@ export component ActionButton inherits Rectangle {
     }
 
     content := HorizontalLayout {
-        padding-left: large ? Theme.spacing-xl : Theme.spacing-l;
+        padding-left: large ? Theme.spacing-xl : compact ? Theme.spacing-s : Theme.spacing-l;
         padding-right: self.padding-left;
         padding-top: wrapped ? Theme.spacing-s : 0;
         padding-bottom: self.padding-top;
-        spacing: Theme.spacing-s;
+        spacing: compact ? Theme.spacing-xs : Theme.spacing-s;
         alignment: wrapped ? stretch : center;
         if root.icon.width > 0: Icon {
             source: root.icon;
             colorize: label.color;
+            width: compact ? Theme.icon-small : Theme.icon;
+            height: self.width;
             cross-axis-self-alignment: center;
         }
         label := Text {
@@ -218,7 +223,7 @@ export component ActionButton inherits Rectangle {
             color: kind == ButtonKind.danger ? Theme.on-danger
                 : kind == ButtonKind.primary ? Theme.on-accent
                 : kind == ButtonKind.ghost && !hovered ? Theme.text-2 : Theme.text;
-            font-size: large ? Theme.font-heading : Theme.font-label;
+            font-size: large ? Theme.font-heading : compact ? Theme.font-small : Theme.font-label;
             font-weight: Theme.weight-medium;
             vertical-alignment: center;
             wrap: wrapped ? word-wrap : no-wrap;

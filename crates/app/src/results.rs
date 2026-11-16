@@ -6,7 +6,22 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use okapi_engine::{Category, Origin, OriginKey, ScanGroup};
-use okapi_rules::{BrowserKind, Language};
+use okapi_rules::{BrowserKind, Label, Language};
+
+/// What sets the description of one rule apart from the next, in a group
+/// that joins several.
+const PARAGRAPH: &str = "\n\n";
+
+/// What the rules of a group say they remove, in `language`: one paragraph
+/// per text of theirs (the engine gives each once), in their order; empty
+/// when none says.
+fn described(language: Language, descriptions: &[Label]) -> String {
+    descriptions
+        .iter()
+        .map(|description| okapi_rules::description(language, description.as_str()))
+        .collect::<Vec<_>>()
+        .join(PARAGRAPH)
+}
 
 /// What the results need of one group of the report.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +30,9 @@ pub struct GroupFacts {
     pub label: String,
     /// Its label anywhere else: a browser's cache by its browser's name too.
     pub label_alone: String,
+    /// What its rules say they remove, one paragraph per text of
+    /// theirs; empty when none says.
+    pub description: String,
     /// The browser whose cache it is.
     pub browser: Option<BrowserKind>,
     pub categories: BTreeSet<Category>,
@@ -63,6 +81,7 @@ impl GroupFacts {
         Self {
             label: okapi_rules::label(language, english).to_owned(),
             label_alone: okapi_rules::group_label(language, group.browser(), english),
+            description: described(language, group.descriptions()),
             browser: group.browser(),
             categories: Category::of_group(group.origins()),
             preselected: group.is_selected_by_default(),
@@ -148,6 +167,8 @@ pub enum Line {
         hidden: bool,
         /// Under its browser's line.
         nested: bool,
+        /// Its description unfolded.
+        explained: bool,
     },
 }
 
@@ -159,6 +180,8 @@ pub struct Results {
     checked: BTreeSet<usize>,
     folded: BTreeSet<Category>,
     folded_browsers: BTreeSet<BrowserKind>,
+    /// The groups whose description is unfolded, by their index.
+    explained: BTreeSet<usize>,
 }
 
 impl Results {
@@ -178,6 +201,7 @@ impl Results {
             checked,
             folded: BTreeSet::new(),
             folded_browsers: BTreeSet::new(),
+            explained: BTreeSet::new(),
         }
     }
 
@@ -374,6 +398,7 @@ impl Results {
             checked: self.checked.contains(&index),
             hidden,
             nested,
+            explained: self.explained.contains(&index),
         }
     }
 
@@ -419,6 +444,20 @@ impl Results {
                 tracing::warn!(row, "no line of the results to fold");
             }
         }
+    }
+
+    /// Unfolds or folds the description of the group of the line `row`;
+    /// what is checked never changes.
+    pub fn explain_row(&mut self, row: usize) {
+        let Some(Line::Group { index, .. }) = self.rows().get(row).cloned() else {
+            tracing::warn!(row, "no group of the results to explain");
+            return;
+        };
+        let explained = self.explained.insert(index);
+        if !explained {
+            self.explained.remove(&index);
+        }
+        tracing::debug!(index, explained, "description of a group");
     }
 
     /// Checks or unchecks a group; never one that needs the administrator
@@ -612,6 +651,7 @@ mod tests {
         GroupFacts {
             label: String::from("group"),
             label_alone: String::from("group"),
+            description: String::new(),
             browser: None,
             categories: categories.iter().copied().collect(),
             preselected,
@@ -897,6 +937,63 @@ mod tests {
         );
         results.deselect_all();
         assert!(results.checked().is_empty());
+    }
+
+    /// The groups whose line shows their description unfolded.
+    fn explained(results: &Results) -> Vec<usize> {
+        results
+            .rows()
+            .into_iter()
+            .filter_map(|row| match row {
+                Line::Group {
+                    index,
+                    explained: true,
+                    ..
+                } => Some(index),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_group_s_description_says_each_rule_in_the_language_shown() {
+        let english = |text: &str| Label::try_from(text.to_owned()).unwrap();
+        let pip = english("pip downloaded wheel and source distribution cache");
+        let temporary =
+            english("Temporary files created by applications and the current user session");
+        assert_eq!(
+            described(Language::French, &[temporary, pip.clone()]),
+            "Fichiers temporaires créés par les applications et par votre session.\n\n\
+             Paquets wheel et archives de sources téléchargés par pip."
+        );
+        assert_eq!(
+            described(Language::English, std::slice::from_ref(&pip)),
+            pip.as_str(),
+            "the English as the rules write it"
+        );
+        assert_eq!(described(Language::French, &[]), "", "none says");
+    }
+
+    #[test]
+    fn a_description_unfolds_on_its_own_line_and_checks_nothing() {
+        let mut results = mixed();
+        assert!(explained(&results).is_empty(), "nothing unfolded at first");
+        let checked = results.checked().clone();
+        results.explain_row(2);
+        assert_eq!(explained(&results), [1], "the group of that line only");
+        assert_eq!(
+            results.checked(),
+            &checked,
+            "a group left to choose stays unchecked"
+        );
+        results.explain_row(0);
+        assert_eq!(explained(&results), [1], "a category has no description");
+        results.fold_row(0);
+        results.fold_row(0);
+        assert_eq!(explained(&results), [1], "kept across a fold");
+        results.explain_row(2);
+        assert!(explained(&results).is_empty(), "folded again");
+        assert_eq!(results.checked(), &checked);
     }
 
     fn cache(browser: BrowserKind, preselected: bool) -> GroupFacts {

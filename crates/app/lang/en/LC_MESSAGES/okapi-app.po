@@ -496,6 +496,14 @@ msgctxt "ResultLine"
 msgid "Le prochain démarrage sera plus lent, le temps de recréer ce cache."
 msgstr "The next start will be slower, while this cache is built again."
 
+msgctxt "WhyButton"
+msgid "Pourquoi c'est sans risque"
+msgstr "Why it's safe"
+
+msgctxt "WhyButton"
+msgid "Ce qui part"
+msgstr "What goes"
+
 msgctxt "ResultLine"
 msgid "Rien à nettoyer avec les droits administrateur."
 msgstr "Nothing to clean with administrator rights."

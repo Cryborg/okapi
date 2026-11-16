@@ -100,6 +100,13 @@ export struct ResultRow {
     category: CategoryKind,
     // A group's label, from the rules.
     label: string,
+    // What a group removes and why that is safe, from the rules (empty
+    // when they do not say), and whether it is unfolded.
+    description: string,
+    explained: bool,
+    // The engine preselects the group: its description says why that is
+    // safe, any other's what goes.
+    checked-by-default: bool,
     state: CheckState,
     // Its checkbox does something.
     enabled: bool,
@@ -252,6 +259,7 @@ export global Cleaner {
     callback finish();
     callback toggle-result(int);
     callback fold(int);
+    callback explain(int);
     callback deselect-all();
     callback clean();
     callback analyze();

@@ -1,6 +1,7 @@
 //! Draws a screen of the interface into a PNG, with made-up content, so that
 //! its layout can be looked at without a display:
-//! `cargo run -p okapi-app --example snapshot -- results /path/to/out.png`.
+//! `cargo run -p okapi-app --example snapshot -- results /path/to/out.png`
+//! (`results-dark`: the same in the dark scheme).
 //! A development tool: it never reads the machine and never cleans.
 #![expect(clippy::unwrap_used, reason = "a development tool fails by panicking")]
 
@@ -46,6 +47,44 @@ fn size(whole: i32, tenths: i32, unit: ui::SizeUnit) -> ui::Size {
     }
 }
 
+/// The French description of the Linux rule shown as `label`.
+fn description_of(label: &str) -> slint::SharedString {
+    let rules = okapi_rules::RuleSet::embedded(okapi_rules::Os::Linux).unwrap();
+    let system = rules.system();
+    let browsers = rules.browsers();
+    let directories = browsers.chromium_cache_directories();
+    let english = system
+        .clean_targets()
+        .iter()
+        .map(|target| (target.subcategory(), target.description()))
+        .chain(
+            system
+                .single_file_targets()
+                .iter()
+                .map(|target| (target.subcategory(), target.description())),
+        )
+        .chain(
+            rules
+                .apps()
+                .iter()
+                .chain(rules.gaming())
+                .chain(rules.gpu_cache())
+                .map(|rule| (rule.name(), rule.description())),
+        )
+        .chain(
+            directories
+                .profile()
+                .iter()
+                .chain(directories.shared())
+                .chain(browsers.firefox_cache_directories())
+                .map(|directory| (directory.label(), directory.description())),
+        )
+        .find_map(|(name, description)| (name.as_str() == label).then_some(description))
+        .flatten()
+        .unwrap();
+    okapi_rules::description(okapi_rules::Language::French, english.as_str()).into()
+}
+
 fn row(
     category: ui::CategoryKind,
     label: &str,
@@ -58,6 +97,9 @@ fn row(
         category,
         // In French, as the window: the longer labels of the two.
         label: okapi_rules::label(okapi_rules::Language::French, label).into(),
+        description: description_of(label),
+        explained: false,
+        checked_by_default: badge == ui::ResultBadge::Preselected,
         state: if checked {
             ui::CheckState::Checked
         } else {
@@ -83,6 +125,9 @@ fn header(category: ui::CategoryKind, folded: bool) -> ui::ResultRow {
         nested: false,
         category,
         label: "".into(),
+        description: "".into(),
+        explained: false,
+        checked_by_default: false,
         state: ui::CheckState::Partial,
         enabled: true,
         folded,
@@ -126,6 +171,8 @@ fn results(window: &ui::AppWindow, folded: bool) {
     rows.extend(system.iter().map(|(label, badge, checked)| {
         let mut line = row(System, label, *badge, *checked);
         line.hidden = folded;
+        // The mockup's example, and a text long enough to go to the line.
+        line.explained = matches!(*label, "Thumbnail Cache" | "Man Page Cache");
         line
     }));
     rows.push(header(Browsers, false));
@@ -1012,8 +1059,12 @@ fn apps_flatpak(app: &ui::AppWindow) {
 
 fn main() {
     let mut arguments = std::env::args().skip(1);
-    let screen = arguments.next().unwrap_or_else(|| String::from("results"));
-    let out = arguments.next().unwrap_or_else(|| format!("{screen}.png"));
+    let asked = arguments.next().unwrap_or_else(|| String::from("results"));
+    let out = arguments.next().unwrap_or_else(|| format!("{asked}.png"));
+    // Any screen in the dark scheme: its name followed by `-dark`.
+    let (screen, dark) = asked
+        .strip_suffix("-dark")
+        .map_or((asked.as_str(), false), |screen| (screen, true));
     let (width, height) = if screen.ends_with("-small") {
         SMALL
     } else {
@@ -1023,8 +1074,11 @@ fn main() {
     slint::platform::set_platform(Box::new(Offscreen(window.clone()))).unwrap();
     let app = ui::AppWindow::new().unwrap();
     slint::select_bundled_translation("").unwrap();
-    match screen.as_str() {
-        "results" => results(&app, false),
+    if dark {
+        app.global::<ui::Preferences>().invoke_show_theme(true);
+    }
+    match screen {
+        "results" | "results-small" => results(&app, false),
         "folded" => results(&app, true),
         "browser" => browser(&app),
         "receipt" => receipt(&app),
@@ -1084,7 +1138,7 @@ fn main() {
         "apps-leftovers" => apps_leftovers(&app, false),
         "apps-leftovers-empty" => apps_leftovers(&app, true),
         other => panic!(
-            "no screen {other}: results, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty"
+            "no screen {other} (any one dark with -dark): results, results-small, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));
@@ -1098,11 +1152,17 @@ fn main() {
         slint::platform::update_timers_and_animations();
         slint::platform::update_timers_and_animations();
     }
+    write_png(&window, width, height, &out);
+    println!("{out}");
+}
+
+/// Draws `window`, of `width` by `height` pixels, into the PNG file `out`.
+fn write_png(window: &MinimalSoftwareWindow, width: u32, height: u32, out: &str) {
     let mut pixels = vec![PremultipliedRgbaColor::default(); (width * height) as usize];
     window.draw_if_needed(|renderer| {
         renderer.render(&mut pixels, width as usize);
     });
-    let mut encoder = png::Encoder::new(BufWriter::new(File::create(&out).unwrap()), width, height);
+    let mut encoder = png::Encoder::new(BufWriter::new(File::create(out).unwrap()), width, height);
     encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
     let bytes: Vec<u8> = pixels
@@ -1114,5 +1174,4 @@ fn main() {
         .unwrap()
         .write_image_data(&bytes)
         .unwrap();
-    println!("{out}");
 }

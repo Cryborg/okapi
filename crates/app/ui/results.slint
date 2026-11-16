@@ -78,6 +78,37 @@ component Fold inherits IconButton {
     accessible-expanded: !folded;
 }
 
+// The button that unfolds what a group removes, and why that is safe when
+// the engine preselects it.
+component WhyButton inherits ActionButton {
+    in property <bool> explained;
+    // The engine preselects its group: safe to clean. Any other group's
+    // description only says what goes.
+    in property <bool> safe;
+    // The group's name: every group that has a description has such a
+    // button, the name tells them apart.
+    in property <string> group;
+    in property <int> index;
+    // It has the keyboard's focus: its line is to bring into view.
+    callback reached();
+
+    text: safe ? @tr("Pourquoi c'est sans risque") : @tr("Ce qui part");
+    icon: explained ? @image-url("../assets/icons/chevron-up.svg") : @image-url("../assets/icons/chevron-down.svg");
+    kind: ButtonKind.ghost;
+    compact: true;
+    accessible-description: group;
+    accessible-expandable: true;
+    accessible-expanded: explained;
+    clicked => {
+        Cleaner.explain(index);
+    }
+    changed focused => {
+        if self.focused {
+            root.reached();
+        }
+    }
+}
+
 // One line of the results: a category or a browser (its fold and its
 // checkbox) or a group (a checkbox), each indented below the one above. A
 // layout of its own height: a hidden line takes no room and no focus.
@@ -91,6 +122,8 @@ component ResultLine inherits VerticalLayout {
     property <string> badge-text: line.badge == ResultBadge.preselected ? @tr("Présélectionné")
         : @tr("Administrateur");
     property <bool> is-group: line.kind == RowKind.group;
+    // A group whose rules say what they remove.
+    property <bool> explainable: is-group && line.description != "";
     property <string> name: line.kind == RowKind.category ? Words.category(line.category) : line.label;
     // Why a group is left to the user, or out of reach.
     property <string> note: line.badge == ResultBadge.to-choose
@@ -133,106 +166,164 @@ component ResultLine inherits VerticalLayout {
             if root.is-group: Rectangle {
                 width: Theme.icon-box + (line.nested ? 2 : 1) * Theme.results-indent;
             }
-            check := Rectangle {
+            // The line of the checkbox, then a group's notes and description
+            // below its name: the notes and the description check nothing.
+            VerticalLayout {
                 horizontal-stretch: 1;
-                accessible-role: checkbox;
-                accessible-checkable: true;
-                accessible-checked: line.state == CheckState.checked;
-                accessible-enabled: line.enabled;
-                accessible-label: root.name;
-                accessible-description: line.state == CheckState.partial ? @tr("sélection partielle")
-                    : !root.is-group ? (line.enabled ? "" : @tr("À choisir groupe par groupe"))
-                    : line.badge == ResultBadge.preselected ? root.badge-text
-                    : line.badge == ResultBadge.to-choose ? root.note
-                    : @tr("{} : {}", root.badge-text, root.note);
-                accessible-action-default => {
-                    if line.enabled {
-                        Cleaner.toggle-result(root.index);
-                    }
-                }
-                forward-focus: keys;
-
-                keys := FocusScope {
-                    focus-on-tab-navigation: line.enabled;
-                    key-pressed(event) => {
-                        if line.enabled && !event.repeat && event.text == Key.Space {
-                            Cleaner.toggle-result(root.index);
-                            return accept;
-                        }
-                        reject
-                    }
-                    changed has-focus => {
-                        if self.has-focus {
-                            root.focused(root.y, root.height);
-                        }
-                    }
-                }
-
-                TouchArea {
-                    enabled: line.enabled;
-                    clicked => {
-                        Cleaner.toggle-result(root.index);
-                    }
-                }
-
-                // Out of the row's content, in its padding: a badge reaches
-                // the top of the row's content and would touch the ring.
-                FocusRing {
-                    shown: keys.has-focus;
-                    x: -Theme.spacing-xs;
-                    y: -Theme.spacing-xs;
-                    width: parent.width + 2 * Theme.spacing-xs;
-                    height: parent.height + 2 * Theme.spacing-xs;
-                    border-radius: Theme.radius-medium;
-                }
-
+                alignment: center;
+                spacing: Theme.spacing-xxs;
                 HorizontalLayout {
-                    padding-left: Theme.spacing-xs;
-                    spacing: Theme.spacing-m;
-                    CheckMark {
-                        checked: line.state == CheckState.checked;
-                        partial: line.state == CheckState.partial;
-                        enabled: line.enabled;
-                        cross-axis-self-alignment: center;
-                    }
-                    if line.kind == RowKind.category: Icon {
-                        source: Words.icon(line.category);
-                        colorize: Theme.text-2;
-                        cross-axis-self-alignment: center;
-                    }
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        alignment: center;
-                        spacing: Theme.spacing-xxs;
-                        HorizontalLayout {
-                            spacing: Theme.spacing-s;
-                            alignment: start;
-                            Text {
-                                text: root.name;
-                                accessible-role: none;
-                                color: Theme.text;
-                                font-size: Theme.font-label;
-                                font-weight: root.is-group ? Theme.weight-medium : Theme.weight-semibold;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-                            if root.is-group && line.badge != ResultBadge.to-choose: Badge {
-                                text: root.badge-text;
-                                icon: line.badge == ResultBadge.preselected ? @image-url("../assets/icons/check.svg")
-                                    : @image-url("../assets/icons/shield.svg");
-                                tone: line.badge == ResultBadge.preselected ? Theme.accent : Theme.admin;
-                                tone-soft: line.badge == ResultBadge.preselected ? Theme.accent-soft : Theme.admin-soft;
-                                accessible-role: none;
+                    spacing: Theme.spacing-s;
+                    check := Rectangle {
+                        // As wide as its words: the rest of the line is the
+                        // touch area's after it.
+                        horizontal-stretch: 0;
+                        accessible-role: checkbox;
+                        accessible-checkable: true;
+                        accessible-checked: line.state == CheckState.checked;
+                        accessible-enabled: line.enabled;
+                        accessible-label: root.name;
+                        accessible-description: line.state == CheckState.partial ? @tr("sélection partielle")
+                            : !root.is-group ? (line.enabled ? "" : @tr("À choisir groupe par groupe"))
+                            : line.badge == ResultBadge.preselected ? root.badge-text
+                            : line.badge == ResultBadge.to-choose ? root.note
+                            : @tr("{} : {}", root.badge-text, root.note);
+                        accessible-action-default => {
+                            if line.enabled {
+                                Cleaner.toggle-result(root.index);
                             }
                         }
-                        if root.is-group && line.badge == ResultBadge.to-choose: IconNote {
+                        forward-focus: keys;
+
+                        keys := FocusScope {
+                            focus-on-tab-navigation: line.enabled;
+                            key-pressed(event) => {
+                                if line.enabled && !event.repeat && event.text == Key.Space {
+                                    Cleaner.toggle-result(root.index);
+                                    return accept;
+                                }
+                                reject
+                            }
+                            changed has-focus => {
+                                if self.has-focus {
+                                    root.focused(root.y, root.height);
+                                }
+                            }
+                        }
+
+                        TouchArea {
+                            enabled: line.enabled;
+                            clicked => {
+                                Cleaner.toggle-result(root.index);
+                            }
+                        }
+
+                        // Out of the row's content, in its padding: a badge reaches
+                        // the top of the row's content and would touch the ring.
+                        FocusRing {
+                            shown: keys.has-focus;
+                            x: -Theme.spacing-xs;
+                            y: -Theme.spacing-xs;
+                            width: parent.width + 2 * Theme.spacing-xs;
+                            height: parent.height + 2 * Theme.spacing-xs;
+                            border-radius: Theme.radius-medium;
+                        }
+
+                        HorizontalLayout {
+                            padding-left: Theme.spacing-xs;
+                            spacing: Theme.spacing-m;
+                            CheckMark {
+                                checked: line.state == CheckState.checked;
+                                partial: line.state == CheckState.partial;
+                                enabled: line.enabled;
+                                cross-axis-self-alignment: center;
+                            }
+                            if line.kind == RowKind.category: Icon {
+                                source: Words.icon(line.category);
+                                colorize: Theme.text-2;
+                                cross-axis-self-alignment: center;
+                            }
+                            HorizontalLayout {
+                                spacing: Theme.spacing-s;
+                                alignment: start;
+                                Text {
+                                    text: root.name;
+                                    accessible-role: none;
+                                    color: Theme.text;
+                                    font-size: Theme.font-label;
+                                    font-weight: root.is-group ? Theme.weight-medium : Theme.weight-semibold;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                                if root.is-group && line.badge != ResultBadge.to-choose: Badge {
+                                    text: root.badge-text;
+                                    icon: line.badge == ResultBadge.preselected ? @image-url("../assets/icons/check.svg")
+                                        : @image-url("../assets/icons/shield.svg");
+                                    tone: line.badge == ResultBadge.preselected ? Theme.accent : Theme.admin;
+                                    tone-soft: line.badge == ResultBadge.preselected ? Theme.accent-soft : Theme.admin-soft;
+                                    accessible-role: none;
+                                    cross-axis-self-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                    // The rest of the line checks the group, as its name does.
+                    TouchArea {
+                        horizontal-stretch: 1;
+                        enabled: line.enabled;
+                        clicked => {
+                            Cleaner.toggle-result(root.index);
+                        }
+                    }
+                }
+                if root.is-group && (root.explainable || line.badge != ResultBadge.preselected): HorizontalLayout {
+                    // Below the name, past the checkbox.
+                    padding-left: Theme.spacing-xs + Theme.checkbox + Theme.spacing-m;
+                    VerticalLayout {
+                        spacing: Theme.spacing-xxs;
+                        if line.badge == ResultBadge.to-choose: IconNote {
                             text: root.note;
                             icon: @image-url("../assets/icons/triangle-alert.svg");
                             tone: Theme.warning;
                         }
-                        if root.is-group && line.badge == ResultBadge.admin: Detail {
+                        if line.badge == ResultBadge.admin: Detail {
                             text: root.note;
                             accessible-role: none;
+                        }
+                        // Below the name, never beside it: a long name keeps
+                        // its room at any width. Out of the checkbox: a click
+                        // on it checks nothing, and a locked group's button
+                        // is not disabled.
+                        if root.explainable: HorizontalLayout {
+                            alignment: start;
+                            WhyButton {
+                                explained: line.explained;
+                                safe: line.checked-by-default;
+                                group: root.name;
+                                index: root.index;
+                                // Brought into view as the checkbox is: a
+                                // locked group's checkbox is no stop of the
+                                // Tab key, its button is.
+                                reached => {
+                                    root.focused(root.y, root.height);
+                                }
+                            }
+                        }
+                        if line.explained && root.explainable: Rectangle {
+                            max-width: Theme.results-explanation-width;
+                            background: Theme.surface-2;
+                            border-width: Theme.border-width;
+                            border-color: Theme.border;
+                            border-radius: Theme.radius-medium;
+                            HorizontalLayout {
+                                padding-top: Theme.spacing-s;
+                                padding-bottom: Theme.spacing-s;
+                                padding-left: Theme.spacing-m;
+                                padding-right: Theme.spacing-m;
+                                Detail {
+                                    text: line.description;
+                                }
+                            }
                         }
                     }
                 }

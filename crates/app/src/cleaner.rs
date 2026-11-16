@@ -628,6 +628,9 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
             nested: false,
             category: kind(*category),
             label: slint::SharedString::default(),
+            description: slint::SharedString::default(),
+            explained: false,
+            checked_by_default: false,
             state: state(*check),
             enabled: *enabled,
             folded: *folded,
@@ -650,6 +653,9 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
             nested: false,
             category: ui::CategoryKind::Browsers,
             label: browser.name().into(),
+            description: slint::SharedString::default(),
+            explained: false,
+            checked_by_default: false,
             state: state(*check),
             enabled: *enabled,
             folded: *folded,
@@ -664,6 +670,7 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
             checked,
             hidden,
             nested,
+            explained,
         } => {
             let Some(group) = results.group(*index) else {
                 tracing::error!(index, "a line of the results names no group");
@@ -684,6 +691,9 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
                 } else {
                     group.label_alone.as_str().into()
                 },
+                description: group.description.as_str().into(),
+                explained: *explained,
+                checked_by_default: group.checked_by_default,
                 state: state(if *checked {
                     CheckState::Checked
                 } else {
@@ -706,7 +716,7 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
 fn badge_of(group: &GroupFacts) -> ui::ResultBadge {
     if !group.is_checkable() {
         ui::ResultBadge::Admin
-    } else if !group.preselected || group.needs_admin {
+    } else if !group.checked_by_default {
         ui::ResultBadge::ToChoose
     } else {
         ui::ResultBadge::Preselected
@@ -975,6 +985,12 @@ impl CleanerScreen {
         cleaner.on_fold(move |row| {
             if let Some(state) = weak.upgrade() {
                 Self(state).change_results(row, Results::fold_row);
+            }
+        });
+        let weak = Rc::downgrade(&screen.0);
+        cleaner.on_explain(move |row| {
+            if let Some(state) = weak.upgrade() {
+                Self(state).explain(row);
             }
         });
         cleaner.on_deselect_all(on(Self::deselect_all));
@@ -1519,6 +1535,28 @@ impl CleanerScreen {
         self.check_write();
     }
 
+    /// Unfolds or folds the description of the group the line `row` shows.
+    /// Allowed while the results are frozen: it changes neither what is
+    /// checked nor what a cleaning would take.
+    fn explain(&self, row: i32) {
+        if self.is_settling("description of a group") {
+            return;
+        }
+        {
+            let mut state = self.0.borrow_mut();
+            let Some(held) = state.held.as_mut() else {
+                tracing::warn!(row, "no results held to explain a group of");
+                return;
+            };
+            let Ok(row) = usize::try_from(row) else {
+                tracing::warn!(row, "no line of the results to explain");
+                return;
+            };
+            held.results.explain_row(row);
+        }
+        self.show_results();
+    }
+
     /// Shows the results, and whether the last choice among them was kept:
     /// looked at again a little later while its write is not done.
     fn check_write(&self) {
@@ -1744,6 +1782,7 @@ pub mod tests {
         let mut group = GroupFacts {
             label: String::new(),
             label_alone: String::new(),
+            description: String::new(),
             browser: None,
             categories: BTreeSet::new(),
             preselected: true,

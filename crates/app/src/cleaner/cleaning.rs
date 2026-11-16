@@ -1245,6 +1245,148 @@ mod tests {
             .unwrap_or_else(|| panic!("no line {label} in the results"))
     }
 
+    /// A press and release of the pointer at the middle of `element`: through
+    /// the touch areas, as a mouse goes, never its accessible action.
+    fn click(window: &ui::AppWindow, element: &ElementHandle) {
+        let corner = element.absolute_position();
+        let size = element.size();
+        click_at(
+            window,
+            slint::LogicalPosition::new(corner.x + size.width / 2.0, corner.y + size.height / 2.0),
+        );
+    }
+
+    /// A little to the right of `element`, at its middle height.
+    fn right_of(element: &ElementHandle) -> slint::LogicalPosition {
+        let corner = element.absolute_position();
+        let size = element.size();
+        slint::LogicalPosition::new(
+            corner.x + size.width + size.height,
+            corner.y + size.height / 2.0,
+        )
+    }
+
+    /// A press and release of the pointer at `position`.
+    fn click_at(window: &ui::AppWindow, position: slint::LogicalPosition) {
+        use slint::platform::{PointerEventButton, WindowEvent};
+        let button = PointerEventButton::Left;
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerPressed { position, button });
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerReleased { position, button });
+        slint::platform::update_timers_and_animations();
+    }
+
+    /// The button that unfolds the description of the group `group`, its
+    /// words `words`.
+    fn why_button(window: &ui::AppWindow, words: &str, group: &str) -> ElementHandle {
+        ElementHandle::find_by_accessible_label(window, words)
+            .find(|button| button.accessible_description().as_deref() == Some(group))
+            .unwrap_or_else(|| panic!("no button {words} for {group}"))
+    }
+
+    /// The description of the group of pip, in French.
+    const PIP_SAID: &str = "Paquets wheel et archives de sources téléchargés par pip.";
+
+    #[test]
+    fn a_description_unfolds_without_checking_its_group() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let (window, _screen) = on_results(sandbox.read(&sandbox.root.join("state")));
+        let pip = "Cache de pip";
+        let said = PIP_SAID;
+        let why = || why_button(&window, "Pourquoi c'est sans risque", pip);
+        let checked = || found(&window, pip).accessible_checked();
+        assert_eq!(checked(), Some(true));
+        let name = found(&window, pip);
+        assert!(
+            why().absolute_position().y >= name.absolute_position().y + name.size().height,
+            "below the name, which keeps its room"
+        );
+        assert_eq!(why().accessible_expanded(), Some(false));
+        assert!(!shows(&window, said));
+        click(&window, &why());
+        assert_eq!(why().accessible_expanded(), Some(true));
+        assert!(shows(&window, said), "its description, in French");
+        assert_eq!(
+            checked(),
+            Some(true),
+            "a click on the button checks nothing"
+        );
+        let text = ElementHandle::find_by_accessible_label(&window, said)
+            .next()
+            .unwrap();
+        click(&window, &text);
+        assert_eq!(checked(), Some(true), "nor one on the description");
+        click(&window, &found(&window, pip));
+        assert_eq!(checked(), Some(false), "the checkbox itself does");
+        click_at(&window, right_of(&found(&window, pip)));
+        assert_eq!(checked(), Some(true), "so does the rest of its line");
+        // Under the confirmation, the results are frozen, but a description
+        // still folds.
+        button(&window, "Nettoyer").invoke_accessible_default_action();
+        let cleaner = window.global::<ui::Cleaner>();
+        assert!(cleaner.get_confirming());
+        let_the_screen_settle();
+        cleaner.invoke_explain(1);
+        slint::platform::update_timers_and_animations();
+        assert!(!shows(&window, said), "folded");
+        assert!(cleaner.get_confirming());
+    }
+
+    #[test]
+    fn a_group_left_to_choose_says_what_goes_and_stays_unchecked() {
+        let sandbox = Sandbox::new();
+        // A performance cache: left to the user's choice (invariant 5).
+        sandbox.file("home/.cache/fontconfig/old");
+        settle_files();
+        let (window, _screen) = on_cleaner(sandbox.read(&sandbox.root.join("state")));
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
+        let_the_screen_settle();
+        let fonts = "Cache des polices";
+        assert!(
+            ElementHandle::find_by_accessible_label(&window, "Pourquoi c'est sans risque")
+                .all(|button| button.accessible_description().as_deref() != Some(fonts)),
+            "never called safe"
+        );
+        let what = why_button(&window, "Ce qui part", fonts);
+        click(&window, &what);
+        assert_eq!(what.accessible_expanded(), Some(true));
+        assert!(shows(
+            &window,
+            "Cache de rendu des polices de Fontconfig : recréé tout seul quand il manque."
+        ));
+        assert_eq!(found(&window, fonts).accessible_checked(), Some(false));
+    }
+
+    #[test]
+    fn the_description_is_english_in_an_english_window() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let (window, _screen) = super::super::tests::on_cleaner_in(
+            sandbox.read(&sandbox.root.join("state")),
+            okapi_rules::Language::English,
+        );
+        for category in ["System", "Games"] {
+            checkbox(&window, category).invoke_accessible_default_action();
+        }
+        let_the_screen_settle();
+        button(&window, "Analyze").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
+        let_the_screen_settle();
+        why_button(&window, "Why it's safe", "pip Cache").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert!(shows(
+            &window,
+            "pip downloaded wheel and source distribution cache"
+        ));
+    }
+
     /// Opens the confirmation, says it is understood, and deletes.
     fn confirm(window: &ui::AppWindow) {
         button(window, "Nettoyer").invoke_accessible_default_action();
@@ -2095,9 +2237,11 @@ mod tests {
         sandbox.file("home/.cache/fontconfig/old");
         settle_files();
         let (window, _screen) = on_cleaner(sandbox.read(&sandbox.root.join("state")));
+        // Too short for every line, high enough to show Applications: what
+        // the window does not show, the tests cannot find.
         window
             .window()
-            .set_size(slint::PhysicalSize::new(1280, 480));
+            .set_size(slint::PhysicalSize::new(1280, 600));
         checkbox(&window, "Jeux").invoke_accessible_default_action();
         let_the_screen_settle();
         button(&window, "Analyser").invoke_accessible_default_action();
@@ -2114,21 +2258,23 @@ mod tests {
             applications_top >= thumbnails_top + thumbnails_height,
             "{thumbnails_top} + {thumbnails_height} > {applications_top}"
         );
-        let (_, _, font_height) = place(&window, "Cache des polices");
+        // A checkbox covers its name only: a line runs from it to the next.
+        let (_, font_top, _) = place(&window, "Cache des polices");
         assert!(
-            font_height > thumbnails_height,
-            "a line with its note is higher: {font_height} {thumbnails_height}"
+            applications_top - font_top > font_top - thumbnails_top,
+            "a line with its note is higher: {thumbnails_top} {font_top} {applications_top}"
         );
         let (category_x, ..) = place(&window, "Système");
         let (group_x, ..) = place(&window, "Cache des miniatures");
         assert!(group_x > category_x, "a group further in than its category");
-        // Folded, Système leaves no room: Applications comes right below.
+        // Folded, Système leaves no room: Applications comes right below,
+        // nearer than the second group was.
         let_the_screen_settle();
         window.global::<ui::Cleaner>().invoke_fold(0);
-        let (_, applications_top, _) = place(&window, "Applications");
+        let (_, folded_top, _) = place(&window, "Applications");
         assert!(
-            applications_top - (system_top + system_height) < system_height,
-            "folded away: {system_top} {system_height} {applications_top}"
+            folded_top - system_top < font_top - system_top,
+            "folded away: {system_top} {font_top} {folded_top}"
         );
     }
 

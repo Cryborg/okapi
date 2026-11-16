@@ -25,7 +25,9 @@ pub use directory::{
 };
 #[cfg(target_os = "linux")]
 pub use elevation::{HELPER_PATH, PKEXEC_PATH};
-pub use identity::{FileIdentity, IDENTITY_SUPPORTED, file_identity, last_change, ownership};
+pub use identity::{
+    FileIdentity, IDENTITY_SUPPORTED, file_identity, last_change, link_count, ownership,
+};
 pub use probe::{
     CpuTimes, DesktopEntry, DesktopSession, Device, MemoryStatus, Mount, MountClass, MountList,
     ProcessList, ProcessMemory, Space, application_name, confinement, cpu_times, desktop_entry,

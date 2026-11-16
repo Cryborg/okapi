@@ -113,6 +113,23 @@ pub fn file_identity(_metadata: &Metadata) -> Option<FileIdentity> {
     None
 }
 
+/// How many names (hard links) the object `metadata` was read for has.
+#[cfg(unix)]
+#[must_use]
+pub fn link_count(metadata: &Metadata) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+
+    Some(metadata.nlink())
+}
+
+/// How many names the object `metadata` was read for has: unknown here,
+/// until the Windows port reads it.
+#[cfg(not(unix))]
+#[must_use]
+pub fn link_count(_metadata: &Metadata) -> Option<u64> {
+    None
+}
+
 #[cfg(test)]
 #[cfg(unix)]
 mod tests {
@@ -138,6 +155,19 @@ mod tests {
         assert_eq!(identity(&root.join("one")), identity(&root.join("one/.")));
         let device = identity(&root.join("one")).device();
         assert_eq!(identity(&root.join("two")).device(), device);
+    }
+
+    #[test]
+    fn a_file_counts_each_of_its_names() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::write(root.join("single"), b"x").unwrap();
+        std::fs::write(root.join("file"), b"x").unwrap();
+        std::fs::hard_link(root.join("file"), root.join("other-name")).unwrap();
+        let links = |name| link_count(&std::fs::symlink_metadata(root.join(name)).unwrap());
+        assert_eq!(links("single"), Some(1));
+        assert_eq!(links("file"), Some(2));
+        assert_eq!(links("other-name"), Some(2));
     }
 
     #[cfg(unix)]

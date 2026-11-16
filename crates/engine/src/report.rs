@@ -10,6 +10,7 @@ use okapi_rules::{
 };
 
 use crate::preconditions::Stop;
+use crate::roots::PlannedRoot;
 
 use crate::walk::{Found, HoldBack};
 
@@ -299,6 +300,7 @@ pub struct ScanStats {
     pub(crate) excluded: u64,
     pub(crate) protected_names: u64,
     pub(crate) not_owned: u64,
+    pub(crate) hard_linked: u64,
 }
 
 impl ScanStats {
@@ -367,6 +369,13 @@ impl ScanStats {
         self.not_owned
     }
 
+    /// Files with other names below a root that keeps them: removing one of
+    /// their names frees nothing.
+    #[must_use]
+    pub const fn hard_linked(&self) -> u64 {
+        self.hard_linked
+    }
+
     /// Counts one entry held back for `reason`.
     pub(crate) const fn count(&mut self, reason: HoldBack) {
         let counter = match reason {
@@ -379,6 +388,7 @@ impl ScanStats {
             HoldBack::Reserved => &mut self.reserved_directories,
             HoldBack::Recent => &mut self.recent,
             HoldBack::NotOwned => &mut self.not_owned,
+            HoldBack::HardLinked => &mut self.hard_linked,
         };
         *counter += 1;
     }
@@ -396,6 +406,7 @@ impl ScanStats {
             excluded,
             protected_names,
             not_owned,
+            hard_linked,
         } = *other;
         self.links += links;
         self.special_files += special_files;
@@ -407,6 +418,7 @@ impl ScanStats {
         self.excluded += excluded;
         self.protected_names += protected_names;
         self.not_owned += not_owned;
+        self.hard_linked += hard_linked;
     }
 }
 
@@ -713,6 +725,10 @@ impl BrowserLock {
 
 /// The attributes of a group, before its entries are known.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one flag per attribute of the rules, each merged its own way (`merge`)"
+)]
 pub(crate) struct GroupAttributes {
     pub(crate) origins: Vec<Origin>,
     pub(crate) label: Label,
@@ -722,13 +738,16 @@ pub(crate) struct GroupAttributes {
     pub(crate) cache_reset: bool,
     pub(crate) selected_by_default: bool,
     pub(crate) needs_admin: bool,
+    /// Its files with other names are kept ([`crate::walk::WalkContext`]).
+    pub(crate) keep_hard_linked: bool,
     /// The locks of the browsers it empties, those of every rule it gathers.
     pub(crate) locks: BTreeSet<BrowserLock>,
 }
 
 impl GroupAttributes {
     /// Merges the rules of another group sharing a root: the group is
-    /// unselected and a cache reset if either rule is.
+    /// unselected and a cache reset if either rule is, and keeps the files
+    /// with other names if either rule does.
     pub(crate) fn merge(&mut self, other: Self) {
         self.origins.extend(other.origins);
         for description in other.descriptions {
@@ -739,18 +758,34 @@ impl GroupAttributes {
         self.cache_reset |= other.cache_reset;
         self.selected_by_default &= other.selected_by_default;
         self.needs_admin |= other.needs_admin;
+        self.keep_hard_linked |= other.keep_hard_linked;
         self.locks.extend(other.locks);
     }
 }
 
-/// An entry found, with the root it was found under and the cutoff it was
-/// judged against.
+/// An entry found, with the root it was found under, the cutoff it was
+/// judged against and whether its files with other names were kept.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FoundItem {
     pub(crate) found: Found,
     pub(crate) root: PathBuf,
     pub(crate) root_identity: FileIdentity,
     pub(crate) cutoff: SystemTime,
+    pub(crate) keep_hard_linked: bool,
+}
+
+impl FoundItem {
+    /// `found` below `root`, walked keeping its files with other names or
+    /// not.
+    pub(crate) fn below(found: Found, root: &PlannedRoot, keep_hard_linked: bool) -> Self {
+        Self {
+            found,
+            root: root.path.clone(),
+            root_identity: root.identity,
+            cutoff: root.cutoff,
+            keep_hard_linked,
+        }
+    }
 }
 
 /// Builds a report, numbering its entries.

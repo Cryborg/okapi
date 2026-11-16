@@ -218,6 +218,7 @@ impl Planner<'_> {
             cache_reset: directory.is_cache_reset(),
             selected_by_default: directory.is_selected_by_default(),
             needs_admin: false,
+            keep_hard_linked: false,
             locks: bases.locks.clone(),
         };
         // A shared directory is under the base only; a profile's, under the
@@ -453,6 +454,7 @@ impl Planner<'_> {
             cache_reset: deletion.is_cache_reset(),
             selected_by_default: target.is_selected_by_default() && presumed_temporary,
             needs_admin: target.needs_admin(),
+            keep_hard_linked: deletion.keeps_hard_linked(),
             locks: BTreeSet::new(),
         };
         let roots = match deletion.child_subdirectory() {
@@ -487,6 +489,7 @@ impl Planner<'_> {
             cache_reset: deletion.is_cache_reset(),
             selected_by_default: rule.is_selected_by_default(),
             needs_admin: false,
+            keep_hard_linked: false,
             locks: BTreeSet::new(),
         };
         let mut roots = Vec::new();
@@ -573,6 +576,7 @@ impl Planner<'_> {
             cache_reset: false,
             selected_by_default: target.is_selected_by_default(),
             needs_admin: false,
+            keep_hard_linked: false,
             locks: BTreeSet::new(),
         };
         // A bind mount of a file: never offered by this rule, it still joins

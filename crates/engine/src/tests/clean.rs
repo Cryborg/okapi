@@ -586,6 +586,7 @@ fn empty_now(
             limits: Limits::DEFAULT,
             remover: None,
             root_owner: None,
+            keep_hard_linked: false,
         },
         device: opened.status().unwrap().identity.device(),
         pass: crate::clean::CleanPass::Remove,
@@ -685,6 +686,40 @@ fn hard_links_do_not_make_each_other_recent() {
             (fixture.path("data/twin"), CleanResult::Removed { bytes: 3 }),
         ]
     );
+}
+
+/// A snap installed between the scan and the cleaning names a file of
+/// snapd's cache: removing it would free nothing, it stays.
+#[test]
+fn a_file_given_another_name_since_the_scan_stays_below_a_root_that_keeps_them() {
+    let fixture = Fixture::new();
+    let root = fixture.directory("cache");
+    fixture.directory("snaps");
+    let named_since = fixture.file("cache/named-since", 3, Duration::ZERO);
+    fixture.file("cache/alone", 5, Duration::ZERO);
+    let rule = target(&format!(
+        r#"{{"path": "{}", "subcategory": "Snap", "keepHardLinked": true}}"#,
+        root.display()
+    ));
+    let run = run_later(&fixture, vec![RuleEntry::Target(&rule)]);
+    let report = run.scan();
+    assert_eq!(report.total_size(), 3 + 5);
+    fs::hard_link(&named_since, fixture.path("snaps/installed.snap")).unwrap();
+    let receipt = clean(&run, &report, &ids(&report));
+    assert_eq!(
+        results(&receipt),
+        [
+            (
+                fixture.path("cache/alone"),
+                CleanResult::Removed { bytes: 5 }
+            ),
+            (
+                fixture.path("cache/named-since"),
+                CleanResult::Kept(KeepReason::Changed)
+            ),
+        ]
+    );
+    assert!(named_since.exists());
 }
 
 #[test]
@@ -1148,6 +1183,7 @@ fn a_removal_that_stops_halfway_is_partial_and_names_the_entry() {
             limits: Limits::DEFAULT,
             remover: None,
             root_owner: None,
+            keep_hard_linked: false,
         },
         device: opened.status().unwrap().identity.device(),
         pass: crate::clean::CleanPass::Remove,

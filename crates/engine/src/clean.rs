@@ -580,6 +580,7 @@ impl Cleaner<'_> {
             remover: self.remover,
             // Read when the root is reached (`judge_entry`).
             root_owner: None,
+            keep_hard_linked: item.keep_hard_linked,
         }
     }
 
@@ -984,8 +985,10 @@ const fn keep_reason(reason: HoldBack) -> KeepReason {
         },
         // A directory root may not enter, which the scan would not have
         // offered: it changed since. The sticky bit is judged by
-        // `ensure_removable`, never here.
+        // `ensure_removable`, never here. A file given another name since
+        // the scan (a snap installed meanwhile) frees nothing now.
         HoldBack::NotOwned
+        | HoldBack::HardLinked
         | HoldBack::Excluded
         | HoldBack::ProtectedName
         | HoldBack::Link

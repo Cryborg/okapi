@@ -716,6 +716,82 @@ fn a_shared_root_is_walked_once_and_never_preselected_if_one_rule_resets_a_cache
     }
 }
 
+/// A root shaped like snapd's cache: a file only it names, another that an
+/// installed snap names too (outside the root), and a settled directory
+/// holding one of each.
+fn snap_cache(fixture: &Fixture) -> PathBuf {
+    let root = fixture.directory("cache");
+    fixture.directory("snaps");
+    fixture.file("cache/downloaded", 3, 2 * HOUR);
+    let installed = fixture.file("cache/installed", 5, 2 * HOUR);
+    fs::hard_link(&installed, fixture.path("snaps/installed.snap")).unwrap();
+    fixture.file("cache/folder/single", 7, 2 * HOUR);
+    let shared = fixture.file("cache/folder/shared", 11, 2 * HOUR);
+    fs::hard_link(&shared, fixture.path("snaps/shared.snap")).unwrap();
+    fixture.age(&fixture.path("cache/folder"), 2 * HOUR);
+    root
+}
+
+/// snapd's cache holds a name of each snap installed: removing it frees
+/// nothing. Below a root that keeps them, a file with other names is never
+/// offered, nor a directory that holds one whole.
+#[test]
+fn a_root_that_keeps_hard_linked_files_offers_only_files_of_one_name() {
+    let fixture = Fixture::new();
+    let root = snap_cache(&fixture);
+    let keeping = target(&format!(
+        r#"{{"path": "{}", "subcategory": "Snap", "keepHardLinked": true}}"#,
+        root.display()
+    ));
+    let report = Run::new(&fixture, vec![RuleEntry::Target(&keeping)]).scan();
+    assert_eq!(
+        offered_paths(&report),
+        [
+            fixture.path("cache/downloaded"),
+            fixture.path("cache/folder/single")
+        ]
+    );
+    assert_eq!(report.total_size(), 3 + 7);
+    assert_eq!(report.stats().hard_linked(), 2);
+
+    let plain = target_at(&root);
+    let report = Run::new(&fixture, vec![RuleEntry::Target(&plain)]).scan();
+    assert_eq!(
+        offered_paths(&report),
+        [
+            fixture.path("cache/downloaded"),
+            fixture.path("cache/folder"),
+            fixture.path("cache/installed")
+        ],
+        "any other root offers them"
+    );
+    assert_eq!(report.stats().hard_linked(), 0);
+}
+
+#[test]
+fn a_shared_root_keeps_hard_linked_files_if_one_of_its_rules_does() {
+    let fixture = Fixture::new();
+    let root = snap_cache(&fixture);
+    let keeping = target(&format!(
+        r#"{{"path": "{}", "subcategory": "Snap", "keepHardLinked": true}}"#,
+        root.display()
+    ));
+    let plain = target_at(&root);
+    for order in [[&keeping, &plain], [&plain, &keeping]] {
+        let entries = order.iter().map(|rule| RuleEntry::Target(rule)).collect();
+        let report = Run::new(&fixture, entries).scan();
+        assert_eq!(
+            offered_paths(&report),
+            [
+                fixture.path("cache/downloaded"),
+                fixture.path("cache/folder/single")
+            ],
+            "{:?}",
+            order.map(|rule| rule.subcategory().as_str())
+        );
+    }
+}
+
 #[test]
 fn a_rule_with_several_roots_is_one_group() {
     let fixture = Fixture::new();
@@ -1233,6 +1309,7 @@ fn a_root_replaced_after_its_check_is_reported() {
         limits: Limits::DEFAULT,
         remover: None,
         root_owner: None,
+        keep_hard_linked: false,
     };
     // The identity checked before does not match what is opened now.
     let watch = crate::watch::Watch::none();
@@ -2865,6 +2942,7 @@ fn the_policy_holds_back_mount_roots_links_and_recent_files() {
         limits: Limits::DEFAULT,
         remover: None,
         root_owner: None,
+        keep_hard_linked: false,
     };
     let observed = |kind, identity, last_change, mount_root| Observed {
         kind,
@@ -2872,6 +2950,7 @@ fn the_policy_holds_back_mount_roots_links_and_recent_files() {
         last_change: Some(last_change),
         mount_root,
         owner: None,
+        links: Some(1),
     };
     let old = now - HOUR;
     assert_eq!(
@@ -2933,6 +3012,62 @@ fn the_policy_holds_back_mount_roots_links_and_recent_files() {
 }
 
 #[test]
+fn the_policy_holds_back_a_file_of_several_names_only_where_they_are_kept() {
+    use crate::walk::{HoldBack, Observed, WalkContext};
+    use okapi_platform::EntryType;
+
+    let protected =
+        crate::protection::ProtectedRoots::new(&TemplateVariables::new(), file_identity).unwrap();
+    let misc = no_protected_names();
+    let roots = std::collections::BTreeSet::new();
+    let now = SystemTime::now();
+    let keeping = WalkContext {
+        cutoff: now,
+        exclusions: &Exclusions::none(),
+        misc: &misc,
+        protected: &protected,
+        roots: &roots,
+        readers: Readers::SYSTEM,
+        limits: Limits::DEFAULT,
+        remover: None,
+        root_owner: None,
+        keep_hard_linked: true,
+    };
+    let named = |kind, links| Observed {
+        kind,
+        identity: Some(FileIdentity::new(7, 2)),
+        last_change: Some(now - HOUR),
+        mount_root: Some(false),
+        owner: None,
+        links,
+    };
+    let judged =
+        |context: &WalkContext<'_>, observed| context.by_status(&observed, 7, None).map(drop);
+    assert_eq!(judged(&keeping, named(EntryType::File, Some(1))), Ok(()));
+    for links in [Some(2), None] {
+        assert_eq!(
+            judged(&keeping, named(EntryType::File, links)),
+            Err(HoldBack::HardLinked),
+            "{links:?}: what cannot be counted is held back"
+        );
+    }
+    assert_eq!(
+        judged(&keeping, named(EntryType::Directory, Some(3))),
+        Ok(()),
+        "a directory's names are its subdirectories"
+    );
+    let plain = WalkContext {
+        keep_hard_linked: false,
+        ..keeping
+    };
+    assert_eq!(
+        judged(&plain, named(EntryType::File, Some(2))),
+        Ok(()),
+        "any other root offers it"
+    );
+}
+
+#[test]
 fn the_policy_holds_back_an_excluded_directory_by_identity() {
     use crate::walk::{HoldBack, Observed, WalkContext};
     use okapi_platform::EntryType;
@@ -2954,6 +3089,7 @@ fn the_policy_holds_back_an_excluded_directory_by_identity() {
         limits: Limits::DEFAULT,
         remover: None,
         root_owner: None,
+        keep_hard_linked: false,
     };
     // Met at another path (a bind mount shows it elsewhere): the same object.
     let identity = file_identity(&fs::symlink_metadata(&kept).unwrap()).unwrap();
@@ -2963,6 +3099,7 @@ fn the_policy_holds_back_an_excluded_directory_by_identity() {
         last_change: Some(fixture.now - HOUR),
         mount_root: Some(false),
         owner: None,
+        links: Some(2),
     };
     assert_eq!(context.by_path(&fixture.path("elsewhere")), None);
     assert_eq!(
@@ -2992,6 +3129,7 @@ fn the_policy_holds_back_a_variable_directory_and_what_cannot_be_read() {
         limits: Limits::DEFAULT,
         remover: None,
         root_owner: None,
+        keep_hard_linked: false,
     };
     let identity = file_identity(&fs::symlink_metadata(&home).unwrap()).unwrap();
     let observed = Observed {
@@ -3000,6 +3138,7 @@ fn the_policy_holds_back_a_variable_directory_and_what_cannot_be_read() {
         last_change: Some(fixture.now),
         mount_root: Some(false),
         owner: None,
+        links: Some(2),
     };
     assert_eq!(
         context.by_status(&observed, identity.device(), None),
@@ -3011,6 +3150,7 @@ fn the_policy_holds_back_a_variable_directory_and_what_cannot_be_read() {
         last_change: Some(fixture.now - HOUR),
         mount_root: Some(false),
         owner: None,
+        links: Some(1),
     };
     assert_eq!(
         context.by_status(&unknown, identity.device(), None),
@@ -3034,6 +3174,7 @@ fn the_policy_holds_back_a_variable_directory_and_what_cannot_be_read() {
                     last_change: Some(fixture.now),
                     mount_root: Some(false),
                     owner: None,
+                    links: Some(1),
                 },
                 identity.device(),
                 None
@@ -3227,6 +3368,7 @@ fn the_policy_lets_root_enter_only_directories_of_root_or_the_roots_owner() {
         limits: Limits::DEFAULT,
         remover: Some(ROOT_USER),
         root_owner: Some(TEST_USER),
+        keep_hard_linked: false,
     };
     let entry = |kind, owner| Observed {
         kind,
@@ -3234,6 +3376,7 @@ fn the_policy_lets_root_enter_only_directories_of_root_or_the_roots_owner() {
         last_change: Some(now - HOUR),
         mount_root: Some(false),
         owner,
+        links: Some(1),
     };
     let judged = |context: &WalkContext<'_>, kind, owner| {
         context.by_status(&entry(kind, owner), 7, None).map(drop)

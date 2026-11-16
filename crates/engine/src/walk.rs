@@ -102,6 +102,10 @@ pub(crate) struct WalkContext<'a> {
     /// reaches it; `None` before, when it cannot be read, or for a single file
     /// target.
     pub(crate) root_owner: Option<u32>,
+    /// A file with other names (hard links), or whose names cannot be
+    /// counted, is held back: removing one of its names frees nothing
+    /// (`keepHardLinked`, snapd's cache).
+    pub(crate) keep_hard_linked: bool,
 }
 
 /// Why an entry is held back, which keeps its parent directory open.
@@ -125,6 +129,9 @@ pub(crate) enum HoldBack {
     /// remove; or, root removing, a directory that belongs to neither root
     /// nor the root's owner ([`WalkContext::refuses_owner`]).
     NotOwned,
+    /// A file with other names, below a root that keeps them
+    /// ([`WalkContext::keep_hard_linked`]).
+    HardLinked,
 }
 
 /// What is known of an entry, read without following links. `None` is what
@@ -136,6 +143,8 @@ pub(crate) struct Observed {
     pub(crate) last_change: Option<SystemTime>,
     pub(crate) mount_root: Option<bool>,
     pub(crate) owner: Option<u32>,
+    /// How many names (hard links) it has.
+    pub(crate) links: Option<u64>,
 }
 
 impl Observed {
@@ -147,6 +156,7 @@ impl Observed {
             last_change: Some(status.last_change),
             mount_root: status.mount_root,
             owner: Some((readers.entry_owner)(status)),
+            links: Some(status.links),
         }
     }
 
@@ -169,6 +179,7 @@ impl Observed {
             last_change: (readers.last_change)(metadata),
             mount_root: Some(mount_root),
             owner: (readers.ownership)(metadata).map(|ownership| ownership.owner),
+            links: okapi_platform::link_count(metadata),
         }
     }
 }
@@ -239,6 +250,9 @@ impl WalkContext<'_> {
         }
         if self.refuses_owner(observed.kind, observed.owner) {
             return Err(HoldBack::NotOwned);
+        }
+        if self.keep_hard_linked && observed.kind == EntryType::File && observed.links != Some(1) {
+            return Err(HoldBack::HardLinked);
         }
         Ok(Accepted {
             identity,

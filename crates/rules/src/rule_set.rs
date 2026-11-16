@@ -614,6 +614,32 @@ mod tests {
         }
     }
 
+    /// snapd's cache holds a name of each snap installed: removing it frees
+    /// nothing. No other target keeps its hard-linked files.
+    #[test]
+    fn only_the_snap_cache_keeps_its_hard_linked_files() {
+        for os in Os::ALL {
+            let rules = RuleSet::embedded(os).unwrap();
+            let keeping: Vec<String> = rules
+                .system()
+                .clean_targets()
+                .iter()
+                .filter_map(|target| match target.effect() {
+                    Effect::Delete(deletion) if deletion.keeps_hard_linked() => {
+                        Some(deletion.path().to_string())
+                    }
+                    Effect::Delete(_) | Effect::Maintenance { .. } => None,
+                })
+                .collect();
+            let expected: &[&str] = if os == Os::Linux {
+                &["/var/lib/snapd/cache"]
+            } else {
+                &[]
+            };
+            assert_eq!(keeping, expected, "{os}");
+        }
+    }
+
     #[test]
     fn the_performance_caches_of_browsers_are_never_preselected() {
         let resets = [

@@ -16,6 +16,7 @@ pub struct TargetDeletion {
     min_age: Option<AgeDays>,
     deep_recency_check: bool,
     cache_reset: bool,
+    keep_hard_linked: bool,
 }
 
 impl TargetDeletion {
@@ -48,6 +49,14 @@ impl TargetDeletion {
     #[must_use]
     pub const fn is_cache_reset(&self) -> bool {
         self.cache_reset
+    }
+
+    /// Whether a file with other names (hard links) is kept: removing one
+    /// of its names frees nothing (snapd's cache holds a name of each snap
+    /// installed).
+    #[must_use]
+    pub const fn keeps_hard_linked(&self) -> bool {
+        self.keep_hard_linked
     }
 }
 
@@ -105,6 +114,10 @@ impl CleanTarget {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the rule file's own flags, read as written before `CleanTarget` checks them"
+)]
 struct RawCleanTarget {
     path: TemplatePath,
     subcategory: Label,
@@ -116,6 +129,8 @@ struct RawCleanTarget {
     deep_recency_check: bool,
     #[serde(default)]
     cache_reset: bool,
+    #[serde(default)]
+    keep_hard_linked: bool,
     cleanup_action: Option<CleanupAction>,
     description: Option<Label>,
 }
@@ -134,6 +149,7 @@ impl TryFrom<RawCleanTarget> for CleanTarget {
             Some(_) if raw.min_age_days.is_some() => return Err(conflict("minAgeDays")),
             Some(_) if raw.deep_recency_check => return Err(conflict("deepRecencyCheck")),
             Some(_) if raw.cache_reset => return Err(conflict("cacheReset")),
+            Some(_) if raw.keep_hard_linked => return Err(conflict("keepHardLinked")),
             Some(action) => Effect::Maintenance {
                 action,
                 affected: raw.path,
@@ -146,6 +162,7 @@ impl TryFrom<RawCleanTarget> for CleanTarget {
                     min_age: raw.min_age_days,
                     deep_recency_check: raw.deep_recency_check,
                     cache_reset: raw.cache_reset,
+                    keep_hard_linked: raw.keep_hard_linked,
                 })
             }
         };
@@ -243,6 +260,7 @@ mod tests {
         assert_eq!(deletion.child_subdirectory(), None);
         assert_eq!(deletion.min_age(), None);
         assert!(!deletion.deep_recency_check());
+        assert!(!deletion.keeps_hard_linked());
     }
 
     #[test]
@@ -267,7 +285,7 @@ mod tests {
         let target = target(
             r#"{"path": "${HOME}/.var/app", "subcategory": "Flatpak", "needsAdmin": true,
                 "childSubdir": "common/.cache", "minAgeDays": 30, "deepRecencyCheck": true, "cacheReset": true,
-                "description": "App caches"}"#,
+                "keepHardLinked": true, "description": "App caches"}"#,
         )
         .unwrap();
         assert!(target.needs_admin());
@@ -286,6 +304,7 @@ mod tests {
         assert_eq!(deletion.min_age().map(AgeDays::days), Some(30));
         assert!(deletion.deep_recency_check());
         assert!(deletion.is_cache_reset());
+        assert!(deletion.keeps_hard_linked());
     }
 
     #[test]
@@ -307,6 +326,7 @@ mod tests {
             (r#""minAgeDays": 30"#, "minAgeDays"),
             (r#""deepRecencyCheck": true"#, "deepRecencyCheck"),
             (r#""cacheReset": true"#, "cacheReset"),
+            (r#""keepHardLinked": true"#, "keepHardLinked"),
         ] {
             let json = format!(
                 r#"{{"path": "/var/log/journal", "subcategory": "J", "cleanupAction": "journal-vacuum", {extra}}}"#

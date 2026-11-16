@@ -221,11 +221,13 @@ pub(crate) fn scan_entries(
         // privileged helper.
         let needs_admin = group_attributes.is_some_and(|attributes| attributes.needs_admin);
         let remover = if needs_admin { Some(ROOT_USER) } else { user };
+        let keep_hard_linked =
+            group_attributes.is_some_and(|attributes| attributes.keep_hard_linked);
         let withheld = root.kind == PlannedKind::Withheld;
-        let found = match root.kind {
+        let found = match &root.kind {
             PlannedKind::File(found) => {
                 progress.found_bytes = progress.found_bytes.saturating_add(found.size);
-                vec![found]
+                vec![found.clone()]
             }
             PlannedKind::Withheld => Vec::new(),
             PlannedKind::Directory => {
@@ -239,6 +241,7 @@ pub(crate) fn scan_entries(
                     limits,
                     remover,
                     root_owner: None,
+                    keep_hard_linked,
                 };
                 walk_root(&mut report, &root, &origins, context, &mut progress)
             }
@@ -260,15 +263,11 @@ pub(crate) fn scan_entries(
                 issues: report.issue_count(),
             });
         }
-        found_by_group
-            .entry(group)
-            .or_default()
-            .extend(found.into_iter().map(|found| FoundItem {
-                found,
-                root: root.path.clone(),
-                root_identity: root.identity,
-                cutoff: root.cutoff,
-            }));
+        found_by_group.entry(group).or_default().extend(
+            found
+                .into_iter()
+                .map(|found| FoundItem::below(found, &root, keep_hard_linked)),
+        );
     }
     if watch.is_cancelled() {
         report.cancel(roots_done, roots_total, progress.entries_seen());

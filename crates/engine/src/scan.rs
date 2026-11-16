@@ -377,7 +377,7 @@ fn walk_root(
 ) -> Vec<Found> {
     let walked = walk(&root.path, root.identity, context, progress);
     tracing::debug!(
-        root = %root.path.display(),
+        root = ?root.path,
         found = walked.found.len(),
         limits = ?walked.limits_reached,
         "root walked"
@@ -480,8 +480,8 @@ fn group_rules(roots_by_rule: Vec<(usize, PlannedRoot)>, rules: usize) -> Groupe
             let (first_rule, existing): &mut (usize, PlannedRoot) = &mut grouped.roots[index];
             existing.cutoff = existing.cutoff.min(root.cutoff);
             tracing::debug!(
-                path = %existing.path.display(),
-                joined = %root.path.display(),
+                path = ?existing.path,
+                joined = ?root.path,
                 withheld = existing.kind == PlannedKind::Withheld || root.kind == PlannedKind::Withheld,
                 "rules share a root"
             );

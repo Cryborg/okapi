@@ -424,7 +424,7 @@ impl Walker<'_, '_, '_> {
             // Gone since it was listed: nothing to count, the parent stays open.
             Err(error) if is_absent(&error) => return Resolved::held_back(),
             Err(error) => {
-                tracing::debug!(path = %path.display(), %error, "entry unreadable");
+                tracing::debug!(path = ?path, %error, "entry unreadable");
                 self.walk.stats.unreadable += 1;
                 return Resolved::held_back();
             }
@@ -469,7 +469,7 @@ impl Walker<'_, '_, '_> {
             Ok(mount_root) => Some(mount_root.unwrap_or(false)),
             Err(error) if is_absent(&error) => None,
             Err(error) => {
-                tracing::debug!(path = %path.display(), %error, "mount status unreadable");
+                tracing::debug!(path = ?path, %error, "mount status unreadable");
                 self.walk.stats.unreadable += 1;
                 None
             }
@@ -490,7 +490,7 @@ impl Walker<'_, '_, '_> {
     }
 
     fn held_back(&mut self, path: &Path, reason: HoldBack) -> Resolved {
-        tracing::trace!(path = %path.display(), ?reason, "held back");
+        tracing::trace!(path = ?path, ?reason, "held back");
         self.walk.stats.count(reason);
         Resolved::held_back()
     }
@@ -524,13 +524,13 @@ impl Walker<'_, '_, '_> {
         let (entries, ownership) = match self.open_directory(path, identity) {
             Ok(opened) => opened,
             Err(RootProblem::Replaced) => {
-                tracing::debug!(path = %path.display(), "directory replaced since judged");
+                tracing::debug!(path = ?path, "directory replaced since judged");
                 self.walk.stats.replaced += 1;
                 return Resolved::held_back();
             }
             Err(RootProblem::Unreadable(error)) => {
                 if !is_absent_kind(error) {
-                    tracing::debug!(path = %path.display(), ?error, "directory unreadable");
+                    tracing::debug!(path = ?path, ?error, "directory unreadable");
                     self.walk.stats.unreadable += 1;
                 }
                 return Resolved::held_back();
@@ -544,7 +544,7 @@ impl Walker<'_, '_, '_> {
         // lock taken with `mkdir`), even when everything in it is old: its old
         // entries are still offered one by one, the directory is not.
         if modified > self.context.cutoff {
-            tracing::trace!(path = %path.display(), "directory recent, offered entry by entry");
+            tracing::trace!(path = ?path, "directory recent, offered entry by entry");
             self.walk.stats.recent += 1;
             return Resolved {
                 complete: false,

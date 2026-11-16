@@ -632,7 +632,7 @@ impl ScanReport {
             .into_iter()
             .filter(|lock| lock.is_held())
             .inspect(|lock| {
-                tracing::info!(browser = lock.browser.key(), lock = %lock.lock.display(), "browser open");
+                tracing::info!(browser = lock.browser.key(), lock = ?lock.lock, "browser open");
             })
             .cloned()
             .collect()

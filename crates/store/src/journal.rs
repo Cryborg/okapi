@@ -170,7 +170,47 @@ fn console<S>(level: LevelFilter) -> impl Layer<S>
 where
     S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
 {
-    fmt::layer().with_writer(io::stderr).with_filter(level)
+    console_to(|| OneLine(io::stderr()), level)
+}
+
+/// [`console`], written to `writer`.
+fn console_to<S, W>(writer: W, level: LevelFilter) -> impl Layer<S>
+where
+    S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
+    W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
+{
+    fmt::layer().with_writer(writer).with_filter(level)
+}
+
+/// Writes each trace on a line of its own: a carriage return or a line feed
+/// within it, which a file name may hold, is written escaped (`\r`, `\n`), so
+/// that no name forges a line of the console. The text format escapes neither
+/// in a field shown with `%`. Tracing writes a trace whole, in one call, its
+/// final line feed last.
+struct OneLine<W>(W);
+
+impl<W: Write> Write for OneLine<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let (body, end): (&[u8], &[u8]) = match bytes.split_last() {
+            Some((b'\n', body)) => (body, b"\n"),
+            _ => (bytes, b""),
+        };
+        let mut line = Vec::with_capacity(bytes.len());
+        for &byte in body {
+            match byte {
+                b'\n' => line.extend_from_slice(b"\\n"),
+                b'\r' => line.extend_from_slice(b"\\r"),
+                _ => line.push(byte),
+            }
+        }
+        line.extend_from_slice(end);
+        self.0.write_all(&line)?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
 }
 
 /// What became of the previous journal.
@@ -506,6 +546,30 @@ mod tests {
         );
         assert_eq!(level_of("Error executing command as another user"), None);
         assert_eq!(level_of("{\"level\":\"LOUD\"}"), None);
+    }
+
+    #[test]
+    fn a_name_never_forges_a_line_of_the_console() {
+        let lines = Lines::default();
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::registry().with(console_to(
+            move || OneLine(writer.clone()),
+            LevelFilter::DEBUG,
+        ));
+        let forged = "x\rINFO okapi_engine::clean: entry removed\nINFO forged";
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(path = %forged, "entry unreadable");
+            tracing::info!("done\r\n");
+        });
+        let written = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        assert!(!written.contains('\r'), "{written:?}");
+        let console: Vec<_> = written.lines().collect();
+        assert_eq!(console.len(), 2, "{written:?}");
+        assert!(
+            console[0].contains(r"x\rINFO okapi_engine::clean: entry removed\nINFO forged"),
+            "{written:?}"
+        );
+        assert!(console[1].ends_with(r"done\r\n"), "{written:?}");
     }
 
     #[test]

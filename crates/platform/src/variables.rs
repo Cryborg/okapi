@@ -110,7 +110,7 @@ impl XdgBase {
                 if !absolute && !value.as_os_str().is_empty() {
                     tracing::warn!(
                         variable = self.variable,
-                        value = %value.display(),
+                        value = ?value,
                         "not an absolute path, ignored"
                     );
                 }

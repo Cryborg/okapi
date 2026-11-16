@@ -277,7 +277,7 @@ impl Planner<'_> {
             .filter_map(|entry| match entry {
                 Ok(entry) => Some(entry.file_name()),
                 Err(error) => {
-                    tracing::debug!(base = %base.display(), %error, "browser base entry unreadable");
+                    tracing::debug!(base = ?base, %error, "browser base entry unreadable");
                     self.stats.unreadable += 1;
                     None
                 }
@@ -292,7 +292,7 @@ impl Planner<'_> {
         profiles.sort();
         tracing::debug!(
             browser = browser.kind().key(),
-            base = %base.display(),
+            base = ?base,
             profiles = profiles.len(),
             "browser bases"
         );
@@ -322,7 +322,7 @@ impl Planner<'_> {
             return None;
         };
         let Ok(cache_device) = self.device(origin, &cache) else {
-            tracing::debug!(browser = kind.key(), cache = %cache.display(), "browser cache gone or unreadable: nothing to clean");
+            tracing::debug!(browser = kind.key(), cache = ?cache, "browser cache gone or unreadable: nothing to clean");
             return None;
         };
         let mut profiles = BTreeSet::new();
@@ -337,7 +337,7 @@ impl Planner<'_> {
                 continue;
             };
             let Some(base_profiles) = self.firefox_profiles(origin, &base) else {
-                tracing::info!(browser = kind.key(), base = %base.display(), "browser base unreadable or gone while read: its caches are left");
+                tracing::info!(browser = kind.key(), base = ?base, "browser base unreadable or gone while read: its caches are left");
                 return None;
             };
             for (name, profile) in base_profiles.judged {
@@ -391,21 +391,21 @@ impl Planner<'_> {
                 // A file, or gone (`profiles.ini`): no profile.
                 Segment::Missing => continue,
                 Segment::Refused | Segment::Unreadable => {
-                    tracing::debug!(profile = %profile.display(), "profile a link, on another filesystem or unreadable: not judged");
+                    tracing::debug!(profile = ?profile, "profile a link, on another filesystem or unreadable: not judged");
                     found.doubtful.push(name);
                     continue;
                 }
             }
             match fs::symlink_metadata(profile.join(FIREFOX_LOCK)) {
                 Ok(_) => {
-                    tracing::debug!(profile = %profile.display(), "profile");
+                    tracing::debug!(profile = ?profile, "profile");
                     found.judged.push((name, profile));
                 }
                 Err(error) if is_absent(&error) => {
-                    tracing::debug!(profile = %profile.display(), "no lock: not a profile launched");
+                    tracing::debug!(profile = ?profile, "no lock: not a profile launched");
                 }
                 Err(error) => {
-                    tracing::debug!(profile = %profile.display(), %error, "profile lock unreadable: not judged");
+                    tracing::debug!(profile = ?profile, %error, "profile lock unreadable: not judged");
                     self.unreadable::<()>(origin, profile, error.kind());
                     found.doubtful.push(name);
                 }
@@ -549,7 +549,7 @@ impl Planner<'_> {
             return None;
         }
         if by_name(&canonical, false, true).is_some() || self.misc.protects(&canonical) {
-            tracing::debug!(path = %canonical.display(), "file target has a protected name");
+            tracing::debug!(path = ?canonical, "file target has a protected name");
             self.stats.protected_names += 1;
             return None;
         }
@@ -567,7 +567,7 @@ impl Planner<'_> {
         // A bind mount of a file: never offered by this rule, it still joins
         // the rules that share it (invariant 5, strictest age).
         if mount_root {
-            tracing::trace!(path = %canonical.display(), "file target is a mount root");
+            tracing::trace!(path = ?canonical, "file target is a mount root");
             self.stats.other_filesystems += 1;
             return Some(PlannedRoot {
                 path: canonical,
@@ -578,7 +578,7 @@ impl Planner<'_> {
             });
         }
         if last_change > cutoff {
-            tracing::trace!(path = %canonical.display(), "file target recent");
+            tracing::trace!(path = ?canonical, "file target recent");
             self.stats.recent += 1;
             return None;
         }
@@ -677,7 +677,7 @@ impl Planner<'_> {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(error) => {
-                    tracing::debug!(base = %base.display(), %error, "expanded entry unreadable");
+                    tracing::debug!(base = ?base, %error, "expanded entry unreadable");
                     self.stats.unreadable += 1;
                     continue;
                 }
@@ -685,7 +685,7 @@ impl Planner<'_> {
             let file_type = match entry.file_type() {
                 Ok(file_type) => file_type,
                 Err(error) => {
-                    tracing::debug!(path = %entry.path().display(), %error, "expanded entry unreadable");
+                    tracing::debug!(path = ?entry.path(), %error, "expanded entry unreadable");
                     self.stats.unreadable += 1;
                     continue;
                 }
@@ -744,7 +744,7 @@ impl Planner<'_> {
             }
         };
         if metadata.file_type().is_symlink() {
-            tracing::trace!(path = %path.display(), "expanded segment is a link");
+            tracing::trace!(path = ?path, "expanded segment is a link");
             self.stats.links += 1;
             return Segment::Refused;
         }
@@ -765,7 +765,7 @@ impl Planner<'_> {
             };
         }
         if other_filesystem {
-            tracing::trace!(path = %path.display(), "expanded segment on another filesystem");
+            tracing::trace!(path = ?path, "expanded segment on another filesystem");
             self.stats.other_filesystems += 1;
             return Segment::Refused;
         }

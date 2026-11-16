@@ -438,7 +438,7 @@ pub(crate) fn clean_items(
 fn held(locks: &BTreeSet<BrowserLock>, id: ItemId) -> Option<Outcome> {
     let lock = locks.iter().find(|lock| lock.is_held())?;
     // Each outcome is traced with its reason: this says which lock.
-    tracing::debug!(?id, browser = lock.browser().key(), lock = %lock.lock().display(), "browser open: entry kept");
+    tracing::debug!(?id, browser = lock.browser().key(), lock = ?lock.lock(), "browser open: entry kept");
     Some((
         CleanResult::Kept(KeepReason::BrowserOpen),
         Some(lock.lock().to_path_buf()),

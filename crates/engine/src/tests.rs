@@ -162,11 +162,12 @@ fn marked_ownership(metadata: &fs::Metadata) -> Option<okapi_platform::Ownership
 }
 
 /// The owner of an entry the cleaning read, as the marks say; by default its
-/// real owner, the user running the tests.
+/// real owner, the user running the tests, and for a foreign mark another one
+/// (whatever that user is), never root.
 fn marked_entry_owner(status: &okapi_platform::EntryStatus) -> u32 {
     match status.modified.duration_since(SystemTime::UNIX_EPOCH).ok() {
         Some(STICKY_MARK) => okapi_platform::ROOT_USER,
-        Some(FOREIGN_MARK) => FOREIGN_USER,
+        Some(FOREIGN_MARK) => status.owner.wrapping_add(1).max(1),
         _ => status.owner,
     }
 }
@@ -538,6 +539,18 @@ fn the_temporary_directory_is_selected_beforehand_only_in_the_systems() {
         !temp_directory_selected(&in_tmp, in_tmp.path("link/sub")),
         "under /tmp by its value, elsewhere by its real path"
     );
+
+    // Only `${TMPDIR}` is judged so.
+    elsewhere.file("cache/app/old", 1, 2 * HOUR);
+    let rule = target(r#"{"path": "${CACHE}/app", "subcategory": "App"}"#);
+    let mut run = Run::new(&elsewhere, vec![RuleEntry::Target(&rule)]);
+    run.variables = elsewhere.variables(&[(Variable::Cache, "cache")]);
+    let report = run.scan();
+    let [group] = report.groups() else {
+        panic!("one group: {:?}", report.groups());
+    };
+    assert_eq!(group.items().len(), 1);
+    assert!(group.is_selected_by_default());
 }
 
 /// The modification date that gives directories one shared identity, for
@@ -1383,10 +1396,80 @@ fn directories_root_may_not_enter_never_spend_its_budget() {
         fixture.file(&format!("crash/{name}/a"), 1, 2 * HOUR);
         mark(&fixture.path(&format!("crash/{name}")), FOREIGN_MARK);
     }
-    let mine = fixture.file("crash/mine", 1, 2 * HOUR);
+    let theirs = fixture.file("crash/report", 1, 2 * HOUR);
     mark(&root, STICKY_MARK);
     let options = fixture.options(Exclusions::none());
-    one_entry_is_enough(&fixture, &admin_target_at(&root), options, &mine);
+    one_entry_is_enough(&fixture, &admin_target_at(&root), options, &theirs);
+}
+
+#[cfg(unix)]
+#[test]
+fn what_root_holds_back_of_another_user_never_spends_its_budget() {
+    let fixture = Fixture::new();
+    let root = fixture.directory("crash");
+    for name in ["one", "two", "three"] {
+        std::os::unix::fs::symlink("/", fixture.path(&format!("crash/{name}"))).unwrap();
+    }
+    // Not root's, as the links: offered, so counted.
+    let theirs = fixture.file("crash/report", 1, 2 * HOUR);
+    mark(&root, STICKY_MARK);
+    let options = fixture.options(Exclusions::none());
+    one_entry_is_enough(&fixture, &admin_target_at(&root), options, &theirs);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_removers_own_entries_spend_the_budget_even_held_back() {
+    let fixture = Fixture::new();
+    let root = fixture.directory("data");
+    for name in ["one", "two", "three"] {
+        std::os::unix::fs::symlink("/", fixture.path(&format!("data/{name}"))).unwrap();
+    }
+    // The user's, then root's with the links of the root's owner.
+    for rule in [target_at(&root), admin_target_at(&root)] {
+        let mut run = Run::new(&fixture, vec![RuleEntry::Target(&rule)]);
+        run.limits = Limits {
+            depth: 8,
+            entries: 1,
+        };
+        let report = run.scan();
+        assert_eq!(offered_paths(&report), Vec::<PathBuf>::new());
+        assert!(
+            matches!(
+                report.issues(),
+                [ScanIssue::LimitReached {
+                    limit: Limit::Entries,
+                    ..
+                }]
+            ),
+            "{:?}",
+            report.issues()
+        );
+    }
+}
+
+#[test]
+fn roots_budget_still_bounds_what_it_offers_of_another_user() {
+    let fixture = Fixture::new();
+    let root = fixture.directory("crash");
+    fixture.file("crash/one", 1, 2 * HOUR);
+    fixture.file("crash/two", 1, 2 * HOUR);
+    mark(&root, STICKY_MARK);
+    let rule = admin_target_at(&root);
+    let mut run = Run::new(&fixture, vec![RuleEntry::Target(&rule)]);
+    run.limits = Limits {
+        depth: 8,
+        entries: 1,
+    };
+    let report = run.scan();
+    assert_eq!(offered_paths(&report).len(), 1);
+    assert!(matches!(
+        report.issues(),
+        [ScanIssue::LimitReached {
+            limit: Limit::Entries,
+            ..
+        }]
+    ));
 }
 
 #[test]
@@ -3003,10 +3086,24 @@ fn root_enters_the_directories_of_the_roots_owner() {
     fixture.age(&fixture.path("man/cat1"), 2 * HOUR);
     fixture.file("man/theirs/page", 1, 2 * HOUR);
     mark(&fixture.path("man/theirs"), FOREIGN_MARK);
+    // Below root's own directory, the root's owner still rules.
+    fixture.file("man/cat2/page", 1, 2 * HOUR);
+    fixture.file("man/cat2/theirs/page", 1, 2 * HOUR);
+    mark(&fixture.path("man/cat2/theirs"), FOREIGN_MARK);
+    fixture.file("man/cat2/mine/page", 1, 2 * HOUR);
+    fixture.age(&fixture.path("man/cat2/mine"), 2 * HOUR);
+    mark(&fixture.path("man/cat2"), STICKY_MARK);
     let rule = admin_target_at(&root);
     let report = Run::new(&fixture, vec![RuleEntry::Target(&rule)]).scan();
-    assert_eq!(offered_paths(&report), [fixture.path("man/cat1")]);
-    assert_eq!(report.stats().not_owned(), 1);
+    assert_eq!(
+        offered_paths(&report),
+        [
+            fixture.path("man/cat1"),
+            fixture.path("man/cat2/mine"),
+            fixture.path("man/cat2/page"),
+        ]
+    );
+    assert_eq!(report.stats().not_owned(), 2);
 }
 
 #[test]

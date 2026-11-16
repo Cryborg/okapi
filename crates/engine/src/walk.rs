@@ -54,8 +54,10 @@ const fn status_owner(status: &EntryStatus) -> u32 {
 pub(crate) struct Limits {
     /// Directory levels below the root.
     pub(crate) depth: usize,
-    /// Entries read below the root, offered or not; the scan leaves out
-    /// those the remover may not remove (`HoldBack::NotOwned`).
+    /// Entries below the root. The cleaning spends it on every entry it
+    /// reads; the scan on every entry it reads that its path alone does not
+    /// hold back, but on another user's only once offered: what another user
+    /// leaves and the walk holds back never spends it ([`Walker::entry`]).
     pub(crate) entries: usize,
 }
 
@@ -96,8 +98,9 @@ pub(crate) struct WalkContext<'a> {
     /// sticky directory (`/tmp`), which the remover may not remove; with root,
     /// both walks hold back the directories [`Self::refuses_owner`] refuses.
     pub(crate) remover: Option<u32>,
-    /// Who owns the scan root, read when it is opened; `None` before, or when
-    /// it cannot be read.
+    /// Who owns the scan root: read when the scan opens it, when the cleaning
+    /// reaches it; `None` before, when it cannot be read, or for a single file
+    /// target.
     pub(crate) root_owner: Option<u32>,
 }
 
@@ -244,15 +247,20 @@ impl WalkContext<'_> {
     }
 
     /// Whether root, removing what is offered, must neither enter nor offer
-    /// an entry of `kind` owned by `owner`: a directory that belongs to
-    /// neither root nor the root's owner (unknown owners included). Another
-    /// user may have moved there a tree they could not empty (`/var/crash` is
-    /// writable by all), which root, whom nothing stops, would remove whole.
-    /// A file is never refused so: a crash report belongs to the user who
-    /// crashed, and a file moved in is one its mover could remove already.
+    /// an entry of `kind` owned by `owner`: a directory of a third party
+    /// ([`Self::is_third_party`]). Another user may have moved there a tree
+    /// they could not empty (`/var/crash` is writable by all), which root,
+    /// whom nothing stops, would remove whole. A file is never refused so: a
+    /// crash report belongs to the user who crashed, and a file moved in is
+    /// one its mover could remove already.
     pub(crate) fn refuses_owner(&self, kind: EntryType, owner: Option<u32>) -> bool {
+        kind == EntryType::Directory && self.is_third_party(owner)
+    }
+
+    /// Whether, root removing, `owner` is neither root nor the root's owner
+    /// (an unknown owner included). Never with another remover.
+    fn is_third_party(&self, owner: Option<u32>) -> bool {
         self.remover == Some(ROOT_USER)
-            && kind == EntryType::Directory
             && !owner.is_some_and(|owner| owner == ROOT_USER || Some(owner) == self.root_owner)
     }
 }
@@ -381,6 +389,9 @@ pub(crate) fn walk(
     match walker.open_directory(root, root_identity) {
         Ok((entries, ownership)) => {
             walker.context.root_owner = ownership.map(|ownership| ownership.owner);
+            if walker.context.root_owner.is_none() && context.remover == Some(ROOT_USER) {
+                tracing::debug!(root = ?root, "owner of the root unreadable: root enters only its own directories");
+            }
             let resolved = walker.children(entries, context.limits.depth, ownership);
             walker.walk.found = resolved.found;
         }
@@ -424,7 +435,8 @@ impl Walker<'_, '_, '_> {
             size: 0,
         };
         for entry in entries {
-            if self.cancelled {
+            // Cancelled, or nothing more can be offered: nothing more is read.
+            if self.cancelled || self.walk.limits_reached.contains(&Limit::Entries) {
                 resolved.complete = false;
                 break;
             }
@@ -475,15 +487,13 @@ impl Walker<'_, '_, '_> {
         };
         let observed = Observed::from_metadata(&metadata, self.context.readers, mount_root);
         let removable = self.removable_from(listed, observed.owner);
-        // An entry the remover may not remove, whatever else it is, never
-        // spends the budget: another user could fill a shared directory
-        // (`/tmp`, `/var/crash`) until none of the remover's own entries is
+        // Another user's entry spends the budget only once offered: whatever
+        // they leave in a shared directory (`/tmp`, `/var/crash`) and the walk
+        // holds back would otherwise keep the remover's own entries from being
         // offered. It costs a reading, never a place in the report.
-        if removable && !self.context.refuses_owner(observed.kind, observed.owner) {
-            self.visited += 1;
-            if self.visited > self.context.limits.entries {
-                return self.limit(Limit::Entries);
-            }
+        let third_party = !removable || self.context.is_third_party(observed.owner);
+        if !third_party && self.spend_budget() {
+            return self.limit(Limit::Entries);
         }
         let accepted = match self.context.by_status(&observed, self.device, None) {
             Ok(accepted) => accepted,
@@ -497,7 +507,11 @@ impl Walker<'_, '_, '_> {
         if !removable {
             return self.held_back(path, HoldBack::NotOwned);
         }
+        // A third party's directory is never entered (`refuses_owner`).
         if !is_directory {
+            if third_party && self.spend_budget() {
+                return self.limit(Limit::Entries);
+            }
             self.progress.found_bytes = self.progress.found_bytes.saturating_add(metadata.len());
             return Self::file(path, &metadata, accepted);
         }
@@ -505,6 +519,12 @@ impl Walker<'_, '_, '_> {
             return self.limit(Limit::Depth);
         };
         self.directory(path, accepted.last_change, accepted.identity, depth_left)
+    }
+
+    /// Spends one entry of the budget; `true` when it was already spent.
+    fn spend_budget(&mut self) -> bool {
+        self.visited += 1;
+        self.visited > self.context.limits.entries
     }
 
     /// Whether the entry at `path`, a file or a directory, is the root of a

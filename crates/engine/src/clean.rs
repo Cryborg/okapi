@@ -669,13 +669,21 @@ impl Cleaner<'_> {
         if status.identity != item.found.identity || status.kind != entry_type(item.found.kind) {
             return Err(kept(KeepReason::Replaced));
         }
+        let observed = Observed::from_status(&status, self.readers);
         context
             .by_status(
-                &Observed::from_status(&status, self.readers),
+                &observed,
                 item.root_identity.device(),
                 Some(item.root_identity),
             )
-            .map_err(|reason| kept(keep_reason(reason)))?;
+            .map_err(|reason| {
+                kept(traced_keep_reason(
+                    &item.found.path,
+                    reason,
+                    observed.owner,
+                    context,
+                ))
+            })?;
         let is_directory = status.kind == EntryType::Directory;
         if by_name(&item.found.path, is_directory, depth_below_root(item) <= 1).is_some() {
             return Err(kept(KeepReason::Protected));
@@ -874,25 +882,22 @@ fn walk_entry(
     if walking.visited > walking.context.limits.entries {
         return Err(KeepReason::Changed);
     }
-    if let Some(reason) = walking.context.by_path(path) {
-        return Err(keep_reason(reason));
+    let context = walking.context;
+    if let Some(reason) = context.by_path(path) {
+        return Err(traced_keep_reason(path, reason, None, &context));
     }
     let status = match directory.status_of(name) {
         Ok(status) => remembered(status, walking.dates),
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(keep(&error)),
     };
-    walking
-        .context
-        .by_status(
-            &Observed::from_status(&status, walking.context.readers),
-            walking.device,
-            None,
-        )
-        .map_err(keep_reason)?;
+    let observed = Observed::from_status(&status, context.readers);
+    context
+        .by_status(&observed, walking.device, None)
+        .map_err(|reason| traced_keep_reason(path, reason, observed.owner, &context))?;
     let is_directory = status.kind == EntryType::Directory;
     if let Some(reason) = by_name(path, is_directory, false) {
-        return Err(keep_reason(reason));
+        return Err(traced_keep_reason(path, reason, observed.owner, &context));
     }
     if walking.pass == CleanPass::Check {
         directory
@@ -980,6 +985,30 @@ const fn entry_type(kind: EntryKind) -> EntryType {
         EntryKind::File => EntryType::File,
         EntryKind::Directory => EntryType::Directory,
     }
+}
+
+/// What holding back `path`, owned by `owner`, for `reason` means for the
+/// entry cleaned. The receipt may fold the reason into another (`Changed`):
+/// it is traced, with who owns what for a refusal of root.
+fn traced_keep_reason(
+    path: &Path,
+    reason: HoldBack,
+    owner: Option<u32>,
+    context: &WalkContext<'_>,
+) -> KeepReason {
+    if reason == HoldBack::NotOwned {
+        tracing::info!(
+            path = ?path,
+            ?reason,
+            ?owner,
+            root_owner = ?context.root_owner,
+            remover = ?context.remover,
+            "held back while cleaning"
+        );
+    } else {
+        tracing::info!(path = ?path, ?reason, "held back while cleaning");
+    }
+    keep_reason(reason)
 }
 
 /// What holding back an entry below the one cleaned means for it.

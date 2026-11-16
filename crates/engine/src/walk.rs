@@ -129,8 +129,8 @@ pub(crate) enum HoldBack {
     /// remove; or, root removing, a directory that belongs to neither root
     /// nor the root's owner ([`WalkContext::refuses_owner`]).
     NotOwned,
-    /// A file with other names, below a root that keeps them
-    /// ([`WalkContext::keep_hard_linked`]).
+    /// A file with other names, or whose names cannot be counted, below a
+    /// root that keeps them ([`WalkContext::keep_hard_linked`]).
     HardLinked,
 }
 
@@ -143,7 +143,8 @@ pub(crate) struct Observed {
     pub(crate) last_change: Option<SystemTime>,
     pub(crate) mount_root: Option<bool>,
     pub(crate) owner: Option<u32>,
-    /// How many names (hard links) it has.
+    /// How many names (hard links) it has; none when they cannot be
+    /// counted, which a root keeping hard-linked files holds back.
     pub(crate) links: Option<u64>,
 }
 
@@ -375,8 +376,8 @@ struct Walker<'a, 'p, 'w> {
 /// directory or one of its ancestors, another scan root, an unreadable or
 /// recent entry, an excluded or protected name, a name a running session
 /// relies on, an entry the remover may not remove from a sticky directory, a
-/// directory root may not enter ([`WalkContext::refuses_owner`]), or a limit
-/// reached.
+/// directory root may not enter ([`WalkContext::refuses_owner`]), a file with
+/// other names below a root that keeps them, or a limit reached.
 ///
 /// No link is followed: every entry is judged by metadata read without
 /// following links, and a directory is listed only if, once opened, it is

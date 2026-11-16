@@ -689,7 +689,9 @@ fn hard_links_do_not_make_each_other_recent() {
 }
 
 /// A snap installed between the scan and the cleaning names a file of
-/// snapd's cache: removing it would free nothing, it stays.
+/// snapd's cache: removing it would free nothing, it stays. Naming it moves
+/// its inode date, which keeps it as recent first in real time: this runs
+/// "two hours from now" (`run_later`) to reach the check of its names.
 #[test]
 fn a_file_given_another_name_since_the_scan_stays_below_a_root_that_keeps_them() {
     let fixture = Fixture::new();

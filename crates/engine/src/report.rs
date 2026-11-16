@@ -10,7 +10,6 @@ use okapi_rules::{
 };
 
 use crate::preconditions::Stop;
-use crate::roots::PlannedRoot;
 
 use crate::walk::{Found, HoldBack};
 
@@ -772,20 +771,6 @@ pub(crate) struct FoundItem {
     pub(crate) root_identity: FileIdentity,
     pub(crate) cutoff: SystemTime,
     pub(crate) keep_hard_linked: bool,
-}
-
-impl FoundItem {
-    /// `found` below `root`, walked keeping its files with other names or
-    /// not.
-    pub(crate) fn below(found: Found, root: &PlannedRoot, keep_hard_linked: bool) -> Self {
-        Self {
-            found,
-            root: root.path.clone(),
-            root_identity: root.identity,
-            cutoff: root.cutoff,
-            keep_hard_linked,
-        }
-    }
 }
 
 /// Builds a report, numbering its entries.

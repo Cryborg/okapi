@@ -122,8 +122,8 @@ pub fn link_count(metadata: &Metadata) -> Option<u64> {
     Some(metadata.nlink())
 }
 
-/// How many names the object `metadata` was read for has: unknown here,
-/// until the Windows port reads it.
+/// How many names the object `metadata` was read for has: unknown outside
+/// Unix, which a walk keeping hard-linked files holds back.
 #[cfg(not(unix))]
 #[must_use]
 pub fn link_count(_metadata: &Metadata) -> Option<u64> {

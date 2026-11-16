@@ -30,7 +30,9 @@ pub enum KeepReason {
     /// A directory whose contents are no longer all removable, for another
     /// reason than age: a link, a special file, a mount, an exclusion, a
     /// protected name or a limit appeared in it; or, below a root that keeps
-    /// them, a file (or one in it) given another name since the scan.
+    /// them, a file (or one in it) given another name since the scan without
+    /// its inode date moving past the cutoff (naming a file moves it: it is
+    /// then [`Self::Recent`]).
     Changed,
     /// An exclusion in force covers it, or a directory on the way to it.
     Excluded,
@@ -987,7 +989,9 @@ const fn keep_reason(reason: HoldBack) -> KeepReason {
         // A directory root may not enter, which the scan would not have
         // offered: it changed since. The sticky bit is judged by
         // `ensure_removable`, never here. A file given another name since
-        // the scan (a snap installed meanwhile) frees nothing now.
+        // the scan (a snap installed meanwhile) frees nothing now; naming it
+        // moves its inode date, so it is mostly kept as recent first, this a
+        // closed net behind.
         HoldBack::NotOwned
         | HoldBack::HardLinked
         | HoldBack::Excluded

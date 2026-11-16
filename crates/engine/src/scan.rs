@@ -266,7 +266,7 @@ pub(crate) fn scan_entries(
         found_by_group.entry(group).or_default().extend(
             found
                 .into_iter()
-                .map(|found| FoundItem::below(found, &root, keep_hard_linked)),
+                .map(|found| found_below(found, &root, keep_hard_linked)),
         );
     }
     if watch.is_cancelled() {
@@ -281,6 +281,19 @@ pub(crate) fn scan_entries(
         );
     }
     report.finish()
+}
+
+/// `found` below `root`, its group keeping its files with other names or
+/// not (`keep_hard_linked`: the group's, its rules merged, never the root's
+/// own rule's alone).
+fn found_below(found: Found, root: &PlannedRoot, keep_hard_linked: bool) -> FoundItem {
+    FoundItem {
+        found,
+        root: root.path.clone(),
+        root_identity: root.identity,
+        cutoff: root.cutoff,
+        keep_hard_linked,
+    }
 }
 
 /// The roots the rules name, checked, each with the rule it comes from; what

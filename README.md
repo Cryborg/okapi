@@ -23,8 +23,8 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/home-dark.png">
-    <img src="assets/screenshots/home.png" width="860" alt="Okapi's home screen: reclaimable space, disks, memory, processor and system widgets">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/en/home-dark.png">
+    <img src="assets/screenshots/en/home.png" width="860" alt="Okapi's home screen: reclaimable space, disks, memory, processor and system widgets">
   </picture>
 </p>
 
@@ -37,7 +37,7 @@
 |---|---|
 | **Cleaner** | Finds what applications leave behind (caches, logs, temporary files, crash reports) for the system, Chromium and Firefox based browsers, dozens of desktop apps and developer tools, games and GPU shader caches. Every group says why it is safe to remove. |
 | **Dashboard** | A home screen you arrange yourself: reclaimable space, disks, memory, processor, system. Widgets move with the mouse or the keyboard. |
-| **Disk usage** | Shows what takes up space, folder by folder, and opens any of them in your file manager. |
+| **Disk space** | Shows what takes up space, folder by folder, and opens any of them in your file manager. |
 | **Duplicates** | Finds files with identical content (BLAKE3) and moves the copies you pick to the trash. The last copy of a file never leaves. |
 | **Applications** | Lists installed apps (deb, snap, flatpak) with the space each one really takes, uninstalls them, and finds the folders that uninstalled apps left behind. |
 | **Updates** | Shows pending apt and snap updates, with security updates flagged, and installs them. |
@@ -47,15 +47,13 @@ The interface is available in French and English, in a light and a dark theme, a
 
 ## Screenshots
 
-The interface below is shown in French, its source language.
-
-| Cleaner | Disk usage |
+| Cleaner | Disk space |
 |---|---|
-| <img src="assets/screenshots/cleaner.png" alt="Cleaner results: groups with their size, preselected or left to choose, and an explanation of why each is safe"> | <img src="assets/screenshots/disk-usage.png" alt="Disk usage: the folders of a directory sorted by size, with a details panel"> |
+| <img src="assets/screenshots/en/cleaner.png" alt="Cleaner results: groups with their size, preselected or left to choose, and an explanation of why each is safe"> | <img src="assets/screenshots/en/disk-usage.png" alt="Disk space: the folders of a directory sorted by size, with a details panel"> |
 
 | Applications | Updates |
 |---|---|
-| <img src="assets/screenshots/applications.png" alt="Applications: installed apps with the space taken by the app and its data, and an uninstall button"> | <img src="assets/screenshots/updates.png" alt="Updates: pending apt and snap updates, with security updates flagged"> |
+| <img src="assets/screenshots/en/applications.png" alt="Applications: installed apps with the space taken by the app and its data, and an uninstall button"> | <img src="assets/screenshots/en/updates.png" alt="Updates: pending apt and snap updates, with security updates flagged"> |
 
 ## Safe by design
 

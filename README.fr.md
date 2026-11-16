@@ -23,8 +23,8 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/home-dark.png">
-    <img src="assets/screenshots/home.png" width="860" alt="L'écran d'accueil d'Okapi : espace récupérable, disques, mémoire, processeur et système">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/fr/home-dark.png">
+    <img src="assets/screenshots/fr/home.png" width="860" alt="L'écran d'accueil d'Okapi : espace récupérable, disques, mémoire, processeur et système">
   </picture>
 </p>
 
@@ -49,11 +49,11 @@ L'interface existe en français et en anglais, en thème clair et sombre, et ell
 
 | Nettoyeur | Espace disque |
 |---|---|
-| <img src="assets/screenshots/cleaner.png" alt="Résultats du Nettoyeur : les groupes avec leur taille, présélectionnés ou à choisir, et pourquoi chacun est sans risque"> | <img src="assets/screenshots/disk-usage.png" alt="Espace disque : les dossiers d'un répertoire triés par taille, avec un panneau de détails"> |
+| <img src="assets/screenshots/fr/cleaner.png" alt="Résultats du Nettoyeur : les groupes avec leur taille, présélectionnés ou à choisir, et pourquoi chacun est sans risque"> | <img src="assets/screenshots/fr/disk-usage.png" alt="Espace disque : les dossiers d'un répertoire triés par taille, avec un panneau de détails"> |
 
 | Applications | Mises à jour |
 |---|---|
-| <img src="assets/screenshots/applications.png" alt="Applications : les applis installées, la place de l'appli et de ses données, et le bouton pour désinstaller"> | <img src="assets/screenshots/updates.png" alt="Mises à jour : les mises à jour apt et snap en attente, celles de sécurité signalées"> |
+| <img src="assets/screenshots/fr/applications.png" alt="Applications : les applis installées, la place de l'appli et de ses données, et le bouton pour désinstaller"> | <img src="assets/screenshots/fr/updates.png" alt="Mises à jour : les mises à jour apt et snap en attente, celles de sécurité signalées"> |
 
 ## Sûr par construction
 

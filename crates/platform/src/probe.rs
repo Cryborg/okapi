@@ -1,6 +1,7 @@
 //! What the system says of itself, for the dashboard: mounts and their
 //! space, block devices, memory, processes and their systemd units, the
-//! applications' `.desktop` names, the processor and the system. Each reader
+//! applications' `.desktop` names, the processor and the system, and whether
+//! Okapi runs confined (a container, a sandbox). Each reader
 //! has a pure parser, tested on samples; those of `/proc`, `/sys`, `/dev` and
 //! the mounts work on Linux and say [`std::io::ErrorKind::Unsupported`]
 //! elsewhere (a `.desktop` file is read anywhere).
@@ -13,6 +14,7 @@
 
 mod block;
 mod capped;
+mod confinement;
 mod desktop;
 mod memory;
 mod mounts;
@@ -23,6 +25,7 @@ mod units;
 
 pub use block::{device_labels, removable, rotational};
 pub use capped::read_regular_capped;
+pub use confinement::confinement;
 pub use desktop::{DesktopEntry, application_name, desktop_entry};
 pub use memory::{MemoryStatus, memory};
 pub use mounts::{Device, Mount, MountClass, MountList, mounts};

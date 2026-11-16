@@ -1,7 +1,9 @@
 //! What is installed, as the leftovers need it: every snap, every flatpak id
 //! of every installation (with the ids a flatpak was renamed from, and those
 //! running now), and the packages removed whose settings stay. A source not
-//! read whole is unread: nothing it might own is ever proposed.
+//! read whole is unread: nothing it might own is ever proposed. Okapi
+//! confined (a container, a sandbox) reads none: what it sees is not the
+//! system that filled the home folder.
 
 use std::collections::BTreeSet;
 use std::io;
@@ -59,13 +61,34 @@ pub struct InstalledPlaces {
     /// flatpak falls back on without it. Without either, flatpaks are
     /// unread.
     pub runtime: Option<PathBuf>,
+    /// Why Okapi may not see the system that filled the home folder (a
+    /// container, a sandbox): then nothing installed is known, never none.
+    pub(crate) confined: Option<String>,
+}
+
+impl InstalledPlaces {
+    /// The places given, Okapi's confinement read now
+    /// ([`okapi_platform::confinement`]).
+    #[must_use]
+    pub fn new(
+        snap_files: PathBuf,
+        installations: Vec<Installation>,
+        runtime: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            snap_files,
+            installations,
+            runtime,
+            confined: okapi_platform::confinement(),
+        }
+    }
 }
 
 /// What is installed on this system now: the snaps as snapd lists them, the
 /// flatpaks as `places` hold them.
 #[must_use]
 pub fn installed_now(places: &InstalledPlaces) -> Installed {
-    installed_with(places, snaps_now(&places.snap_files))
+    installed_reading(places, || snaps_now(&places.snap_files))
 }
 
 /// The snaps installed on this system now, as snapd lists them; when it
@@ -83,8 +106,24 @@ pub fn snaps_now(snap_files: &Path) -> Known {
 /// for whoever needs them), the flatpaks as `places` hold them.
 #[must_use]
 pub fn installed_with(places: &InstalledPlaces, snaps: Known) -> Installed {
+    installed_reading(places, || snaps)
+}
+
+/// What is installed, the snaps read by `snaps`; nothing read, and both
+/// unread, when Okapi runs confined: what it sees is not the system that
+/// filled the home folder (none there would propose every application's
+/// data).
+fn installed_reading(places: &InstalledPlaces, snaps: impl FnOnce() -> Known) -> Installed {
+    if let Some(mark) = &places.confined {
+        tracing::warn!(mark, "Okapi runs confined: what is installed unread");
+        let unread = Known::Unread(format!("Okapi runs confined ({mark})"));
+        return Installed {
+            snaps: unread.clone(),
+            flatpaks: unread,
+        };
+    }
     Installed {
-        snaps,
+        snaps: snaps(),
         flatpaks: flatpaks(&places.installations, places.runtime.as_deref()),
     }
 }

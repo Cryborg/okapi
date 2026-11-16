@@ -28,9 +28,9 @@ pub use elevation::{HELPER_PATH, PKEXEC_PATH};
 pub use identity::{FileIdentity, IDENTITY_SUPPORTED, file_identity, last_change, ownership};
 pub use probe::{
     CpuTimes, DesktopEntry, DesktopSession, Device, MemoryStatus, Mount, MountClass, MountList,
-    ProcessList, ProcessMemory, Space, application_name, cpu_times, desktop_entry, desktop_id,
-    desktop_session, device_labels, distribution, kernel_release, load_average, memory, mounts,
-    names_a_file, processes, read_regular_capped, removable, rotational, space, uptime,
+    ProcessList, ProcessMemory, Space, application_name, confinement, cpu_times, desktop_entry,
+    desktop_id, desktop_session, device_labels, distribution, kernel_release, load_average, memory,
+    mounts, names_a_file, processes, read_regular_capped, removable, rotational, space, uptime,
 };
 pub use session::sync_directory;
 pub use session::{

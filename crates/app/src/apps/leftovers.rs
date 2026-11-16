@@ -637,11 +637,11 @@ mod system {
             .map(PathBuf::from)
             .filter(|runtime| runtime.is_absolute())
             .or_else(|| variables.value_of(Variable::Cache).map(Path::to_path_buf));
-        let places = InstalledPlaces {
-            snap_files: PathBuf::from(leftovers::installed::SNAP_FILES),
-            installations: okapi_tools::apps::flatpak::installations(Some(data_home)),
+        let places = InstalledPlaces::new(
+            PathBuf::from(leftovers::installed::SNAP_FILES),
+            okapi_tools::apps::flatpak::installations(Some(data_home)),
             runtime,
-        };
+        );
         Some((variables, places))
     }
 

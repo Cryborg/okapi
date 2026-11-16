@@ -498,8 +498,48 @@ fn a_leftover_never_moves_while_a_duplicate_does() {
 }
 
 #[test]
+fn nothing_installed_is_known_when_okapi_runs_confined() {
+    // Catches Okapi in a container, a toolbox or a sandbox, which sees the
+    // home folder but not the system that filled it: no snapd, no flatpak
+    // installation there would propose every snap's and flatpak's data.
+    let sandbox = sandbox();
+    sandbox.folder(LeftoverKind::Snap, "firefox");
+    sandbox.folder(LeftoverKind::Flatpak, "org.gimp.GIMP");
+    let gone = sandbox.data.join("gone");
+    let visible = InstalledPlaces {
+        snap_files: gone.join("snaps"),
+        installations: vec![installation(&gone.join("flatpak"), false)],
+        runtime: Some(gone.join("run")),
+        confined: None,
+    };
+    // A system seen whole without them: none installed, as before.
+    let seen = installed::installed_with(&visible, read(&[]));
+    assert_eq!(seen, installed(&[], &[]));
+    assert_eq!(sandbox.find(&seen).leftovers().len(), 2);
+    let confined = InstalledPlaces {
+        confined: Some("/run/.containerenv".to_owned()),
+        ..visible
+    };
+    for installed in [
+        installed::installed_with(&confined, read(&[])),
+        installed::installed_now(&confined),
+    ] {
+        assert!(matches!(installed.snaps, Known::Unread(_)), "{installed:?}");
+        assert!(
+            matches!(installed.flatpaks, Known::Unread(_)),
+            "{installed:?}"
+        );
+        let report = sandbox.find(&installed);
+        assert_eq!(report.leftovers(), []);
+        assert_eq!(report.unread(), [LeftoverKind::Snap, LeftoverKind::Flatpak]);
+    }
+}
+
+#[test]
 fn snaps_are_unread_when_snapd_is_silent_and_snaps_are_there() {
-    // Catches a snapd that did not answer taken for no snap installed.
+    // Catches a snapd that did not answer taken for no snap installed. A
+    // system without snapd nor its files has none: unless Okapi runs
+    // confined (`nothing_installed_is_known_when_okapi_runs_confined`).
     let root = tempfile::tempdir().unwrap();
     let files = root.path().join("snaps");
     let silent = || Err("snapd silent".to_owned());

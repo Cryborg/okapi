@@ -36,6 +36,10 @@ pub const KIND_NOT_FOUND: &str = "snap-not-found";
 /// The kinds of a snap absent, read or changed.
 const KINDS_ABSENT: [&str; 2] = [KIND_NOT_INSTALLED, KIND_NOT_FOUND];
 pub const KIND_DNS_FAILURE: &str = "dns-failure";
+/// What snapd says when it refuses to refresh a snap whose apps run: no
+/// kind of its own (snapd 2.78, seen 2026-11-16), only this message, never
+/// translated.
+const MESSAGE_APPS_RUNNING: &str = " has running apps ";
 /// The HTTP statuses of a request refused for its rights (unauthorized,
 /// forbidden), whatever kind snapd gives it.
 const HTTP_NOT_ALLOWED: [u16; 2] = [401, 403];
@@ -118,6 +122,12 @@ impl SnapdError {
     #[must_use]
     pub fn busy(&self) -> bool {
         matches!(self, Self::Refused { kind, .. } if kind == KIND_CHANGE_CONFLICT)
+    }
+
+    /// Whether snapd refused a refresh because the snap's apps run.
+    #[must_use]
+    pub fn apps_running(&self) -> bool {
+        matches!(self, Self::Refused { message, .. } if message.contains(MESSAGE_APPS_RUNNING))
     }
 }
 

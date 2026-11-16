@@ -47,6 +47,9 @@ pub enum Why {
     Refused,
     /// The updates changed since they were read.
     Changed,
+    /// An app of a snap to refresh is open: snapd refuses until it is
+    /// closed.
+    AppsOpen,
     /// A package or a repository is not signed by a trusted key.
     Unsigned,
     /// No answer, or none in time: the outcome is unknown.
@@ -749,6 +752,8 @@ fn why_of_snapd(error: &SnapdError) -> Why {
         Why::Refused
     } else if error.busy() {
         Why::Busy
+    } else if error.apps_running() {
+        Why::AppsOpen
     } else if error.offline() {
         Why::Offline
     } else if error.timed_out() {

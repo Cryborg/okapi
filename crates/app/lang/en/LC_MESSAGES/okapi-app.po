@@ -3331,6 +3331,10 @@ msgid "Les mises à jour ont changé depuis la recherche. La liste vient d'être
 msgstr "The updates changed since the search. The list was just read again: try again."
 
 msgctxt "UpdatesWords"
+msgid "Une appli à mettre à jour est ouverte. Fermez-la, puis réessayez."
+msgstr "An app to update is open. Close it, then try again."
+
+msgctxt "UpdatesWords"
 msgid "Des paquets ne sont pas signés par une source de confiance."
 msgstr "Some packages are not signed by a trusted source."
 

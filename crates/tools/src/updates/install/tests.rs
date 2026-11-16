@@ -638,6 +638,20 @@ fn each_end_of_a_snap_refresh_is_told() {
         ),
         End::Failed(Why::Busy)
     );
+    // As snapd 2.78 said it, with no kind.
+    assert_eq!(
+        ending(
+            || {
+                Err(SnapdError::Refused {
+                    status: 400,
+                    kind: String::new(),
+                    message: "cannot refresh \"snap-store\": snap \"snap-store\" has running apps (snap-store), pids: 1221553".into(),
+                })
+            },
+            done
+        ),
+        End::Failed(Why::AppsOpen)
+    );
     // Its progress is heard.
     let heard = RefCell::new(Vec::new());
     install_snaps(

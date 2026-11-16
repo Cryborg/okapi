@@ -143,6 +143,9 @@ global UpdatesWords {
         if why == InstallWhy.changed {
             return @tr("Les mises à jour ont changé depuis la recherche. La liste vient d'être relue : réessayez.");
         }
+        if why == InstallWhy.apps-open {
+            return @tr("Une appli à mettre à jour est ouverte. Fermez-la, puis réessayez.");
+        }
         if why == InstallWhy.unsigned {
             return @tr("Des paquets ne sont pas signés par une source de confiance.");
         }

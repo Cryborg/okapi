@@ -40,7 +40,7 @@ export enum InstallEnd { done, cancelled, failed, stopped }
 
 // Why the updates were not installed (`okapi_tools::updates::install::Why`).
 // `none` when it did not fail.
-export enum InstallWhy { none, busy, interrupted, offline, no-space, refused, changed, unsigned, unanswered, broken }
+export enum InstallWhy { none, busy, interrupted, offline, no-space, refused, changed, apps-open, unsigned, unanswered, broken }
 
 // A package an update would take away.
 export struct RemovedLine {

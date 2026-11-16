@@ -666,6 +666,7 @@ pub(super) const fn why_shown(why: Why) -> ui::InstallWhy {
         Why::NoSpace => ui::InstallWhy::NoSpace,
         Why::Refused => ui::InstallWhy::Refused,
         Why::Changed => ui::InstallWhy::Changed,
+        Why::AppsOpen => ui::InstallWhy::AppsOpen,
         Why::Unsigned => ui::InstallWhy::Unsigned,
         Why::Unanswered => ui::InstallWhy::Unanswered,
         Why::Broken => ui::InstallWhy::Broken,

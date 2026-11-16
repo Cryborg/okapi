@@ -1972,6 +1972,7 @@ fn each_cause_is_shown_as_itself() {
         Why::NoSpace,
         Why::Refused,
         Why::Changed,
+        Why::AppsOpen,
         Why::Unsigned,
         Why::Unanswered,
         Why::Broken,
@@ -1979,7 +1980,7 @@ fn each_cause_is_shown_as_itself() {
     .into_iter()
     .map(|why| format!("{:?}", why_shown(why)))
     .collect();
-    assert_eq!(shown.len(), 9);
+    assert_eq!(shown.len(), 10);
     assert!(!shown.contains("None"));
     assert_eq!(why_shown(Why::NoSpace), ui::InstallWhy::NoSpace);
     assert_eq!(why_shown(Why::Busy), ui::InstallWhy::Busy);
@@ -1987,4 +1988,5 @@ fn each_cause_is_shown_as_itself() {
     assert_eq!(why_shown(Why::Unsigned), ui::InstallWhy::Unsigned);
     assert_eq!(why_shown(Why::Interrupted), ui::InstallWhy::Interrupted);
     assert_eq!(why_shown(Why::Broken), ui::InstallWhy::Broken);
+    assert_eq!(why_shown(Why::AppsOpen), ui::InstallWhy::AppsOpen);
 }

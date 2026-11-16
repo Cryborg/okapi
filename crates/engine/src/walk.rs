@@ -54,7 +54,8 @@ const fn status_owner(status: &EntryStatus) -> u32 {
 pub(crate) struct Limits {
     /// Directory levels below the root.
     pub(crate) depth: usize,
-    /// Entries visited below the root, offered or not.
+    /// Entries read below the root, offered or not; the scan leaves out
+    /// those the remover may not remove (`HoldBack::NotOwned`).
     pub(crate) entries: usize,
 }
 
@@ -456,10 +457,6 @@ impl Walker<'_, '_, '_> {
             return Resolved::held_back();
         }
         self.progress.entry_seen(path);
-        self.visited += 1;
-        if self.visited > self.context.limits.entries {
-            return self.limit(Limit::Entries);
-        }
         if let Some(reason) = self.context.by_path(path) {
             return self.held_back(path, reason);
         }
@@ -477,6 +474,17 @@ impl Walker<'_, '_, '_> {
             return Resolved::held_back();
         };
         let observed = Observed::from_metadata(&metadata, self.context.readers, mount_root);
+        let removable = self.removable_from(listed, observed.owner);
+        // An entry the remover may not remove, whatever else it is, never
+        // spends the budget: another user could fill a shared directory
+        // (`/tmp`, `/var/crash`) until none of the remover's own entries is
+        // offered. It costs a reading, never a place in the report.
+        if removable && !self.context.refuses_owner(observed.kind, observed.owner) {
+            self.visited += 1;
+            if self.visited > self.context.limits.entries {
+                return self.limit(Limit::Entries);
+            }
+        }
         let accepted = match self.context.by_status(&observed, self.device, None) {
             Ok(accepted) => accepted,
             Err(reason) => return self.held_back(path, reason),
@@ -486,7 +494,7 @@ impl Walker<'_, '_, '_> {
         if let Some(reason) = by_name(path, is_directory, top_level) {
             return self.held_back(path, reason);
         }
-        if !self.removable_from(listed, observed.owner) {
+        if !removable {
             return self.held_back(path, HoldBack::NotOwned);
         }
         if !is_directory {

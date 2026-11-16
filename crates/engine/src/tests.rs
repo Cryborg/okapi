@@ -1299,6 +1299,68 @@ fn a_nested_root_keeps_its_entries_in_either_order() {
     }
 }
 
+/// Scans `rule` with room for one entry only, and checks that it held
+/// `mine`, the limit never reached.
+fn one_entry_is_enough(fixture: &Fixture, rule: &CleanTarget, options: ScanOptions, mine: &Path) {
+    let mut run = Run::new(fixture, vec![RuleEntry::Target(rule)]);
+    run.options = options;
+    run.limits = Limits {
+        depth: 8,
+        entries: 1,
+    };
+    let report = run.scan();
+    assert_eq!(offered_paths(&report), [mine]);
+    assert!(
+        !report
+            .issues()
+            .iter()
+            .any(|issue| matches!(issue, ScanIssue::LimitReached { .. })),
+        "{:?}",
+        report.issues()
+    );
+}
+
+#[test]
+fn another_users_entries_never_spend_the_budget() {
+    let fixture = Fixture::new();
+    let root = fixture.directory("tmp");
+    for name in ["one", "two", "three"] {
+        let theirs = fixture.file(&format!("tmp/{name}"), 1, 2 * HOUR);
+        mark(&theirs, FOREIGN_MARK);
+    }
+    let mine = fixture.file("tmp/mine", 1, 2 * HOUR);
+    mark(&root, STICKY_MARK);
+    let options = fixture.options(Exclusions::none());
+    one_entry_is_enough(&fixture, &target_at(&root), options, &mine);
+}
+
+#[test]
+fn directories_root_may_not_enter_never_spend_its_budget() {
+    let fixture = Fixture::new();
+    let root = fixture.directory("crash");
+    for name in ["one", "two", "three"] {
+        fixture.file(&format!("crash/{name}/a"), 1, 2 * HOUR);
+        mark(&fixture.path(&format!("crash/{name}")), FOREIGN_MARK);
+    }
+    let mine = fixture.file("crash/mine", 1, 2 * HOUR);
+    mark(&root, STICKY_MARK);
+    let options = fixture.options(Exclusions::none());
+    one_entry_is_enough(&fixture, &admin_target_at(&root), options, &mine);
+}
+
+#[test]
+fn excluded_entries_never_spend_the_budget() {
+    let fixture = Fixture::new();
+    let root = fixture.directory("data");
+    let excluded: Vec<_> = ["one", "two", "three"]
+        .into_iter()
+        .map(|name| fixture.file(&format!("data/{name}"), 1, 2 * HOUR))
+        .collect();
+    let mine = fixture.file("data/mine", 1, 2 * HOUR);
+    let options = fixture.options(Exclusions::new(excluded).unwrap());
+    one_entry_is_enough(&fixture, &target_at(&root), options, &mine);
+}
+
 #[test]
 fn the_depth_limit_counts_levels_below_the_root() {
     let fixture = Fixture::new();

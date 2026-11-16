@@ -46,9 +46,11 @@ impl UsageScan {
     /// # Errors
     ///
     /// [`FilesError::NotRead`] when the analysis did not read `of`,
-    /// [`FilesError::Changed`] when it is no longer, from the root and never
-    /// through a link, the directory it read; the system's error when it
-    /// cannot be opened or listed.
+    /// [`FilesError::Changed`] when it is no longer, reached from the
+    /// filesystem root without a link, the directory it read,
+    /// [`FilesError::Gone`] when it, or a folder above it, was removed since;
+    /// the system's error when it, or a folder above it, cannot be opened, or
+    /// it cannot be listed.
     pub fn files(&self, of: NodeId) -> Result<(Vec<FileEntry>, usize), FilesError> {
         let path = self.path(of).unwrap_or_default();
         let span = tracing::debug_span!(parent: self.span(), "files", path = %path.display());

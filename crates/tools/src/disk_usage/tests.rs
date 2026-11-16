@@ -667,6 +667,69 @@ fn a_folder_whose_parent_was_replaced_is_not_listed() {
 }
 
 #[test]
+fn a_folder_whose_parent_was_removed_is_said_gone() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    file(&root.join("a/b/f"), 1);
+    let scan = analyzed(root, 1);
+    let b = find(&scan, &["a", "b"]);
+    fs::remove_dir_all(root.join("a")).unwrap();
+    assert!(matches!(scan.files(b.id), Err(FilesError::Gone)));
+}
+
+#[test]
+fn a_root_removed_since_the_analysis_is_said_gone() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("root");
+    file(&root.join("sub/f"), 1);
+    let scan = analyzed(&root, 1);
+    let sub = find(&scan, &["sub"]);
+    fs::remove_dir_all(&root).unwrap();
+    assert!(matches!(scan.files(NodeId::ROOT), Err(FilesError::Gone)));
+    assert!(matches!(scan.files(sub.id), Err(FilesError::Gone)));
+}
+
+#[test]
+fn a_root_reached_through_a_link_since_the_analysis_is_not_listed() {
+    let temporary = tempfile::tempdir().unwrap();
+    let base = temporary.path().join("base");
+    let root = base.join("root");
+    file(&root.join("sub/f"), 1);
+    let scan = analyzed(&root, 1);
+    let sub = find(&scan, &["sub"]);
+    assert!(scan.files(sub.id).is_ok(), "read again before");
+    // The very root, its parent moved and its old path now a link to it.
+    fs::rename(&base, temporary.path().join("moved")).unwrap();
+    symlink(temporary.path().join("moved"), &base).unwrap();
+    assert!(matches!(scan.files(NodeId::ROOT), Err(FilesError::Changed)));
+    assert!(matches!(scan.files(sub.id), Err(FilesError::Changed)));
+}
+
+#[test]
+fn a_folder_the_system_refuses_on_the_way_is_a_refusal() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    file(&root.join("a/b/f"), 1);
+    let scan = analyzed(root, 1);
+    let b = find(&scan, &["a", "b"]);
+    let closed = root.join("a");
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).unwrap();
+    let files = scan.files(b.id);
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o700)).unwrap();
+    if files.is_ok() {
+        eprintln!("skipped: root reads every folder");
+        return;
+    }
+    assert!(
+        matches!(
+            files,
+            Err(FilesError::Io(ref error)) if error.kind() == std::io::ErrorKind::PermissionDenied
+        ),
+        "{files:?}"
+    );
+}
+
+#[test]
 fn the_files_of_a_folder_are_read_again_largest_first() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path();

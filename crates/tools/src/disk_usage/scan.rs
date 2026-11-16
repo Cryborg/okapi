@@ -4,7 +4,7 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::num::NonZeroUsize;
 use std::panic::AssertUnwindSafe;
@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
-use okapi_platform::{Directory, EntryStatus, EntryType, FileIdentity};
+use okapi_platform::{Directory, EntryStatus, EntryType, FileIdentity, Unreached, reach_with};
 
 use super::tree::{Child, NodeId, NodeState, Size, Tree, View};
 use crate::mounts::mounts_below;
@@ -341,26 +341,27 @@ impl UsageScan {
         Some(path)
     }
 
-    /// Opens the directory `of` again, read by the analysis, from the root,
-    /// name by name, never through a link: each must still be the directory
-    /// the analysis read there, none below the root a mount point.
+    /// Opens the directory `of` again, read by the analysis, from the
+    /// filesystem root, name by name, never through a link ([`reach_with`]):
+    /// the root and each directory below it must still be the one the
+    /// analysis read there, none below the root a mount point;
+    /// [`FilesError::Gone`] when one is gone.
     pub(crate) fn open(&self, of: NodeId) -> Result<Directory, FilesError> {
         let lineage = lock(&self.shared.tree)
             .read_lineage(of)
             .ok_or(FilesError::NotRead)?;
-        let mut directory = Directory::open(&self.root).map_err(opened_again)?;
-        if !still_listed(&directory.status()?, self.root_identity, true) {
-            tracing::debug!(root = %self.root.display(), "the folder analyzed changed");
-            return Err(FilesError::Changed);
+        let names: Vec<&OsStr> = lineage.iter().map(|(name, _)| name.as_os_str()).collect();
+        let listed = |index: usize, status: &EntryStatus| {
+            lineage
+                .get(index)
+                .is_some_and(|&(_, expected)| still_listed(status, expected))
+        };
+        match reach_with(&self.root, self.root_identity, &names, listed) {
+            Ok(Some(reached)) => Ok(reached.directory),
+            Ok(None) => Err(FilesError::Gone),
+            Err(Unreached::Changed) => Err(FilesError::Changed),
+            Err(Unreached::Io(error)) => Err(FilesError::Io(error)),
         }
-        for (name, expected) in lineage {
-            directory = directory.open_child(&name).map_err(opened_again)?;
-            if !still_listed(&directory.status()?, expected, false) {
-                tracing::debug!(name = ?name, "a folder on the way changed");
-                return Err(FilesError::Changed);
-            }
-        }
-        Ok(directory)
     }
 
     /// Whether `path` is a mount point below the root, read at the start.
@@ -538,22 +539,11 @@ impl From<io::Error> for Failure {
     }
 }
 
-/// What opening a directory of the analysis again failed for: one no
-/// longer a directory (replaced by a file or a link) changed, as in the
-/// analysis.
-fn opened_again(error: io::Error) -> FilesError {
-    match error.kind() {
-        io::ErrorKind::NotADirectory => FilesError::Changed,
-        io::ErrorKind::NotFound => FilesError::Gone,
-        _ => FilesError::Io(error),
-    }
-}
-
-/// Whether a directory opened again, read as `status`, is still the one
-/// listed as `expected`; below the root, never a mount point (the root may
-/// be one, as `/` is).
-fn still_listed(status: &EntryStatus, expected: FileIdentity, root: bool) -> bool {
-    status.identity == expected && (root || status.mount_root != Some(true))
+/// Whether a directory below the root, read again as `status`, is still the
+/// one listed as `expected`, and no mount point (the root may be one, as `/`
+/// is: [`reach_with`] judges it by its identity alone).
+fn still_listed(status: &EntryStatus, expected: FileIdentity) -> bool {
+    status.identity == expected && status.mount_root != Some(true)
 }
 
 /// Opens the task's directory, checked to be the one listed, and reads it.
@@ -570,7 +560,7 @@ fn open(source: Source) -> Result<(Directory, EntryStatus), Failure> {
         } => (parent.open_child(&name)?, expected),
     };
     let status = directory.status()?;
-    if !still_listed(&status, expected, false) {
+    if !still_listed(&status, expected) {
         return Err(Failure::Changed);
     }
     Ok((directory, status))
@@ -884,7 +874,7 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_opened_again_is_the_one_listed_and_only_the_root_a_mount() {
+    fn a_folder_opened_again_is_the_one_listed_and_no_mount() {
         let listed = FileIdentity::new(1, 1);
         let status = |identity, mount_root| EntryStatus {
             kind: EntryType::Directory,
@@ -900,16 +890,11 @@ mod tests {
             locked: false,
             mount_root,
         };
-        assert!(still_listed(&status(listed, Some(false)), listed, false));
-        assert!(!still_listed(&status(listed, Some(true)), listed, false));
-        assert!(
-            still_listed(&status(listed, Some(true)), listed, true),
-            "/ is a mount"
-        );
+        assert!(still_listed(&status(listed, Some(false)), listed));
+        assert!(!still_listed(&status(listed, Some(true)), listed));
         assert!(!still_listed(
             &status(FileIdentity::new(1, 2), Some(false)),
-            listed,
-            true
+            listed
         ));
     }
 }

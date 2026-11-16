@@ -969,6 +969,18 @@ fn apps_leftovers(app: &ui::AppWindow, empty: bool) {
             false,
         ),
     ])));
+    leftovers.set_copies(ModelRc::new(VecModel::from(vec![ui::CopyLine {
+        name: "Firefox".into(),
+        made: ui::Moment {
+            day: ui::DayKind::Other,
+            day_of_month: 17,
+            month: 10,
+            year: 0,
+            hour: 18,
+            minute: 39,
+        },
+        size: size(669, 0, ui::SizeUnit::Megabyte),
+    }])));
     leftovers.set_total(size(1, 8, ui::SizeUnit::Gigabyte));
     leftovers.set_has_total(true);
     leftovers.set_checked_count(1);

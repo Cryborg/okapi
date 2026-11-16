@@ -2,8 +2,12 @@
 //! (`okapi_tools::apps::leftovers`): analysed on a thread of its own each
 //! time the list is read, never replaced under what the user checked or
 //! confirms; its folders moved to the trash on a thread by identifiers of
-//! the report shown only (invariants 1 and 7). And what Okapi remembers of
-//! the applications it saw, written after a whole reading.
+//! the report shown only (invariants 1 and 7). The copies snapd keeps of
+//! snaps removed, read with them, each forgotten by snapd once confirmed
+//! (`copies`). And what Okapi remembers of the applications it saw, written
+//! after a whole reading.
+
+mod copies;
 
 use std::collections::BTreeSet;
 use std::io;
@@ -17,6 +21,7 @@ use okapi_tools::apps::Source;
 use okapi_tools::apps::leftovers::{
     KeepReason, Leftover, LeftoverId, LeftoverKind, LeftoverReport, TrashReceipt, TrashResult,
 };
+use okapi_tools::apps::snapshots::{Copies, CopyId, CopyReport, Forgot};
 use slint::{ComponentHandle as _, ModelRc, VecModel};
 
 use super::{AppsScreen, source_key};
@@ -31,6 +36,9 @@ pub struct Analysis {
     /// Packages removed whose settings stay; `None` when dpkg was unread.
     pub residual: Option<usize>,
     pub seen: SeenApps,
+    /// snapd's copies of snaps no longer installed, read whatever blocks
+    /// the leftovers.
+    pub copies: Copies,
 }
 
 /// Why no leftover could be looked for.
@@ -52,6 +60,8 @@ pub type MoveToTrash = Arc<
 >;
 /// Keeps the applications seen installed.
 pub type Remember = Arc<dyn Fn(Vec<SeenApp>) + Send + Sync>;
+/// Asks snapd to forget a copy of a report.
+pub type Forget = Arc<dyn Fn(&CopyReport, CopyId) -> Forgot + Send + Sync>;
 
 /// What the tab asks of the machine: the system's, or a test's.
 #[derive(Clone)]
@@ -59,6 +69,7 @@ pub struct LeftoverSeams {
     pub analyse: Analyse,
     pub trash: MoveToTrash,
     pub remember: Remember,
+    pub forget: Forget,
 }
 
 impl std::fmt::Debug for LeftoverSeams {
@@ -126,16 +137,17 @@ pub(super) struct LeftoversState {
     /// An analysis asked while one could not start: made once free.
     again: bool,
     model: Rc<VecModel<ui::LeftoverLine>>,
+    copies: copies::CopiesState,
 }
 
 impl LeftoversState {
     /// Whether a new report would come under the user's hand.
     fn held(&self) -> bool {
-        self.busy() || self.confirming || !self.checked.is_empty()
+        self.busy() || self.confirming || !self.checked.is_empty() || self.copies.asked.is_some()
     }
 
     pub(super) const fn busy(&self) -> bool {
-        self.analysing.is_some() || self.moving.is_some()
+        self.analysing.is_some() || self.moving.is_some() || self.copies.forgetting.is_some()
     }
 }
 
@@ -143,6 +155,9 @@ impl AppsScreen {
     pub(super) fn attach_leftovers(&self, window: &ui::AppWindow) {
         let leftovers = window.global::<ui::Leftovers>();
         leftovers.set_lines(ModelRc::from(Rc::clone(&self.0.borrow().leftovers.model)));
+        leftovers.set_copies(ModelRc::from(Rc::clone(
+            &self.0.borrow().leftovers.copies.model,
+        )));
         let weak = Rc::downgrade(&self.0);
         let on = move |action: fn(&Self)| {
             let weak = weak.clone();
@@ -156,6 +171,18 @@ impl AppsScreen {
         leftovers.on_cancel(on(Self::cancel_trash));
         leftovers.on_confirm(on(Self::confirm_trash));
         leftovers.on_close_receipt(on(Self::close_receipt));
+        leftovers.on_confirm_forget(on(Self::confirm_forget));
+        leftovers.on_cancel_forget(on(Self::cancel_forget));
+        leftovers.on_close_forgot(on(Self::close_forgot));
+        let weak = Rc::downgrade(&self.0);
+        leftovers.on_forget(move |index| {
+            let Some(state) = weak.upgrade() else { return };
+            if let Ok(index) = usize::try_from(index) {
+                Self(state).ask_forget(index);
+            } else {
+                tracing::warn!(index, "a copy out of the list refused");
+            }
+        });
         let weak = Rc::downgrade(&self.0);
         leftovers.on_toggle(move |index| {
             let Some(state) = weak.upgrade() else { return };
@@ -263,6 +290,7 @@ impl AppsScreen {
             }
             Some(Err(TryRecvError::Empty)) | None => {}
         }
+        self.take_forgotten();
         let again = {
             let state = self.0.borrow();
             state.leftovers.again && !state.leftovers.held()
@@ -282,6 +310,7 @@ impl AppsScreen {
             leftovers.checked.clear();
             leftovers.residual = analysis.residual;
             leftovers.seen = analysis.seen;
+            leftovers.copies.analysed(analysis.copies);
             match analysis.report {
                 Ok(report) => {
                     tracing::info!(found = report.leftovers().len(), "leftovers shown");
@@ -331,8 +360,8 @@ impl AppsScreen {
             let leftovers = &mut state.leftovers;
             if leftovers.checked.is_empty() {
                 tracing::warn!("a move to the trash with nothing checked refused");
-            } else if leftovers.busy() {
-                tracing::warn!("a move to the trash while the leftovers are read or moved refused");
+            } else if leftovers.busy() || leftovers.copies.asked.is_some() {
+                tracing::warn!("a move to the trash while another action runs refused");
             } else {
                 leftovers.confirming = true;
             }
@@ -462,15 +491,11 @@ impl AppsScreen {
                     LeftoverKind::Snap => (Source::Snap, ui::AppSource::Snap),
                     LeftoverKind::Flatpak => (Source::Flatpak, ui::AppSource::Flatpak),
                 };
-                let seen = tab.seen.find(source_key(source), leftover.name());
+                let (name, known) = shown_name(&tab.seen, source, leftover.name());
                 ui::LeftoverLine {
                     source: shown_source,
-                    name: seen
-                        .map(|seen| seen.shown.as_str())
-                        .filter(|shown| !shown.is_empty())
-                        .unwrap_or(leftover.name())
-                        .into(),
-                    known: seen.is_some(),
+                    name: name.into(),
+                    known,
                     path: from_home(leftover.path(), home.as_deref()).into(),
                     size: size(leftover.bytes().unwrap_or(0)),
                     checkable: leftover.checkable(),
@@ -517,12 +542,23 @@ impl AppsScreen {
         leftovers.set_analysing(tab.analysing.is_some());
         leftovers.set_trashing(tab.moving.is_some());
         leftovers.set_confirming(tab.confirming);
+        tab.copies.show(
+            &leftovers,
+            &tab.seen,
+            (state.seams.now)(),
+            &state.seams.zone,
+        );
+        leftovers.set_busy(tab.busy());
     }
 
     /// The window closes: a move of leftovers is waited for a little (each
     /// folder is one rename; a cut one leaves at most a `.trashinfo`
-    /// without its folder, or a folder in the trash not read again).
+    /// without its folder, or a folder in the trash not read again); a copy
+    /// being forgotten is left to snapd, traced.
     pub(super) fn wait_for_leftovers(&self) {
+        if self.0.borrow().leftovers.copies.forgetting.is_some() {
+            tracing::warn!("a copy of snapd being forgotten left at closing: snapd ends it");
+        }
         let Some(moving) = self.0.borrow_mut().leftovers.moving.take() else {
             return;
         };
@@ -555,6 +591,17 @@ impl AppsScreen {
     }
 }
 
+/// The name a snap or flatpak `name` of `source` is shown by: the one Okapi
+/// saw it installed with, else its own; and whether Okapi saw it.
+fn shown_name(seen: &SeenApps, source: Source, name: &str) -> (String, bool) {
+    let card = seen.find(source_key(source), name);
+    let shown = card
+        .map(|card| card.shown.as_str())
+        .filter(|shown| !shown.is_empty())
+        .unwrap_or(name);
+    (shown.to_owned(), card.is_some())
+}
+
 #[cfg(target_os = "linux")]
 mod system {
     //! The system's analysis, trash and memory.
@@ -568,6 +615,8 @@ mod system {
     use okapi_tools::apps::leftovers::{
         self, InstalledPlaces, LeftoverId, LeftoverReport, MOST_ENTRIES, Places, TrashReceipt,
     };
+    use okapi_tools::apps::snapshots::{self, CopyId, CopyReport, FORGET_WAIT, Forgot};
+    use okapi_tools::packages::snapd::Snapd;
 
     use super::{Analysis, Blocked};
 
@@ -627,6 +676,10 @@ mod system {
     }
 
     pub(crate) fn analyse(exclusions: Result<Vec<PathBuf>, Blocked>) -> Analysis {
+        // Read once, whatever blocks the leftovers: snapd's copies need no
+        // setting nor variable.
+        let snaps = leftovers::installed::snaps_now(Path::new(leftovers::installed::SNAP_FILES));
+        let copies = snapshots::find(Snapd::system().snapshots(), &snaps);
         let report = (|| {
             let exclusions = Exclusions::new(exclusions?).map_err(|error| {
                 tracing::warn!(?error, "an exclusion refused: no leftover proposed");
@@ -645,7 +698,7 @@ mod system {
                 tracing::warn!("the user unknown: no leftover proposed");
                 return Err(Blocked::Variables);
             };
-            let installed = leftovers::installed::installed_now(&installed_places);
+            let installed = leftovers::installed::installed_with(&installed_places, snaps);
             let places = Places {
                 home: home.to_path_buf(),
                 user,
@@ -662,7 +715,12 @@ mod system {
             report,
             residual: residual(),
             seen: seen(),
+            copies,
         }
+    }
+
+    pub(crate) fn forget(report: &CopyReport, id: CopyId) -> Forgot {
+        snapshots::forget(report, id, &Snapd::system(), FORGET_WAIT)
     }
 
     pub(crate) fn trash(
@@ -724,6 +782,7 @@ impl LeftoverSeams {
             analyse: Arc::new(system::analyse),
             trash: Arc::new(system::trash),
             remember: Arc::new(system::remember),
+            forget: Arc::new(system::forget),
         }
     }
 
@@ -735,9 +794,11 @@ impl LeftoverSeams {
                 report: Err(Blocked::Variables),
                 residual: None,
                 seen: SeenApps::default(),
+                copies: Copies::None,
             }),
             trash: Arc::new(|_, _, _| Err(io::Error::from(io::ErrorKind::Unsupported))),
             remember: Arc::new(|_| {}),
+            forget: Arc::new(|_, _| Forgot::Failed(okapi_tools::apps::uninstall::Why::Absent)),
         }
     }
 }

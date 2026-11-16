@@ -885,6 +885,8 @@ mod tests {
         "Tab",
         "LeftoverRow",
         "LeftoverLines",
+        "CopyRow",
+        "ForgetConfirm",
         "LeftoversView",
         "LeftoversConfirm",
         "DuplicateWords",

@@ -49,9 +49,11 @@ pub(crate) fn inert() -> LeftoverSeams {
             )),
             residual: None,
             seen: SeenApps::default(),
+            copies: Copies::None,
         }),
         trash: Arc::new(|_, _, _| Err(io::Error::other("inert"))),
         remember: Arc::new(|_| {}),
+        forget: Arc::new(|_, _| Forgot::Gone),
     }
 }
 
@@ -117,6 +119,7 @@ fn seams_of(
             }),
             residual: Some(3),
             seen: seen.clone(),
+            copies: Copies::None,
         }),
         trash: Arc::new(move |report: &LeftoverReport, ids, _| {
             let bin = okapi_platform::Trash::in_folder(&moved.data)?;
@@ -133,6 +136,7 @@ fn seams_of(
             ))
         }),
         remember: Arc::new(move |seen| remembered.lock().unwrap().push(seen)),
+        forget: Arc::new(|_, _| Forgot::Gone),
     }
 }
 
@@ -701,6 +705,7 @@ fn a_leftover_too_large_to_be_checked_is_never_ticked() {
             )),
             residual: None,
             seen: SeenApps::default(),
+            copies: Copies::None,
         }),
         ..base
     };
@@ -708,4 +713,233 @@ fn a_leftover_too_large_to_be_checked_is_never_ticked() {
     assert!(!tab(&window).get_lines().row_data(0).unwrap().checkable);
     tab(&window).invoke_toggle(0);
     assert_eq!(tab(&window).get_checked_count(), 0);
+}
+
+/// snapd's answer listing firefox's and nordvpn's automatic copies.
+const FIREFOX_COPY: &str = r#"[{"id":1,"snapshots":[{"set":1,"time":"2026-10-17T18:39:44+02:00","snap":"firefox","revision":"1","snap-id":"x","epoch":{"read":[0]},"summary":"","version":"1","sha3-384":{},"size":668852084,"auto":true}]},{"id":3,"snapshots":[{"set":3,"time":"2026-10-17T21:48:00+02:00","snap":"nordvpn","revision":"81","snap-id":"y","epoch":{"read":[0]},"summary":"","version":"5","sha3-384":{},"size":654252,"auto":true}]}]"#;
+
+/// What snapd keeps: firefox's and nordvpn's copies, none of their snaps
+/// installed.
+fn firefox_copy() -> Copies {
+    okapi_tools::apps::snapshots::find(Ok(serde_json::from_str(FIREFOX_COPY).unwrap()), &read(&[]))
+}
+
+/// `seams` whose analyses also give `copies` (made again each time), and
+/// whose forgetting tells the snap asked for, then says `forgot`.
+fn with_copies(
+    seams: LeftoverSeams,
+    copies: fn() -> Copies,
+    forgot: Forgot,
+) -> (LeftoverSeams, Arc<Mutex<Vec<String>>>) {
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let told = Arc::clone(&asked);
+    let analyse = Arc::clone(&seams.analyse);
+    let seams = LeftoverSeams {
+        analyse: Arc::new(move |exclusions| Analysis {
+            copies: copies(),
+            ..analyse(exclusions)
+        }),
+        forget: Arc::new(move |report, id| {
+            let snap = report
+                .find(id)
+                .map_or_else(String::new, |copy| copy.snap().to_owned());
+            told.lock().unwrap().push(snap);
+            forgot.clone()
+        }),
+        ..seams
+    };
+    (seams, asked)
+}
+
+#[test]
+fn snapd_s_copies_are_shown_named_never_under_nothing_found() {
+    // Catches a copy hidden under « nothing found », and the name Okapi saw
+    // the snap by lost.
+    let mut seen = SeenApps::default();
+    seen.remember([SeenApp {
+        source: "snap".to_owned(),
+        id: "firefox".to_owned(),
+        shown: "Firefox".to_owned(),
+        names: vec!["firefox".to_owned()],
+        day: 1,
+    }]);
+    let base = LeftoverSeams {
+        analyse: Arc::new(move |exclusions| Analysis {
+            seen: seen.clone(),
+            ..(inert().analyse)(exclusions)
+        }),
+        ..inert()
+    };
+    let (seams, _) = with_copies(base, firefox_copy, Forgot::Gone);
+    let (window, _) = on_page(seams, crate::apps::tests::arrivals, settings(true));
+    window.global::<ui::Apps>().set_tab(ui::AppsTab::Leftovers);
+    let copies = tab(&window).get_copies();
+    assert_eq!(copies.row_count(), 2);
+    let line = copies.row_data(0).unwrap();
+    assert_eq!(line.name, "Firefox");
+    assert!(line.size.whole > 0);
+    assert_eq!(
+        (line.made.day_of_month, line.made.month, line.made.hour),
+        (17, 10, 16),
+        "dated in the seams' zone"
+    );
+    assert_eq!(copies.row_data(1).unwrap().name, "nordvpn");
+    assert!(
+        !shows(&window, "Aucun reste trouvé"),
+        "a copy is no nothing"
+    );
+    assert!(!tab(&window).get_copies_unread());
+}
+
+#[test]
+fn snapd_s_copies_unread_are_said_never_taken_for_none() {
+    let (seams, _) = with_copies(
+        inert(),
+        || Copies::Unread("silent".to_owned()),
+        Forgot::Gone,
+    );
+    let (window, _) = on_page(seams, crate::apps::tests::arrivals, settings(true));
+    window.global::<ui::Apps>().set_tab(ui::AppsTab::Leftovers);
+    assert!(tab(&window).get_copies_unread());
+    assert_eq!(tab(&window).get_copies().row_count(), 0);
+    assert!(
+        !shows(&window, "Aucun reste trouvé"),
+        "not read is no nothing"
+    );
+}
+
+#[test]
+fn without_snapd_nothing_is_said_of_its_copies() {
+    let (window, _) = on_page(inert(), crate::apps::tests::arrivals, settings(true));
+    window.global::<ui::Apps>().set_tab(ui::AppsTab::Leftovers);
+    assert!(
+        !tab(&window).get_copies_unread(),
+        "no snapd: nothing to say"
+    );
+    assert!(shows(&window, "Aucun reste trouvé"));
+}
+
+#[test]
+fn a_copy_is_forgotten_only_once_confirmed_by_its_identifier_then_told_and_read_again() {
+    // Catches a copy forgotten without the yes, another copy asked for,
+    // the outcome unsaid, and the tab not read again.
+    let (seams, asked) = with_copies(inert(), firefox_copy, Forgot::Forgotten);
+    let analyses = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&analyses);
+    let analyse = Arc::clone(&seams.analyse);
+    let seams = LeftoverSeams {
+        analyse: Arc::new(move |exclusions| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            analyse(exclusions)
+        }),
+        ..seams
+    };
+    let (window, _) = on_page(seams, crate::apps::tests::arrivals, settings(true));
+    tab(&window).invoke_forget(1);
+    assert!(tab(&window).get_forget_asking());
+    assert_eq!(tab(&window).get_forget_name(), "nordvpn");
+    assert!(asked.lock().unwrap().is_empty(), "not before the yes");
+    tab(&window).invoke_cancel_forget();
+    assert!(!tab(&window).get_forget_asking());
+    tab(&window).invoke_forget(1);
+    let before = analyses.load(Ordering::SeqCst);
+    tab(&window).invoke_confirm_forget();
+    read_until(&window, |window| {
+        tab(window).get_forgot() != ui::ForgetOutcome::None
+    });
+    assert_eq!(
+        *asked.lock().unwrap(),
+        ["nordvpn"],
+        "the copy shown, no other"
+    );
+    assert_eq!(tab(&window).get_forgot(), ui::ForgetOutcome::Forgotten);
+    assert_eq!(tab(&window).get_forgot_name(), "nordvpn");
+    analysed(&window);
+    assert!(analyses.load(Ordering::SeqCst) > before, "read again");
+    tab(&window).invoke_close_forgot();
+    assert_eq!(tab(&window).get_forgot(), ui::ForgetOutcome::None);
+}
+
+/// firefox's and nordvpn's copies, in the other order from the second
+/// reading on: a rank shown before is another copy after.
+fn copies_reordered() -> Copies {
+    static READINGS: AtomicUsize = AtomicUsize::new(0);
+    let listed: serde_json::Value = serde_json::from_str(FIREFOX_COPY).unwrap();
+    let mut sets = listed.as_array().unwrap().clone();
+    if READINGS.fetch_add(1, Ordering::SeqCst) > 0 {
+        sets.reverse();
+    }
+    okapi_tools::apps::snapshots::find(Ok(serde_json::Value::Array(sets)), &read(&[]))
+}
+
+#[test]
+fn the_copy_forgotten_is_the_one_the_window_names_whatever_is_read_meanwhile() {
+    // Catches the copy asked kept by its rank: a reading come between the
+    // question and the yes would forget another one.
+    let (seams, asked) = with_copies(inert(), copies_reordered, Forgot::Forgotten);
+    let (window, screen) = on_page(seams, crate::apps::tests::arrivals, settings(true));
+    tab(&window).invoke_forget(1);
+    assert_eq!(tab(&window).get_forget_name(), "nordvpn");
+    screen.analyse_leftovers();
+    analysed(&window);
+    tab(&window).invoke_confirm_forget();
+    read_until(&window, |window| {
+        tab(window).get_forgot() != ui::ForgetOutcome::None
+    });
+    assert_eq!(*asked.lock().unwrap(), ["nordvpn"]);
+}
+
+#[test]
+fn nothing_else_runs_while_a_copy_is_forgotten_nor_over_boxes_checked() {
+    // Catches a box ticked or a second copy asked while snapd forgets one
+    // (polkit may wait a long while), and a copy asked over boxes checked,
+    // which would hold back the reading that follows.
+    let sandbox = sandbox();
+    let (gate, waiting) = mpsc::channel::<()>();
+    let waiting = Mutex::new(waiting);
+    let (seams, _) = with_copies(
+        seams_of(
+            &sandbox,
+            read(&["firefox"]),
+            SeenApps::default(),
+            Arc::default(),
+        ),
+        firefox_copy,
+        Forgot::Forgotten,
+    );
+    let forget = Arc::clone(&seams.forget);
+    let seams = LeftoverSeams {
+        forget: Arc::new(move |report, id| {
+            let _ = waiting.lock().unwrap().recv();
+            forget(report, id)
+        }),
+        ..seams
+    };
+    let (window, _) = on_page(seams, crate::apps::tests::arrivals, settings(true));
+    tab(&window).invoke_toggle(0);
+    tab(&window).invoke_forget(0);
+    assert!(!tab(&window).get_forget_asking(), "boxes checked");
+    tab(&window).invoke_toggle(0);
+    tab(&window).invoke_forget(0);
+    tab(&window).invoke_confirm_forget();
+    assert!(tab(&window).get_forgetting());
+    assert!(tab(&window).get_busy());
+    tab(&window).invoke_toggle(0);
+    assert_eq!(tab(&window).get_checked_count(), 0);
+    tab(&window).invoke_forget(0);
+    assert!(!tab(&window).get_forget_asking());
+    gate.send(()).unwrap();
+    read_until(&window, |window| !tab(window).get_forgetting());
+}
+
+#[test]
+fn snapd_s_copies_stay_shown_when_the_settings_block_the_leftovers() {
+    let (seams, _) = with_copies(
+        seams_of(&sandbox(), read(&[]), SeenApps::default(), Arc::default()),
+        firefox_copy,
+        Forgot::Gone,
+    );
+    let (window, _) = on_page(seams, crate::apps::tests::arrivals, settings(false));
+    assert_eq!(tab(&window).get_blocked(), ui::LeftoversBlock::Settings);
+    assert_eq!(tab(&window).get_copies().row_count(), 2);
 }

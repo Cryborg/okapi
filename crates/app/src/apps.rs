@@ -58,6 +58,8 @@ pub struct AppsSeams {
     pub leftovers: leftovers::LeftoverSeams,
     /// The home folder, as a leftover's path is shown under it.
     pub home: Option<PathBuf>,
+    /// Where a copy's date is said.
+    pub zone: jiff::tz::TimeZone,
 }
 
 /// How the applications seen name `source`: written and read by this key.
@@ -114,6 +116,7 @@ impl AppsSeams {
             now: Timestamp::now,
             leftovers: leftovers::LeftoverSeams::system(),
             home,
+            zone: crate::dashboard::system_zone(),
         }
     }
 }

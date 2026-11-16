@@ -29,6 +29,7 @@ pub(crate) fn inert() -> AppsSeams {
         now: Timestamp::now,
         leftovers: super::leftovers::tests::inert(),
         home: None,
+        zone: jiff::tz::TimeZone::UTC,
     }
 }
 
@@ -251,6 +252,7 @@ fn on_apps_reading(
             now: Timestamp::now,
             leftovers: super::leftovers::tests::inert(),
             home: None,
+            zone: jiff::tz::TimeZone::UTC,
         },
         ..seams_never_scanning()
     };

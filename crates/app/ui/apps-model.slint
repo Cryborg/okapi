@@ -1,5 +1,6 @@
 // What the applications screen shows, filled by Rust (`apps.rs`).
 import { Size } from "cleaner-model.slint";
+import { Moment } from "dashboard-model.slint";
 
 export enum AppSource { deb, snap, flatpak }
 
@@ -91,6 +92,30 @@ export struct LeftoverLine {
     checked: bool,
 }
 
+// A copy snapd made by itself of the data of a snap no longer installed.
+export struct CopyLine {
+    // The snap's name as Okapi saw it installed, else its own.
+    name: string,
+    made: Moment,
+    size: Size,
+}
+
+// What became of the last copy asked to be forgotten.
+export enum ForgetOutcome {
+    none,
+    forgotten,
+    // snapd lists it no more: it may have erased it itself.
+    gone,
+    reinstalled,
+    // The rights were not given.
+    refused,
+    // Another operation of snapd holds it.
+    busy,
+    // snapd did not say in time: the list read again tells.
+    unknown,
+    failed,
+}
+
 // Why no leftover is proposed at all.
 export enum LeftoversBlock { none, settings, variables }
 
@@ -116,6 +141,8 @@ export global Leftovers {
     in property <Size> checked-size;
     in property <bool> confirming;
     in property <bool> trashing;
+    // An analysis, a move or a forgetting runs: nothing else starts.
+    in property <bool> busy;
     // What the last move did, until closed.
     in property <bool> receipt;
     // Nothing was moved: the move could not run.
@@ -128,6 +155,24 @@ export global Leftovers {
     // In the trash, not known to be what was checked.
     in property <int> unchecked;
 
+    // snapd's copies of snaps no longer installed, by the rank in its report.
+    in property <[CopyLine]> copies;
+    // They could not be read: none is proposed.
+    in property <bool> copies-unread;
+    // A copy asked to be forgotten, waiting for the yes.
+    in property <bool> forget-asking;
+    in property <string> forget-name;
+    in property <Size> forget-size;
+    in property <bool> forgetting;
+    // What the last forgetting did, until closed.
+    in property <ForgetOutcome> forgot;
+    in property <string> forgot-name;
+    in property <Size> forgot-size;
+
+    callback forget(int);
+    callback confirm-forget();
+    callback cancel-forget();
+    callback close-forgot();
     callback toggle(int);
     callback trash();
     callback confirm();

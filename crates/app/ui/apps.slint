@@ -9,7 +9,8 @@ import {
     Badge, ModalFrame, ProgressBar, Title,
 } from "widgets.slint";
 import { Size, Words } from "cleaner-model.slint";
-import { AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, AppsTab, LeftoverLine, Leftovers, LeftoversBlock, SourceShown, UninstallStep, UninstallWhy } from "apps-model.slint";
+import { DashboardWords } from "dashboard-widgets.slint";
+import { AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, AppsTab, CopyLine, ForgetOutcome, LeftoverLine, Leftovers, LeftoversBlock, SourceShown, UninstallStep, UninstallWhy } from "apps-model.slint";
 
 global AppWords {
     pure public function source(source: AppSource) -> string {
@@ -742,7 +743,7 @@ component LeftoverRow inherits Rectangle {
     property <string> label: line.source == AppSource.snap
         ? (line.known ? @tr("Données de {} (snap désinstallé)", line.name) : @tr("Données de {} (aucun snap de ce nom)", line.name))
         : (line.known ? @tr("Données de {} (flatpak désinstallé)", line.name) : @tr("Données de {} (aucun flatpak de ce nom)", line.name));
-    property <bool> toggles: line.checkable && !Leftovers.analysing && !Leftovers.trashing;
+    property <bool> toggles: line.checkable && !Leftovers.busy;
     // Fixed: the list scrolls to a line by its rank.
     height: Theme.app-row-height;
     accessible-role: list-item;
@@ -801,6 +802,55 @@ component LeftoverRow inherits Rectangle {
             color: Theme.text;
             font-weight: Theme.weight-semibold;
             vertical-alignment: center;
+        }
+    }
+    Rectangle {
+        y: parent.height - self.height;
+        height: Theme.border-width;
+        background: Theme.border;
+    }
+}
+
+// A copy snapd keeps of a snap no longer installed, to forget.
+component CopyRow inherits Rectangle {
+    in property <CopyLine> line;
+    in property <int> index;
+    // Fixed: its list is as high as a few of them.
+    height: Theme.app-row-height;
+    HorizontalLayout {
+        padding-left: Theme.spacing-l;
+        padding-right: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        Icon {
+            source: @image-url("../assets/icons/history.svg");
+            colorize: Theme.text-2;
+            width: Theme.icon;
+            height: Theme.icon;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: @tr("Copie automatique de {}, faite {}", line.name, DashboardWords.moment(line.made));
+            color: Theme.text;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+        Text {
+            text: Words.size(line.size);
+            color: Theme.text;
+            font-weight: Theme.weight-semibold;
+            vertical-alignment: center;
+        }
+        ActionButton {
+            text: @tr("Oublier");
+            kind: ButtonKind.ghost;
+            accessible-label: @tr("Oublier la copie de {}", line.name);
+            // Never while folders are checked: they hold the reading after.
+            enabled: !Leftovers.busy && Leftovers.checked-count == 0;
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                Leftovers.forget(root.index);
+            }
         }
     }
     Rectangle {
@@ -927,9 +977,36 @@ component LeftoversView inherits VerticalLayout {
         text: Leftovers.withheld == 1 ? @tr("Un dossier n'est pas proposé par sécurité : un montage ou des fichiers d'un autre utilisateur, ou une lecture impossible. Le détail est dans le journal.")
             : @tr("{} dossiers ne sont pas proposés par sécurité : un montage ou des fichiers d'un autre utilisateur, ou une lecture impossible. Le détail est dans le journal.", Leftovers.withheld);
     }
+    if Leftovers.copies-unread: Banner {
+        warning: true;
+        text: @tr("Les copies gardées par snapd n'ont pas pu être lues. Le détail est dans le journal.");
+    }
+    if Leftovers.forgot != ForgetOutcome.none: Banner {
+        warning: Leftovers.forgot != ForgetOutcome.forgotten && Leftovers.forgot != ForgetOutcome.gone;
+        text: Leftovers.forgot == ForgetOutcome.forgotten ? @tr("Copie de {} oubliée : {} rendus.", Leftovers.forgot-name, Words.size(Leftovers.forgot-size))
+            : Leftovers.forgot == ForgetOutcome.gone ? @tr("La copie de {} n'est plus là : snapd l'a sans doute déjà effacée.", Leftovers.forgot-name)
+            : Leftovers.forgot == ForgetOutcome.reinstalled ? @tr("{} est de nouveau installé : sa copie est gardée.", Leftovers.forgot-name)
+            : Leftovers.forgot == ForgetOutcome.refused ? @tr("La copie de {} est gardée : les droits n'ont pas été donnés.", Leftovers.forgot-name)
+            : Leftovers.forgot == ForgetOutcome.busy ? @tr("snapd est occupé par une autre opération : la copie de {} est gardée. Réessayez dans un moment.", Leftovers.forgot-name)
+            : Leftovers.forgot == ForgetOutcome.unknown ? @tr("snapd n'a pas dit à temps si la copie de {} est oubliée : la liste relue le montre.", Leftovers.forgot-name)
+            : @tr("La copie de {} n'a pas pu être oubliée. Le détail est dans le journal.", Leftovers.forgot-name);
+        ActionButton {
+            kind: ButtonKind.ghost;
+            icon: @image-url("../assets/icons/x.svg");
+            text: "";
+            accessible-label: @tr("Fermer le message");
+            clicked => {
+                Leftovers.close-forgot();
+            }
+        }
+    }
     if Leftovers.analysing: ProgressBar {
         indeterminate: true;
         label: @tr("Recherche des restes… Rien n'est modifié.");
+    }
+    if Leftovers.forgetting: ProgressBar {
+        indeterminate: true;
+        label: @tr("snapd efface la copie…");
     }
     if Leftovers.trashing: ProgressBar {
         indeterminate: true;
@@ -975,11 +1052,45 @@ component LeftoversView inherits VerticalLayout {
                     ActionButton {
                         text: @tr("Mettre à la corbeille");
                         kind: ButtonKind.danger;
-                        enabled: Leftovers.checked-count > 0 && !Leftovers.trashing && !Leftovers.analysing;
+                        enabled: Leftovers.checked-count > 0 && !Leftovers.busy;
                         clicked => {
                             Leftovers.trash();
                         }
                     }
+                }
+            }
+        }
+    }
+    if Leftovers.copies.length > 0: Card {
+        // Its own height: the folders' list takes what is left.
+        vertical-stretch: 0;
+        VerticalLayout {
+            alignment: start;
+            VerticalLayout {
+                padding: Theme.spacing-l;
+                spacing: Theme.spacing-xs;
+                Text {
+                    text: @tr("Copies automatiques gardées par le système");
+                    color: Theme.text;
+                    font-weight: Theme.weight-semibold;
+                    wrap: word-wrap;
+                }
+                Detail {
+                    text: @tr("Quand on désinstalle un snap, snapd garde une copie de ses données, pour tous les comptes, et l'efface de lui-même après un temps (31 jours, sauf réglage). L'oublier rend la place tout de suite.");
+                    wrap: word-wrap;
+                }
+            }
+            Rectangle {
+                height: Theme.border-width;
+                background: Theme.border;
+            }
+            // A few rows high, scrolled past: many copies never push the
+            // window's minimum.
+            ListView {
+                height: min(Leftovers.copies.length, Theme.copies-shown) * Theme.app-row-height;
+                for line[index] in Leftovers.copies: CopyRow {
+                    line: line;
+                    index: index;
                 }
             }
         }
@@ -1001,7 +1112,7 @@ component LeftoversView inherits VerticalLayout {
             }
         }
     }
-    if Leftovers.searched && !Leftovers.analysing && !Leftovers.snaps-unread && !Leftovers.flatpaks-unread && Leftovers.withheld == 0 && Leftovers.lines.length == 0 && Leftovers.residual == 0: Card {
+    if Leftovers.searched && !Leftovers.analysing && !Leftovers.snaps-unread && !Leftovers.flatpaks-unread && Leftovers.withheld == 0 && Leftovers.lines.length == 0 && Leftovers.residual == 0 && Leftovers.copies.length == 0 && !Leftovers.copies-unread: Card {
         vertical-stretch: 1;
         VerticalLayout {
             alignment: center;
@@ -1062,6 +1173,48 @@ component LeftoversConfirm inherits ModalFrame {
             kind: ButtonKind.danger;
             clicked => {
                 Leftovers.confirm();
+            }
+        }
+    }
+    init => {
+        cancel.focus();
+    }
+}
+
+// Asked before snapd forgets a copy: for every account, for good. Closed by
+// its buttons or Escape, never by a click outside.
+component ForgetConfirm inherits ModalFrame {
+    label: question.text;
+    escaped => {
+        Leftovers.cancel-forget();
+    }
+    question := Text {
+        text: @tr("Oublier la copie de {} ?", Leftovers.forget-name);
+        accessible-role: none;
+        color: Theme.text;
+        font-size: Theme.font-title;
+        font-weight: Theme.weight-semibold;
+        wrap: word-wrap;
+    }
+    Detail {
+        text: @tr("{}. snapd l'efface pour tous les comptes : c'est définitif.", Words.size(Leftovers.forget-size));
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        alignment: end;
+        spacing: Theme.spacing-s;
+        cancel := ActionButton {
+            text: @tr("Annuler");
+            kind: ButtonKind.ghost;
+            clicked => {
+                Leftovers.cancel-forget();
+            }
+        }
+        ActionButton {
+            text: @tr("Oublier");
+            kind: ButtonKind.danger;
+            clicked => {
+                Leftovers.confirm-forget();
             }
         }
     }
@@ -1142,6 +1295,9 @@ export component AppsPage inherits Rectangle {
         if self.confirming {
             confirm.show();
         }
+        if self.forget-asking {
+            forget.show();
+        }
     }
     changed asking => {
         if self.asking {
@@ -1168,6 +1324,20 @@ export component AppsPage inherits Rectangle {
         }
     }
     confirm := LeftoversConfirm {
+        x: (root.width - Theme.modal-width) / 2;
+        y: root.height / 4;
+        width: Theme.modal-width;
+    }
+
+    property <bool> forget-asking: Leftovers.forget-asking;
+    changed forget-asking => {
+        if self.forget-asking {
+            forget.show();
+        } else {
+            forget.close();
+        }
+    }
+    forget := ForgetConfirm {
         x: (root.width - Theme.modal-width) / 2;
         y: root.height / 4;
         width: Theme.modal-width;

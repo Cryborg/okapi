@@ -3687,6 +3687,78 @@ msgctxt "LeftoversView"
 msgid "Les applis désinstallées n'ont rien laissé dans votre dossier personnel."
 msgstr "The uninstalled apps left nothing in your home folder."
 
+msgctxt "CopyRow"
+msgid "Copie automatique de {}, faite {}"
+msgstr "Automatic copy of {}, made {}"
+
+msgctxt "CopyRow"
+msgid "Oublier"
+msgstr "Forget"
+
+msgctxt "CopyRow"
+msgid "Oublier la copie de {}"
+msgstr "Forget the copy of {}"
+
+msgctxt "LeftoversView"
+msgid "Les copies gardées par snapd n'ont pas pu être lues. Le détail est dans le journal."
+msgstr "The copies kept by snapd could not be read. The details are in the log."
+
+msgctxt "LeftoversView"
+msgid "Copie de {} oubliée : {} rendus."
+msgstr "Copy of {} forgotten: {} freed."
+
+msgctxt "LeftoversView"
+msgid "La copie de {} n'est plus là : snapd l'a sans doute déjà effacée."
+msgstr "The copy of {} is gone: snapd has likely erased it already."
+
+msgctxt "LeftoversView"
+msgid "{} est de nouveau installé : sa copie est gardée."
+msgstr "{} is installed again: its copy is kept."
+
+msgctxt "LeftoversView"
+msgid "La copie de {} est gardée : les droits n'ont pas été donnés."
+msgstr "The copy of {} is kept: the rights were not granted."
+
+msgctxt "LeftoversView"
+msgid "snapd est occupé par une autre opération : la copie de {} est gardée. Réessayez dans un moment."
+msgstr "snapd is busy with another operation: the copy of {} is kept. Try again in a moment."
+
+msgctxt "LeftoversView"
+msgid "snapd n'a pas dit à temps si la copie de {} est oubliée : la liste relue le montre."
+msgstr "snapd did not say in time whether the copy of {} is forgotten: the refreshed list shows whether it is still there."
+
+msgctxt "LeftoversView"
+msgid "La copie de {} n'a pas pu être oubliée. Le détail est dans le journal."
+msgstr "The copy of {} could not be forgotten. The details are in the log."
+
+msgctxt "LeftoversView"
+msgid "snapd efface la copie…"
+msgstr "snapd is erasing the copy…"
+
+msgctxt "LeftoversView"
+msgid "Copies automatiques gardées par le système"
+msgstr "Automatic copies kept by the system"
+
+msgctxt "LeftoversView"
+msgid "Quand on désinstalle un snap, snapd garde une copie de ses données, pour tous les comptes, et l'efface de lui-même après un temps (31 jours, sauf réglage). L'oublier rend la place tout de suite."
+msgstr "When a snap is uninstalled, snapd keeps a copy of its data, for every account, and erases it by itself after a while (31 days unless set otherwise). Forgetting it gives the space back at once."
+
+msgctxt "ForgetConfirm"
+msgid "Oublier la copie de {} ?"
+msgstr "Forget the copy of {}?"
+
+msgctxt "ForgetConfirm"
+msgid "{}. snapd l'efface pour tous les comptes : c'est définitif."
+msgstr "{}. snapd erases it for every account: it cannot be undone."
+
+msgctxt "ForgetConfirm"
+msgid "Annuler"
+msgstr "Cancel"
+
+msgctxt "ForgetConfirm"
+msgid "Oublier"
+msgstr "Forget"
+
 msgctxt "LeftoversConfirm"
 msgid "Mettre un dossier à la corbeille ?"
 msgstr "Move one folder to the trash?"

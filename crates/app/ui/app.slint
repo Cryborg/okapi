@@ -7,7 +7,7 @@ import { DiskUsagePage } from "disk-usage.slint";
 import { SettingsPage } from "settings.slint";
 import { EntryError, ExclusionKind, ExclusionRow, LanguageChoice, Preferences, SettingsState, ThemeChoice } from "settings-model.slint";
 import { AppsPage } from "apps.slint";
-import { AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, AppsTab, LeftoverLine, Leftovers, LeftoversBlock, SourceShown, UninstallStep, UninstallWhy } from "apps-model.slint";
+import { AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, AppsTab, CopyLine, ForgetOutcome, LeftoverLine, Leftovers, LeftoversBlock, SourceShown, UninstallStep, UninstallWhy } from "apps-model.slint";
 import { DuplicatesPage } from "duplicates.slint";
 import {
     DuplicateRow, Duplicates, DuplicatesRefusal, DuplicatesStep, KeptShown, KeptWhy, PersonalShown, QuickRule,
@@ -39,7 +39,7 @@ export {
     // Read by the tests, to see the theme applied.
     Theme,
     SnapLine, SourceFailure, SourceState, SystemLine, UpdateKind, Updates, UpdatesStep,
-    AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, AppsTab, LeftoverLine, Leftovers, LeftoversBlock, SourceShown, UninstallStep, UninstallWhy,
+    AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, AppsTab, CopyLine, ForgetOutcome, LeftoverLine, Leftovers, LeftoversBlock, SourceShown, UninstallStep, UninstallWhy,
 }
 
 export component AppWindow inherits Window {

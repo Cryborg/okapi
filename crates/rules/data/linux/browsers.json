@@ -2,11 +2,11 @@
   "type": "browsers",
   "chromiumCacheDirs": {
     "profile": [
-      { "dir": "Cache", "label": "Cache" },
-      { "dir": "Code Cache", "label": "Code Cache", "cacheReset": true },
-      { "dir": "GPUCache", "label": "GPU Cache", "cacheReset": true },
-      { "dir": "Shared Dictionary/cache", "label": "Shared Dictionary Cache", "description": "Chromium shared-compression dictionary cache; downloaded content rebuilt on demand" },
-      { "dir": "Service Worker/CacheStorage", "label": "Service Worker Cache", "cacheReset": true },
+      { "dir": "Cache", "label": "Cache", "description": "Pages, images, and scripts the browser keeps to load sites faster: downloaded again on the next visit. Logins, history, and bookmarks are not touched" },
+      { "dir": "Code Cache", "label": "Code Cache", "cacheReset": true, "description": "Scripts of the sites visited, compiled: compiled again on the next visit, which is a little slower" },
+      { "dir": "GPUCache", "label": "GPU Cache", "cacheReset": true, "description": "Shaders compiled by the browser's GPU process: rebuilt on demand" },
+      { "dir": "Shared Dictionary/cache", "label": "Shared Dictionary Cache", "description": "Shared-compression dictionary cache: downloaded content rebuilt on demand" },
+      { "dir": "Service Worker/CacheStorage", "label": "Service Worker Cache", "cacheReset": true, "description": "Responses the sites' service workers keep, offline copies included: usually downloaded again on the next visit, but a web app used offline may lose its local data" },
       { "dir": "DawnWebGPUCache", "label": "WebGPU Shader Cache", "cacheReset": true, "description": "Dawn's compiled WebGPU shaders: rebuilt on demand" },
       { "dir": "DawnGraphiteCache", "label": "Graphite Shader Cache", "cacheReset": true, "description": "Dawn/Skia Graphite pipeline cache: rebuilt on demand" }
     ],
@@ -21,9 +21,9 @@
     ]
   },
   "firefoxCacheDirs": [
-    { "dir": "cache2", "label": "Cache" },
+    { "dir": "cache2", "label": "Cache", "description": "Pages, images, and scripts the browser keeps to load sites faster: downloaded again on the next visit. Logins, history, and bookmarks are not touched" },
     { "dir": "thumbnails", "label": "Thumbnails", "description": "Page thumbnails of the new tab page: rebuilt on demand" },
-    { "dir": "startupCache", "label": "Startup Cache", "cacheReset": true, "description": "Compiled scripts of Firefox's own interface: rebuilt at the next launch, which is slower" }
+    { "dir": "startupCache", "label": "Startup Cache", "cacheReset": true, "description": "Compiled scripts of the browser's own interface: rebuilt at the next launch, which is slower" }
   ],
   "chromium": [
     { "key": "chrome", "base": "${CONFIG}/google-chrome", "cache": "${CACHE}/google-chrome" },

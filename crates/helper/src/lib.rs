@@ -1,17 +1,19 @@
 //! The privileged helper and its protocol: `okapi-helper`, run as root by
 //! pkexec (the path `okapi_platform::HELPER_PATH`, which its polkit policy
 //! names), scans and cleans the system targets of its own embedded rules that
-//! need the administrator, and nothing else.
+//! need the administrator, vacuums systemd's journal, and nothing else.
 //!
 //! It reads one request on one line of its standard input ([`Request`]): the
 //! targets by the path the rules write them with, never a path to remove
 //! (invariant 1), an age no younger than [`HELPER_MIN_AGE_FLOOR`], and
 //! exclusions as the interface resolved them, which it compares as received
 //! and never reads. It scans those targets itself and, for a cleaning, removes
-//! what that scan offers there, through the engine and its checks. It writes
-//! one JSON document on its standard output ([`Answer`], or [`RefusalAnswer`])
-//! and its traces on its standard error, never a file of its own (no
-//! journal). It runs no command (invariant 4).
+//! what that scan offers there, through the engine and its checks; the
+//! journal it plans and vacuums itself, out of the engine, each file read
+//! again before it goes (`vacuum`). It writes one JSON document on its
+//! standard output ([`Answer`], or [`RefusalAnswer`]) and its traces on its
+//! standard error, never a file of its own (no log file). It runs no command
+//! (invariant 4).
 //!
 //! The end of its standard input, after the request, cancels it: the caller
 //! keeps it open until the answer, as a user cannot signal a process of root
@@ -25,6 +27,7 @@ mod answer;
 mod operation;
 mod reply;
 mod request;
+mod vacuum;
 
 use std::io::{self, Read};
 use std::process::ExitCode;
@@ -39,13 +42,15 @@ pub use request::{
     HELPER_MIN_AGE_FLOOR, MAX_REQUEST_BYTES, Operation, Refusal, Request, Selection, admin_targets,
     read_request, request_line,
 };
+pub use vacuum::{MACHINE_ID, MachineId, Unfit, description_values, unfit};
 
 /// The version of the request and of the answer; a helper of another version
 /// refuses the request (`unsupportedVersion`), which the interface says as a
 /// helper to install again. Raised too when the same request is answered
 /// otherwise (what the helper's rules offer changes): a helper installed
-/// before would remove what this one keeps.
-pub const PROTOCOL_VERSION: u32 = 4;
+/// before would remove what this one keeps, or refuse what this one is
+/// asked for.
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// How the helper ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

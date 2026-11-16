@@ -326,14 +326,17 @@ impl ScanOptions {
         })
     }
 
-    pub(crate) const fn exclusions(&self) -> &Exclusions {
+    /// The exclusions honoured.
+    #[must_use]
+    pub const fn exclusions(&self) -> &Exclusions {
         &self.exclusions
     }
 
     /// The instant after which an entry is too recent to offer, for a rule that
     /// asks for `rule_age`: the stricter of the two ages. `None` when the age
     /// reaches before the clock's origin, so nothing is old enough.
-    pub(crate) fn cutoff(&self, rule_age: Option<Duration>) -> Option<SystemTime> {
+    #[must_use]
+    pub fn cutoff(&self, rule_age: Option<Duration>) -> Option<SystemTime> {
         let age = rule_age.map_or(self.min_age, |rule_age| rule_age.max(self.min_age));
         self.now.checked_sub(age)
     }

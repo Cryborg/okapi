@@ -5,6 +5,7 @@ use std::time::Instant;
 use okapi_platform::{IDENTITY_SUPPORTED, ROOT_USER};
 use okapi_rules::{MiscRules, RuleSet, TemplateVariables};
 
+use crate::maintenance;
 use crate::options::ScanOptions;
 use crate::paths::is_absent_kind;
 use crate::preconditions::{protection, stops_before_reading};
@@ -26,9 +27,10 @@ use crate::watch::{Progress, Watch};
 /// never equals or holds a variable's directory, `${TMPDIR}`'s own directory
 /// excepted (invariant 6).
 ///
-/// Rules the scan does not handle yet offer nothing: maintenance operations
-/// are left to the privileged helper and not reported, recursive and file
-/// matchers are reported as [`ScanIssue::Unsupported`].
+/// A maintenance operation is never scanned: it is offered when its place is
+/// there ([`ScanReport::maintenances`]), what it would remove left to whoever
+/// runs it. Recursive and file matchers are reported as
+/// [`ScanIssue::Unsupported`].
 #[must_use]
 pub fn scan(rules: &RuleSet, variables: &TemplateVariables, options: &ScanOptions) -> ScanReport {
     scan_watched(rules, variables, options, &Watch::none())
@@ -73,6 +75,7 @@ pub fn scan_watched(
         entries = groups.iter().map(|group| group.items().len()).sum::<usize>(),
         bytes = report.total_size(),
         issues = report.issues().len(),
+        maintenances = report.maintenances().len(),
         stats = ?report.stats(),
         elapsed = ?started.elapsed(),
         "scan finished"
@@ -274,6 +277,7 @@ pub(crate) fn scan_entries(
         return report.finish();
     }
     report.roots(root_identities);
+    report.maintenances(maintenance::found(entries, variables, options));
     for (group, attributes) in attributes {
         report.group(
             attributes,

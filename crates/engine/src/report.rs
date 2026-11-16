@@ -5,10 +5,10 @@ use std::time::SystemTime;
 
 use okapi_platform::FileIdentity;
 use okapi_rules::{
-    BrowserKind, CleanTarget, Effect, Label, RelativePath, RuleId, TemplateError, TemplatePath,
-    Variable,
+    BrowserKind, CleanTarget, Label, RelativePath, RuleId, TemplateError, TemplatePath, Variable,
 };
 
+use crate::maintenance::MaintenanceFound;
 use crate::preconditions::Stop;
 
 use crate::walk::{Found, HoldBack};
@@ -65,16 +65,12 @@ pub enum Origin {
 }
 
 impl Origin {
-    /// The origin of the entries of `target`, if it deletes anything: a
-    /// maintenance operation offers no entry.
+    /// The origin of `target`, keyed by the path it deletes or maintains.
     #[must_use]
-    pub fn of_target(target: &CleanTarget) -> Option<Self> {
-        match target.effect() {
-            Effect::Delete(deletion) => Some(Self::SystemTarget {
-                subcategory: target.subcategory().clone(),
-                path: deletion.path().clone(),
-            }),
-            Effect::Maintenance { .. } => None,
+    pub fn of_target(target: &CleanTarget) -> Self {
+        Self::SystemTarget {
+            subcategory: target.subcategory().clone(),
+            path: target.template_path().clone(),
         }
     }
 
@@ -589,6 +585,7 @@ pub struct ScanReport {
     /// The identity of every root, walked or withheld: cleaning judges an
     /// entry against them as the scan did.
     roots: BTreeSet<FileIdentity>,
+    maintenances: Vec<MaintenanceFound>,
 }
 
 impl ScanReport {
@@ -596,6 +593,14 @@ impl ScanReport {
     #[must_use]
     pub fn groups(&self) -> &[ScanGroup] {
         &self.groups
+    }
+
+    /// The maintenance operations chosen whose place is there, in the order
+    /// of the rule files: no entry of theirs is offered, nor counted in the
+    /// groups; none when the scan stopped.
+    #[must_use]
+    pub fn maintenances(&self) -> &[MaintenanceFound] {
+        &self.maintenances
     }
 
     /// The size of everything offered: the sum over groups, each entry once.
@@ -788,6 +793,7 @@ impl ReportBuilder {
                 issues: Vec::new(),
                 stats: ScanStats::default(),
                 roots: BTreeSet::new(),
+                maintenances: Vec::new(),
             },
         }
     }
@@ -850,6 +856,10 @@ impl ReportBuilder {
 
     pub(crate) fn roots(&mut self, roots: BTreeSet<FileIdentity>) {
         self.report.roots = roots;
+    }
+
+    pub(crate) fn maintenances(&mut self, maintenances: Vec<MaintenanceFound>) {
+        self.report.maintenances = maintenances;
     }
 
     pub(crate) fn finish(self) -> ScanReport {

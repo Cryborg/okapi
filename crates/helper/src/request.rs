@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use okapi_engine::{ExclusionError, Exclusions, Origin, ScanOptions, settings_min_age};
-use okapi_rules::{Effect, RuleSet};
+use okapi_rules::{CleanupAction, Effect, RuleSet};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -29,12 +29,12 @@ pub enum Operation {
     /// Says what the targets offer, without changing anything.
     Scan,
     /// Removes what the targets offer, but a group that joins a rule not
-    /// asked for.
+    /// asked for; vacuums the journal asked for.
     Clean,
 }
 
 /// The request as written, one JSON object on one line:
-/// `{"version": 4, "operation": "clean", "targets": ["/var/crash"],
+/// `{"version": <PROTOCOL_VERSION>, "operation": "clean", "targets": ["/var/crash"],
 /// "minAgeMinutes": 60, "exclusions": ["/var/crash/keep"]}`, the exclusions
 /// as the caller resolved them. The caller writes it with the type the
 /// helper reads it with ([`request_line`]).
@@ -152,14 +152,54 @@ impl Refusal {
     }
 }
 
+/// What the helper does to a target it may be asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Work {
+    /// Removes what its scan offers there, through the engine.
+    Deletion,
+    /// Vacuums systemd's journal there ([`crate::vacuum`]).
+    JournalVacuum,
+}
+
+impl Work {
+    /// The work of a target that deletes or runs `action`; none for a
+    /// maintenance the helper does not do.
+    const fn of<D, A>(effect: &Effect<D, A>) -> Option<Self> {
+        match effect {
+            Effect::Delete(_) => Some(Self::Deletion),
+            Effect::Maintenance {
+                action: CleanupAction::JournalVacuum,
+                ..
+            } => Some(Self::JournalVacuum),
+            Effect::Maintenance {
+                action:
+                    CleanupAction::UvPrune
+                    | CleanupAction::PnpmPrune
+                    | CleanupAction::WindowsComponents
+                    | CleanupAction::DeliveryOptimization
+                    | CleanupAction::DockerBuildPrune,
+                ..
+            } => None,
+        }
+    }
+}
+
+/// A target asked for: the path it was asked by, and what is done there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Asked {
+    name: String,
+    work: Work,
+}
+
 /// The targets asked for, by origin, each with the path it was asked by.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Selection(BTreeMap<Origin, String>);
+pub struct Selection(BTreeMap<Origin, Asked>);
 
 impl Selection {
     /// The targets `names`, each the exact path of a target of `rules` that
-    /// deletes, needs the administrator and holds no variable (the same for
-    /// every user, root included); never none.
+    /// deletes or that the helper maintains, needs the administrator and
+    /// holds no variable (the same for every user, root included); never
+    /// none.
     ///
     /// # Errors
     ///
@@ -169,17 +209,21 @@ impl Selection {
         if names.is_empty() {
             return Err(Refusal::NoTarget);
         }
-        let allowed = admin_targets(rules);
+        let allowed = helper_targets(rules);
         let mut selection = BTreeMap::new();
         for name in names {
-            let origin = allowed
-                .get(name.as_str())
-                .ok_or_else(|| Refusal::UnknownTarget {
-                    target: name.clone(),
-                })?;
+            let (origin, work) =
+                allowed
+                    .get(name.as_str())
+                    .ok_or_else(|| Refusal::UnknownTarget {
+                        target: name.clone(),
+                    })?;
             match selection.entry(origin.clone()) {
                 Entry::Vacant(slot) => {
-                    slot.insert(name.clone());
+                    slot.insert(Asked {
+                        name: name.clone(),
+                        work: *work,
+                    });
                 }
                 Entry::Occupied(_) => {
                     return Err(Refusal::DuplicateTarget {
@@ -200,32 +244,58 @@ impl Selection {
     /// The path `origin` was asked by, if it was.
     #[must_use]
     pub fn name_of(&self, origin: &Origin) -> Option<&str> {
-        self.0.get(origin).map(String::as_str)
+        self.0.get(origin).map(|asked| asked.name.as_str())
     }
 
-    /// `options`, walking only the targets asked for.
+    /// `options`, walking only the targets asked for that delete: the engine
+    /// is never asked of a maintenance, whose place it would resolve, as
+    /// root, to offer it (invariant 3).
     #[must_use]
     pub fn restrict(&self, options: ScanOptions) -> ScanOptions {
-        options.with_origins(self.0.keys().cloned().collect())
+        options.with_origins(
+            self.0
+                .iter()
+                .filter(|(_, asked)| asked.work == Work::Deletion)
+                .map(|(origin, _)| origin.clone())
+                .collect(),
+        )
+    }
+
+    /// The journals asked to be vacuumed: each rule, and the path it was
+    /// asked by, which is the journal's.
+    pub(crate) fn journals(&self) -> impl Iterator<Item = (&Origin, &str)> {
+        self.0
+            .iter()
+            .filter(|(_, asked)| asked.work == Work::JournalVacuum)
+            .map(|(origin, asked)| (origin, asked.name.as_str()))
     }
 }
 
 /// The targets the helper may be asked for, by their path as written in the
-/// rules: those that delete, need the administrator and hold no variable.
-/// Unique: no other target that deletes has the path of one of them
-/// (`okapi-rules`).
+/// rules: those that need the administrator, hold no variable, and delete
+/// or run a maintenance the helper does (the journal's vacuum). Unique: no
+/// other target that deletes or needs the administrator has the path of one
+/// of them (`okapi-rules`).
 #[must_use]
 pub fn admin_targets(rules: &RuleSet) -> BTreeMap<String, Origin> {
+    helper_targets(rules)
+        .into_iter()
+        .map(|(name, (origin, _))| (name, origin))
+        .collect()
+}
+
+/// [`admin_targets`], with what the helper does to each.
+fn helper_targets(rules: &RuleSet) -> BTreeMap<String, (Origin, Work)> {
     rules
         .system()
         .clean_targets()
         .iter()
         .filter(|target| target.needs_admin())
-        .filter_map(|target| match target.effect() {
-            Effect::Delete(deletion) if deletion.path().is_literal() => {
-                Some((deletion.path().to_string(), Origin::of_target(target)?))
-            }
-            Effect::Delete(_) | Effect::Maintenance { .. } => None,
+        .filter_map(|target| {
+            let work = Work::of(target.effect())?;
+            let path = target.template_path();
+            path.is_literal()
+                .then(|| (path.to_string(), (Origin::of_target(target), work)))
         })
         .collect()
 }

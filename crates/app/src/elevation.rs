@@ -295,9 +295,13 @@ mod tests {
 
     use super::*;
 
-    /// A scan answer of no group, as the helper writes it.
-    const EMPTY_SCAN: &str =
-        r#"{"version":4,"operation":"scan","stops":[],"groups":[],"issues":[]}"#;
+    /// A scan answer of no group, as the helper of this version writes it.
+    fn empty_scan() -> String {
+        format!(
+            r#"{{"version":{},"operation":"scan","stops":[],"groups":[],"issues":[]}}"#,
+            okapi_helper::PROTOCOL_VERSION
+        )
+    }
 
     fn run(script: &str, cancel: &Cancel) -> (Result<Reply, ElevationFailure>, Vec<ElevationStep>) {
         let (sender, steps) = mpsc::channel();
@@ -311,7 +315,8 @@ mod tests {
         // still open: a wait that times out (above 128), not an end (1).
         let script = format!(
             "read -r request; echo '{{\"fields\":{{}}}}' >&2; \
-             read -r -t 1 more; [ $? -gt 128 ] || exit 9; echo '{EMPTY_SCAN}'; exit 0"
+             read -r -t 1 more; [ $? -gt 128 ] || exit 9; echo '{}'; exit 0",
+            empty_scan()
         );
         let (reply, steps) = run(&script, &Cancel::new());
         let Ok(Reply::Answer(answer)) = reply else {

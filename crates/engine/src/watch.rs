@@ -128,7 +128,10 @@ impl Watch {
         Self::new(Cancel::new(), None)
     }
 
-    pub(crate) fn is_cancelled(&self) -> bool {
+    /// Whether its token was cancelled: for work of its caller's own that
+    /// it watches beside the engine's (the helper's vacuum).
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
         self.cancel.is_cancelled()
     }
 

@@ -9,6 +9,7 @@
 //! [`CleanReceipt`] says what became of each one.
 
 mod clean;
+mod maintenance;
 mod options;
 mod paths;
 mod preconditions;
@@ -23,6 +24,7 @@ mod watch;
 pub use clean::{
     CleanOutcome, CleanPass, CleanReceipt, CleanResult, KeepReason, clean, clean_watched,
 };
+pub use maintenance::MaintenanceFound;
 pub use options::{
     DEFAULT_MIN_AGE, DEFAULT_MIN_AGE_MINUTES, ExclusionError, Exclusions, ScanOptions,
     duration_of_minutes, settings_min_age,
@@ -35,6 +37,7 @@ pub use report::{
 };
 pub use scan::{DefaultChoice, scan, scan_watched};
 pub use size::{ByteSize, SizeUnit};
+pub use walk::is_third_party;
 pub use watch::{Cancel, Progress, Watch};
 
 // The end-to-end tests write rule paths into JSON and create links: Unix only.

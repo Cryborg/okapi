@@ -1,17 +1,21 @@
 //! End-to-end tests of the scan, on real temporary directories.
 
+use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use okapi_platform::{FileIdentity, file_identity};
 use okapi_rules::{
-    AppCacheRule, CleanTarget, MiscRules, SingleFileTarget, TemplateVariables, Variable,
+    AppCacheRule, CleanTarget, CleanupAction, MiscRules, SingleFileTarget, TemplateVariables,
+    Variable,
 };
 
 use crate::options::{Exclusions, ScanOptions};
 use crate::preconditions::Stop;
-use crate::report::{AppFile, EntryKind, Limit, ScanGroup, ScanIssue, ScanReport};
+use crate::report::{
+    AppFile, Category, EntryKind, Limit, Origin, ScanGroup, ScanIssue, ScanReport,
+};
 use crate::roots::RuleEntry;
 use crate::scan::scan_entries;
 use crate::walk::{Limits, Readers};
@@ -1069,6 +1073,139 @@ fn maintenance_admin_and_unsupported_rules() {
     assert!(group.needs_admin());
     assert_eq!(offered_paths(&report), [fixture.path("apt/old.deb")]);
     assert!(matches!(report.issues(), [ScanIssue::Unsupported { .. }]));
+}
+
+#[test]
+fn a_maintenance_is_offered_where_its_place_is_when_it_is_chosen() {
+    let fixture = Fixture::new();
+    let journal = fixture.directory("journal");
+    fixture.file("journal/old", 1, 2 * HOUR);
+    let uv = fixture.directory("uv");
+    let vacuum = |path: &Path, subcategory: &str| {
+        target(&format!(
+            r#"{{"path": "{}", "subcategory": "{subcategory}", "needsAdmin": true, "cleanupAction": "journal-vacuum"}}"#,
+            path.display()
+        ))
+    };
+    let there = vacuum(&journal, "Journal");
+    let absent = vacuum(&fixture.path("absent"), "Absent");
+    let prune = app(&format!(
+        r#"{{"id": "uv", "name": "uv", "paths": ["{}", "{}"], "cleanupAction": "uv-prune"}}"#,
+        fixture.path("nowhere").display(),
+        uv.display()
+    ));
+    let mut run = Run::new(
+        &fixture,
+        vec![
+            RuleEntry::Target(&there),
+            RuleEntry::Target(&absent),
+            RuleEntry::App {
+                file: AppFile::Apps,
+                rule: &prune,
+            },
+        ],
+    );
+    let offered = |run: &Run<'_>| -> Vec<(Origin, CleanupAction, bool, Vec<PathBuf>)> {
+        run.scan()
+            .maintenances()
+            .iter()
+            .map(|found| {
+                (
+                    found.origin().clone(),
+                    found.action(),
+                    found.needs_admin(),
+                    found.paths().to_vec(),
+                )
+            })
+            .collect()
+    };
+    let journal_found = (
+        Origin::of_target(&there),
+        CleanupAction::JournalVacuum,
+        true,
+        vec![journal.clone()],
+    );
+    let uv_found = (
+        Origin::App {
+            file: AppFile::Apps,
+            id: prune.id().clone(),
+        },
+        CleanupAction::UvPrune,
+        false,
+        vec![uv],
+    );
+    let report = run.scan();
+    assert!(report.groups().is_empty(), "a maintenance is never scanned");
+    let [found, _] = report.maintenances() else {
+        panic!("{:?}", report.maintenances());
+    };
+    assert_eq!(found.label().as_str(), "Journal");
+    assert_eq!(offered(&run), [journal_found.clone(), uv_found.clone()]);
+
+    run.options = fixture.options(Exclusions::new([journal.clone()]).unwrap());
+    assert_eq!(
+        offered(&run),
+        std::slice::from_ref(&uv_found),
+        "its place excluded"
+    );
+
+    run.options = fixture
+        .options(Exclusions::none())
+        .with_categories(BTreeSet::from([Category::System]));
+    assert_eq!(
+        offered(&run),
+        std::slice::from_ref(&journal_found),
+        "a category chosen"
+    );
+    run.options = fixture
+        .options(Exclusions::none())
+        .with_origins(BTreeSet::from([journal_found.0.clone()]));
+    assert_eq!(offered(&run), [journal_found], "a rule chosen");
+    run.options = fixture
+        .options(Exclusions::none())
+        .with_origins(BTreeSet::new());
+    assert_eq!(offered(&run), [], "no rule chosen");
+
+    run.options = fixture.options(Exclusions::none());
+    // A place reached through a link, excluded by its real location only.
+    let linked = fixture.path("journal-link");
+    std::os::unix::fs::symlink(&journal, &linked).unwrap();
+    let through = vacuum(&linked, "Through");
+    run.entries = vec![RuleEntry::Target(&through)];
+    run.options = fixture.options(Exclusions::as_written([journal.clone()]).unwrap());
+    assert_eq!(offered(&run), [], "excluded where it really is");
+    run.entries = vec![RuleEntry::Target(&there)];
+
+    let cancel = crate::watch::Cancel::new();
+    cancel.cancel();
+    run.watch = crate::watch::Watch::new(cancel, None);
+    assert_eq!(offered(&run), [], "a scan stopped offers nothing");
+}
+
+/// A place the user may not even look at is offered all the same: whoever
+/// runs the maintenance (root) says what it holds.
+#[cfg(unix)]
+#[test]
+fn a_maintenance_whose_place_the_user_cannot_read_is_offered() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if okapi_platform::running_as_root() {
+        return;
+    }
+    let fixture = Fixture::new();
+    let closed = fixture.directory("closed");
+    let journal = fixture.directory("closed/journal");
+    let vacuum = target(&format!(
+        r#"{{"path": "{}", "subcategory": "Journal", "needsAdmin": true, "cleanupAction": "journal-vacuum"}}"#,
+        journal.display()
+    ));
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).unwrap();
+    let report = Run::new(&fixture, vec![RuleEntry::Target(&vacuum)]).scan();
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o700)).unwrap();
+    let [found] = report.maintenances() else {
+        panic!("{:?}", report.maintenances());
+    };
+    assert_eq!(found.paths(), [journal]);
 }
 
 #[cfg(unix)]

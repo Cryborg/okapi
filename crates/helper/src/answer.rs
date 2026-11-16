@@ -99,7 +99,8 @@ impl Answer {
     }
 }
 
-/// A group of entries offered: the targets asked for that it gathers.
+/// A group of entries offered, or what a vacuum of the journal would remove:
+/// the targets asked for that it gathers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GroupAnswer {
@@ -110,10 +111,19 @@ pub struct GroupAnswer {
 
 impl GroupAnswer {
     pub(crate) fn of(group: &ScanGroup, selection: &Selection) -> Self {
+        Self::new(
+            names(group.origins(), selection),
+            group.items().len(),
+            group.total_size(),
+        )
+    }
+
+    /// A group of `targets`: `entries` of `bytes`.
+    pub(crate) const fn new(targets: Vec<String>, entries: usize, bytes: u64) -> Self {
         Self {
-            targets: names(group.origins(), selection),
-            entries: group.items().len(),
-            bytes: group.total_size(),
+            targets,
+            entries,
+            bytes,
         }
     }
 

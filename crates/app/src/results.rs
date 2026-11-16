@@ -130,7 +130,7 @@ impl GroupFacts {
             .system()
             .clean_targets()
             .iter()
-            .find(|target| Origin::of_target(target).as_ref() == Some(origin))?;
+            .find(|target| Origin::of_target(target) == *origin)?;
         let english = target.subcategory().as_str();
         let preselected = target.is_selected_by_default();
         let needs_admin = target.needs_admin();

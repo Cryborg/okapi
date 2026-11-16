@@ -715,7 +715,7 @@ mod tests {
             .clean_targets()
             .iter()
             .find(|target| target.subcategory().as_str() == subcategory)
-            .and_then(Origin::of_target)
+            .map(Origin::of_target)
             .unwrap()
     }
 
@@ -791,7 +791,7 @@ mod tests {
                     .system()
                     .clean_targets()
                     .iter()
-                    .find(|target| Origin::of_target(target).as_ref() == Some(&snap))
+                    .find(|target| Origin::of_target(target) == snap)
                     .and_then(|target| target.description())
                     .unwrap()
                     .as_str()
@@ -1219,6 +1219,7 @@ mod tests {
             &rules,
             &sandbox.variables(),
             options,
+            Err(io::ErrorKind::NotFound),
             &Watch::none(),
         );
         assert_eq!(answer.exit(), okapi_helper::Exit::Success, "{answer:?}");

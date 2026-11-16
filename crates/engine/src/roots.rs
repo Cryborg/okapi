@@ -433,9 +433,7 @@ impl Planner<'_> {
         let Effect::Delete(deletion) = target.effect() else {
             return Vec::new();
         };
-        let Some(origin) = Origin::of_target(target) else {
-            return Vec::new();
-        };
+        let origin = Origin::of_target(target);
         let Some(base) = self.open_base(&origin, deletion.path()) else {
             return Vec::new();
         };

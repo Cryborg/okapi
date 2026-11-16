@@ -272,12 +272,19 @@ impl WalkContext<'_> {
         kind == EntryType::Directory && self.is_third_party(owner)
     }
 
-    /// Whether, root removing, `owner` is neither root nor the root's owner
-    /// (an unknown owner included). Never with another remover.
     fn is_third_party(&self, owner: Option<u32>) -> bool {
-        self.remover == Some(ROOT_USER)
-            && !owner.is_some_and(|owner| owner == ROOT_USER || Some(owner) == self.root_owner)
+        is_third_party(self.remover, self.root_owner, owner)
     }
+}
+
+/// Whether, `remover` being root, `owner` is neither root nor `root_owner`,
+/// the owner of the root walked (an unknown owner included): a directory of
+/// a third party, which root never enters nor removes. Never with another
+/// remover. The one rule of the engine and of the helper's vacuum.
+#[must_use]
+pub fn is_third_party(remover: Option<u32>, root_owner: Option<u32>, owner: Option<u32>) -> bool {
+    remover == Some(ROOT_USER)
+        && !owner.is_some_and(|owner| owner == ROOT_USER || Some(owner) == root_owner)
 }
 
 /// Why a walk could not even list its root.

@@ -191,15 +191,23 @@ impl HistoryOutcome {
     /// What became of `outcome`, as scripts and the history read it.
     #[must_use]
     pub fn of(outcome: &CleanOutcome) -> Self {
-        let inexact = [outcome.path(), outcome.blocked()]
+        Self::of_result(outcome.path(), outcome.result(), outcome.blocked())
+    }
+
+    /// What became of the entry at `path` (none when it is unknown):
+    /// `result`, `blocked` naming what kept a directory whole; also for what
+    /// the engine did not remove itself (the privileged helper's vacuum of
+    /// systemd's journal).
+    #[must_use]
+    pub fn of_result(path: Option<&Path>, result: CleanResult, blocked: Option<&Path>) -> Self {
+        let inexact = [path, blocked]
             .into_iter()
             .flatten()
             .any(|path| path.to_str().is_none());
         if inexact {
-            tracing::warn!(path = ?outcome.path(), "a name not in UTF-8 is recorded inexactly");
+            tracing::warn!(?path, "a name not in UTF-8 is recorded inexactly");
         }
         let lossy = |path: &Path| path.to_string_lossy().into_owned();
-        let result = outcome.result();
         let (bytes, reason) = match result {
             CleanResult::Removed { bytes } => (Some(bytes), None),
             CleanResult::Partial { bytes, reason } => (Some(bytes), Some(reason)),
@@ -211,13 +219,13 @@ impl HistoryOutcome {
             _ => (None, None),
         };
         Self {
-            path: outcome.path().map(lossy),
+            path: path.map(lossy),
             result: result.key().to_owned(),
             bytes,
             reason: reason.map(|reason| reason.key().to_owned()),
             error,
             code,
-            blocked: outcome.blocked().map(lossy),
+            blocked: blocked.map(lossy),
             inexact,
         }
     }

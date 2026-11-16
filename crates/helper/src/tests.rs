@@ -18,6 +18,13 @@ use super::*;
 use crate::operation::{cleanable, is_cancelled};
 use crate::request::{MAX_REQUEST_BYTES, admin_targets};
 
+/// The local machine of the tests' journals.
+const MACHINE: &str = "0123456789abcdef0123456789abcdef";
+
+fn machine() -> MachineId {
+    MachineId::parse(MACHINE.as_bytes()).unwrap()
+}
+
 fn embedded() -> RuleSet {
     RuleSet::embedded(Os::Linux).unwrap()
 }
@@ -49,9 +56,8 @@ fn refusal(overrides: &Value) -> Refusal {
 fn refuses_any_target_but_those_of_its_rules_that_need_the_administrator() {
     for target in [
         "/etc",
-        // A user's target, and a maintenance operation.
+        // A user's target.
         "${CACHE}/thumbnails",
-        "/var/log/journal",
         // An admin target written otherwise than in the rules.
         "/var/crash/",
         "/var//crash",
@@ -113,12 +119,12 @@ fn refuses_a_request_of_another_form_or_version() {
     let now = SystemTime::now();
     for line in [
         &b"not json"[..],
-        b"{\"version\": 4}",
+        b"{\"version\": 5}",
         b"",
         // The fields as an array, which serde accepts for a structure.
-        b"[4, \"clean\", [\"/var/crash\"], 60, []]",
+        b"[5, \"clean\", [\"/var/crash\"], 60, []]",
         // Complete but for its one byte that is not UTF-8.
-        b"{\"version\": 4, \"operation\": \"clean\", \"targets\": [\"/var/\xff\"], \"minAgeMinutes\": 60, \"exclusions\": []}",
+        b"{\"version\": 5, \"operation\": \"clean\", \"targets\": [\"/var/\xff\"], \"minAgeMinutes\": 60, \"exclusions\": []}",
     ] {
         assert!(
             matches!(
@@ -166,7 +172,7 @@ fn a_valid_request_names_the_targets_of_its_rules() {
     let request = Request::read(
         &request_line(&json!({
             "operation": "scan",
-            "targets": ["/var/cache/apt/archives", "/var/crash"],
+            "targets": ["/var/cache/apt/archives", "/var/crash", "/var/log/journal"],
         })),
         &rules,
         SystemTime::now(),
@@ -178,19 +184,25 @@ fn a_valid_request_names_the_targets_of_its_rules() {
             .system()
             .clean_targets()
             .iter()
-            .find(|target| matches!(target.effect(), Effect::Delete(deletion) if deletion.path().to_string() == path))
-            .and_then(Origin::of_target)
+            .find(|target| match target.effect() {
+                Effect::Delete(deletion) => deletion.path().to_string() == path,
+                Effect::Maintenance { affected, .. } => affected.to_string() == path,
+            })
+            .map(Origin::of_target)
             .unwrap()
     };
     let crash = target("/var/crash");
-    assert!(request.selection().contains(&crash));
-    assert_eq!(request.selection().name_of(&crash), Some("/var/crash"));
-    assert!(
-        request
-            .selection()
-            .contains(&target("/var/cache/apt/archives"))
+    let journal = target("/var/log/journal");
+    let selection = request.selection();
+    assert!(selection.contains(&crash));
+    assert_eq!(selection.name_of(&crash), Some("/var/crash"));
+    assert!(selection.contains(&target("/var/cache/apt/archives")));
+    assert!(!selection.contains(&target("/var/tmp")));
+    assert_eq!(
+        selection.journals().collect::<Vec<_>>(),
+        [(&journal, "/var/log/journal")],
+        "the journal's is a vacuum"
     );
-    assert!(!request.selection().contains(&target("/var/tmp")));
 }
 
 /// The exclusions are compared as received, never read: one anywhere is no
@@ -236,6 +248,7 @@ fn an_exclusion_is_never_read() {
             &rules,
             &sandbox.variables(),
             request.options(now),
+            Ok(&machine()),
             &Watch::none(),
         );
         serde_json::to_value(answer).unwrap()
@@ -319,6 +332,7 @@ fn the_traces_never_tell_where_an_exclusion_leads() {
             &rules,
             &sandbox.variables(),
             request.options(now),
+            Ok(&machine()),
             &Watch::none(),
         );
         assert_eq!(answer.exit(), Exit::Success, "{answer:?}");
@@ -338,8 +352,9 @@ fn the_traces_never_tell_where_an_exclusion_leads() {
     assert!(!traces.contains(&identity), "{identity} in {traces}");
 }
 
-/// A Linux target that needs the administrator and holds a variable could
-/// never be asked for: none does, so none is silently out of reach.
+/// A Linux target that needs the administrator and holds a variable, or
+/// runs a maintenance the helper does not do, could never be asked for: none
+/// does, so none is silently out of reach.
 #[test]
 fn every_linux_target_that_needs_the_administrator_can_be_asked_for() {
     let rules = embedded();
@@ -348,7 +363,7 @@ fn every_linux_target_that_needs_the_administrator_can_be_asked_for() {
         .clean_targets()
         .iter()
         .filter(|target| target.needs_admin())
-        .filter_map(Origin::of_target)
+        .map(Origin::of_target)
         .collect();
     assert!(deleting.len() > 1);
     let allowed = admin_targets(&rules);
@@ -510,6 +525,28 @@ impl Sandbox {
         RuleSet::embedded_with(Os::Linux, RuleFileKind::System, &system.to_string()).unwrap()
     }
 
+    /// [`Self::rules`], with the journal's vacuum at `journal`.
+    fn rules_with_journal(&self, targets: &[(&str, &str, bool)], journal: &str) -> RuleSet {
+        let mut all: Vec<Value> = targets
+            .iter()
+            .map(|(relative, subcategory, admin)| {
+                json!({
+                    "path": self.path(relative),
+                    "subcategory": subcategory,
+                    "needsAdmin": admin,
+                })
+            })
+            .collect();
+        all.push(json!({
+            "path": self.path(journal),
+            "subcategory": "Journal Logs",
+            "needsAdmin": true,
+            "cleanupAction": "journal-vacuum",
+        }));
+        let system = json!({ "type": "system", "cleanTargets": all });
+        RuleSet::embedded_with(Os::Linux, RuleFileKind::System, &system.to_string()).unwrap()
+    }
+
     fn variables(&self) -> TemplateVariables {
         let mut variables = TemplateVariables::new();
         for (variable, relative) in [
@@ -547,6 +584,7 @@ fn operate_on(sandbox: &Sandbox, rules: &RuleSet, operation: Operation, asked: &
         rules,
         &sandbox.variables(),
         options_now(),
+        Ok(&machine()),
         &Watch::none(),
     );
     assert_eq!(answer.exit(), Exit::Success, "{answer:?}");
@@ -601,6 +639,94 @@ fn a_cleaning_removes_what_its_targets_offer_and_says_so() {
     );
 }
 
+/// The journal asked for beside a target that deletes: root's scan says what
+/// the vacuum would remove, the cleaning removes it, never the journal being
+/// written; each with its outcome.
+#[test]
+fn the_journal_is_vacuumed_beside_the_targets_asked_for() {
+    use std::os::unix::fs::MetadataExt;
+
+    let sandbox = Sandbox::new();
+    let crash = sandbox.file_of("var/crash/core", 3);
+    let machine = format!("var/log/journal/{MACHINE}");
+    let active = sandbox.file(&format!("{machine}/system.journal"));
+    // Its first entry on 2020-01-01: past any age.
+    let old = sandbox.file_of(
+        &format!(
+            "{machine}/system@{:032x}-{:016x}-{:016x}.journal",
+            1, 1, 1_577_836_800_000_000_u64
+        ),
+        5000,
+    );
+    let usage = fs::metadata(&old).unwrap().blocks() * 512;
+    let rules = sandbox.rules_with_journal(&[("var/crash", "Crash", true)], "var/log/journal");
+    let asked = ["var/crash", "var/log/journal"];
+
+    let scanned = operate_on(&sandbox, &rules, Operation::Scan, &asked);
+    assert_eq!(
+        scanned["groups"],
+        json!([
+            { "targets": [sandbox.name("var/crash")], "entries": 1, "bytes": 3 },
+            { "targets": [sandbox.name("var/log/journal")], "entries": 1, "bytes": usage },
+        ])
+    );
+    assert!(old.exists(), "a scan removes nothing");
+
+    let only_crash = operate_on(&sandbox, &rules, Operation::Scan, &["var/crash"]);
+    assert_eq!(
+        only_crash["groups"].as_array().unwrap().len(),
+        1,
+        "the journal not asked for is not looked at"
+    );
+    // Asked for, the journal is the vacuum's alone: the engine, which would
+    // resolve its place as root to offer it, is never asked of it.
+    let restricted = sandbox.selection(&rules, &asked).restrict(options_now());
+    assert_eq!(
+        scan(&rules, &sandbox.variables(), &restricted).maintenances(),
+        []
+    );
+
+    let cleaned = operate_on(&sandbox, &rules, Operation::Clean, &asked);
+    assert_eq!(cleaned["stops"], json!([]));
+    assert_eq!(
+        cleaned["outcomes"],
+        json!([
+            { "outcome": { "path": crash.display().to_string(), "result": "removed", "bytes": 3 }, "scannedBytes": 3 },
+            { "outcome": { "path": old.display().to_string(), "result": "removed", "bytes": usage }, "scannedBytes": usage },
+        ])
+    );
+    assert!(!old.exists() && !crash.exists());
+    assert!(active.exists(), "the journal being written");
+}
+
+/// A journal's root that is a link: said for its target, nothing removed.
+#[test]
+fn a_journal_out_of_reach_is_said_for_its_target() {
+    let sandbox = Sandbox::new();
+    let elsewhere = sandbox.path(&format!("elsewhere/{MACHINE}"));
+    fs::create_dir_all(&elsewhere).unwrap();
+    let old = elsewhere.join(format!(
+        "system@{:032x}-{:016x}-{:016x}.journal",
+        1, 1, 1_577_836_800_000_000_u64
+    ));
+    fs::write(&old, b"old").unwrap();
+    fs::create_dir_all(sandbox.path("var/log")).unwrap();
+    std::os::unix::fs::symlink(sandbox.path("elsewhere"), sandbox.path("var/log/journal")).unwrap();
+    let rules = sandbox.rules_with_journal(&[], "var/log/journal");
+
+    let cleaned = operate_on(&sandbox, &rules, Operation::Clean, &["var/log/journal"]);
+    assert_eq!(cleaned["groups"], json!([]));
+    assert_eq!(cleaned["outcomes"], json!([]));
+    let issues = cleaned["issues"].as_array().unwrap();
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(issues[0]["kind"], "unsafeRoot");
+    assert_eq!(
+        issues[0]["targets"],
+        json!([sandbox.name("var/log/journal")])
+    );
+    assert!(old.exists());
+}
+
 #[test]
 fn a_group_that_joins_a_rule_not_asked_for_is_withheld_and_said() {
     let sandbox = Sandbox::new();
@@ -647,6 +773,7 @@ fn a_group_that_joins_a_rule_not_asked_for_is_withheld_and_said() {
         &rules,
         &sandbox.variables(),
         options_now(),
+        Ok(&machine()),
         &Watch::new(Cancel::new(), Some(sender)),
     );
     let planned = progress.try_iter().find_map(|progress| match progress {
@@ -693,6 +820,7 @@ fn a_partial_cleaning_is_a_complete_answer() {
         &rules,
         &sandbox.variables(),
         options_now(),
+        Ok(&machine()),
         &Watch::none(),
     );
     fs::set_permissions(locked_directory, fs::Permissions::from_mode(0o755)).unwrap();
@@ -765,6 +893,7 @@ fn a_scan_stopped_cleans_nothing_and_says_why() {
         &rules,
         &sandbox.variables(),
         options_now(),
+        Ok(&machine()),
         &Watch::new(cancel, None),
     );
     assert_eq!(answer.exit(), Exit::Failure);
@@ -793,15 +922,13 @@ fn a_cleaning_cancelled_midway_is_stopped() {
         blocked: None,
         inexact: false,
     };
-    assert!(is_cancelled(&[
-        outcome("removed", None),
-        outcome("kept", Some("cancelled")),
-    ]));
-    assert!(!is_cancelled(&[
-        outcome("removed", None),
-        outcome("kept", Some("recent")),
-    ]));
-    assert!(!is_cancelled(&[]));
+    assert!(is_cancelled(
+        [outcome("removed", None), outcome("kept", Some("cancelled"))].iter()
+    ));
+    assert!(!is_cancelled(
+        [outcome("removed", None), outcome("kept", Some("recent"))].iter()
+    ));
+    assert!(!is_cancelled([].iter()));
 }
 
 /// Invariant 4: the crates `Cargo.lock` lists for the helper, by name (its
@@ -1022,6 +1149,7 @@ fn the_caller_reads_back_each_reply() {
         &rules,
         &sandbox.variables(),
         options_now(),
+        Ok(&machine()),
         &Watch::none(),
     );
     let written = serde_json::to_vec(&answer).unwrap();

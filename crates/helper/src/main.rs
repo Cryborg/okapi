@@ -62,6 +62,12 @@ fn run() -> Exit {
         }
     };
     tracing::info!(?variables, "variables");
+    // Read whatever is asked: its failure matters only to a journal asked
+    // for, which says it.
+    let machine = okapi_helper::MachineId::local().map_err(|error| {
+        tracing::debug!(kind = ?error.kind(), code = error.raw_os_error(), %error, path = okapi_helper::MACHINE_ID, "the local machine unknown");
+        error.kind()
+    });
     let cancel = Cancel::new();
     cancel_at_end_of(io::stdin(), cancel.clone());
     let answer = operate(
@@ -70,6 +76,7 @@ fn run() -> Exit {
         &rules,
         &variables,
         request.options(now),
+        machine.as_ref().map_err(|kind| *kind),
         &Watch::new(cancel, None),
     );
     written(&answer, answer.exit())

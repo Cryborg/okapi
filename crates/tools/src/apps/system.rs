@@ -22,7 +22,7 @@ use crate::packages::flatpak::{FlatpakError, SystemHelper};
 use crate::packages::packagekit::{
     self, PackageId, PackageKit, PackageKitError, Removing, error_code,
 };
-use crate::packages::snapd::{self, CHANGE_DONE, Followed, Snapd, SnapdError};
+use crate::packages::snapd::{CHANGE_DONE, Followed, Snapd, SnapdError};
 
 /// How long a snap's removal is followed at most once snapd took it (the
 /// rights given): unmounting and a snapshot of its data, minutes at worst.
@@ -281,41 +281,54 @@ impl Services {
             }
         };
         tracing::info!(name, purge, change, "snapd removes the snap");
-        match self
-            .snapd
-            .follow(&change, self.removal_wait, CHANGE_LOOKS_FAILED, &|_| {})
-        {
-            Followed::Ready(state) if state.status == CHANGE_DONE => Ended::Done(Gone::default()),
-            Followed::Ready(state) => {
-                tracing::warn!(name, change, status = %state.status, err = ?state.err, "snapd's removal did not end done");
-                Ended::Failed(Why::Service(state.err.unwrap_or(state.status)))
-            }
-            Followed::TimedOut => self.snap_outcome(name, Why::TimedOut),
-            Followed::Unanswered => self.snap_outcome(name, Why::Unanswered),
+        let _span = tracing::info_span!("snap_removal", name).entered();
+        let gone = || self.snapd.installed(name).map(|installed| !installed);
+        match followed(&self.snapd, &change, self.removal_wait, &gone) {
+            Ok(()) => Ended::Done(Gone::default()),
+            Err(why) => Ended::Failed(why),
         }
     }
+}
 
-    /// What became of a removal whose change is followed no longer: the
-    /// snap gone, it is done; still there, it failed as `why` says (it may
-    /// yet end, the list read again shows it).
-    fn snap_outcome(&self, name: &str, why: Why) -> Ended {
-        match self.snapd.installed(name) {
-            Ok(false) => {
-                tracing::info!(name, "the snap is gone: its removal done");
-                Ended::Done(Gone::default())
-            }
-            Ok(true) => {
-                tracing::warn!(
-                    name,
-                    ?why,
-                    "the snap still installed: its removal not seen to end"
-                );
-                Ended::Failed(why)
-            }
-            Err(error) => {
-                tracing::warn!(name, %error, "whether the snap is still installed unknown");
-                Ended::Failed(Why::Unanswered)
-            }
+/// Follows the change `change` of snapd for `wait` at most. Ready, it
+/// ended as its status says; followed no longer (past the wait, or after
+/// looks failed in a row), what it was to remove is asked: `gone`, it is
+/// done; still there, it failed (it may yet end, a list read again shows
+/// it).
+///
+/// # Errors
+/// Why it did not end done, as the screen says it.
+pub(crate) fn followed(
+    snapd: &Snapd,
+    change: &str,
+    wait: Duration,
+    gone: &dyn Fn() -> Result<bool, SnapdError>,
+) -> Result<(), Why> {
+    let why = match snapd.follow(change, wait, CHANGE_LOOKS_FAILED, &|_| {}) {
+        Followed::Ready(state) if state.status == CHANGE_DONE => return Ok(()),
+        Followed::Ready(state) => {
+            tracing::warn!(change, status = %state.status, err = ?state.err, "snapd's change did not end done");
+            return Err(Why::Service(state.err.unwrap_or(state.status)));
+        }
+        Followed::TimedOut => Why::TimedOut,
+        Followed::Unanswered => Why::Unanswered,
+    };
+    match gone() {
+        Ok(true) => {
+            tracing::info!(change, "what the change removes is gone: it is done");
+            Ok(())
+        }
+        Ok(false) => {
+            tracing::warn!(
+                change,
+                ?why,
+                "what the change removes is still there: not seen to end"
+            );
+            Err(why)
+        }
+        Err(error) => {
+            tracing::warn!(change, %error, "whether what the change removes is gone unknown");
+            Err(Why::Unanswered)
         }
     }
 }
@@ -372,20 +385,15 @@ fn why_flatpak(error: &FlatpakError) -> Why {
 }
 
 /// Why, as the screen says it, snapd gave no answer.
-fn why_snapd(error: &SnapdError) -> Why {
+pub(crate) fn why_snapd(error: &SnapdError) -> Why {
     match error {
         SnapdError::Absent { .. } => Why::Absent,
         SnapdError::InvalidName(_) => Why::NotFound,
         error if error.timed_out() => Why::TimedOut,
         error if error.rights_refused() => Why::NotAuthorized,
         error if error.busy() => Why::Busy,
-        SnapdError::Refused { kind, message, .. } => {
-            if kind == snapd::KIND_NOT_INSTALLED {
-                Why::NotFound
-            } else {
-                Why::Service(message.clone())
-            }
-        }
+        error if error.snap_absent() => Why::NotFound,
+        SnapdError::Refused { message, .. } => Why::Service(message.clone()),
         SnapdError::Io(_)
         | SnapdError::Truncated { .. }
         | SnapdError::TooLarge
@@ -396,11 +404,8 @@ fn why_snapd(error: &SnapdError) -> Why {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read as _, Write as _};
-    use std::os::unix::net::UnixListener;
-
     use super::*;
-    use crate::packages::snapd::CHANGE_LOOK_EVERY;
+    use crate::packages::snapd::{self, CHANGE_LOOK_EVERY};
 
     /// A snapd that answers each request, one per connection, with the
     /// next of `answers` (`None`: closed unanswered); the services that
@@ -409,30 +414,14 @@ mod tests {
         answers: Vec<Option<&'static str>>,
         removal_wait: Duration,
     ) -> (tempfile::TempDir, Services) {
-        let directory = tempfile::tempdir().unwrap();
-        let socket = directory.path().join("snapd.socket");
-        let listener = UnixListener::bind(&socket).unwrap();
-        std::thread::spawn(move || {
-            for answer in answers {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut request = vec![0; 4096];
-                let _ = stream.read(&mut request).unwrap();
-                if let Some(body) = answer {
-                    let status = if body.contains(r#""type":"error""#) {
-                        "404 Not Found"
-                    } else {
-                        "200 OK"
-                    };
-                    let _ = write!(
-                        stream,
-                        "HTTP/1.1 {status}\r\nContent-Length: {}\r\n\r\n{body}",
-                        body.len()
-                    );
-                }
-            }
-        });
+        let (directory, snapd, _) = crate::packages::snapd::fake::scripted(
+            answers
+                .into_iter()
+                .map(|answer| answer.map(str::to_owned))
+                .collect(),
+        );
         let services = Services {
-            snapd: Snapd::at(&socket, Duration::from_secs(5)),
+            snapd,
             removal_wait,
             ..Services::new(Language::French)
         };
@@ -443,7 +432,8 @@ mod tests {
         r#"{"type":"async","status-code":202,"status":"Accepted","result":null,"change":"7"}"#;
     const DOING: &str = r#"{"type":"sync","status-code":200,"status":"OK","result":{"status":"Doing","ready":false}}"#;
     const DONE: &str = r#"{"type":"sync","status-code":200,"status":"OK","result":{"status":"Done","ready":true}}"#;
-    const GONE: &str = r#"{"type":"error","status-code":404,"status":"Not Found","result":{"kind":"snap-not-installed","message":"not installed"}}"#;
+    /// snapd's answer, word for word, to reading a snap absent.
+    const GONE: &str = r#"{"type":"error","status-code":404,"status":"Not Found","result":{"message":"snap not installed","kind":"snap-not-found","value":"android-studio"}}"#;
     const THERE: &str =
         r#"{"type":"sync","status-code":200,"status":"OK","result":{"name":"android-studio"}}"#;
     const LONG: Duration = Duration::from_mins(1);
@@ -509,6 +499,7 @@ mod tests {
             (refused(401, snapd::KIND_LOGIN_REQUIRED), Why::NotAuthorized),
             (refused(409, snapd::KIND_CHANGE_CONFLICT), Why::Busy),
             (refused(404, snapd::KIND_NOT_INSTALLED), Why::NotFound),
+            (refused(404, snapd::KIND_NOT_FOUND), Why::NotFound),
             (refused(403, ""), Why::NotAuthorized),
             (refused(500, "other"), Why::Service("words".to_owned())),
             (SnapdError::Malformed("x"), Why::Unanswered),

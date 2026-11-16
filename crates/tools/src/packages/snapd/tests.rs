@@ -409,20 +409,13 @@ fn a_change_s_tasks_say_their_progress() {
 /// A snapd that answers each request, one per connection, with the next of
 /// `answers` (`None`: closed unanswered).
 fn answering(answers: Vec<Option<&'static str>>) -> (tempfile::TempDir, Snapd) {
-    let directory = tempfile::tempdir().unwrap();
-    let socket = directory.path().join("snapd.socket");
-    let listener = UnixListener::bind(&socket).unwrap();
-    thread::spawn(move || {
-        for answer in answers {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = vec![0; 4096];
-            let _ = stream.read(&mut request).unwrap();
-            if let Some(body) = answer {
-                let _ = stream.write_all(&with_length("200 OK", body));
-            }
-        }
-    });
-    (directory, Snapd::at(&socket, Duration::from_secs(5)))
+    let (directory, snapd, _) = super::fake::scripted(
+        answers
+            .into_iter()
+            .map(|answer| answer.map(str::to_owned))
+            .collect(),
+    );
+    (directory, snapd)
 }
 
 const DOING: &str =

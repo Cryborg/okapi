@@ -28,7 +28,13 @@ pub const KIND_AUTH_CANCELLED: &str = "auth-cancelled";
 pub const KIND_LOGIN_REQUIRED: &str = "login-required";
 /// Another change holds the snap (an automatic refresh).
 pub const KIND_CHANGE_CONFLICT: &str = "snap-change-conflict";
+/// A snap absent, as a change on it says (`POST /v2/snaps/<name>`).
 pub const KIND_NOT_INSTALLED: &str = "snap-not-installed";
+/// A snap absent, as reading it says (`GET /v2/snaps/<name>`): not the
+/// change's kind, seen on snapd 2.7x.
+pub const KIND_NOT_FOUND: &str = "snap-not-found";
+/// The kinds of a snap absent, read or changed.
+const KINDS_ABSENT: [&str; 2] = [KIND_NOT_INSTALLED, KIND_NOT_FOUND];
 pub const KIND_DNS_FAILURE: &str = "dns-failure";
 /// The HTTP statuses of a request refused for its rights (unauthorized,
 /// forbidden), whatever kind snapd gives it.
@@ -82,6 +88,12 @@ pub enum SnapdError {
 }
 
 impl SnapdError {
+    /// Whether snapd said the snap is absent, read or changed.
+    #[must_use]
+    pub fn snap_absent(&self) -> bool {
+        matches!(self, Self::Refused { kind, .. } if KINDS_ABSENT.contains(&kind.as_str()))
+    }
+
     /// Whether snapd fell silent past the deadline.
     #[must_use]
     pub fn timed_out(&self) -> bool {
@@ -311,6 +323,38 @@ impl Snapd {
         self.get("/v2/snaps?select=all")
     }
 
+    /// The copies of snaps' data snapd keeps, every set (`/v2/snapshots`),
+    /// as snapd lists them.
+    ///
+    /// # Errors
+    /// Whatever kept snapd from answering, or its refusal.
+    pub fn snapshots(&self) -> Result<Value, SnapdError> {
+        self.get("/v2/snapshots")
+    }
+
+    /// Forgets the copy of the snap `snap` in the set `set`, polkit asking
+    /// the user for the rights: the change it started. Only that snap's: an
+    /// empty list would forget the whole set.
+    ///
+    /// # Errors
+    /// A name that is no snap's (nothing asked), whatever kept snapd from
+    /// answering, or its refusal (the rights not given, the copy gone).
+    pub fn forget(&self, set: u64, snap: &str) -> Result<String, SnapdError> {
+        let snap = checked(snap)?;
+        let envelope = self.request(&Request {
+            method: "POST",
+            path: "/v2/snapshots",
+            body: Some(
+                serde_json::json!({ "action": "forget", "set": set, "snaps": [snap] }).to_string(),
+            ),
+            interactive: true,
+            wait: ASKING_WAIT,
+        })?;
+        envelope.change.ok_or(SnapdError::Malformed(
+            "an asynchronous answer without its change",
+        ))
+    }
+
     /// Removes the snap `name`, its data with it when `purge` (no copy
     /// kept), polkit asking the user for the rights: the change it started.
     ///
@@ -366,7 +410,7 @@ impl Snapd {
     pub fn installed(&self, name: &str) -> Result<bool, SnapdError> {
         match self.get(&format!("/v2/snaps/{name}")) {
             Ok(_) => Ok(true),
-            Err(SnapdError::Refused { kind, .. }) if kind == KIND_NOT_INSTALLED => Ok(false),
+            Err(error) if error.snap_absent() => Ok(false),
             Err(error) => Err(error),
         }
     }
@@ -612,3 +656,6 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) mod fake;

@@ -65,11 +65,28 @@ pub struct InstalledPlaces {
 /// flatpaks as `places` hold them.
 #[must_use]
 pub fn installed_now(places: &InstalledPlaces) -> Installed {
+    installed_with(places, snaps_now(&places.snap_files))
+}
+
+/// The snaps installed on this system now, as snapd lists them; when it
+/// cannot be asked, none only if no snap file is in `snap_files`.
+#[must_use]
+pub fn snaps_now(snap_files: &Path) -> Known {
     let listed = crate::packages::snapd::Snapd::system()
         .snaps()
         .map_err(|error| error.to_string())
         .and_then(|listed| snap_names(&listed));
-    installed(places, listed)
+    snaps(listed, snap_files)
+}
+
+/// What is installed, the snaps being `snaps` (read once by [`snaps_now`]
+/// for whoever needs them), the flatpaks as `places` hold them.
+#[must_use]
+pub fn installed_with(places: &InstalledPlaces, snaps: Known) -> Installed {
+    Installed {
+        snaps,
+        flatpaks: flatpaks(&places.installations, places.runtime.as_deref()),
+    }
 }
 
 /// The names of the snaps `listed` (snapd's `/v2/snaps` result), every
@@ -91,19 +108,6 @@ pub(crate) fn snap_names(listed: &serde_json::Value) -> Result<Vec<String>, Stri
                 .ok_or_else(|| "a snap without its name".to_owned())
         })
         .collect()
-}
-
-/// What `places` say is installed, the snaps being those snapd listed
-/// (`listed`, or why it could not be asked).
-#[must_use]
-pub(crate) fn installed(
-    places: &InstalledPlaces,
-    listed: Result<Vec<String>, String>,
-) -> Installed {
-    Installed {
-        snaps: snaps(listed, &places.snap_files),
-        flatpaks: flatpaks(&places.installations, places.runtime.as_deref()),
-    }
 }
 
 /// The snaps installed: those snapd lists (`listed`); when it could not be

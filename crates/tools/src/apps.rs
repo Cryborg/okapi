@@ -11,6 +11,8 @@ pub mod leftovers;
 pub mod measure;
 pub mod snap;
 #[cfg(target_os = "linux")]
+pub mod snapshots;
+#[cfg(target_os = "linux")]
 pub mod system;
 pub mod uninstall;
 

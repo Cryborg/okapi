@@ -170,41 +170,52 @@ fn console<S>(level: LevelFilter) -> impl Layer<S>
 where
     S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
 {
-    console_to(|| OneLine(io::stderr()), level)
+    console_to(io::stderr, level)
 }
 
-/// [`console`], written to `writer`.
-fn console_to<S, W>(writer: W, level: LevelFilter) -> impl Layer<S>
+/// [`console`], written to what `writer` gives, one line per trace
+/// ([`OneLine`]).
+fn console_to<S, W>(
+    writer: impl Fn() -> W + Send + Sync + 'static,
+    level: LevelFilter,
+) -> impl Layer<S>
 where
     S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
-    W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
+    W: Write,
 {
-    fmt::layer().with_writer(writer).with_filter(level)
+    fmt::layer()
+        .with_ansi(false)
+        .with_writer(move || OneLine(writer()))
+        .with_filter(level)
 }
 
-/// Writes each trace on a line of its own: a carriage return or a line feed
-/// within it, which a file name may hold, is written escaped (`\r`, `\n`), so
-/// that no name forges a line of the console. The text format escapes neither
-/// in a field shown with `%`. Tracing writes a trace whole, in one call, its
-/// final line feed last.
+/// Writes each trace on a line of its own: a control character within it, but
+/// a tab (line feed, carriage return, escape sequence, C1 control...), which a
+/// file name may hold, is written escaped (`\n`, `\u{1b}`), so that no name
+/// forges or rubs out a line of the console. The text format leaves a field
+/// shown with `%` as it is, and emits no control character of its own (no
+/// colours, [`console_to`]). Tracing writes a trace whole, in one
+/// call, its final line feed last.
 struct OneLine<W>(W);
 
 impl<W: Write> Write for OneLine<W> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        let (body, end): (&[u8], &[u8]) = match bytes.split_last() {
-            Some((b'\n', body)) => (body, b"\n"),
-            _ => (bytes, b""),
+        let (body, end) = match bytes.split_last() {
+            Some((b'\n', body)) => (body, "\n"),
+            _ => (bytes, ""),
         };
-        let mut line = Vec::with_capacity(bytes.len());
-        for &byte in body {
-            match byte {
-                b'\n' => line.extend_from_slice(b"\\n"),
-                b'\r' => line.extend_from_slice(b"\\r"),
-                _ => line.push(byte),
+        // Tracing formats into a `String`: never lossy in practice.
+        let text = String::from_utf8_lossy(body);
+        let mut line = String::with_capacity(bytes.len());
+        for character in text.chars() {
+            if character.is_control() && character != '\t' {
+                line.extend(character.escape_default());
+            } else {
+                line.push(character);
             }
         }
-        line.extend_from_slice(end);
-        self.0.write_all(&line)?;
+        line.push_str(end);
+        self.0.write_all(line.as_bytes())?;
         Ok(bytes.len())
     }
 
@@ -552,24 +563,29 @@ mod tests {
     fn a_name_never_forges_a_line_of_the_console() {
         let lines = Lines::default();
         let writer = lines.clone();
-        let subscriber = tracing_subscriber::registry().with(console_to(
-            move || OneLine(writer.clone()),
-            LevelFilter::DEBUG,
-        ));
-        let forged = "x\rINFO okapi_engine::clean: entry removed\nINFO forged";
+        let subscriber = tracing_subscriber::registry()
+            .with(console_to(move || writer.clone(), LevelFilter::DEBUG));
+        let forged = "été 🦓\tx\x1b[1G\x1b[2K\x0b\x7f\u{9b}2K\u{85}INFO a\rINFO okapi_engine::clean: removed\nINFO b";
         tracing::subscriber::with_default(subscriber, || {
             tracing::debug!(path = %forged, "entry unreadable");
             tracing::info!("done\r\n");
         });
         let written = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
-        assert!(!written.contains('\r'), "{written:?}");
+        assert!(
+            !written
+                .chars()
+                .any(|character| character.is_control() && character != '\n' && character != '\t'),
+            "{written:?}"
+        );
         let console: Vec<_> = written.lines().collect();
         assert_eq!(console.len(), 2, "{written:?}");
+        let escaped = r"x\u{1b}[1G\u{1b}[2K\u{b}\u{7f}\u{9b}2K\u{85}INFO a\rINFO okapi_engine::clean: removed\nINFO b";
         assert!(
-            console[0].contains(r"x\rINFO okapi_engine::clean: entry removed\nINFO forged"),
+            console[0].contains(&format!("été 🦓\t{escaped}")),
             "{written:?}"
         );
         assert!(console[1].ends_with(r"done\r\n"), "{written:?}");
+        assert!(!console[1].contains(r"\u{1b}"), "no colours: {written:?}");
     }
 
     #[test]

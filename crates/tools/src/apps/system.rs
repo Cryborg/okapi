@@ -581,10 +581,18 @@ mod tests {
             "[Extension org.gimp.GIMP.Locale]\n",
         )
         .unwrap();
+        // Both from Flathub, the translations saying whose they are.
+        std::fs::write(branch.join("abc123/deploy"), b"flathub\0").unwrap();
         let locale = installation.join("runtime/org.gimp.GIMP.Locale/aarch64/stable");
         std::fs::create_dir_all(locale.join("def456")).unwrap();
         std::os::unix::fs::symlink("def456", locale.join("active")).unwrap();
         std::fs::write(locale.join("def456/fr.mo"), [0; 10]).unwrap();
+        std::fs::write(locale.join("def456/deploy"), b"flathub\0").unwrap();
+        std::fs::write(
+            locale.join("def456/metadata"),
+            "[ExtensionOf]\nref=app/org.gimp.GIMP/aarch64/stable\n",
+        )
+        .unwrap();
         std::fs::write(branch.join("abc123/gimp"), vec![0; 256 * 1024]).unwrap();
         let target =
             Target::Flatpak(FlatpakRef::app("org.gimp.GIMP", "aarch64", "stable").unwrap());

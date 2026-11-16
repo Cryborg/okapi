@@ -56,6 +56,17 @@ const KEY_VERSIONS: &str = "versions";
 const KEY_SUBDIRECTORIES: &str = "subdirectories";
 /// What separates the items of a list, in a key file.
 const LIST_SEPARATOR: char = ';';
+/// The group of an extension's metadata that says whose it is, by the
+/// reference `ref` of what it extends.
+const EXTENSION_OF_GROUP: &str = "ExtensionOf";
+const KEY_REF: &str = "ref";
+/// What flatpak keeps of a deployment beside it: a `GVariant` `(ssasta{sv})`
+/// whose first member, the remote it came from, starts the file and ends at
+/// the first NUL.
+const DEPLOY_DATA: &str = "deploy";
+/// The most of a deployment's data read: its `AppStream` texts make it some
+/// kilobytes.
+const DEPLOY_DATA_LIMIT: usize = 1024 * 1024;
 
 /// One installation of flatpaks. Whether it is there is said by
 /// [`presence`] alone.
@@ -310,6 +321,22 @@ impl FlatpakRef {
     #[must_use]
     pub fn app(id: &str, arch: &str, branch: &str) -> Option<Self> {
         Self::new(RefKind::App, id, arch, branch)
+    }
+
+    /// The reference `text` writes (`app/<id>/<arch>/<branch>`), if it is
+    /// one.
+    fn parse(text: &str) -> Option<Self> {
+        let mut parts = text.split('/');
+        let kind = match parts.next()? {
+            "app" => RefKind::App,
+            "runtime" => RefKind::Runtime,
+            _ => return None,
+        };
+        let (id, arch, branch) = (parts.next()?, parts.next()?, parts.next()?);
+        if parts.next().is_some() {
+            return None;
+        }
+        Self::new(kind, id, arch, branch)
     }
 
     fn new(kind: RefKind, id: &str, arch: &str, branch: &str) -> Option<Self> {
@@ -706,37 +733,63 @@ fn says_true(value: Option<&str>) -> bool {
     matches!(value, Some("true" | "1"))
 }
 
-/// The extensions of `metadata` that go with their application (whose
-/// branch is `branch`), as libflatpak tells them: marked `autodelete`, a
-/// subset of locales, or translations or debugging symbols by their name.
-fn extensions_deleted(metadata: &str, branch: &str) -> Vec<Extension> {
-    let mut groups: Vec<(String, Vec<(String, String)>)> = Vec::new();
-    for line in metadata.lines().map(str::trim) {
+/// A group of a key file (`[name]`) and its keys, in their order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KeyGroup {
+    pub(crate) name: String,
+    keys: Vec<(String, String)>,
+}
+
+impl KeyGroup {
+    /// The value of `wanted`, the last one when it is written twice (as
+    /// `GKeyFile` reads it).
+    pub(crate) fn value(&self, wanted: &str) -> Option<&str> {
+        self.keys
+            .iter()
+            .rev()
+            .find(|(key, _)| key == wanted)
+            .map(|(_, value)| value.as_str())
+    }
+}
+
+/// The groups of the key file `text`, in their order: comments, blank
+/// lines and keys before any group are passed over.
+pub(crate) fn key_file_groups(text: &str) -> Vec<KeyGroup> {
+    let mut groups: Vec<KeyGroup> = Vec::new();
+    for line in text.lines().map(str::trim) {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        if let Some(group) = line
+        if let Some(name) = line
             .strip_prefix('[')
             .and_then(|line| line.strip_suffix(']'))
         {
-            groups.push((group.to_owned(), Vec::new()));
-        } else if let (Some((_, keys)), Some((key, value))) =
-            (groups.last_mut(), line.split_once('='))
+            groups.push(KeyGroup {
+                name: name.to_owned(),
+                keys: Vec::new(),
+            });
+        } else if let (Some(group), Some((key, value))) = (groups.last_mut(), line.split_once('='))
         {
-            keys.push((key.trim().to_owned(), value.trim().to_owned()));
+            group
+                .keys
+                .push((key.trim().to_owned(), value.trim().to_owned()));
         }
     }
     groups
+}
+
+/// The extensions of `metadata` that go with their application (whose
+/// branch is `branch`), as libflatpak tells them: marked `autodelete`, a
+/// subset of locales, or translations or debugging symbols by their name.
+/// Each is only a candidate: whether it is the application's is told by its
+/// own metadata ([`not_its_own`]).
+fn extensions_deleted(metadata: &str, branch: &str) -> Vec<Extension> {
+    key_file_groups(metadata)
         .into_iter()
-        .filter_map(|(group, keys)| {
-            let tagged = group.strip_prefix(EXTENSION_GROUP)?;
+        .filter_map(|group| {
+            let tagged = group.name.strip_prefix(EXTENSION_GROUP)?;
             let name = tagged.split_once(TAG).map_or(tagged, |(name, _)| name);
-            let value = |wanted: &str| {
-                keys.iter()
-                    .rev()
-                    .find(|(key, _)| key == wanted)
-                    .map(|(_, value)| value.as_str())
-            };
+            let value = |wanted: &str| group.value(wanted);
             let deleted = says_true(value(KEY_AUTODELETE))
                 || says_true(value(KEY_LOCALE_SUBSET))
                 || ALWAYS_DELETED.iter().any(|suffix| name.ends_with(suffix));
@@ -794,6 +847,127 @@ fn runtime_ids(installation: &Path, app: &FlatpakRef) -> Result<Vec<String>, Why
     }
 }
 
+/// The remote `deployment` came from, as its data says (what precedes the
+/// first NUL of `deploy`); none when it has no data or none readable as a
+/// name.
+///
+/// # Errors
+///
+/// Its data cannot be read (traced by the caller).
+fn origin(deployment: &Path) -> io::Result<Option<String>> {
+    let bytes =
+        match okapi_platform::read_regular_capped(&deployment.join(DEPLOY_DATA), DEPLOY_DATA_LIMIT)
+        {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+    Ok(bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .and_then(|end| std::str::from_utf8(&bytes[..end]).ok())
+        .filter(|origin| !origin.is_empty())
+        .map(str::to_owned))
+}
+
+/// What a candidate needs to go with `app`: the application's origin, read
+/// once, when a candidate is first deployed.
+struct Owner<'a> {
+    installation: &'a Path,
+    app: &'a FlatpakRef,
+    deployment: &'a Path,
+    origin: Option<String>,
+}
+
+impl Owner<'_> {
+    /// The application's origin.
+    ///
+    /// # Errors
+    ///
+    /// [`Why::Unclear`] when it cannot be told (traced): what goes with it
+    /// cannot either, as for libflatpak.
+    fn origin(&mut self) -> Result<&str, Why> {
+        if self.origin.is_none() {
+            let read = origin(self.deployment);
+            let app = self.app;
+            self.origin = Some(match read {
+                Ok(Some(origin)) => origin,
+                Ok(None) => {
+                    tracing::warn!(%app, "its origin unknown: what goes unknown");
+                    return Err(Why::Unclear);
+                }
+                Err(error) => {
+                    tracing::warn!(%app, %error, "its origin unreadable: what goes unknown");
+                    return Err(Why::Unclear);
+                }
+            });
+        }
+        Ok(self.origin.as_deref().unwrap_or_default())
+    }
+
+    /// Why the extension `reference` deployed at `deployment` is not the
+    /// application's, so stays: its own metadata does not say it extends
+    /// this application (`[ExtensionOf] ref=app/<id>/<arch>/…`), or it
+    /// extends another branch of it still installed, or it came from
+    /// another remote. `None` when it goes. The application's metadata
+    /// only names candidates: it may name anyone's.
+    ///
+    /// # Errors
+    ///
+    /// [`Why::Unclear`] when what it is cannot be read (traced).
+    fn not_its_own(
+        &mut self,
+        reference: &FlatpakRef,
+        deployment: &Path,
+    ) -> Result<Option<&'static str>, Why> {
+        let app = self.app;
+        let metadata = match okapi_platform::read_regular_capped(
+            &deployment.join(METADATA),
+            METADATA_LIMIT,
+        ) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(Some("no metadata"));
+            }
+            Err(error) => {
+                tracing::warn!(%app, %reference, %error, "an extension's metadata unreadable: what goes unknown");
+                return Err(Why::Unclear);
+            }
+        };
+        let groups = key_file_groups(&metadata);
+        let Some(extended) = groups
+            .iter()
+            .rev()
+            .find(|group| group.name == EXTENSION_OF_GROUP)
+            .and_then(|group| group.value(KEY_REF))
+        else {
+            return Ok(Some("no ExtensionOf"));
+        };
+        let Some(extended) = FlatpakRef::parse(extended).filter(|extended| {
+            extended.kind == RefKind::App && extended.id == app.id && extended.arch == app.arch
+        }) else {
+            return Ok(Some("ExtensionOf names another"));
+        };
+        if extended.branch != app.branch
+            && deployed_or_unclear(self.installation, &extended)?.is_some()
+        {
+            return Ok(Some("of another branch still installed"));
+        }
+        let own = match origin(deployment) {
+            Ok(Some(own)) => own,
+            Ok(None) => return Ok(Some("no origin")),
+            Err(error) => {
+                tracing::warn!(%app, %reference, %error, "an extension's origin unreadable: what goes unknown");
+                return Err(Why::Unclear);
+            }
+        };
+        if own != self.origin()? {
+            return Ok(Some("another origin"));
+        }
+        Ok(None)
+    }
+}
+
 /// An application deployed, and the extensions that go with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Related {
@@ -804,14 +978,18 @@ pub struct Related {
 }
 
 /// The application `app` deployed in `installation`, and the extensions
-/// installed there that go with it, read from its deployment's metadata now
-/// (none when it has no metadata).
+/// installed there that go with it: named by its deployment's metadata now
+/// (none when it has no metadata), as libflatpak names them, and each, by
+/// its own metadata and data, the application's and from its remote. What
+/// goes is removed as root by flatpak's helper: an application never makes
+/// another's go.
 ///
 /// # Errors
 ///
 /// [`Why::NotFound`] when the application is no longer deployed;
 /// [`Why::Unclear`] when what goes cannot be told: its deployment, its
-/// metadata, an extension's or the runtimes' folder unreadable.
+/// metadata or origin, an extension's folder, metadata or origin, or the
+/// runtimes' folder unreadable.
 pub fn related(installation: &Path, app: &FlatpakRef) -> Result<Related, Why> {
     let deployed = match deployment(&app.folder(installation)) {
         Ok(Some(deployed)) => deployed,
@@ -839,6 +1017,12 @@ pub fn related(installation: &Path, app: &FlatpakRef) -> Result<Related, Why> {
     } else {
         Vec::new()
     };
+    let mut owner = Owner {
+        installation,
+        app,
+        deployment: &deployed,
+        origin: None,
+    };
     let mut found: Vec<(FlatpakRef, PathBuf)> = Vec::new();
     for extension in extensions {
         for branch in &extension.branches {
@@ -864,9 +1048,15 @@ pub fn related(installation: &Path, app: &FlatpakRef) -> Result<Related, Why> {
                 if found.iter().any(|(known, _)| *known == reference) {
                     continue;
                 }
-                if let Some(deployed) = deployed_or_unclear(installation, &reference)? {
-                    found.push((reference, deployed));
+                let Some(extension_deployed) = deployed_or_unclear(installation, &reference)?
+                else {
+                    continue;
+                };
+                if let Some(reason) = owner.not_its_own(&reference, &extension_deployed)? {
+                    tracing::info!(%app, %reference, reason, "an extension kept: not the application's");
+                    continue;
                 }
+                found.push((reference, extension_deployed));
             }
         }
     }

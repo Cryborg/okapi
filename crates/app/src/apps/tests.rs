@@ -520,12 +520,10 @@ fn a_deb_goes_as_shown_and_is_recorded_once_gone() {
         "Ses réglages dans votre dossier personnel restent en place : vous les retrouvez si vous la réinstallez."
     ));
     // Never a flatpak's words.
-    for words in [
-        "Ses traductions et extensions installées partent avec elle.",
-        "Votre mot de passe peut vous être demandé.",
-    ] {
-        assert!(!shows(&window, words), "{words}");
-    }
+    assert!(!shows(
+        &window,
+        "Votre mot de passe peut vous être demandé."
+    ));
     assert_eq!(
         buttons(&window, "Désinstaller"),
         2,
@@ -1230,16 +1228,16 @@ fn a_flatpak_of_the_system_goes_with_its_extensions_without_a_cancel_and_is_reco
     ask(&window, "Builder");
     assert_eq!(step(&window), ui::UninstallStep::Confirm);
     for words in [
-        // The application and its translations, both measured.
+        // The application and its translations, both measured, and each
+        // named: flatpak's helper removes them as root.
         "Place libérée : 3,0 Mo.",
-        "Ses traductions et extensions installées partent avec elle.",
+        "Ce qui partirait : org.gnome.Builder, org.gnome.Builder.Locale",
         "Ses données dans votre dossier personnel restent en place, ainsi que les environnements qu'elle utilisait.",
         "Votre mot de passe peut vous être demandé.",
     ] {
         assert!(shows(&window, words), "{words}");
     }
     for words in [
-        "Ce qui partirait : org.gnome.Builder, org.gnome.Builder.Locale",
         "Builder et un paquet qui en dépend partiront. Place libérée : 3,0 Mo.",
         "Ses réglages dans votre dossier personnel restent en place : vous les retrouvez si vous la réinstallez.",
         "Une copie de ses données (de tous les comptes et du système) est gardée 31 jours par le système.",

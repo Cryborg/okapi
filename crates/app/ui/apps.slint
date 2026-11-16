@@ -519,8 +519,9 @@ component Uninstall inherits ModalFrame {
     if Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.flatpak: Detail {
         text: Apps.freed-known ? @tr("Place libérée : {}.", Words.size(Apps.freed)) : @tr("Place libérée : inconnue.");
     }
+    // Named one by one: flatpak's helper removes them as root.
     if Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.flatpak && Apps.going.length > 1: Detail {
-        text: @tr("Ses traductions et extensions installées partent avec elle.");
+        text: @tr("Ce qui partirait : {}", AppWords.names(Apps.going));
         wrap: word-wrap;
     }
     if Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.flatpak: Detail {

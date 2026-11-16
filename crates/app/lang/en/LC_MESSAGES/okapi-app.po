@@ -2555,10 +2555,6 @@ msgid "Votre mot de passe peut vous être demandé."
 msgstr "You may be asked for your password."
 
 msgctxt "Uninstall"
-msgid "Ses traductions et extensions installées partent avec elle."
-msgstr "Its translations and installed extensions go with it."
-
-msgctxt "Uninstall"
 msgid "Ses données dans votre dossier personnel restent en place, ainsi que les environnements qu'elle utilisait."
 msgstr "Its data in your home folder stay, and so do the runtimes it used."
 

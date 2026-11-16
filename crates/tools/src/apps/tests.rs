@@ -237,7 +237,17 @@ fn a_list_snapd_cannot_be_read_is_a_failure() {
     assert!(matches!(read, SourceReading::Failed(_)), "{read:?}");
 }
 
-/// A flatpak installation with `id` deployed, `active` naming `target`.
+/// The remote every deployment of these tests comes from, but where said.
+const ORIGIN: &str = "flathub";
+
+/// What flatpak writes as a deployment's data (`deploy`) for one from
+/// `origin`: the remote, its NUL, then the rest of the `GVariant`.
+fn deploy_data(origin: &str) -> Vec<u8> {
+    [origin.as_bytes(), b"\0", b"\0\x01commit"].concat()
+}
+
+/// A flatpak installation with `id` deployed from [`ORIGIN`], `active`
+/// naming `target`.
 fn deploy(installation: &Path, id: &str, target: &str) -> PathBuf {
     let branch = installation.join("app").join(id).join("x86_64/stable");
     let deployment = branch.join("abc123");
@@ -246,6 +256,7 @@ fn deploy(installation: &Path, id: &str, target: &str) -> PathBuf {
         &deployment.join(format!("export/share/applications/{id}.desktop")),
         &launcher(id, ""),
     );
+    fs::write(deployment.join("deploy"), deploy_data(ORIGIN)).unwrap();
     std::os::unix::fs::symlink(target, branch.join("active")).unwrap();
     deployment
 }
@@ -707,15 +718,37 @@ fn a_link_among_the_architectures_or_branches_is_never_read() {
     assert_eq!(found, Vec::new());
 }
 
-/// An extension of `id` deployed in `installation`, on `branch`.
-fn deploy_runtime(installation: &Path, id: &str, branch: &str) {
+/// The metadata of an extension that says it extends `reference`, as
+/// flatpak-builder writes it.
+fn extension_of(id: &str, reference: &str) -> String {
+    format!("[Runtime]\nname={id}\n\n[ExtensionOf]\nref={reference}\n")
+}
+
+/// The runtime `id` deployed in `installation` on `branch`, from `origin`,
+/// its metadata `metadata`.
+fn deploy_extension(installation: &Path, id: &str, branch: &str, metadata: &str, origin: &str) {
     let folder = installation
         .join("runtime")
         .join(id)
         .join("x86_64")
         .join(branch);
-    fs::create_dir_all(folder.join("abc123")).unwrap();
+    let deployment = folder.join("abc123");
+    fs::create_dir_all(&deployment).unwrap();
+    fs::write(deployment.join("metadata"), metadata).unwrap();
+    fs::write(deployment.join("deploy"), deploy_data(origin)).unwrap();
     std::os::unix::fs::symlink("abc123", folder.join("active")).unwrap();
+}
+
+/// An extension of GIMP's stable branch, `id`, deployed in `installation`
+/// on `branch`, from [`ORIGIN`].
+fn deploy_runtime(installation: &Path, id: &str, branch: &str) {
+    deploy_extension(
+        installation,
+        id,
+        branch,
+        &extension_of(id, "app/org.gimp.GIMP/x86_64/stable"),
+        ORIGIN,
+    );
 }
 
 #[test]
@@ -748,7 +781,16 @@ fn the_extensions_that_go_with_a_flatpak_are_those_marked_and_installed() {
     // Its name only begins as the extension's: another extension.
     deploy_runtime(&system, "org.gimp.GIMP.PluginX", "3");
     deploy_runtime(&system, "org.gimp.GIMP.Help", "3");
-    deploy_runtime(&system, "org.inkscape.Inkscape.Locale", "stable");
+    deploy_extension(
+        &system,
+        "org.inkscape.Inkscape.Locale",
+        "stable",
+        &extension_of(
+            "org.inkscape.Inkscape.Locale",
+            "app/org.inkscape.Inkscape/x86_64/stable",
+        ),
+        ORIGIN,
+    );
     let app = FlatpakRef::app("org.gimp.GIMP", "x86_64", "stable").unwrap();
     let names: Vec<String> = related(&system, &app)
         .unwrap()
@@ -774,6 +816,104 @@ fn the_extensions_that_go_with_a_flatpak_are_those_marked_and_installed() {
     // No longer deployed: not found, nothing to remove.
     fs::remove_file(system.join("app/org.gimp.GIMP/x86_64/stable/active")).unwrap();
     assert_eq!(related(&system, &app), Err(Why::NotFound));
+}
+
+/// The references of what goes with GIMP's stable branch in `system`.
+fn going_with_gimp(system: &Path) -> Vec<String> {
+    let app = FlatpakRef::app("org.gimp.GIMP", "x86_64", "stable").unwrap();
+    related(system, &app)
+        .unwrap()
+        .extensions
+        .iter()
+        .map(|(reference, _)| reference.to_string())
+        .collect()
+}
+
+#[test]
+fn an_application_never_makes_another_s_extensions_or_a_shared_runtime_go() {
+    // Catches the application's metadata trusted to say what is its own:
+    // flatpak's helper would remove, as root, another application's
+    // translations, the graphics drivers, the codecs. Each extension below
+    // but the first and the last fails one check alone.
+    let root = tempfile::tempdir().unwrap();
+    let system = root.path().join("system");
+    let deployment = deploy(&system, "org.gimp.GIMP", "abc123");
+    write(
+        &deployment.join("metadata"),
+        "[Application]\nname=org.gimp.GIMP\n\n\
+         [Extension org.gimp.GIMP.Locale]\n\n\
+         [Extension org.mozilla.firefox.Locale]\n\n\
+         [Extension org.freedesktop.Platform.GL]\nsubdirectories=true\nautodelete=true\nversions=24.08\n\n\
+         [Extension org.freedesktop.Platform.ffmpeg-full]\nautodelete=true\nversion=24.08\n\n\
+         [Extension org.gimp.GIMP.Plugin]\nautodelete=true\nsubdirectories=true\n",
+    );
+    deploy_runtime(&system, "org.gimp.GIMP.Locale", "stable");
+    deploy_extension(
+        &system,
+        "org.mozilla.firefox.Locale",
+        "stable",
+        &extension_of(
+            "org.mozilla.firefox.Locale",
+            "app/org.mozilla.firefox/x86_64/stable",
+        ),
+        ORIGIN,
+    );
+    // As on Flathub: the drivers extend the platform, the codecs say
+    // nothing.
+    deploy_extension(
+        &system,
+        "org.freedesktop.Platform.GL.default",
+        "24.08",
+        &extension_of(
+            "org.freedesktop.Platform.GL.default",
+            "runtime/org.freedesktop.Platform/x86_64/24.08",
+        ),
+        ORIGIN,
+    );
+    deploy_extension(
+        &system,
+        "org.freedesktop.Platform.ffmpeg-full",
+        "24.08",
+        "[Runtime]\nname=org.freedesktop.Platform.ffmpeg-full\n",
+        ORIGIN,
+    );
+    let plugin = |name: &str, reference: &str, origin: &str| {
+        let id = format!("org.gimp.GIMP.Plugin.{name}");
+        deploy_extension(
+            &system,
+            &id,
+            "stable",
+            &extension_of(&id, reference),
+            origin,
+        );
+    };
+    plugin("Evil", "app/org.gimp.GIMP/x86_64/stable", "evil-remote");
+    plugin("Runtime", "runtime/org.gimp.GIMP/x86_64/stable", ORIGIN);
+    plugin("Prefix", "app/org.gimp.GIMP.Evil/x86_64/stable", ORIGIN);
+    plugin("Three", "app/org.gimp.GIMP/x86_64", ORIGIN);
+    plugin("Arm", "app/org.gimp.GIMP/aarch64/stable", ORIGIN);
+    // Built against another branch, which is not installed: it goes.
+    plugin("Beta", "app/org.gimp.GIMP/x86_64/beta", ORIGIN);
+    // Built against another branch still installed: that one's.
+    plugin("Other", "app/org.gimp.GIMP/x86_64/2-40", ORIGIN);
+    let other_branch = system.join("app/org.gimp.GIMP/x86_64/2-40");
+    fs::create_dir_all(other_branch.join("def456")).unwrap();
+    std::os::unix::fs::symlink("def456", other_branch.join("active")).unwrap();
+    // `ref` outside its group says nothing.
+    deploy_extension(
+        &system,
+        "org.gimp.GIMP.Plugin.Misplaced",
+        "stable",
+        "[Runtime]\nref=app/org.gimp.GIMP/x86_64/stable\n",
+        ORIGIN,
+    );
+    assert_eq!(
+        going_with_gimp(&system),
+        [
+            "runtime/org.gimp.GIMP.Locale/x86_64/stable",
+            "runtime/org.gimp.GIMP.Plugin.Beta/x86_64/stable",
+        ]
+    );
 }
 
 #[test]
@@ -900,6 +1040,75 @@ fn what_goes_with_a_flatpak_unclear_is_never_told_nothing() {
                 &deployment.join("metadata"),
                 "[Extension org.gimp.GIMP.Plugin]\nautodelete=true\nsubdirectories=true\n",
             );
+        })
+        .map(|related| related.extensions.len()),
+        Ok(0)
+    );
+}
+
+#[test]
+fn whose_an_extension_is_unclear_is_never_told_nothing() {
+    // Catches an origin or an extension's metadata that cannot be read told
+    // « not the application's »: it would stay unseen, or go unchecked.
+    let app = FlatpakRef::app("org.gimp.GIMP", "x86_64", "stable").unwrap();
+    let unclear = |prepare: &dyn Fn(&Path, &Path)| {
+        let root = tempfile::tempdir().unwrap();
+        let system = root.path().join("system");
+        let deployment = deploy(&system, "org.gimp.GIMP", "abc123");
+        prepare(&system, &deployment);
+        related(&system, &app)
+    };
+    // The application's origin, once an extension is deployed: missing,
+    // without its NUL, empty, unreadable.
+    let with_locale = |system: &Path, deployment: &Path| {
+        write(
+            &deployment.join("metadata"),
+            "[Extension org.gimp.GIMP.Locale]\n",
+        );
+        deploy_runtime(system, "org.gimp.GIMP.Locale", "stable");
+    };
+    for data in [None, Some(&b"flathub"[..]), Some(&b"\0flathub"[..])] {
+        assert_eq!(
+            unclear(&|system, deployment| {
+                with_locale(system, deployment);
+                fs::remove_file(deployment.join("deploy")).unwrap();
+                if let Some(data) = data {
+                    fs::write(deployment.join("deploy"), data).unwrap();
+                }
+            }),
+            Err(Why::Unclear),
+            "{data:?}"
+        );
+    }
+    assert_eq!(
+        unclear(&|system, deployment| {
+            with_locale(system, deployment);
+            fs::remove_file(deployment.join("deploy")).unwrap();
+            fs::create_dir(deployment.join("deploy")).unwrap();
+        }),
+        Err(Why::Unclear)
+    );
+    // The extension's metadata or data unreadable.
+    for file in ["metadata", "deploy"] {
+        assert_eq!(
+            unclear(&|system, deployment| {
+                with_locale(system, deployment);
+                let extension = system.join("runtime/org.gimp.GIMP.Locale/x86_64/stable/abc123");
+                fs::remove_file(extension.join(file)).unwrap();
+                fs::create_dir(extension.join(file)).unwrap();
+            }),
+            Err(Why::Unclear),
+            "{file}"
+        );
+    }
+    // No extension deployed: the application's origin is never needed.
+    assert_eq!(
+        unclear(&|_, deployment| {
+            write(
+                &deployment.join("metadata"),
+                "[Extension org.gimp.GIMP.Locale]\n",
+            );
+            fs::remove_file(deployment.join("deploy")).unwrap();
         })
         .map(|related| related.extensions.len()),
         Ok(0)

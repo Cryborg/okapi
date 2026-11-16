@@ -27,11 +27,14 @@ pub enum Variable {
     ProgramFiles,
     ProgramFilesX86,
     SystemDrive,
+    /// The session's private directory (`$XDG_RUNTIME_DIR`: sockets,
+    /// authorizations): never in a rule, only protected (invariant 6).
+    RuntimeDirectory,
 }
 
 impl Variable {
     /// Every variable, on every operating system.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::Home,
         Self::TempDirectory,
         Self::Config,
@@ -47,6 +50,7 @@ impl Variable {
         Self::ProgramFiles,
         Self::ProgramFilesX86,
         Self::SystemDrive,
+        Self::RuntimeDirectory,
     ];
 
     /// The name written between `${` and `}` in rule files.
@@ -68,6 +72,7 @@ impl Variable {
             Self::ProgramFiles => "PROGRAMFILES",
             Self::ProgramFilesX86 => "PROGRAMFILES_X86",
             Self::SystemDrive => "SYSTEMDRIVE",
+            Self::RuntimeDirectory => "XDG_RUNTIME_DIR",
         }
     }
 
@@ -75,6 +80,7 @@ impl Variable {
     #[must_use]
     pub const fn is_available_on(self, os: Os) -> bool {
         match self {
+            Self::RuntimeDirectory => false,
             Self::Home | Self::TempDirectory => true,
             Self::Config | Self::Cache | Self::LocalShare => matches!(os, Os::Linux),
             Self::Library | Self::Caches | Self::AppSupport => matches!(os, Os::MacOs),
@@ -88,10 +94,11 @@ impl Variable {
         }
     }
 
+    /// The variable a rule may name so, on some operating system.
     fn from_name(name: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|variable| variable.name() == name)
+        Self::ALL.into_iter().find(|variable| {
+            variable.name() == name && Os::ALL.into_iter().any(|os| variable.is_available_on(os))
+        })
     }
 }
 
@@ -124,6 +131,15 @@ impl TemplatePath {
     #[cfg(test)]
     pub(crate) const fn root(&self) -> PathRoot {
         self.root
+    }
+
+    /// The variable this path starts with, if it starts with one.
+    #[must_use]
+    pub const fn variable(&self) -> Option<Variable> {
+        match self.root {
+            PathRoot::Variable(variable) => Some(variable),
+            PathRoot::FilesystemRoot | PathRoot::Drive(_) => None,
+        }
     }
 
     /// Whether this path is a variable alone, such as `${HOME}`.
@@ -330,7 +346,9 @@ impl TemplateVariables {
     ///   be another variable's value or one of its ancestors, whichever is set
     ///   first: the temporary directory is the one directory rules may empty
     ///   whole. The comparison is lexical; the engine repeats it on canonical
-    ///   paths (invariant 6).
+    ///   paths (invariant 6). `${XDG_RUNTIME_DIR}` is left to the engine
+    ///   alone: a `${TMPDIR}` that holds it (Nix sets one to the other) then
+    ///   leaves only the rules of `${TMPDIR}` out, not every variable.
     pub fn insert(&mut self, variable: Variable, value: PathBuf) -> Result<(), TemplateError> {
         if !value.is_absolute() {
             return Err(TemplateError::RelativeValue { variable, value });
@@ -364,13 +382,16 @@ impl TemplateVariables {
         variable: Variable,
         value: &Path,
     ) -> Result<(), TemplateError> {
+        let checked = |other: Variable| {
+            other != Variable::TempDirectory && other != Variable::RuntimeDirectory
+        };
         let contained = if variable == Variable::TempDirectory {
             self.0
                 .iter()
-                .find(|(other, other_value)| {
-                    **other != Variable::TempDirectory && other_value.starts_with(value)
-                })
+                .find(|(other, other_value)| checked(**other) && other_value.starts_with(value))
                 .map(|(other, other_value)| (value, *other, other_value.as_path()))
+        } else if !checked(variable) {
+            None
         } else {
             self.value_of(Variable::TempDirectory)
                 .filter(|temp| value.starts_with(temp))
@@ -423,7 +444,8 @@ mod tests {
     #[test]
     fn variable_names_round_trip() {
         for variable in Variable::ALL {
-            assert_eq!(Variable::from_name(variable.name()), Some(variable));
+            let named = (variable != Variable::RuntimeDirectory).then_some(variable);
+            assert_eq!(Variable::from_name(variable.name()), named);
         }
     }
 
@@ -431,8 +453,8 @@ mod tests {
     fn each_variable_exists_on_its_own_systems() {
         use Variable::{
             AppData, AppSupport, Cache, Caches, Config, Home, Library, LocalAppData, LocalShare,
-            ProgramData, ProgramFiles, ProgramFilesX86, SystemDrive, TempDirectory,
-            WindowsDirectory,
+            ProgramData, ProgramFiles, ProgramFilesX86, RuntimeDirectory, SystemDrive,
+            TempDirectory, WindowsDirectory,
         };
         // Linux, macOS, Windows.
         let expected = [
@@ -451,6 +473,7 @@ mod tests {
             (ProgramFiles, [false, false, true]),
             (ProgramFilesX86, [false, false, true]),
             (SystemDrive, [false, false, true]),
+            (RuntimeDirectory, [false, false, false]),
         ];
         assert_eq!(expected.len(), Variable::ALL.len());
         for (variable, availability) in expected {
@@ -532,6 +555,71 @@ mod tests {
     }
 
     #[test]
+    fn a_rule_never_names_the_runtime_directory() {
+        assert_eq!(
+            template("${XDG_RUNTIME_DIR}/x"),
+            Err(ValidationError::UnknownVariable {
+                name: "XDG_RUNTIME_DIR".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn a_temp_directory_holding_the_runtime_directory_is_left_to_the_engine() {
+        for (first, second) in [
+            (
+                (Variable::RuntimeDirectory, "run/user/1000"),
+                (Variable::TempDirectory, "run/user/1000"),
+            ),
+            (
+                (Variable::TempDirectory, "run/user"),
+                (Variable::RuntimeDirectory, "run/user/1000"),
+            ),
+        ] {
+            let mut variables = variables(&[first]);
+            assert_eq!(
+                variables.insert(second.0, absolute(second.1)),
+                Ok(()),
+                "{first:?} then {second:?}"
+            );
+        }
+        let mut variables = variables(&[(Variable::RuntimeDirectory, "run/user/1000")]);
+        assert!(
+            variables
+                .insert(Variable::RuntimeDirectory, absolute(""))
+                .is_err(),
+            "the same checks of its value as any variable"
+        );
+        assert!(
+            matches!(
+                variables.insert(Variable::TempDirectory, absolute("run")),
+                Ok(())
+            ),
+            "{variables:?}"
+        );
+        assert!(
+            matches!(
+                variables.insert(Variable::Home, absolute("run/home")),
+                Err(TemplateError::TempDirectoryContainsVariable { .. })
+            ),
+            "the others still checked"
+        );
+    }
+
+    #[test]
+    fn a_path_names_the_variable_it_starts_with() {
+        assert_eq!(
+            template("${TMPDIR}").unwrap().variable(),
+            Some(Variable::TempDirectory)
+        );
+        assert_eq!(
+            template("${CACHE}/x").unwrap().variable(),
+            Some(Variable::Cache)
+        );
+        assert_eq!(template("/var/tmp").unwrap().variable(), None);
+    }
+
+    #[test]
     fn availability_follows_the_variable_and_the_literal_root() {
         let linux_only = template("${CONFIG}/x").unwrap();
         assert!(linux_only.is_available_on(Os::Linux));
@@ -559,7 +647,10 @@ mod tests {
     #[test]
     fn only_the_temporary_directory_may_be_emptied_whole() {
         let mut refused = 0;
-        for variable in Variable::ALL {
+        let named = Variable::ALL
+            .into_iter()
+            .filter(|variable| *variable != Variable::RuntimeDirectory);
+        for variable in named {
             let bare = template(&format!("${{{}}}", variable.name())).unwrap();
             if variable == Variable::TempDirectory {
                 assert_eq!(bare.ensure_bounded_deletion(), Ok(()));
@@ -575,7 +666,7 @@ mod tests {
             let below = template(&format!("${{{}}}/cache", variable.name())).unwrap();
             assert_eq!(below.ensure_bounded_deletion(), Ok(()));
         }
-        assert_eq!(refused, Variable::ALL.len() - 1);
+        assert_eq!(refused, Variable::ALL.len() - 2);
     }
 
     #[test]

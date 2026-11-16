@@ -183,6 +183,24 @@ mod tests {
     }
 
     #[test]
+    fn refuses_a_temporary_directory_that_is_or_holds_the_runtime_directory() {
+        let fixture = fixture(&["run/user/1000"]);
+        let runtime = fixture.root.join("run/user/1000");
+        for temp in [runtime.clone(), fixture.root.join("run/user")] {
+            let protected = protected(&[
+                (Variable::RuntimeDirectory, runtime.clone()),
+                (Variable::TempDirectory, temp.clone()),
+            ]);
+            assert_eq!(
+                protected.refusal(identity(&temp)),
+                Some(Variable::RuntimeDirectory),
+                "{temp:?}"
+            );
+            assert!(protected.is_protected_directory(identity(&runtime)));
+        }
+    }
+
+    #[test]
     fn protects_a_variable_that_does_not_exist_yet() {
         let fixture = fixture(&[]);
         let root = &fixture.root;

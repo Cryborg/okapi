@@ -84,6 +84,18 @@ pub(crate) fn is_session_name(name: &OsStr, is_directory: bool, top_level: bool)
     lock_file || session_entry
 }
 
+/// Whether the real path `path` is a directory where the system keeps
+/// everyone's temporary files (`/tmp`, `/var/tmp`), or below one. A
+/// `${TMPDIR}` elsewhere (`/run/user/<uid>` under Nix, `/scratch/<user>` on a
+/// cluster, a folder of the user's) may hold a session's state or data: its
+/// rule is not selected before the user chooses.
+pub(crate) fn is_system_temporary(path: &Path) -> bool {
+    const SYSTEM_TEMPORARY: [&str; 2] = ["/tmp", "/var/tmp"];
+    SYSTEM_TEMPORARY
+        .iter()
+        .any(|directory| path.starts_with(directory))
+}
+
 /// `text` in lower case, one character at a time: `str::to_lowercase` writes a
 /// final sigma differently at the end of a word, so a name and its suffix
 /// would no longer compare.
@@ -107,6 +119,16 @@ pub(crate) fn starts_with_ignoring_case(path: &Path, prefix: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_temporary_directories_compare_whole_components() {
+        for presumed in ["/tmp", "/tmp/user/1000", "/var/tmp", "/var/tmp/x"] {
+            assert!(is_system_temporary(Path::new(presumed)), "{presumed}");
+        }
+        for elsewhere in ["/tmpx", "/var/tmpx", "/run/user/1000", "/home/ana/tmp", "/"] {
+            assert!(!is_system_temporary(Path::new(elsewhere)), "{elsewhere}");
+        }
+    }
 
     #[test]
     fn prefixes_compare_whole_components_ignoring_case() {

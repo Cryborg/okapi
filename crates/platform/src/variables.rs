@@ -177,6 +177,14 @@ fn variables_from(
         .map_or_else(|| PathBuf::from(DEFAULT_TEMP_DIRECTORY), PathBuf::from);
     variables.insert(Variable::TempDirectory, temp)?;
     variables.insert(Variable::Home, home)?;
+    // Only protected, never in a rule: a value that cannot be used protects
+    // nothing, and stops nothing either. Absent where no session manager sets
+    // it (the privileged helper, a cron job).
+    if let Some(runtime) = read("XDG_RUNTIME_DIR").filter(|value| !value.is_empty())
+        && let Err(error) = variables.insert(Variable::RuntimeDirectory, PathBuf::from(runtime))
+    {
+        tracing::warn!(?error, "XDG_RUNTIME_DIR unusable, ignored");
+    }
     Ok(variables)
 }
 
@@ -272,6 +280,46 @@ mod tests {
                 ..
             }))
         ));
+    }
+
+    #[test]
+    fn the_runtime_directory_is_read_when_usable_and_ignored_otherwise() {
+        let runtime = |value| {
+            variables(&[("XDG_RUNTIME_DIR", value)], Some("/home/ana"))
+                .unwrap()
+                .value_of(Variable::RuntimeDirectory)
+                .map(Path::to_path_buf)
+        };
+        assert_eq!(
+            runtime("/run/user/1000"),
+            Some(PathBuf::from("/run/user/1000"))
+        );
+        for unusable in ["", "run/user/1000", "/", "/run/user/../1000"] {
+            assert_eq!(runtime(unusable), None, "{unusable:?}");
+        }
+        assert_eq!(
+            variables(&[], Some("/home/ana"))
+                .unwrap()
+                .value_of(Variable::RuntimeDirectory),
+            None
+        );
+    }
+
+    #[test]
+    fn a_temp_directory_that_is_the_runtime_directory_stops_nothing() {
+        // Nix: the engine then refuses the rules of `${TMPDIR}` alone.
+        let variables = variables(
+            &[
+                ("TMPDIR", "/run/user/1000"),
+                ("XDG_RUNTIME_DIR", "/run/user/1000"),
+            ],
+            Some("/home/ana"),
+        )
+        .unwrap();
+        assert_eq!(
+            variables.value_of(Variable::RuntimeDirectory),
+            variables.value_of(Variable::TempDirectory)
+        );
     }
 
     #[test]

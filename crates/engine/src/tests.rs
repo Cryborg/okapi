@@ -39,7 +39,15 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let directory = tempfile::tempdir().unwrap();
+        Self::of(tempfile::tempdir().unwrap())
+    }
+
+    /// A temporary directory in `parent`.
+    fn new_in(parent: &str) -> Self {
+        Self::of(tempfile::tempdir_in(parent).unwrap())
+    }
+
+    fn of(directory: tempfile::TempDir) -> Self {
         let root = fs::canonicalize(directory.path()).unwrap();
         Self {
             _directory: directory,
@@ -497,6 +505,39 @@ fn a_root_that_holds_a_variable_is_refused_and_the_temporary_directory_is_not() 
         report.issues(),
         [ScanIssue::ProtectedRoot { path, variable: Variable::Home, .. }] if *path == shared
     ));
+}
+
+/// Scans the `${TMPDIR}` rule, the variable set to `temp`, which holds one old
+/// file; gives whether its group is selected before the user chooses.
+fn temp_directory_selected(fixture: &Fixture, temp: PathBuf) -> bool {
+    let rule = target(r#"{"path": "${TMPDIR}", "subcategory": "Temp"}"#);
+    let mut run = Run::new(fixture, vec![RuleEntry::Target(&rule)]);
+    run.variables.insert(Variable::TempDirectory, temp).unwrap();
+    let report = run.scan();
+    let [group] = report.groups() else {
+        panic!("one group: {:?}", report.groups());
+    };
+    assert_eq!(group.items().len(), 1);
+    group.is_selected_by_default()
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn the_temporary_directory_is_selected_beforehand_only_in_the_systems() {
+    let in_tmp = Fixture::new_in("/tmp");
+    in_tmp.file("temp/old", 1, 2 * HOUR);
+    assert!(temp_directory_selected(&in_tmp, in_tmp.path("temp")));
+
+    let elsewhere = Fixture::new_in("/dev/shm");
+    elsewhere.file("temp/old", 1, 2 * HOUR);
+    assert!(!temp_directory_selected(&elsewhere, elsewhere.path("temp")));
+
+    elsewhere.file("real/sub/old", 1, 2 * HOUR);
+    std::os::unix::fs::symlink(elsewhere.path("real"), in_tmp.path("link")).unwrap();
+    assert!(
+        !temp_directory_selected(&in_tmp, in_tmp.path("link/sub")),
+        "under /tmp by its value, elsewhere by its real path"
+    );
 }
 
 /// The modification date that gives directories one shared identity, for

@@ -11,11 +11,11 @@ use okapi_platform::{CHROMIUM_LOCK, FIREFOX_LOCK, FileIdentity};
 use okapi_rules::{
     AgeDays, AppCacheRule, BrowserCacheDirectory, BrowserKind, ChromiumBrowser, CleanTarget,
     Effect, FirefoxBrowser, MiscRules, Name, PathMatcher, RelativePath, SingleFileTarget,
-    TemplatePath, TemplateVariables,
+    TemplatePath, TemplateVariables, Variable,
 };
 
 use crate::options::ScanOptions;
-use crate::paths::is_absent;
+use crate::paths::{is_absent, is_system_temporary};
 use crate::protection::ProtectedRoots;
 use crate::report::{
     AppFile, BrowserLock, Category, EntryKind, GroupAttributes, Origin, ScanIssue, ScanStats,
@@ -434,17 +434,24 @@ impl Planner<'_> {
         let Some(origin) = Origin::of_target(target) else {
             return Vec::new();
         };
+        let Some(base) = self.open_base(&origin, deletion.path()) else {
+            return Vec::new();
+        };
+        // Judged on the real path: `/tmp/x` may be a link to a folder of the
+        // user's.
+        let presumed_temporary = deletion.path().variable() != Some(Variable::TempDirectory)
+            || is_system_temporary(&base);
+        if !presumed_temporary {
+            tracing::debug!(base = ?base, "temporary directory outside /tmp and /var/tmp: left to choose");
+        }
         let attributes = GroupAttributes {
             origins: vec![origin.clone()],
             label: target.subcategory().clone(),
             rule_group: None,
             cache_reset: deletion.is_cache_reset(),
-            selected_by_default: target.is_selected_by_default(),
+            selected_by_default: target.is_selected_by_default() && presumed_temporary,
             needs_admin: target.needs_admin(),
             locks: BTreeSet::new(),
-        };
-        let Some(base) = self.open_base(&origin, deletion.path()) else {
-            return Vec::new();
         };
         let roots = match deletion.child_subdirectory() {
             Some(subdirectory) => self.expand(&origin, &base, subdirectory),

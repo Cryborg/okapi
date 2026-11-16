@@ -47,6 +47,10 @@ sed "s|^Exec=.*|Exec=$binary|" \
 if [[ -f $hicolor/icon-theme.cache ]] && command -v gtk-update-icon-cache > /dev/null; then
     gtk-update-icon-cache --quiet --ignore-theme-index "$hicolor"
 fi
+# GNOME Shell reads a theme's folders again only once the theme's own date
+# changes, not that of a folder below it: without this, it keeps a gear for
+# the icon until the next session.
+touch -- "$hicolor"
 if command -v update-desktop-database > /dev/null; then
     update-desktop-database --quiet "$(dirname -- "$entry")"
 fi

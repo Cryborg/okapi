@@ -1432,7 +1432,7 @@ mod tests {
         assert_eq!(history.len(), 1);
         assert_eq!(history[0]["removed"], 1);
         assert_eq!(
-            history[0]["entries"][0]["path"],
+            sandbox.deletion_logs()[0][0]["path"],
             old.to_string_lossy().as_ref(),
             "the deletion log asked for"
         );
@@ -2033,7 +2033,7 @@ mod tests {
         assert!(!yarn.exists());
         assert!(pip.exists(), "unchecked, never cleaned (invariant 1)");
         assert!(!pipenv.exists());
-        let mut paths: Vec<String> = sandbox.history()[0]["entries"]
+        let mut paths: Vec<String> = sandbox.deletion_logs()[0]
             .as_array()
             .unwrap()
             .iter()
@@ -3093,7 +3093,7 @@ mod tests {
             "root's part first"
         );
         assert_eq!(
-            history[0]["entries"][0]["path"],
+            sandbox.deletion_logs()[0][0]["path"],
             crash.display().to_string(),
             "root's first"
         );

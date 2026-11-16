@@ -714,7 +714,11 @@ fn each_cleaning_leaves_a_history_line() {
     let output = sandbox.run(&["--clean", "--apps", "--min-age", "0"]);
     assert_eq!(output.status.code(), Some(0));
     let history = sandbox.history();
-    assert_eq!(history.len(), 2);
+    assert_eq!(history.len(), 3, "the deletion log on a line of its own");
+    assert_eq!(history[1]["kind"], "deletions");
+    assert_eq!(history[1]["time"], history[2]["time"], "its cleaning's");
+    assert_eq!(history[2]["removed"], 1);
+    assert_eq!(history[2].get("entries"), None);
     assert_eq!(
         history[1]["entries"][0].get("inexact"),
         None,
@@ -865,17 +869,27 @@ fn the_cleaning_outcomes_keep_their_exact_form() {
         {"path": path("three"), "result": "removed", "bytes": 3},
     ]);
     assert_eq!(serde_json::Value::Array(outcomes.clone()), expected);
-    let mut line = sandbox.history()[0].clone();
-    let mut entries = line["entries"].as_array().unwrap().clone();
+    let history = sandbox.history();
+    let [deletions, line] = history.as_slice() else {
+        panic!("{history:?}");
+    };
+    let mut deletions = deletions.clone();
+    let mut line = line.clone();
+    let mut entries = deletions["entries"].as_array().unwrap().clone();
     entries.sort_by_key(|entry| entry["path"].as_str().unwrap().to_owned());
     assert_eq!(
         serde_json::Value::Array(entries),
         expected,
         "the deletion log"
     );
-    let object = line.as_object_mut().unwrap();
-    object.remove("entries");
-    assert!(object.remove("time").unwrap().is_i64());
+    let time = line.as_object_mut().unwrap().remove("time").unwrap();
+    assert!(time.is_i64());
+    deletions.as_object_mut().unwrap().remove("entries");
+    assert_eq!(
+        deletions,
+        serde_json::json!({"version": 1, "kind": "deletions", "time": time}),
+        "on the line before its cleaning's, at its time"
+    );
     assert_eq!(
         line,
         serde_json::json!({

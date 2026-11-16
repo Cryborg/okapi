@@ -33,7 +33,8 @@ pub struct Settings {
     /// The minimum age, in minutes; `None` leaves the engine's default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_age_minutes: Option<u64>,
-    /// Whether each cleaning's history line lists every entry.
+    /// Whether each cleaning's history lists every entry (on a line before
+    /// the cleaning's).
     pub deletion_log: bool,
     /// The language of both interfaces; `None` is the session's (D-7).
     #[serde(skip_serializing_if = "Option::is_none")]

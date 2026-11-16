@@ -2388,7 +2388,31 @@ pub mod tests {
             }
         }
 
+        /// The cleaning lines of the history (their deletion logs, on the
+        /// lines before them, are [`Self::deletion_logs`]).
         pub fn history(&self) -> Vec<serde_json::Value> {
+            self.history_lines()
+                .into_iter()
+                .filter(|line| line.get("kind").is_none())
+                .collect()
+        }
+
+        /// The entries of the deletion log of each cleaning, in order.
+        pub fn deletion_logs(&self) -> Vec<serde_json::Value> {
+            let lines = self.history_lines();
+            lines
+                .iter()
+                .zip(lines.iter().skip(1))
+                .filter(|(line, _)| line["kind"] == "deletions")
+                .map(|(log, cleaning)| {
+                    assert_eq!(log["time"], cleaning["time"], "its cleaning's, next");
+                    assert_eq!(cleaning.get("kind"), None);
+                    log["entries"].clone()
+                })
+                .collect()
+        }
+
+        fn history_lines(&self) -> Vec<serde_json::Value> {
             fs::read_to_string(self.root.join("state/history.jsonl"))
                 .unwrap_or_default()
                 .lines()

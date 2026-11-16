@@ -12,10 +12,12 @@ use crate::{StoreError, file};
 const HISTORY_FILE: &str = "history.jsonl";
 /// The format of each history line.
 const HISTORY_VERSION: u32 = 1;
-/// A bound on what is read, on the caller's thread, to find the last line:
-/// a longer one (a link to another file, or a deletion log beyond any seen)
-/// is not read, which is traced.
-const MAX_LINE: u64 = 256 * 1024 * 1024;
+/// A bound on what is read, on the caller's thread, to find the last
+/// cleaning: its line and the uninstallations after it take a few hundred
+/// bytes each, its deletion log is on a line of its own before it, never
+/// read. More (a link to another file, a line of a deletion log whose
+/// cleaning line is missing) is not read, which is traced.
+const MAX_LINE: u64 = 1024 * 1024;
 /// The blocks the history is read by from its end, none of them kept.
 const BLOCK: u64 = 64 * 1024;
 
@@ -38,9 +40,19 @@ pub struct HistoryEntry {
     /// was one; absent otherwise, so a line of the user's alone is unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub admin: Option<AdminRecord>,
-    /// Every entry, when the user keeps a deletion log.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Every entry, when the user keeps a deletion log: written on a line
+    /// of its own (`kind: "deletions"`, the same `time`) just before the
+    /// cleaning's, so that the cleaning's stays short to read back however
+    /// many entries there are.
+    #[serde(skip)]
     pub entries: Option<Vec<HistoryOutcome>>,
+}
+
+/// The deletion log of a cleaning, on the line before the cleaning's.
+#[derive(Serialize)]
+struct DeletionLog<'a> {
+    time: i64,
+    entries: &'a [HistoryOutcome],
 }
 
 /// What became of the part of a cleaning that needed the administrator.
@@ -273,6 +285,8 @@ pub enum UninstallSource {
 #[serde(rename_all = "lowercase")]
 enum LineKind {
     Uninstall,
+    /// The deletion log of the cleaning on the next line.
+    Deletions,
 }
 
 #[derive(Serialize)]
@@ -359,8 +373,9 @@ impl History {
     /// last line, past the lines of the applications uninstalled after it:
     /// `None` when there is none, or when the line met does not say one (a
     /// write cut short, another version or kind, too long), traced at each
-    /// reading. A line before one that cannot be read is never taken for
-    /// the last cleaning: a cleaning may have come after. All the lines read
+    /// reading. A line before one that cannot be read, or before a deletion
+    /// log whose cleaning line is missing, is never taken for the last
+    /// cleaning: a cleaning may have come after. All the lines read
     /// are bounded together as one line is.
     ///
     /// # Errors
@@ -377,21 +392,34 @@ impl History {
         find_last_cleaning(&history, &path, MAX_LINE)
     }
 
-    /// Adds `entry` as one line, written at once and synced to the disk: `Ok`
-    /// means the line is kept (but for a history file created by this very
-    /// run, whose name a power cut may still lose). A last line an interrupted run left unfinished
-    /// is ended with a line break first, so an interrupted write spoils at
-    /// most its own line.
+    /// Adds `entry` as one line, after the line of its deletion log if it
+    /// has one, written at once and synced to the disk: `Ok` means the lines
+    /// are kept (but for a history file created by this very run, whose
+    /// name a power cut may still lose). A last line an interrupted run left
+    /// unfinished is ended with a line break first, so an interrupted write
+    /// spoils at most its own lines.
     ///
     /// # Errors
     ///
     /// [`StoreError::Unwritable`].
     pub fn record(&mut self, entry: &HistoryEntry) -> Result<(), StoreError> {
-        self.write(&Line {
+        let mut bytes = match &entry.entries {
+            Some(entries) => self.line(&Line {
+                version: HISTORY_VERSION,
+                kind: Some(LineKind::Deletions),
+                entry: &DeletionLog {
+                    time: entry.time,
+                    entries,
+                },
+            })?,
+            None => Vec::new(),
+        };
+        bytes.extend(self.line(&Line {
             version: HISTORY_VERSION,
             kind: None,
             entry,
-        })
+        })?);
+        self.write(bytes)
     }
 
     /// Adds the line of `entry`, an application uninstalled, as [`record`]
@@ -403,22 +431,29 @@ impl History {
     ///
     /// [`record`]: Self::record
     pub fn record_uninstall(&mut self, entry: &UninstallEntry) -> Result<(), StoreError> {
-        self.write(&Line {
+        self.line(&Line {
             version: HISTORY_VERSION,
             kind: Some(LineKind::Uninstall),
             entry,
         })
+        .and_then(|bytes| self.write(bytes))
         .inspect_err(
             |error| tracing::error!(%error, name = %entry.name, "uninstallation not recorded"),
         )
     }
 
-    fn write<T: Serialize>(&mut self, line: &Line<'_, T>) -> Result<(), StoreError> {
+    /// `line`, as written: JSON, then a line break.
+    fn line<T: Serialize>(&self, line: &Line<'_, T>) -> Result<Vec<u8>, StoreError> {
         let mut bytes = serde_json::to_vec(line).map_err(|error| StoreError::Unwritable {
             path: self.path.clone(),
             error: io::Error::other(error),
         })?;
         bytes.push(b'\n');
+        Ok(bytes)
+    }
+
+    /// Adds the lines `bytes` at once, synced to the disk.
+    fn write(&mut self, mut bytes: Vec<u8>) -> Result<(), StoreError> {
         // Checked now, not at opening: another run may have been cut short
         // meanwhile.
         let ends_cleanly =
@@ -503,6 +538,17 @@ fn find_last_cleaning(
             Ok(LineRead::Uninstall) => {
                 uninstalls += 1;
                 until = start;
+            }
+            Ok(LineRead::Deletions) => {
+                tracing::warn!(
+                    offset = start,
+                    length = end - start,
+                    scanned,
+                    uninstalls,
+                    ?elapsed,
+                    "deletion log without its cleaning line: no last cleaning"
+                );
+                return Ok(None);
             }
             Err(error @ (StoreError::Invalid { .. } | StoreError::UnsupportedVersion { .. })) => {
                 tracing::warn!(offset = start, length = end - start, scanned, uninstalls, ?elapsed, %error, "history line unreadable: no last cleaning");
@@ -602,6 +648,8 @@ enum LineRead {
     Cleaning(LastCleaning),
     /// An application uninstalled: the line before is read.
     Uninstall,
+    /// A deletion log, whose cleaning line should follow: a write cut short.
+    Deletions,
 }
 
 /// What the line of `history` from `start` to `end` says, read as it
@@ -622,8 +670,10 @@ fn parse(history: &File, start: u64, end: u64, path: &Path) -> Result<LineRead, 
     file::check_version(line().map_err(unreadable)?, path, HISTORY_VERSION)?;
     let read: LastLine = serde_json::from_reader(line().map_err(unreadable)?)
         .map_err(|error| file::json_error(path, error))?;
-    if let Some(LineKind::Uninstall) = read.kind {
-        return Ok(LineRead::Uninstall);
+    match read.kind {
+        Some(LineKind::Uninstall) => return Ok(LineRead::Uninstall),
+        Some(LineKind::Deletions) => return Ok(LineRead::Deletions),
+        None => {}
     }
     let removed_bytes = read
         .removed_bytes
@@ -699,7 +749,11 @@ mod tests {
             .record(&entry(2, Some(vec![outcome])))
             .unwrap();
         let lines = lines(&state);
-        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines.len(),
+            3,
+            "the second's deletion log on a line of its own"
+        );
         // The format on disk, which readers rely on: every field named.
         assert_eq!(
             lines[0],
@@ -716,9 +770,36 @@ mod tests {
             }),
             "no deletion log, no entries"
         );
-        assert_eq!(lines[1]["removed"], 2);
-        assert_eq!(lines[1]["entries"][0]["path"], "/tmp/x");
-        assert_eq!(lines[1]["removedBytes"], 10);
+        assert_eq!(
+            lines[1],
+            serde_json::json!({
+                "version": 1,
+                "kind": "deletions",
+                "time": 1_700_000_000,
+                "entries": [{"path": "/tmp/x", "result": "removed", "bytes": 10}],
+            }),
+            "before its cleaning, at its time"
+        );
+        assert_eq!(lines[2]["removed"], 2);
+        assert_eq!(lines[2]["removedBytes"], 10);
+        assert_eq!(
+            lines[2].get("entries"),
+            None,
+            "never on the cleaning's line"
+        );
+    }
+
+    #[test]
+    fn a_deletion_log_asked_for_is_written_even_empty() {
+        let directory = tempfile::tempdir().unwrap();
+        History::open(directory.path())
+            .unwrap()
+            .record(&entry(0, Some(Vec::new())))
+            .unwrap();
+        let lines = lines(directory.path());
+        assert_eq!(lines[0]["kind"], "deletions");
+        assert_eq!(lines[0]["entries"], serde_json::json!([]));
+        assert_eq!(lines.len(), 2);
     }
 
     #[test]
@@ -1280,9 +1361,10 @@ mod tests {
         assert_eq!(last(directory.path()), None);
     }
 
-    /// A deletion log over several blocks is skipped as it streams by.
+    /// A deletion log over several blocks is never read back: the last
+    /// cleaning is found within a bound far shorter than it.
     #[test]
-    fn a_last_line_over_several_blocks_is_read() {
+    fn a_deletion_log_however_long_is_never_read_back() {
         let directory = tempfile::tempdir().unwrap();
         recorded(directory.path(), &[(100, 7, None)]);
         History::open(directory.path())
@@ -1293,16 +1375,27 @@ mod tests {
                 ..entry(1, Some(vec![outcome("removed", Some(4), None); 4000]))
             })
             .unwrap();
-        let length = std::fs::metadata(directory.path().join(HISTORY_FILE))
-            .unwrap()
-            .len();
-        assert!(length > 2 * BLOCK, "{length}");
+        let path = History::path(directory.path());
+        let history = File::open(&path).unwrap();
+        assert!(length(&history) > 2 * BLOCK, "{}", length(&history));
         assert_eq!(
-            last(directory.path()),
+            find_last_cleaning(&history, &path, BLOCK).unwrap(),
             Some(LastCleaning {
                 time: 200,
                 freed: Some(9)
             })
         );
+    }
+
+    #[test]
+    fn a_deletion_log_without_its_cleaning_line_says_no_last_cleaning() {
+        let directory = tempfile::tempdir().unwrap();
+        recorded(directory.path(), &[(100, 7, None)]);
+        let text = std::fs::read_to_string(History::path(directory.path())).unwrap();
+        let deletions = text.lines().next().unwrap().to_owned();
+        assert!(deletions.contains("\"kind\":\"deletions\""), "{deletions}");
+        // A write cut right after the deletion log.
+        append(directory.path(), format!("{deletions}\n").as_bytes());
+        assert_eq!(last(directory.path()), None, "never the one before");
     }
 }

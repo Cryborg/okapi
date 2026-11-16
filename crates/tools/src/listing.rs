@@ -14,10 +14,13 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
-use okapi_platform::{Directory, EntryStatus, FileIdentity, Unreached, reach};
+use okapi_platform::{Directory, EntryStatus, FileIdentity, Unreached, reach_with};
 
 pub(crate) use roots::{Mounts, Opened, list, open_roots};
-pub(crate) use walk::{Cancelled, Listing};
+// The comparison of the duplicates stops on it too.
+#[cfg(feature = "duplicates")]
+pub(crate) use walk::Cancelled;
+pub(crate) use walk::{Counts, Listing, Measure, Owners};
 
 /// A file listed.
 #[derive(Debug)]
@@ -33,6 +36,9 @@ pub(crate) struct Found {
 pub(crate) struct Seen {
     pub(crate) identity: FileIdentity,
     pub(crate) size: u64,
+    /// What it takes on disk ([`EntryStatus::on_disk`]), never compared
+    /// again: compressing or sharing its blocks changes it, not the file.
+    pub(crate) on_disk: u64,
     pub(crate) modified: SystemTime,
     pub(crate) changed: SystemTime,
     pub(crate) links: u64,
@@ -40,10 +46,11 @@ pub(crate) struct Seen {
 }
 
 impl Seen {
-    pub(crate) const fn of(status: &EntryStatus) -> Self {
+    pub(crate) fn of(status: &EntryStatus) -> Self {
         Self {
             identity: status.identity,
             size: status.size,
+            on_disk: status.on_disk(),
             modified: status.modified,
             changed: status.changed,
             links: status.links,
@@ -52,7 +59,8 @@ impl Seen {
     }
 
     /// Whether `status` is still this file, unchanged: the same object, of
-    /// the same size, dates and owner. A write moves the inode's change
+    /// the same size, dates, owner and names (a name made moves the change
+    /// date, but not on every filesystem). A write moves the inode's change
     /// date, even one that sets the modification date back; only two writes
     /// within one tick of a coarse clock could go unseen. FAT keeps no change
     /// date of its own (a date set back sets it back too): the size is the
@@ -63,6 +71,7 @@ impl Seen {
             && status.size == self.size
             && status.modified == self.modified
             && status.owner == self.owner
+            && status.links == self.links
     }
 
     /// Whether `status`, read in the trash once moved, is this file: moving
@@ -113,6 +122,8 @@ pub struct SearchStats {
     /// Mounts not entered: folders, or files mounted on another.
     pub other_mounts: u64,
     pub excluded: u64,
+    /// Files of another user, never kept (the large files).
+    pub other_owners: u64,
     /// Files that changed, went, or could not be read while compared (the
     /// duplicates): never in a group.
     pub dropped: u64,
@@ -157,11 +168,12 @@ const HIDDEN_TRASH: &str = ".Trash";
 const WINDOWS_TRASH: &str = "$RECYCLE.BIN";
 
 /// The folder holding the file at `path`, below `root`, reached from the
-/// filesystem root without a link (invariant 3), and the file's name in it.
+/// filesystem root without a link (invariant 3), and the file's name in it;
+/// `None` when a folder on the way is gone.
 pub(crate) fn parent_of<'a>(
     path: &'a Path,
     root: &Root,
-) -> Result<(Directory, &'a OsStr), Unreached> {
+) -> Result<Option<(Directory, &'a OsStr)>, Unreached> {
     let below = path
         .strip_prefix(&root.path)
         .map_err(|_| Unreached::Changed)?;
@@ -173,7 +185,8 @@ pub(crate) fn parent_of<'a>(
         names.push(name);
     }
     let name = names.pop().ok_or(Unreached::Changed)?;
-    Ok((reach(&root.path, root.identity, &names)?, name))
+    let reached = reach_with(&root.path, root.identity, &names, |_, _| true)?;
+    Ok(reached.map(|reached| (reached.directory, name)))
 }
 
 /// Why a file listed is not, read again, the file the search read.
@@ -194,13 +207,23 @@ pub(crate) fn located<'a>(
     root: &Root,
     seen: &Seen,
 ) -> Result<(Directory, &'a OsStr), Unlocated> {
-    let (folder, name) = parent_of(path, root).map_err(|unreached| match unreached {
-        Unreached::Changed => Unlocated::Changed,
-        Unreached::Io(error) => Unlocated::Refused(error),
-    })?;
+    let (folder, name) = parent_of(path, root)
+        .map_err(|unreached| match unreached {
+            Unreached::Changed => Unlocated::Changed,
+            Unreached::Io(error) => Unlocated::Refused(error),
+        })?
+        .ok_or(Unlocated::Gone)?;
     match folder.status_of(name) {
         Ok(status) if seen.unchanged(&status) => Ok((folder, name)),
-        Ok(_) => Err(Unlocated::Changed),
+        Ok(status) => {
+            tracing::debug!(
+                path = %path.display(),
+                listed = ?seen,
+                read = ?status,
+                "file read again is no longer the one listed"
+            );
+            Err(Unlocated::Changed)
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Err(Unlocated::Gone),
         Err(error) => Err(Unlocated::Refused(error)),
     }
@@ -264,6 +287,16 @@ mod tests {
             ..status()
         };
         assert!(!seen.unchanged(&given), "given to another");
+        let named = EntryStatus {
+            links: 2,
+            ..status()
+        };
+        assert!(!seen.unchanged(&named), "given another name");
+        let compressed = EntryStatus {
+            allocated: Some(SIZE / 2),
+            ..status()
+        };
+        assert!(seen.unchanged(&compressed), "its blocks shared or packed");
     }
 
     #[test]

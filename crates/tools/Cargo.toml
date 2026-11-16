@@ -43,6 +43,8 @@ monitor = ["dep:okapi-platform", "dep:okapi-rules", "dep:tracing"]
 disk-usage = ["dep:okapi-platform", "dep:thiserror", "dep:tracing"]
 # Copies of one content in the user's folders, read on threads of their own.
 duplicates = ["dep:okapi-platform", "dep:okapi-engine", "dep:blake3", "dep:jiff", "dep:thiserror", "dep:tracing"]
+# The largest files in the user's folders, read on a thread of its own.
+large-files = ["dep:okapi-platform", "dep:okapi-engine", "dep:jiff", "dep:thiserror", "dep:tracing"]
 # The package managers' daemons, asked and never run: PackageKit and
 # flatpak's system helper on the system bus, snapd on its socket.
 packages = [
@@ -79,6 +81,10 @@ required-features = ["disk-usage"]
 [[example]]
 name = "duplicates"
 required-features = ["duplicates"]
+
+[[example]]
+name = "large_files"
+required-features = ["large-files"]
 
 [[example]]
 name = "packages"

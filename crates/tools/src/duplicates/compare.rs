@@ -198,10 +198,13 @@ fn key_of(file: &Found, pass: Pass, comparing: &Comparing<'_>) -> Option<Key> {
 /// the file listed, unchanged.
 pub(crate) fn open(file: &Found, roots: &[Root]) -> Result<File, Dropped> {
     let root = roots.get(file.root).ok_or(Dropped::Changed)?;
-    let (directory, name) = parent_of(&file.path, root).map_err(|unreached| match unreached {
-        Unreached::Changed => Dropped::Changed,
-        Unreached::Io(error) => Dropped::Io(error),
-    })?;
+    let (directory, name) = parent_of(&file.path, root)
+        .map_err(|unreached| match unreached {
+            Unreached::Changed => Dropped::Changed,
+            Unreached::Io(error) => Dropped::Io(error),
+        })?
+        // Gone since it was listed: it changed, like a file gone below.
+        .ok_or(Dropped::Changed)?;
     let (opened, status) = directory
         .open_file(name)
         .map_err(|error| refused(&directory, name, error))?;

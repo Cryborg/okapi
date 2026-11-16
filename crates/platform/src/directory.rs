@@ -317,8 +317,9 @@ impl EntryStatus {
         }
     }
 
-    /// The bytes it takes on disk, what removing it frees: its size stands
-    /// for them when the system does not say.
+    /// The bytes its blocks take on disk, the most removing it frees (less
+    /// when it has other names or shares its blocks): its size stands for
+    /// them when the system does not say.
     #[must_use]
     pub fn on_disk(&self) -> u64 {
         self.allocated.unwrap_or(self.size)

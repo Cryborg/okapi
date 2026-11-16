@@ -31,13 +31,57 @@ const HIDDEN_PREFIX: u8 = b'.';
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Cancelled;
 
+/// What a file's size is, as compared with the smallest kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    all(not(test), not(all(feature = "duplicates", feature = "large-files"))),
+    expect(dead_code, reason = "each tool measures one way")
+)]
+pub(crate) enum Measure {
+    /// Its length: what the duplicates compare.
+    Apparent,
+    /// What its blocks take on disk: the most the trash frees once emptied.
+    OnDisk,
+}
+
+/// Whose files are kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    all(not(test), not(all(feature = "duplicates", feature = "large-files"))),
+    expect(dead_code, reason = "each tool keeps the files of one rule")
+)]
+pub(crate) enum Owners {
+    All,
+    /// This user's only, none when the user is unknown.
+    Only(Option<u32>),
+}
+
+impl Owners {
+    fn keep(self, owner: u32) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(user) => user == Some(owner),
+        }
+    }
+}
+
+/// What the listing counts as it goes, for the progress.
+#[derive(Debug, Default)]
+pub(crate) struct Counts {
+    /// Plain files listed, of any size.
+    pub(crate) files: AtomicU64,
+    /// Files kept.
+    pub(crate) kept: AtomicU64,
+}
+
 /// What the listing honours, as the tool gives it.
 pub(crate) struct Listing<'a> {
     pub(crate) min_size: u64,
+    pub(crate) measure: Measure,
+    pub(crate) owners: Owners,
     pub(crate) exclusions: &'a Exclusions,
     pub(crate) cancelled: &'a AtomicBool,
-    /// The plain files listed so far, for the progress.
-    pub(crate) files: &'a AtomicU64,
+    pub(crate) counts: &'a Counts,
 }
 
 /// What every root's walk honours.
@@ -87,7 +131,7 @@ pub(super) fn walk(
         Ok(own) => own.identity.device(),
         Err(error) => {
             stats.unreadable += 1;
-            tracing::debug!(path = %path.display(), %error, "folder searched unreadable");
+            tracing::warn!(path = %path.display(), %error, "folder searched unreadable");
             return Ok(());
         }
     };
@@ -159,7 +203,13 @@ impl Walk<'_, '_> {
             Ok(names) => names,
             Err(error) => {
                 self.stats.unreadable += 1;
-                tracing::debug!(path = %path.display(), %error, "folder unreadable");
+                // A folder searched that cannot be read is no folder found
+                // empty: it is told. One below it is counted.
+                if root {
+                    tracing::warn!(path = %path.display(), %error, "folder searched unreadable");
+                } else {
+                    tracing::debug!(path = %path.display(), %error, "folder unreadable");
+                }
                 return Ok(());
             }
         };
@@ -254,33 +304,42 @@ impl Walk<'_, '_> {
         None
     }
 
-    /// Keeps the plain file at `path`, read as `status`, if it could have a
-    /// copy.
+    /// Keeps the plain file at `path`, read as `status`, if the tool may
+    /// offer it.
     fn file(&mut self, path: PathBuf, status: &EntryStatus) {
         // A file mounted on another (bind) may lie on another filesystem
-        // than its root's, which judges every copy found below it.
+        // than its root's, which judges every file found below it.
         if status.mount_root == Some(true) {
             self.stats.other_mounts += 1;
             tracing::debug!(path = %path.display(), "mounted file not kept");
             return;
         }
         self.stats.files += 1;
-        self.listing.files.fetch_add(1, Ordering::Relaxed);
-        // An empty file is never a copy worth moving: it frees nothing, and
-        // an empty file often marks something (`__init__.py`).
-        if status.size < self.listing.min_size.max(1) {
+        self.listing.counts.files.fetch_add(1, Ordering::Relaxed);
+        let seen = Seen::of(status);
+        let size = match self.listing.measure {
+            Measure::Apparent => seen.size,
+            Measure::OnDisk => seen.on_disk,
+        };
+        // An empty file is never worth moving: it frees nothing, and an
+        // empty file often marks something (`__init__.py`).
+        if size < self.listing.min_size.max(1) {
             self.stats.below_minimum += 1;
         } else if self.listing.exclusions.excludes(&path) {
             self.stats.excluded += 1;
+        } else if !self.listing.owners.keep(status.owner) {
+            self.stats.other_owners += 1;
+            tracing::debug!(path = %path.display(), owner = status.owner, "file of another user not kept");
         } else if !self.seen.insert(status.identity) {
             // Another name of a file already listed: removing one would free
             // nothing, and a file is never its own copy.
             self.stats.other_names += 1;
         } else {
+            self.listing.counts.kept.fetch_add(1, Ordering::Relaxed);
             self.found.push(Found {
                 path,
                 root: self.root,
-                status: Seen::of(status),
+                status: seen,
             });
         }
     }
@@ -323,18 +382,65 @@ mod tests {
         }
     }
 
+    /// What a walk keeping files by `measure` and `owners` keeps of `files`,
+    /// what it counted, and its count of the files kept.
+    fn walked(
+        measure: Measure,
+        owners: Owners,
+        files: &[(&str, EntryStatus)],
+    ) -> (Vec<PathBuf>, SearchStats, u64) {
+        let exclusions = Exclusions::none();
+        let cancelled = AtomicBool::new(false);
+        let counts = Counts::default();
+        let listing = Listing {
+            min_size: SIZE,
+            measure,
+            owners,
+            exclusions: &exclusions,
+            cancelled: &cancelled,
+            counts: &counts,
+        };
+        let scope = scope(&listing);
+        let mut stats = SearchStats::default();
+        let mut seen = HashSet::new();
+        let mut found = Vec::new();
+        let mut walk = Walk {
+            listing: scope.listing,
+            roots: scope.roots,
+            mounts: scope.mounts,
+            root: 0,
+            device: 1,
+            stats: &mut stats,
+            seen: &mut seen,
+            found: &mut found,
+        };
+        for (path, status) in files {
+            walk.file(PathBuf::from(path), status);
+        }
+        // The progress counts what the stats count.
+        assert_eq!(counts.files.load(Ordering::Relaxed), stats.files);
+        let paths = found.into_iter().map(|file| file.path).collect();
+        (paths, stats, counts.kept.load(Ordering::Relaxed))
+    }
+
+    fn paths(names: &[&str]) -> Vec<PathBuf> {
+        names.iter().map(PathBuf::from).collect()
+    }
+
     #[test]
     fn a_walk_cancelled_reads_no_further() {
         let temporary = tempfile::tempdir().unwrap();
         std::fs::write(temporary.path().join("a"), "a").unwrap();
         let exclusions = Exclusions::none();
         let cancelled = AtomicBool::new(true);
-        let files = AtomicU64::new(0);
+        let counts = Counts::default();
         let listing = Listing {
             min_size: SIZE,
+            measure: Measure::Apparent,
+            owners: Owners::All,
             exclusions: &exclusions,
             cancelled: &cancelled,
-            files: &files,
+            counts: &counts,
         };
         let mut stats = SearchStats::default();
         let mut found = Vec::new();
@@ -354,36 +460,65 @@ mod tests {
 
     #[test]
     fn a_file_mounted_on_another_is_never_kept() {
-        let exclusions = Exclusions::none();
-        let cancelled = AtomicBool::new(false);
-        let files = AtomicU64::new(0);
-        let listing = Listing {
-            min_size: SIZE,
-            exclusions: &exclusions,
-            cancelled: &cancelled,
-            files: &files,
-        };
-        let scope = scope(&listing);
-        let mut stats = SearchStats::default();
-        let mut seen = HashSet::new();
-        let mut found = Vec::new();
-        let mut walk = Walk {
-            listing: scope.listing,
-            roots: scope.roots,
-            mounts: scope.mounts,
-            root: 0,
-            device: 1,
-            stats: &mut stats,
-            seen: &mut seen,
-            found: &mut found,
-        };
-        walk.file(PathBuf::from("/root/mounted"), &status(1, Some(true)));
-        walk.file(PathBuf::from("/root/plain"), &status(2, Some(false)));
-        // A system that cannot tell keeps it: the table of mounts is read.
-        walk.file(PathBuf::from("/root/untold"), &status(3, None));
-        let kept: Vec<&Path> = found.iter().map(|file| file.path.as_path()).collect();
-        assert_eq!(kept, [Path::new("/root/plain"), Path::new("/root/untold")]);
+        let (kept, stats, count) = walked(
+            Measure::Apparent,
+            Owners::All,
+            &[
+                ("/root/mounted", status(1, Some(true))),
+                ("/root/plain", status(2, Some(false))),
+                // A system that cannot tell keeps it: the table of mounts
+                // is read.
+                ("/root/untold", status(3, None)),
+            ],
+        );
+        assert_eq!(kept, paths(&["/root/plain", "/root/untold"]));
         assert_eq!(stats.other_mounts, 1);
         assert_eq!(stats.files, 2);
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn only_the_files_of_the_owners_kept_are_and_the_others_are_counted() {
+        const USER: u32 = 1000;
+        let owned = |inode, owner| EntryStatus {
+            owner,
+            ..status(inode, Some(false))
+        };
+        let files = [
+            ("/root/mine", owned(1, USER)),
+            ("/root/theirs", owned(2, USER + 1)),
+            ("/root/also_mine", owned(3, USER)),
+        ];
+        let (kept, stats, count) = walked(Measure::Apparent, Owners::Only(Some(USER)), &files);
+        assert_eq!(kept, paths(&["/root/mine", "/root/also_mine"]));
+        assert_eq!((stats.other_owners, stats.files, count), (1, 3, 2));
+        let (kept, stats, _) = walked(Measure::Apparent, Owners::All, &files);
+        assert_eq!(kept.len(), 3);
+        assert_eq!(stats.other_owners, 0);
+        // An unknown user keeps nothing.
+        let (kept, stats, count) = walked(Measure::Apparent, Owners::Only(None), &files);
+        assert_eq!(kept, Vec::<PathBuf>::new());
+        assert_eq!((stats.other_owners, count), (3, 0));
+    }
+
+    #[test]
+    fn the_smallest_kept_is_measured_as_the_tool_says() {
+        let sized = |inode, size, allocated| EntryStatus {
+            size,
+            allocated: Some(allocated),
+            ..status(inode, Some(false))
+        };
+        let files = [
+            // Long, sparse: little on disk.
+            ("/root/sparse", sized(1, 4 * SIZE, SIZE / 2)),
+            // Short, its blocks rounded up.
+            ("/root/full", sized(2, SIZE - 1, 2 * SIZE)),
+        ];
+        let (kept, stats, _) = walked(Measure::Apparent, Owners::All, &files);
+        assert_eq!(kept, paths(&["/root/sparse"]));
+        assert_eq!(stats.below_minimum, 1);
+        let (kept, stats, _) = walked(Measure::OnDisk, Owners::All, &files);
+        assert_eq!(kept, paths(&["/root/full"]));
+        assert_eq!(stats.below_minimum, 1);
     }
 }

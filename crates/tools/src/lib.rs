@@ -9,17 +9,23 @@ pub mod disk_usage;
 pub mod docker;
 #[cfg(feature = "duplicates")]
 pub mod duplicates;
-#[cfg(feature = "duplicates")]
+#[cfg(feature = "large-files")]
+pub mod large_files;
+#[cfg(any(feature = "duplicates", feature = "large-files"))]
 mod listing;
 #[cfg(feature = "monitor")]
 pub mod monitor;
-#[cfg(any(feature = "disk-usage", feature = "duplicates"))]
+#[cfg(any(
+    feature = "disk-usage",
+    feature = "duplicates",
+    feature = "large-files"
+))]
 mod mounts;
 #[cfg(feature = "packages")]
 pub mod packages;
-#[cfg(feature = "duplicates")]
+#[cfg(any(feature = "duplicates", feature = "large-files"))]
 mod searching;
-#[cfg(any(feature = "duplicates", feature = "apps"))]
+#[cfg(any(feature = "duplicates", feature = "large-files", feature = "apps"))]
 mod trashing;
 // Its daemons (snapd, Docker) are asked on Linux.
 #[cfg(all(target_os = "linux", any(feature = "packages", feature = "docker")))]
@@ -29,7 +35,11 @@ mod unix_http;
 pub mod updates;
 
 /// What a panic caught says, when it says it in words.
-#[cfg(any(feature = "disk-usage", feature = "duplicates"))]
+#[cfg(any(
+    feature = "disk-usage",
+    feature = "duplicates",
+    feature = "large-files"
+))]
 pub(crate) fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
     panic
         .downcast_ref::<&str>()

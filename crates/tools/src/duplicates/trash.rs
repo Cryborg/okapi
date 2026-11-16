@@ -27,9 +27,11 @@ pub enum KeepReason {
     OtherNames,
     /// The user excluded it since the search.
     Excluded,
-    /// It is no longer the file the search read: written, replaced, or a
-    /// folder on its way changed.
+    /// It is no longer the file the search read: written, replaced, given
+    /// to another, given another name, or a folder on its way changed.
     Changed,
+    /// It is no longer at its path: removed, or it or a folder on its way
+    /// moved elsewhere.
     Gone,
     /// No other copy of its group, not asked for, could be read again
     /// unchanged: changed, gone, or refused by the system.
@@ -118,7 +120,7 @@ impl TrashReceipt {
 }
 
 /// Moves the copies `ids` of `report` to `bin`, but never one the user
-/// excludes (`exclusions`, read afresh, by path) nor the last of a group.
+/// excludes (`exclusions`, read afresh, by path or by identity) nor the last of a group.
 /// Two movings, of one report or of two, never run at once: this one may
 /// wait for another, and reads the disks (a mount that stopped answering
 /// holds it), so it is never called on the interface's thread.
@@ -279,6 +281,16 @@ impl Mover<'_> {
         // Nothing is read of a copy the trash cannot take.
         if copy.identity().device() != self.bin.device() {
             return kept(KeepReason::OtherDevice);
+        }
+        // Through a bind mount of a folder excluded since (the folder
+        // itself shown elsewhere): read only once the copy is known to lie
+        // on the trash's disk.
+        if self.exclusions.excludes_through_identity(copy.path()) {
+            tracing::debug!(
+                path = %copy.path().display(),
+                "excluded by identity: a folder on its way is an excluded one"
+            );
+            return kept(KeepReason::Excluded);
         }
         let mut no_sure_keeper = false;
         let kept_by_another = group
@@ -500,7 +512,7 @@ mod tests {
     }
 
     /// Whether `b` keeps `a` for `user`. `/root1` does not exist: a keeper
-    /// read is `Changed`, one refused before any reading `NoSureKeeper`.
+    /// read is `Gone`, one refused before any reading `NoSureKeeper`.
     #[expect(
         clippy::redundant_closure_for_method_calls,
         reason = "`Mover::keeps` is of one lifetime, the closure of any"
@@ -558,12 +570,12 @@ mod tests {
             may_alias: false,
             ..elsewhere
         };
-        assert_eq!(keeps(sure_elsewhere, user), Err(KeepReason::Changed));
+        assert_eq!(keeps(sure_elsewhere, user), Err(KeepReason::Gone));
         let aliasing_here = Other {
             may_alias: true,
             ..SURE
         };
-        assert_eq!(keeps(aliasing_here, user), Err(KeepReason::Changed));
+        assert_eq!(keeps(aliasing_here, user), Err(KeepReason::Gone));
     }
 
     #[test]
@@ -589,8 +601,8 @@ mod tests {
         };
         assert_eq!(keeps(others, Some(USER)), Err(KeepReason::NoSureKeeper));
         // The same copy, for its owner, is read.
-        assert_eq!(keeps(others, Some(OTHER_USER)), Err(KeepReason::Changed));
-        assert_eq!(keeps(SURE, Some(USER)), Err(KeepReason::Changed));
+        assert_eq!(keeps(others, Some(OTHER_USER)), Err(KeepReason::Gone));
+        assert_eq!(keeps(SURE, Some(USER)), Err(KeepReason::Gone));
         assert_eq!(keeps(SURE, None), Err(KeepReason::NoSureKeeper));
     }
 

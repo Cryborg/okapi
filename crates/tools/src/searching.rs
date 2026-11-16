@@ -202,6 +202,19 @@ mod tests {
     }
 
     #[test]
+    fn a_search_running_has_no_outcome_until_it_ends() {
+        let (go, gone) = mpsc::channel();
+        let searching = spawned(move |_, ()| {
+            gone.recv().unwrap();
+            Some(1)
+        });
+        assert_eq!(searching.wait(Duration::from_millis(10)), None);
+        assert!(searching.report().is_none());
+        go.send(()).unwrap();
+        assert_eq!(searching.wait(WAIT), Some(Outcome::Complete));
+    }
+
+    #[test]
     fn a_report_given_after_a_cancellation_is_dropped() {
         let (go, gone) = mpsc::channel();
         let (dropped, told) = mpsc::channel();

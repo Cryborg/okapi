@@ -16,7 +16,8 @@ use okapi_platform::mount_of;
 use super::compare::{self, Comparing, Pass};
 use super::report::DuplicateReport;
 use crate::listing::{
-    self, Cancelled, Found, Listing, Mounts, Opened, SearchError, SearchStats, open_roots,
+    self, Cancelled, Found, Listing, Measure, Mounts, Opened, Owners, SearchError, SearchStats,
+    open_roots,
 };
 use crate::mounts::mounts_below;
 use crate::searching::{Outcome, Searching};
@@ -117,7 +118,7 @@ enum Step {
 /// What a search counts as it goes.
 struct Counts {
     step: Mutex<Step>,
-    files: AtomicU64,
+    listed: listing::Counts,
     ends_read: AtomicU64,
     bytes_read: AtomicU64,
 }
@@ -173,7 +174,7 @@ impl DuplicateSearch {
         let opened = open_roots(roots)?;
         let counts = Counts {
             step: Mutex::new(Step::Listing),
-            files: AtomicU64::new(0),
+            listed: listing::Counts::default(),
             ends_read: AtomicU64::new(0),
             bytes_read: AtomicU64::new(0),
         };
@@ -219,7 +220,7 @@ impl DuplicateSearch {
         let step = *counts.step.lock().unwrap_or_else(PoisonError::into_inner);
         match step {
             Step::Listing => Progress::Listing {
-                files: counts.files.load(Ordering::Relaxed),
+                files: counts.listed.files.load(Ordering::Relaxed),
             },
             Step::Ends { to_read } => Progress::Ends {
                 read: counts.ends_read.load(Ordering::Relaxed),
@@ -258,7 +259,9 @@ fn search(
         min_size: options.min_size,
         exclusions: &options.exclusions,
         cancelled,
-        files: &counts.files,
+        measure: Measure::Apparent,
+        owners: Owners::All,
+        counts: &counts.listed,
     };
     let found = listing::list(&listing, &mut roots, directories, mounts, &mut stats);
     let listed = started.elapsed();

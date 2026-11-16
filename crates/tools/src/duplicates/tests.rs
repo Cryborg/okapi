@@ -593,6 +593,25 @@ fn a_copy_of_several_names_frees_nothing_in_the_gain() {
 }
 
 #[test]
+fn the_smallest_file_compared_is_measured_by_its_length() {
+    // Contents are compared: a file's length, not what it takes on disk (a
+    // block at least), says whether it is large enough.
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let content = &data(50, 1)[..BLOCK - 1];
+    write(&root.join("a"), content);
+    write(&root.join("b"), content);
+    let options = SearchOptions {
+        min_size: BLOCK as u64,
+        ..options(1)
+    };
+    let search = searched_with(&[root.to_path_buf()], options);
+    let report = search.report().unwrap();
+    assert_eq!(report.groups(), []);
+    assert_eq!(report.stats().below_minimum, 2);
+}
+
+#[test]
 fn small_files_are_compared_at_every_size_and_empty_ones_never() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path();
@@ -963,6 +982,28 @@ mod moving {
         let receipt = trash_dated(
             search.report().unwrap(),
             &[id(&search, &sandbox, "b")],
+            &sandbox.bin(),
+            &excluded,
+            DATE,
+        );
+        assert_eq!(results(&receipt), [TrashResult::Kept(KeepReason::Excluded)]);
+        assert!(sandbox.trashed().is_empty());
+    }
+
+    #[test]
+    fn a_copy_in_a_folder_excluded_under_another_path_stays() {
+        let sandbox = sandbox();
+        sandbox.copies(&["sub/a", "b"], 31);
+        let search = sandbox.search();
+        // The folder excluded where it lies now, then back where it was
+        // found: only its identity tells it, as through a bind mount.
+        let elsewhere = sandbox.data.join("elsewhere");
+        fs::rename(sandbox.root.join("sub"), &elsewhere).unwrap();
+        let excluded = Exclusions::new([elsewhere.clone()]).unwrap();
+        fs::rename(&elsewhere, sandbox.root.join("sub")).unwrap();
+        let receipt = trash_dated(
+            search.report().unwrap(),
+            &[id(&search, &sandbox, "sub/a")],
             &sandbox.bin(),
             &excluded,
             DATE,

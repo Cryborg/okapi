@@ -5,10 +5,9 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::num::NonZeroUsize;
-use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use okapi_engine::Exclusions;
@@ -20,7 +19,7 @@ use crate::listing::{
     self, Cancelled, Found, Listing, Mounts, Opened, SearchError, SearchStats, open_roots,
 };
 use crate::mounts::mounts_below;
-use crate::panic_message;
+use crate::searching::{Outcome, Searching};
 
 /// The smallest file the screen compares: below, many small groups for
 /// little to gain.
@@ -95,16 +94,6 @@ pub struct SearchOptions {
     pub exclusions: Exclusions,
 }
 
-/// How a search ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Outcome {
-    Complete,
-    /// Stopped: nothing found is kept.
-    Cancelled,
-    /// It broke on a fault of its own (traced): nothing found is kept.
-    Failed,
-}
-
 /// What a search has done so far, step by step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Progress {
@@ -125,54 +114,24 @@ enum Step {
     Contents { bytes_to_read: u64 },
 }
 
-/// What the search's thread and its owner share.
-struct Shared {
-    cancelled: AtomicBool,
-    /// How it ended, set once under `ended`: a cancellation after the end
-    /// changes nothing.
-    outcome: OnceLock<Outcome>,
-    ended: Mutex<()>,
-    changed: Condvar,
-    report: OnceLock<DuplicateReport>,
+/// What a search counts as it goes.
+struct Counts {
     step: Mutex<Step>,
     files: AtomicU64,
     ends_read: AtomicU64,
     bytes_read: AtomicU64,
-    span: tracing::Span,
 }
 
-fn lock(mutex: &Mutex<()>) -> MutexGuard<'_, ()> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-impl Shared {
+impl Counts {
     fn enter(&self, step: Step) {
         *self.step.lock().unwrap_or_else(PoisonError::into_inner) = step;
-    }
-
-    /// Sets the outcome, if none is, and tells the waiters.
-    fn end(&self, outcome: Outcome) -> bool {
-        let set = {
-            let _ended = lock(&self.ended);
-            self.outcome.set(outcome).is_ok()
-        };
-        self.changed.notify_all();
-        set
     }
 }
 
 /// A search for copies of one content in folders, on a thread of its own.
+#[derive(Debug)]
 pub struct DuplicateSearch {
-    shared: Arc<Shared>,
-}
-
-impl std::fmt::Debug for DuplicateSearch {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("DuplicateSearch")
-            .field("outcome", &self.shared.outcome.get())
-            .finish_non_exhaustive()
-    }
+    searching: Searching<DuplicateReport, Counts>,
 }
 
 impl DuplicateSearch {
@@ -212,86 +171,62 @@ impl DuplicateSearch {
         );
         let _entered = span.enter();
         let opened = open_roots(roots)?;
-        let shared = Arc::new(Shared {
-            cancelled: AtomicBool::new(false),
-            outcome: OnceLock::new(),
-            ended: Mutex::new(()),
-            changed: Condvar::new(),
-            report: OnceLock::new(),
+        let counts = Counts {
             step: Mutex::new(Step::Listing),
             files: AtomicU64::new(0),
             ends_read: AtomicU64::new(0),
             bytes_read: AtomicU64::new(0),
-            span: span.clone(),
-        });
-        let worker = Arc::clone(&shared);
-        std::thread::Builder::new()
-            .name("okapi-duplicates".to_owned())
-            .spawn(move || {
-                let span = worker.span.clone();
-                span.in_scope(|| {
-                    let searched = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                        search(
-                            &worker,
-                            opened,
-                            &options,
-                            mounts,
-                            #[cfg(test)]
-                            before_read,
-                        );
-                    }));
-                    if let Err(panic) = searched {
-                        tracing::error!(
-                            message = panic_message(&*panic),
-                            "duplicate search panicked"
-                        );
-                        worker.end(Outcome::Failed);
-                    }
-                });
-            })
-            .map_err(|error| {
-                tracing::warn!(%error, "search thread not started");
-                SearchError::Thread(error)
-            })?;
-        Ok(Self { shared })
+        };
+        let searching = Searching::spawn(
+            "okapi-duplicates",
+            span.clone(),
+            counts,
+            move |cancelled, counts| {
+                search(
+                    cancelled,
+                    counts,
+                    opened,
+                    &options,
+                    mounts,
+                    #[cfg(test)]
+                    before_read,
+                )
+            },
+        )
+        .map_err(|error| {
+            tracing::warn!(%error, "search thread not started");
+            SearchError::Thread(error)
+        })?;
+        Ok(Self { searching })
     }
 
     /// Stops the search, if it runs: nothing found is kept. A thread held in
     /// a system call ends on its own.
     pub fn cancel(&self) {
-        self.shared.cancelled.store(true, Ordering::Release);
-        if self.shared.end(Outcome::Cancelled) {
-            tracing::info!(parent: &self.shared.span, "duplicate search cancelled");
-        }
+        self.searching.cancel();
     }
 
     /// Waits at most `timeout` for the search to end: its outcome, `None`
     /// while it runs.
     #[must_use]
     pub fn wait(&self, timeout: Duration) -> Option<Outcome> {
-        let ended = lock(&self.shared.ended);
-        let _ended = self
-            .shared
-            .changed
-            .wait_timeout_while(ended, timeout, |()| self.shared.outcome.get().is_none())
-            .unwrap_or_else(PoisonError::into_inner);
-        self.shared.outcome.get().copied()
+        self.searching.wait(timeout)
     }
 
     #[must_use]
     pub fn progress(&self) -> Progress {
-        let shared = &self.shared;
-        let step = *shared.step.lock().unwrap_or_else(PoisonError::into_inner);
+        let counts = self.searching.counts();
+        let step = *counts.step.lock().unwrap_or_else(PoisonError::into_inner);
         match step {
             Step::Listing => Progress::Listing {
-                files: shared.files.load(Ordering::Relaxed),
+                files: counts.files.load(Ordering::Relaxed),
             },
             Step::Ends { to_read } => Progress::Ends {
-                read: shared.ends_read.load(Ordering::Relaxed),
+                read: counts.ends_read.load(Ordering::Relaxed),
                 to_read,
             },
             Step::Contents { bytes_to_read } => Progress::Contents {
-                bytes_read: shared.bytes_read.load(Ordering::Relaxed),
+                bytes_read: counts.bytes_read.load(Ordering::Relaxed),
                 bytes_to_read,
             },
         }
@@ -300,25 +235,19 @@ impl DuplicateSearch {
     /// What the search found, once it is complete.
     #[must_use]
     pub fn report(&self) -> Option<&DuplicateReport> {
-        self.shared.report.get()
+        self.searching.report()
     }
 }
 
-impl Drop for DuplicateSearch {
-    /// A search no one looks at any more is stopped.
-    fn drop(&mut self) {
-        self.cancel();
-    }
-}
-
-/// The search, from the listing to the report; the outcome set at the end.
+/// The search, from the listing to the report; `None` once cancelled.
 fn search(
-    shared: &Shared,
+    cancelled: &AtomicBool,
+    counts: &Counts,
     opened: Opened,
     options: &SearchOptions,
     mounts: Mounts,
     #[cfg(test)] before_read: Option<fn(&std::path::Path)>,
-) {
+) -> Option<DuplicateReport> {
     let started = Instant::now();
     let Opened {
         mut roots,
@@ -328,51 +257,40 @@ fn search(
     let listing = Listing {
         min_size: options.min_size,
         exclusions: &options.exclusions,
-        cancelled: &shared.cancelled,
-        files: &shared.files,
+        cancelled,
+        files: &counts.files,
     };
     let found = listing::list(&listing, &mut roots, directories, mounts, &mut stats);
     let listed = started.elapsed();
     let comparing = Comparing {
         roots: &roots,
         threads: options.threads,
-        cancelled: &shared.cancelled,
-        bytes_read: &shared.bytes_read,
-        files_done: &shared.ends_read,
+        cancelled,
+        bytes_read: &counts.bytes_read,
+        files_done: &counts.ends_read,
         #[cfg(test)]
         before_read,
     };
-    let result = found.and_then(|found| compare(shared, found, &comparing, &mut stats));
-    let Ok(groups) = result else {
-        // `cancel` set the outcome and traced it.
-        return;
-    };
+    let groups = found
+        .and_then(|found| compare(counts, found, &comparing, &mut stats))
+        .ok()?;
     let report = DuplicateReport::new(groups, roots, stats);
     tracing::info!(
         elapsed = ?started.elapsed(),
         listing = ?listed,
         ?stats,
-        bytes_read = shared.bytes_read.load(Ordering::Relaxed),
+        bytes_read = counts.bytes_read.load(Ordering::Relaxed),
         groups = report.groups().len(),
         gain = report.gain(),
         "duplicate search ended"
     );
-    // The report and the outcome together: a cancellation that came first
-    // keeps its outcome, and no report is given.
-    let ended = {
-        let _ended = lock(&shared.ended);
-        shared.outcome.set(Outcome::Complete).is_ok() && shared.report.set(report).is_ok()
-    };
-    shared.changed.notify_all();
-    if !ended {
-        tracing::debug!("search cancelled at its end: its report is dropped");
-    }
+    Some(report)
 }
 
 /// Groups `found` by size, then by the key of their ends, then of their
 /// whole content.
 fn compare(
-    shared: &Shared,
+    counts: &Counts,
     found: Vec<Found>,
     comparing: &Comparing<'_>,
     stats: &mut SearchStats,
@@ -386,7 +304,7 @@ fn compare(
         .filter(|files| files.len() > 1)
         .collect();
     let candidates = count(&same_size);
-    shared.enter(Step::Ends {
+    counts.enter(Step::Ends {
         to_read: candidates as u64,
     });
     let same_ends = compare::split(same_size, Pass::Ends, comparing, &mut stats.dropped)?;
@@ -395,7 +313,7 @@ fn compare(
         .flatten()
         .map(|file| file.status.size)
         .fold(0, u64::saturating_add);
-    shared.enter(Step::Contents {
+    counts.enter(Step::Contents {
         bytes_to_read: to_read,
     });
     let after_ends = count(&same_ends);

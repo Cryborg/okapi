@@ -17,6 +17,8 @@ pub mod monitor;
 mod mounts;
 #[cfg(feature = "packages")]
 pub mod packages;
+#[cfg(feature = "duplicates")]
+mod searching;
 #[cfg(any(feature = "duplicates", feature = "apps"))]
 mod trashing;
 // Its daemons (snapd, Docker) are asked on Linux.

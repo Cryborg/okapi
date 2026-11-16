@@ -13,9 +13,10 @@ mod search;
 mod trash;
 
 pub use crate::listing::{SearchError, SearchStats};
+pub use crate::searching::Outcome;
 pub use report::{CopyId, DuplicateReport, FileCopy, Group};
 pub use search::{
-    DuplicateSearch, MIN_SIZE, Outcome, Progress, SearchOptions, default_threads, threads_for_roots,
+    DuplicateSearch, MIN_SIZE, Progress, SearchOptions, default_threads, threads_for_roots,
 };
 pub use trash::{KeepReason, Refusal, TrashOutcome, TrashReceipt, TrashResult, trash};
 

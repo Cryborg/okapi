@@ -10,8 +10,17 @@ use thiserror::Error;
 use crate::{StoreError, file};
 
 mod lines;
+mod rotation;
 
 pub use lines::{Deletions, HistoryRead, HistoryRecord};
+
+/// How many times the history is opened, at most, when each opening finds
+/// it set aside before its lock.
+const OPEN_ATTEMPTS: u32 = 3;
+/// How many times the shared lock of the history is tried, and the wait
+/// between two tries: a run setting it aside holds it for a moment only.
+const LOCK_ATTEMPTS: u32 = 50;
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_millis(10);
 
 const HISTORY_FILE: &str = "history.jsonl";
 /// The format of each history line.
@@ -224,17 +233,21 @@ impl HistoryOutcome {
         CleanResult::from_key(&self.result, self.bytes, reason)
     }
 
+    /// What a result that cannot be read back is counted as: an entry the
+    /// system kept for an unknown reason, never one of another report.
+    pub const UNREADABLE: CleanResult = CleanResult::Kept(KeepReason::Failed {
+        kind: io::ErrorKind::Other,
+        code: None,
+    });
+
     /// The result another process said, as the history and the receipt
-    /// count it: one that cannot be read back is an entry the system kept
-    /// for an unknown reason (never one of another report), traced.
+    /// count it: one that cannot be read back is [`Self::UNREADABLE`],
+    /// traced.
     #[must_use]
     pub fn clean_result_or_refused(&self) -> CleanResult {
         self.clean_result().unwrap_or_else(|| {
             tracing::error!(outcome = ?self, "a result that cannot be read back: counted kept");
-            CleanResult::Kept(KeepReason::Failed {
-                kind: io::ErrorKind::Other,
-                code: None,
-            })
+            Self::UNREADABLE
         })
     }
 }
@@ -325,23 +338,50 @@ struct Line<'a, T> {
 pub struct History {
     file: File,
     path: PathBuf,
+    /// It holds its shared lock: never set aside under it.
+    locked: bool,
 }
 
 impl History {
-    /// Opens the history in `directory` (created private if needed).
+    /// Opens the history in `directory` (created private if needed), and
+    /// holds a shared lock on it for as long as it is open: the history is
+    /// never set aside under it ([`Self::open_for_cleaning`]). Where the
+    /// system refuses the lock, it looks before each write that the history
+    /// is still its file, and refuses to write to one set aside.
     ///
     /// # Errors
     ///
-    /// [`StoreError::Unwritable`].
+    /// [`StoreError::Unwritable`], also when the history stays held whole
+    /// by a run setting it aside, or is set aside at each opening.
     pub fn open(directory: &Path) -> Result<Self, StoreError> {
+        Self::open_locked(directory, okapi_platform::try_lock_journal_shared)
+    }
+
+    /// [`Self::open`], its shared lock tried with `try_lock`.
+    fn open_locked(
+        directory: &Path,
+        try_lock: impl Fn(&File) -> io::Result<bool>,
+    ) -> Result<Self, StoreError> {
         let path = Self::path(directory);
         let unwritable = |error| StoreError::Unwritable {
             path: path.clone(),
             error,
         };
         okapi_platform::create_private_directory(directory).map_err(unwritable)?;
-        let file = okapi_platform::open_journal(&path).map_err(unwritable)?;
-        Ok(Self { file, path })
+        // Locked shared, then looked at: a history set aside between its
+        // opening and the lock is opened again, so a line never goes to the
+        // one set aside, which may be replaced.
+        for _ in 0..OPEN_ATTEMPTS {
+            let file = okapi_platform::open_journal(&path).map_err(unwritable)?;
+            let locked = lock_shared(&file, &path, &try_lock)?;
+            if rotation::still_named(&file, &path).map_err(unwritable)? {
+                return Ok(Self { file, path, locked });
+            }
+            tracing::info!(path = %path.display(), "history set aside meanwhile: opened again");
+        }
+        tracing::error!(path = %path.display(), attempts = OPEN_ATTEMPTS, "history set aside at each opening");
+        // Busy, as the user is told: never a system's error.
+        Err(unwritable(io::ErrorKind::ResourceBusy.into()))
     }
 
     /// Adds the line of `receipt`, a cleaning that ended now, after the line
@@ -360,9 +400,12 @@ impl History {
     }
 
     /// Opens the history before a cleaning, in `directory` (none when no
-    /// state directory is known). The deletion log the user may ask for is
-    /// never lost: then a history that cannot be kept is the error, and
-    /// nothing must be removed.
+    /// state directory is known). A history grown beyond what is kept is
+    /// first set aside as `history.1.jsonl`, the one set aside before
+    /// replaced, its lines lost; one that cannot be set aside stays as it
+    /// is, traced. The deletion log the user may ask for is never lost: then
+    /// a history that cannot be kept is the error, and nothing must be
+    /// removed.
     ///
     /// # Errors
     ///
@@ -371,6 +414,11 @@ impl History {
         directory: Option<&Path>,
         deletion_log: bool,
     ) -> Result<Opened, HistoryUnavailable> {
+        // Before a cleaning only: its line follows, and the last cleaning is
+        // looked for in the history set aside too.
+        if let Some(directory) = directory {
+            rotation::rotate_if_grown(directory, rotation::ROTATION_SIZE).trace(directory);
+        }
         let unavailable = match directory.map(Self::open) {
             Some(Ok(history)) => return Ok(Opened::Open(history)),
             Some(Err(error)) => HistoryUnavailable::Store(error),
@@ -390,50 +438,90 @@ impl History {
         directory.join(HISTORY_FILE)
     }
 
+    /// The file the history of `directory` is set aside as.
+    pub(crate) fn rotated_path(directory: &Path) -> PathBuf {
+        rotation::rotated_path(directory)
+    }
+
     /// The last cleaning the history of `directory` keeps, read from its
     /// last line, past the lines of the applications uninstalled after it:
     /// `None` when there is none, or when the line met does not say one (a
     /// write cut short, another version or kind, too long), traced at each
     /// reading. A line before one that cannot be read, or before a deletion
     /// log whose cleaning line is missing, is never taken for the last
-    /// cleaning: a cleaning may have come after. All the lines read
-    /// are bounded together as one line is.
+    /// cleaning: a cleaning may have come after. A history of
+    /// uninstallations alone, or none, is read on into the one set aside
+    /// before it. All the lines read are bounded together as one line is.
     ///
     /// # Errors
     ///
-    /// [`StoreError::Unreadable`] (the file failing to be read, the line
-    /// included), [`StoreError::BrokenLink`] or [`StoreError::NotAFile`].
+    /// [`StoreError::Unreadable`] (a file failing to be read, the line
+    /// included), [`StoreError::BrokenLink`] or [`StoreError::NotAFile`],
+    /// the history set aside's as the history's.
     pub fn last_cleaning(directory: &Path) -> Result<Option<LastCleaning>, StoreError> {
         let path = Self::path(directory);
         let _span = tracing::info_span!("last_cleaning", path = %path.display()).entered();
-        let Some(history) = file::open_regular(&path)? else {
-            tracing::info!("no history: no last cleaning");
+        // Its start reached past uninstallations alone (or none): the
+        // history set aside before it is read on, within what is left of
+        // the bound.
+        let room = match file::open_regular(&path)? {
+            Some(history) => match find_last_cleaning(&history, &path, MAX_LINE)? {
+                Searched::Found(last) => return Ok(last),
+                Searched::Start { length } => MAX_LINE.saturating_sub(length),
+            },
+            None => MAX_LINE,
+        };
+        let rotated = rotation::rotated_path(directory);
+        let Some(previous) = file::open_regular(&rotated)? else {
+            tracing::info!("no cleaning line in the history: no last cleaning");
             return Ok(None);
         };
-        find_last_cleaning(&history, &path, MAX_LINE)
+        match find_last_cleaning(&previous, &rotated, room)? {
+            Searched::Found(last) => Ok(last),
+            Searched::Start { .. } => {
+                tracing::info!("no cleaning line in the history: no last cleaning");
+                Ok(None)
+            }
+        }
     }
 
-    /// Every line the history of `directory` keeps, oldest first, each
-    /// deletion log folded into a `D` entry by entry as it is read (never
-    /// held whole unless `D` holds it): none when there is no history. A
-    /// line that cannot be read (a write cut short, another version or
-    /// kind), or a deletion log whose cleaning line does not follow it, is
-    /// skipped, counted and traced, never a reason to refuse the rest.
+    /// Every line the history of `directory` keeps, the one set aside's
+    /// first, oldest first, each deletion log folded into a `D` entry by
+    /// entry as it is read (never held whole unless `D` holds it): none when
+    /// there is no history. A line that cannot be read (a write cut short,
+    /// another version or kind), or a deletion log whose cleaning line does
+    /// not follow it, is skipped, counted and traced, never a reason to
+    /// refuse the rest; the history's last line not ended yet (a write under
+    /// way) is neither read nor counted, the one set aside's is (cut short).
     ///
     /// # Errors
     ///
-    /// [`StoreError::Unreadable`] (the file failing to be read),
-    /// [`StoreError::BrokenLink`] or [`StoreError::NotAFile`].
+    /// [`StoreError::Unreadable`] (a file failing to be read),
+    /// [`StoreError::BrokenLink`] or [`StoreError::NotAFile`], the history
+    /// set aside's as the history's: a part never passes for the whole.
     pub fn read_all<D: Default + Extend<HistoryOutcome>>(
         directory: &Path,
     ) -> Result<HistoryRead<D>, StoreError> {
         let path = Self::path(directory);
         let _span = tracing::info_span!("history_read", path = %path.display()).entered();
-        let Some(history) = file::open_regular(&path)? else {
-            tracing::info!("no history: nothing to read");
-            return Ok(HistoryRead::default());
-        };
-        lines::read(&history, &path)
+        // The history first: set aside between the two openings, it is the
+        // one set aside too, read once.
+        let current = file::open_regular(&path)?;
+        let rotated = rotation::rotated_path(directory);
+        let previous = file::open_regular(&rotated)?.filter(|previous| {
+            current
+                .as_ref()
+                .is_none_or(|current| !same_file(current, previous))
+        });
+        let mut read = HistoryRead::default();
+        for (history, path, set_aside) in [(previous, &rotated, true), (current, &path, false)] {
+            if let Some(history) = history {
+                let part = lines::read(&history, path, set_aside)?;
+                read.records.extend(part.records);
+                read.skipped += part.skipped;
+            }
+        }
+        Ok(read)
     }
 
     /// Adds `entry` as one line, after the line of its deletion log if it
@@ -509,6 +597,23 @@ impl History {
             tracing::warn!(path = %self.path.display(), "history ended mid-line, closed with a line break");
             bytes.insert(0, b'\n');
         }
+        // Without its lock, a run that got its own may have set it aside
+        // meanwhile: never written there, which the next setting aside
+        // replaces (a moment between this look and the write remains).
+        if !self.locked
+            && !rotation::still_named(&self.file, &self.path).map_err(|error| {
+                StoreError::Unwritable {
+                    path: self.path.clone(),
+                    error,
+                }
+            })?
+        {
+            tracing::error!(path = %self.path.display(), "history set aside under a run without its lock: not written");
+            return Err(StoreError::Unwritable {
+                path: self.path.clone(),
+                error: io::ErrorKind::ResourceBusy.into(),
+            });
+        }
         self.file
             .write_all(&bytes)
             .map_err(|error| StoreError::Unwritable {
@@ -530,11 +635,7 @@ impl History {
 
 /// The last cleaning of `history` (at `path`), as [`History::last_cleaning`]
 /// finds it, reading at most `max_line` bytes of lines.
-fn find_last_cleaning(
-    history: &File,
-    path: &Path,
-    max_line: u64,
-) -> Result<Option<LastCleaning>, StoreError> {
+fn find_last_cleaning(history: &File, path: &Path, max_line: u64) -> Result<Searched, StoreError> {
     let started = Instant::now();
     let unreadable = |error| StoreError::Unreadable {
         path: path.to_owned(),
@@ -553,15 +654,16 @@ fn find_last_cleaning(
         let (start, end) = match tail {
             Tail::Empty => {
                 tracing::info!(
+                    path = %path.display(),
                     scanned,
                     uninstalls,
-                    "history without a cleaning line: no last cleaning"
+                    "start of the history reached without a cleaning line"
                 );
-                return Ok(None);
+                return Ok(Searched::Start { length });
             }
             Tail::TooLong => {
                 tracing::warn!(scanned, uninstalls, max = max_line, elapsed = ?started.elapsed(), "history lines too long: not read");
-                return Ok(None);
+                return Ok(Searched::Found(None));
             }
             Tail::Line { start, end } => (start, end),
         };
@@ -577,7 +679,7 @@ fn find_last_cleaning(
                     ?last,
                     "last cleaning read"
                 );
-                return Ok(Some(last));
+                return Ok(Searched::Found(Some(last)));
             }
             Ok(LineRead::Uninstall) => {
                 uninstalls += 1;
@@ -592,15 +694,68 @@ fn find_last_cleaning(
                     ?elapsed,
                     "deletion log without its cleaning line: no last cleaning"
                 );
-                return Ok(None);
+                return Ok(Searched::Found(None));
             }
             Err(error @ (StoreError::Invalid { .. } | StoreError::UnsupportedVersion { .. })) => {
                 tracing::warn!(offset = start, length = end - start, scanned, uninstalls, ?elapsed, %error, "history line unreadable: no last cleaning");
-                return Ok(None);
+                return Ok(Searched::Found(None));
             }
             Err(error) => return Err(error),
         }
     }
+}
+
+/// What looking for the last cleaning in one file found.
+#[derive(Debug, PartialEq, Eq)]
+enum Searched {
+    /// What it says of the last cleaning: one, or none (a line that cannot
+    /// be read, a deletion log without its cleaning line, too much to read).
+    Found(Option<LastCleaning>),
+    /// Its start reached, `length` bytes read, past uninstallations alone:
+    /// the file before it says.
+    Start { length: u64 },
+}
+
+/// Takes a shared lock on `history` (at `path`), tried for a little while:
+/// only a run setting the history aside holds it whole, for a moment.
+/// Where the system refuses the lock, the history is written without,
+/// traced: whether it holds it. Without it, the file may be set aside by
+/// a run that got the lock, which the writer looks for before it writes.
+///
+/// # Errors
+///
+/// [`StoreError::Unwritable`] when it stays held whole.
+fn lock_shared(
+    history: &File,
+    path: &Path,
+    try_lock: &impl Fn(&File) -> io::Result<bool>,
+) -> Result<bool, StoreError> {
+    for _ in 0..LOCK_ATTEMPTS {
+        match try_lock(history) {
+            Ok(true) => return Ok(true),
+            Ok(false) => std::thread::sleep(LOCK_WAIT),
+            Err(error) => {
+                tracing::warn!(path = %path.display(), %error, code = error.raw_os_error(), "history lock unavailable: written without");
+                return Ok(false);
+            }
+        }
+    }
+    tracing::error!(path = %path.display(), waited = ?LOCK_WAIT * LOCK_ATTEMPTS, "history held whole: not opened");
+    Err(StoreError::Unwritable {
+        path: path.to_owned(),
+        error: io::ErrorKind::ResourceBusy.into(),
+    })
+}
+
+/// Whether `one` and `other` are the same file; never taken to where files
+/// have no known identity.
+fn same_file(one: &File, other: &File) -> bool {
+    let identity = |file: &File| {
+        file.metadata()
+            .ok()
+            .and_then(|metadata| okapi_platform::file_identity(&metadata))
+    };
+    identity(one).is_some_and(|one| Some(one) == identity(other))
 }
 
 /// The last cleaning a history keeps.
@@ -920,6 +1075,97 @@ mod tests {
         let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&state), 0o700);
         assert_eq!(mode(&state.join(HISTORY_FILE)), 0o600);
+    }
+
+    /// A history set aside between its opening and its lock, the lock
+    /// taken or refused by the system: the run writes to the new one, never
+    /// to the one set aside, which the next setting aside replaces.
+    #[cfg(unix)]
+    #[test]
+    fn a_history_set_aside_before_the_lock_is_opened_again() {
+        for locks in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = History::path(directory.path());
+            let rotated = rotation::rotated_path(directory.path());
+            History::open(directory.path())
+                .unwrap()
+                .record(&entry(1, None))
+                .unwrap();
+            let tries = std::cell::Cell::new(0);
+            // As another run setting it aside before the first lock.
+            let try_lock = |_: &File| {
+                tries.set(tries.get() + 1);
+                if tries.get() == 1 {
+                    std::fs::rename(&path, &rotated).unwrap();
+                }
+                if locks {
+                    Ok(true)
+                } else {
+                    Err(io::ErrorKind::Unsupported.into())
+                }
+            };
+            History::open_locked(directory.path(), try_lock)
+                .unwrap()
+                .record(&HistoryEntry {
+                    time: 2,
+                    ..entry(2, None)
+                })
+                .unwrap();
+            assert_eq!(tries.get(), 2, "opened again: {locks}");
+            let set_aside = std::fs::read_to_string(&rotated).unwrap();
+            assert_eq!(set_aside.lines().count(), 1, "{locks}: {set_aside}");
+            let new: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(new["removed"], 2, "{locks}");
+        }
+    }
+
+    /// Written without its lock (refused by the system), the history set
+    /// aside by a run that got its own: never written to.
+    #[cfg(unix)]
+    #[test]
+    fn a_history_without_its_lock_is_never_written_once_set_aside() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = History::path(directory.path());
+        let rotated = rotation::rotated_path(directory.path());
+        let refused = |_: &File| Err(io::ErrorKind::Unsupported.into());
+        let mut history = History::open_locked(directory.path(), refused).unwrap();
+        history.record(&entry(1, None)).unwrap();
+        std::fs::rename(&path, &rotated).unwrap();
+        assert!(matches!(
+            history.record(&entry(2, None)),
+            Err(StoreError::Unwritable { error, .. }) if error.kind() == io::ErrorKind::ResourceBusy
+        ));
+        let set_aside = std::fs::read_to_string(&rotated).unwrap();
+        assert_eq!(set_aside.lines().count(), 1, "{set_aside}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_history_held_whole_or_set_aside_at_each_opening_is_busy() {
+        let directory = tempfile::tempdir().unwrap();
+        History::open(directory.path()).unwrap();
+        let path = History::path(directory.path());
+        let held = okapi_platform::open_journal(&path).unwrap();
+        assert!(okapi_platform::try_lock_journal_exclusive(&held).unwrap());
+        let busy = |opened: Result<History, StoreError>| {
+            matches!(
+                opened,
+                Err(StoreError::Unwritable { error, .. }) if error.kind() == io::ErrorKind::ResourceBusy
+            )
+        };
+        assert!(busy(History::open(directory.path())));
+        drop(held);
+        History::open(directory.path()).unwrap();
+        let rotated = rotation::rotated_path(directory.path());
+        let set_aside_each_time = |_: &File| {
+            std::fs::rename(&path, &rotated).unwrap();
+            Ok(true)
+        };
+        assert!(busy(History::open_locked(
+            directory.path(),
+            set_aside_each_time
+        )));
     }
 
     #[test]
@@ -1264,14 +1510,15 @@ mod tests {
         let line_lengths: Vec<u64> = text.lines().map(|line| line.len() as u64 + 1).collect();
         // Room for each line alone, not for the three together.
         let longest = *line_lengths.iter().max().unwrap();
-        assert_eq!(find_last_cleaning(&history, &path, longest).unwrap(), None);
-        let all = line_lengths.iter().sum::<u64>();
         assert_eq!(
-            find_last_cleaning(&history, &path, all)
-                .unwrap()
-                .map(|last| last.time),
-            Some(100)
+            find_last_cleaning(&history, &path, longest).unwrap(),
+            Searched::Found(None)
         );
+        let all = line_lengths.iter().sum::<u64>();
+        assert!(matches!(
+            find_last_cleaning(&history, &path, all).unwrap(),
+            Searched::Found(Some(last)) if last.time == 100
+        ));
     }
 
     #[test]
@@ -1455,10 +1702,10 @@ mod tests {
         assert!(length(&history) > 2 * BLOCK, "{}", length(&history));
         assert_eq!(
             find_last_cleaning(&history, &path, BLOCK).unwrap(),
-            Some(LastCleaning {
+            Searched::Found(Some(LastCleaning {
                 time: 200,
                 freed: Some(9)
-            })
+            }))
         );
     }
 

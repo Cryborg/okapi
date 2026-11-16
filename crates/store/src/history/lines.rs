@@ -13,8 +13,8 @@ use std::marker::PhantomData;
 use std::path::Path;
 use std::time::Instant;
 
+use serde::Deserialize;
 use serde::de::{Deserializer, SeqAccess, Visitor};
-use serde::{Deserialize, Serialize};
 
 use super::{
     BLOCK, HistoryEntry, HistoryOutcome, LineKind, UninstallEntry, check_line_version, read_line,
@@ -134,7 +134,7 @@ struct DeletionLine<D> {
 struct Folded<D>(D);
 
 impl<'de, D: Default + Extend<HistoryOutcome>> Deserialize<'de> for Folded<D> {
-    fn deserialize<De: Deserializer<'de>>(deserializer: De) -> Result<Self, De::Error> {
+    fn deserialize<Source: Deserializer<'de>>(deserializer: Source) -> Result<Self, Source::Error> {
         struct Fold<D>(PhantomData<D>);
 
         impl<'de, D: Default + Extend<HistoryOutcome>> Visitor<'de> for Fold<D> {
@@ -157,9 +157,8 @@ impl<'de, D: Default + Extend<HistoryOutcome>> Deserialize<'de> for Folded<D> {
     }
 }
 
-/// Why a line was skipped, as the journal says it.
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "camelCase")]
+/// Why a line was skipped.
+#[derive(Debug, Clone, Copy)]
 enum Skip {
     Unreadable,
     /// A deletion log not followed by its cleaning line.
@@ -203,10 +202,13 @@ impl<D> Reading<'_, D> {
 
 /// Every line of `history` (at `path`), as [`super::History::read_all`]
 /// reads them, within the length it had when this began: a line added
-/// meanwhile is not read.
+/// meanwhile is not read. A last line not ended is a write under way, but
+/// in a history `set_aside`, which no one writes to, a write cut short:
+/// read as any line, whole or counted.
 pub(super) fn read<D: Default + Extend<HistoryOutcome>>(
     history: &File,
     path: &Path,
+    set_aside: bool,
 ) -> Result<HistoryRead<D>, StoreError> {
     let started = Instant::now();
     let unreadable = |error| StoreError::Unreadable {
@@ -225,14 +227,18 @@ pub(super) fn read<D: Default + Extend<HistoryOutcome>>(
             read_one(history, span, &mut reading)?;
         }
     }
-    reading.orphan_waiting();
-    if let Some(span) = unended {
-        tracing::debug!(
+    // Set aside, no one writes to it: its last line is read as the last
+    // cleaning's reader reads it, whole or counted cut short.
+    match unended {
+        Some(span) if set_aside => read_one(history, span, &mut reading)?,
+        Some(span) => tracing::info!(
             offset = span.start,
             length = span.length(),
             "last history line not ended yet: not read"
-        );
+        ),
+        None => {}
     }
+    reading.orphan_waiting();
     let read = reading.read;
     tracing::info!(
         bytes = length,
@@ -473,6 +479,14 @@ mod tests {
         append(directory.path(), b"{\"version\":1,\"tim\n");
         append(directory.path(), log_at(500).as_bytes());
         cleaned(directory.path(), 510, 1);
+        // Past a line that cannot be read, or a cleaning line without its
+        // facts, at its own time: never its log.
+        append(directory.path(), log_at(700).as_bytes());
+        append(directory.path(), b"{\"version\":1,\"tim\n");
+        cleaned(directory.path(), 700, 1);
+        append(directory.path(), log_at(800).as_bytes());
+        append(directory.path(), b"{\"version\":1,\"time\":800}\n");
+        cleaned(directory.path(), 800, 1);
         // And last of all.
         append(directory.path(), log_at(600).as_bytes());
         let read = read_all(directory.path());
@@ -484,11 +498,25 @@ mod tests {
                 ('c', 200, None),
                 ('c', 310, Some(1)),
                 ('c', 510, None),
+                ('c', 700, None),
+                ('c', 800, None),
             ],
             "the cleaning after an orphan read, without its log"
         );
-        // 200, 300, 400 and the cut line, 500, 600.
-        assert_eq!(read.skipped, 6);
+        // 200, 300, 400 and the cut line, 500, 700 and the cut line, 800
+        // and the line without its facts, 600.
+        assert_eq!(read.skipped, 10);
+    }
+
+    /// Kept but empty: never taken for a log not kept.
+    #[test]
+    fn an_empty_deletion_log_is_read_as_one() {
+        let directory = tempfile::tempdir().unwrap();
+        cleaned_with_log(directory.path(), 100, 0);
+        assert_eq!(
+            summaries(&read_all(directory.path())),
+            [('c', 100, Some(0))]
+        );
     }
 
     #[test]

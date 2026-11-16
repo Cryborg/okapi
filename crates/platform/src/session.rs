@@ -126,6 +126,39 @@ pub fn open_journal(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
+/// Opens the journal at `path` for reading and writing, only if it exists,
+/// never through a link nor waiting: what an exclusive lock needs on a
+/// network filesystem, where `flock` asks for a file open for writing.
+///
+/// # Errors
+///
+/// The system's error (`NotFound` when there is none), or
+/// [`io::ErrorKind::InvalidInput`] when `path` is not a regular file.
+#[cfg(target_os = "linux")]
+pub fn open_existing_journal(path: &Path) -> io::Result<File> {
+    use rustix::fs::{CWD, Mode, OFlags, openat};
+
+    let flags = OFlags::RDWR | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let file = File::from(openat(CWD, path, flags, Mode::empty())?);
+    if !file.metadata()?.is_file() {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    Ok(file)
+}
+
+/// Opens the journal at `path` for reading and writing, only if it exists.
+///
+/// # Errors
+///
+/// The system's error.
+#[cfg(not(target_os = "linux"))]
+pub fn open_existing_journal(path: &Path) -> io::Result<File> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+}
+
 /// Opens the file at `path` for reading, a link followed, without ever
 /// waiting: a pipe opens at once (and is then told apart by its type).
 ///
@@ -164,6 +197,62 @@ pub fn open_journal(path: &Path) -> io::Result<File> {
         .open(path)
 }
 
+/// Takes a shared lock on `journal`, which many may hold, unless someone
+/// holds the exclusive one: `Ok(false)` then. Released when `journal` is
+/// closed. Where locks would forbid writing to what they lock (Windows'),
+/// none is taken: `Ok(true)`, and [`try_lock_journal_exclusive`] never
+/// gets one. On a CIFS mount, Linux makes `flock` such a lock too: two runs
+/// writing there at once may see a write refused (`EACCES`), which their
+/// caller says.
+///
+/// # Errors
+///
+/// The system's error (a filesystem without locks).
+#[cfg(unix)]
+pub fn try_lock_journal_shared(journal: &File) -> io::Result<bool> {
+    match journal.try_lock_shared() {
+        Ok(()) => Ok(true),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(false),
+        Err(std::fs::TryLockError::Error(error)) => Err(error),
+    }
+}
+
+/// Takes the exclusive lock on `journal` unless someone holds a lock on it:
+/// `Ok(false)` then, and always where locks are not taken
+/// ([`try_lock_journal_shared`]). Released when `journal` is closed.
+///
+/// # Errors
+///
+/// The system's error (a filesystem without locks).
+#[cfg(unix)]
+pub fn try_lock_journal_exclusive(journal: &File) -> io::Result<bool> {
+    match journal.try_lock() {
+        Ok(()) => Ok(true),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(false),
+        Err(std::fs::TryLockError::Error(error)) => Err(error),
+    }
+}
+
+/// No lock is taken here: a shared lock of Windows would forbid writing.
+///
+/// # Errors
+///
+/// None.
+#[cfg(not(unix))]
+pub fn try_lock_journal_shared(_journal: &File) -> io::Result<bool> {
+    Ok(true)
+}
+
+/// No lock is taken here: whoever needs the exclusive one does without.
+///
+/// # Errors
+///
+/// None.
+#[cfg(not(unix))]
+pub fn try_lock_journal_exclusive(_journal: &File) -> io::Result<bool> {
+    Ok(false)
+}
+
 #[cfg(test)]
 #[cfg(target_os = "linux")]
 mod tests {
@@ -185,6 +274,43 @@ mod tests {
         open_journal(&path).unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "made private again");
+    }
+
+    #[test]
+    fn an_existing_journal_is_opened_only_if_it_is_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("history.1.jsonl");
+        assert_eq!(
+            open_existing_journal(&path).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert!(!path.exists(), "never created");
+        std::fs::write(&path, b"kept").unwrap();
+        assert!(try_lock_journal_exclusive(&open_existing_journal(&path).unwrap()).unwrap());
+        let link = directory.path().join("link");
+        symlink(&path, &link).unwrap();
+        assert!(open_existing_journal(&link).is_err());
+        assert!(open_existing_journal(directory.path()).is_err());
+    }
+
+    #[test]
+    fn a_journal_locked_by_writers_is_never_locked_whole_and_the_reverse() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("history.jsonl");
+        let one = open_journal(&path).unwrap();
+        let two = open_journal(&path).unwrap();
+        let rotator = open_journal(&path).unwrap();
+        assert!(try_lock_journal_shared(&one).unwrap());
+        assert!(try_lock_journal_shared(&two).unwrap(), "many writers");
+        assert!(!try_lock_journal_exclusive(&rotator).unwrap());
+        drop(one);
+        assert!(!try_lock_journal_exclusive(&rotator).unwrap(), "one left");
+        drop(two);
+        assert!(try_lock_journal_exclusive(&rotator).unwrap());
+        let late = open_journal(&path).unwrap();
+        assert!(!try_lock_journal_shared(&late).unwrap(), "held whole");
+        drop(rotator);
+        assert!(try_lock_journal_shared(&late).unwrap());
     }
 
     #[test]

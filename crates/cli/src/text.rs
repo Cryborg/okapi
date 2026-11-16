@@ -516,6 +516,9 @@ Réglages : {settings}
   (exclusions, ajoutées à --exclude ; minAgeMinutes ; deletionLog ;
   language, \"fr\" ou \"en\", sinon celle de la session)
 Historique (nettoyages et désinstallations) : {history}
+  (mis de côté dans history.1.jsonl avant un nettoyage quand il dépasse la
+  taille gardée ; le précédent mis de côté part alors, avec tout ce qu'il
+  contient, journaux des suppressions compris)
 
 Codes de sortie : 0 succès, 1 échec, 2 arguments ou réglages invalides,
 3 permission refusée, 4 nettoyage partiel, 5 rien trouvé,
@@ -548,6 +551,9 @@ Settings: {settings}
   (exclusions, added to --exclude; minAgeMinutes; deletionLog;
   language, \"fr\" or \"en\", else the session's)
 History (cleanings and uninstallations): {history}
+  (set aside as history.1.jsonl before a cleaning once beyond the size
+  kept; the one set aside before then goes, with everything in it,
+  deletion logs included)
 
 Exit codes: 0 success, 1 failure, 2 invalid arguments or settings,
 3 permission denied, 4 partial cleaning, 5 nothing found,

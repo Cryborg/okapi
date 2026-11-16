@@ -2,7 +2,9 @@
 //! `$XDG_CONFIG_HOME/okapi/settings.json`, the layout of the dashboard
 //! beside it (`dashboard.json`), one line per cleaning in
 //! `$XDG_STATE_HOME/okapi/history.jsonl` (its deletion log, when kept, on the
-//! line before) and per application uninstalled, the summary of the last analysis
+//! line before) and per application uninstalled, set aside as
+//! `history.1.jsonl` before a cleaning once grown too large (the one set
+//! aside before then lost), the summary of the last analysis
 //! beside it (`last-analysis.json`), how the user last left the interface
 //! (`interface.json`, there too), what they unchecked among the results
 //! (`selections.json`, there too), the applications seen installed

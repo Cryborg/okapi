@@ -1887,8 +1887,8 @@ msgid "Aucun historique n'est tenu : ni XDG_STATE_HOME ni HOME ne sont utilisabl
 msgstr "No history is kept: neither XDG_STATE_HOME nor HOME can be used."
 
 msgctxt "General"
-msgid "Garde dans l'historique ({}), pour chaque nettoyage, la liste des chemins retirés."
-msgstr "Keeps in the history ({}), for each cleaning, the list of the paths removed."
+msgid "Garde dans l'historique ({}), pour chaque nettoyage, la liste des chemins retirés. Quand l'historique dépasse la taille gardée, ses plus anciens nettoyages et désinstallations partent, avec leur liste."
+msgstr "Keeps in the history ({}), for each cleaning, the list of the paths removed. When the history grows beyond the size kept, its oldest cleanings and uninstallations go, lists included."
 
 msgctxt "General"
 msgid "Journal technique"

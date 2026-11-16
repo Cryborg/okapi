@@ -515,7 +515,7 @@ fn the_deletion_log_is_switched_and_says_where_it_goes() {
     let (window, screens) = sandbox.window();
     assert!(shows(
         &window,
-        "Garde dans l'historique (~/.local/state/okapi), pour chaque nettoyage, la liste des chemins retirés."
+        "Garde dans l'historique (~/.local/state/okapi), pour chaque nettoyage, la liste des chemins retirés. Quand l'historique dépasse la taille gardée, ses plus anciens nettoyages et désinstallations partent, avec leur liste."
     ));
     // The journal is not it, and says what it holds.
     assert!(shows(

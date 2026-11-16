@@ -37,8 +37,8 @@ pub use probe::{
 };
 pub use session::sync_directory;
 pub use session::{
-    create_private_directory, effective_user, open_for_reading, open_journal, real_user,
-    running_as_root,
+    create_private_directory, effective_user, open_existing_journal, open_for_reading,
+    open_journal, real_user, running_as_root, try_lock_journal_exclusive, try_lock_journal_shared,
 };
 pub use trash::{Trash, TrashError};
 #[cfg(target_os = "linux")]

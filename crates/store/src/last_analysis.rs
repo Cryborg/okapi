@@ -92,31 +92,55 @@ impl LastAnalysis {
     /// the summary is then said outdated, which costs a new analysis. Not
     /// seen: a cleaning or an uninstallation cut short before its line was written, a history
     /// restored with an older date, a clock set back, or a history on a
-    /// filesystem whose clock lags. No history: not outdated.
+    /// filesystem whose clock lags. Without a history, the one set aside
+    /// tells, by when it was set aside (a history set aside before its next
+    /// one was created, by a cleaning about to remove). Neither: not outdated.
     ///
     /// # Errors
     ///
     /// [`StoreError::Unreadable`], [`StoreError::BrokenLink`] or
     /// [`StoreError::NotAFile`].
     pub fn outdated(&self, directory: &Path) -> Result<bool, StoreError> {
-        let path = History::path(directory);
-        let Some(history) = file::open_regular(&path)? else {
-            tracing::info!(path = %path.display(), "no history: last analysis not outdated");
+        // The history, else the one set aside: a history is never older than
+        // the one set aside before it.
+        // The one set aside, by when it was set aside (its renaming changes
+        // its inode), not by its last line.
+        let mut changed = None;
+        for (path, set_aside) in [
+            (History::path(directory), false),
+            (History::rotated_path(directory), true),
+        ] {
+            let Some(history) = file::open_regular(&path)? else {
+                continue;
+            };
+            let modified = history
+                .metadata()
+                .and_then(|metadata| {
+                    let modified = metadata.modified()?;
+                    Ok(if set_aside {
+                        okapi_platform::last_change(&metadata)
+                            .map_or(modified, |changed| changed.max(modified))
+                    } else {
+                        modified
+                    })
+                })
+                .map_err(|error| StoreError::Unreadable {
+                    path: path.clone(),
+                    error,
+                })?;
+            changed = Some(seconds(modified));
+            break;
+        }
+        let Some(changed) = changed else {
+            tracing::info!(directory = %directory.display(), "no history: last analysis not outdated");
             return Ok(false);
         };
-        let changed = history
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .map_err(|error| StoreError::Unreadable {
-                path: path.clone(),
-                error,
-            })?;
         // In whole seconds, like the summary: a history changed within the
         // second the analysis started may come after it, so it outdates it.
-        let outdated = seconds(changed) >= self.time;
+        let outdated = changed >= self.time;
         tracing::info!(
-            path = %path.display(),
-            history_changed = seconds(changed),
+            directory = %directory.display(),
+            history_changed = changed,
             analysis_started = self.time,
             outdated,
             "last analysis judged against the history"
@@ -233,6 +257,28 @@ mod tests {
             !later.outdated(directory.path()).unwrap(),
             "an analysis after it"
         );
+        // Last written before the analysis, set aside after it by a cleaning
+        // whose new history could not be created: outdated, by when it was
+        // set aside.
+        fs::File::options()
+            .write(true)
+            .open(History::path(directory.path()))
+            .unwrap()
+            .set_modified(SystemTime::now() - std::time::Duration::from_hours(2 * 24))
+            .unwrap();
+        assert!(!analysis.outdated(directory.path()).unwrap());
+        fs::rename(
+            History::path(directory.path()),
+            History::rotated_path(directory.path()),
+        )
+        .unwrap();
+        assert!(analysis.outdated(directory.path()).unwrap());
+        assert!(!later.outdated(directory.path()).unwrap());
+        // With a history, the one set aside is never read.
+        History::open(directory.path()).unwrap();
+        fs::remove_file(History::rotated_path(directory.path())).unwrap();
+        fs::create_dir(History::rotated_path(directory.path())).unwrap();
+        assert!(!later.outdated(directory.path()).unwrap());
     }
 
     #[test]

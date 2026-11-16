@@ -147,9 +147,7 @@ impl Walk<'_> {
             (status.identity, status.changed, status.size).hash(&mut hasher);
             // The entries come in no set order: summed, they need none.
             print.digest = print.digest.wrapping_add(hasher.finish());
-            print.bytes = print
-                .bytes
-                .saturating_add(status.allocated.unwrap_or(status.size));
+            print.bytes = print.bytes.saturating_add(status.on_disk());
             if status.kind == EntryType::Directory {
                 waiting.push(Waiting {
                     parent: Rc::clone(directory),

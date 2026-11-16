@@ -317,6 +317,13 @@ impl EntryStatus {
         }
     }
 
+    /// The bytes it takes on disk, what removing it frees: its size stands
+    /// for them when the system does not say.
+    #[must_use]
+    pub fn on_disk(&self) -> u64 {
+        self.allocated.unwrap_or(self.size)
+    }
+
     #[must_use]
     #[cfg_attr(
         not(target_os = "linux"),
@@ -429,6 +436,18 @@ mod tests {
             "unknown: another device is a mount"
         );
         assert!(!status(7, None).other_mount(7));
+    }
+
+    #[test]
+    fn what_an_entry_takes_on_disk_is_its_size_when_the_system_does_not_say() {
+        let status = |allocated| EntryStatus {
+            size: 1000,
+            allocated,
+            ..status(0, false, false)
+        };
+        assert_eq!(status(None).on_disk(), 1000);
+        assert_eq!(status(Some(4096)).on_disk(), 4096);
+        assert_eq!(status(Some(0)).on_disk(), 0, "a sparse file");
     }
 
     #[test]

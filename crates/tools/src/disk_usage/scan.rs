@@ -566,11 +566,10 @@ fn open(source: Source) -> Result<(Directory, EntryStatus), Failure> {
     Ok((directory, status))
 }
 
-/// What an entry that is not a directory takes: its length stands for what
-/// it takes on disk when the system does not say.
+/// What an entry that is not a directory takes.
 pub(crate) fn file_size(status: &EntryStatus) -> Size {
     Size {
-        allocated: status.allocated.unwrap_or(status.size),
+        allocated: status.on_disk(),
         apparent: status.size,
         files: 1,
     }

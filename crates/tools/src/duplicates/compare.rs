@@ -8,13 +8,11 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::num::NonZeroUsize;
 use std::panic::AssertUnwindSafe;
-use std::path::{Component, Path};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
-use okapi_platform::{Directory, EntryType, Unreached, reach};
+use okapi_platform::{Directory, EntryType, Unreached};
 
-use super::report::{Found, Root};
-use super::walk::Cancelled;
+use crate::listing::{Cancelled, Found, Root, parent_of};
 
 /// How much of each end of a file the first pass reads.
 pub(crate) const END_BYTES: u64 = 4096;
@@ -212,26 +210,6 @@ pub(crate) fn open(file: &Found, roots: &[Root]) -> Result<File, Dropped> {
     } else {
         Err(Dropped::Changed)
     }
-}
-
-/// The folder holding the file at `path`, below `root`, reached from the
-/// filesystem root without a link (invariant 3), and the file's name in it.
-pub(crate) fn parent_of<'a>(
-    path: &'a Path,
-    root: &Root,
-) -> Result<(Directory, &'a OsStr), Unreached> {
-    let below = path
-        .strip_prefix(&root.path)
-        .map_err(|_| Unreached::Changed)?;
-    let mut names: Vec<&OsStr> = Vec::new();
-    for component in below.components() {
-        let Component::Normal(name) = component else {
-            return Err(Unreached::Changed);
-        };
-        names.push(name);
-    }
-    let name = names.pop().ok_or(Unreached::Changed)?;
-    Ok((reach(&root.path, root.identity, &names)?, name))
 }
 
 /// Why the file `name` of `directory` did not open: read again, gone or no

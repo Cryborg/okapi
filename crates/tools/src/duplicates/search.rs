@@ -2,7 +2,7 @@
 //! of the comparison, then the report. Cancelled, it gives no report: a
 //! group half compared is no sure group.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::BTreeMap;
 use std::io;
 use std::num::NonZeroUsize;
 use std::panic::AssertUnwindSafe;
@@ -12,11 +12,13 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use okapi_engine::Exclusions;
-use okapi_platform::{Directory, filesystem_may_alias, filesystem_undated, mount_of};
+use okapi_platform::mount_of;
 
 use super::compare::{self, Comparing, Pass};
-use super::report::{DuplicateReport, Found, Root, SearchStats};
-use super::walk::{self, Cancelled, Listing};
+use super::report::DuplicateReport;
+use crate::listing::{
+    self, Cancelled, Found, Listing, Mounts, Opened, SearchError, SearchStats, open_roots,
+};
 use crate::mounts::mounts_below;
 use crate::panic_message;
 
@@ -83,9 +85,6 @@ fn threads_for(rotational: Option<bool>, processors: usize) -> NonZeroUsize {
     }
 }
 
-/// How the mount points below a root are read, and the filesystem it is on.
-pub(crate) type Mounts = fn(&std::path::Path) -> (BTreeSet<PathBuf>, Option<String>);
-
 /// What a search honours.
 #[derive(Debug, Clone)]
 pub struct SearchOptions {
@@ -94,21 +93,6 @@ pub struct SearchOptions {
     pub threads: NonZeroUsize,
     /// What the user never wants touched.
     pub exclusions: Exclusions,
-}
-
-/// Why a search did not start.
-#[derive(Debug, thiserror::Error)]
-pub enum SearchError {
-    #[error("no folder to search")]
-    NoRoot,
-    #[error("the folder {} cannot be searched", path.display())]
-    Root {
-        path: PathBuf,
-        #[source]
-        error: io::Error,
-    },
-    #[error("the thread of the search could not be started")]
-    Thread(#[source] io::Error),
 }
 
 /// How a search ended.
@@ -189,12 +173,6 @@ impl std::fmt::Debug for DuplicateSearch {
             .field("outcome", &self.shared.outcome.get())
             .finish_non_exhaustive()
     }
-}
-
-/// The roots opened, and their folders.
-struct Opened {
-    roots: Vec<Root>,
-    directories: Vec<Directory>,
 }
 
 impl DuplicateSearch {
@@ -333,54 +311,6 @@ impl Drop for DuplicateSearch {
     }
 }
 
-/// Opens each root where it really is, leaving out one given twice.
-fn open_roots(paths: &[PathBuf]) -> Result<Opened, SearchError> {
-    let mut opened: Vec<(Root, Directory)> = Vec::new();
-    for path in paths {
-        let root = std::fs::canonicalize(path).and_then(|canonical| {
-            let directory = Directory::open(&canonical)?;
-            let status = directory.status()?;
-            Ok((
-                Root {
-                    path: canonical,
-                    identity: status.identity,
-                    // Both known once its filesystem is read (`list`).
-                    may_alias: true,
-                    undated: true,
-                },
-                directory,
-            ))
-        });
-        let root = root.map_err(|error| {
-            tracing::warn!(path = %path.display(), %error, "folder to search not opened");
-            SearchError::Root {
-                path: path.clone(),
-                error,
-            }
-        })?;
-        opened.push(root);
-    }
-    // One folder given twice (or by two paths) is searched once. A root
-    // inside another is searched as its own: the walk of the outer one
-    // leaves it, as it may lie below a folder that walk skips.
-    let mut kept: Vec<(Root, Directory)> = Vec::new();
-    for (root, directory) in opened {
-        if kept
-            .iter()
-            .any(|(earlier, _)| earlier.identity == root.identity)
-        {
-            tracing::info!(path = %root.path.display(), "folder given twice: searched once");
-        } else {
-            kept.push((root, directory));
-        }
-    }
-    if kept.is_empty() {
-        return Err(SearchError::NoRoot);
-    }
-    let (roots, directories) = kept.into_iter().unzip();
-    Ok(Opened { roots, directories })
-}
-
 /// The search, from the listing to the report; the outcome set at the end.
 fn search(
     shared: &Shared,
@@ -390,10 +320,18 @@ fn search(
     #[cfg(test)] before_read: Option<fn(&std::path::Path)>,
 ) {
     let started = Instant::now();
-    let Opened { roots, directories } = opened;
+    let Opened {
+        mut roots,
+        directories,
+    } = opened;
     let mut stats = SearchStats::default();
-    let mut roots = roots;
-    let found = list(shared, &mut roots, directories, options, mounts, &mut stats);
+    let listing = Listing {
+        min_size: options.min_size,
+        exclusions: &options.exclusions,
+        cancelled: &shared.cancelled,
+        files: &shared.files,
+    };
+    let found = listing::list(&listing, &mut roots, directories, mounts, &mut stats);
     let listed = started.elapsed();
     let comparing = Comparing {
         roots: &roots,
@@ -429,58 +367,6 @@ fn search(
     if !ended {
         tracing::debug!("search cancelled at its end: its report is dropped");
     }
-}
-
-/// Lists every root, the mount points below each read once.
-fn list(
-    shared: &Shared,
-    roots: &mut [Root],
-    directories: Vec<Directory>,
-    options: &SearchOptions,
-    mounts: Mounts,
-    stats: &mut SearchStats,
-) -> Result<Vec<Found>, Cancelled> {
-    let mut below = BTreeSet::new();
-    for root in roots.iter_mut() {
-        let (points, filesystem) = mounts(&root.path);
-        below.extend(points);
-        // An unknown filesystem (the table of mounts unreadable) may be
-        // either: no copy found there keeps another.
-        root.may_alias = filesystem.as_deref().is_none_or(filesystem_may_alias);
-        root.undated = filesystem.as_deref().is_none_or(filesystem_undated);
-        tracing::info!(
-            path = %root.path.display(),
-            filesystem = filesystem.as_deref(),
-            may_alias = root.may_alias,
-            undated = root.undated,
-            "filesystem of a root"
-        );
-    }
-    let mounts = below;
-    let roots: &[Root] = roots;
-    let listing = Listing {
-        roots: &roots.iter().map(|root| root.identity).collect(),
-        min_size: options.min_size,
-        exclusions: &options.exclusions,
-        mounts: &mounts,
-        cancelled: &shared.cancelled,
-        files: &shared.files,
-    };
-    let mut seen = HashSet::new();
-    let mut found = Vec::new();
-    for (index, (root, directory)) in roots.iter().zip(directories).enumerate() {
-        if options.exclusions.excludes(&root.path)
-            || options.exclusions.excludes_identity(root.identity)
-        {
-            stats.excluded += 1;
-            tracing::info!(path = %root.path.display(), "folder searched is excluded: not searched");
-            continue;
-        }
-        walk::walk(
-            &listing, index, directory, &root.path, stats, &mut seen, &mut found,
-        )?;
-    }
-    Ok(found)
 }
 
 /// Groups `found` by size, then by the key of their ends, then of their

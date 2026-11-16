@@ -5,15 +5,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
-use std::io;
 
 use okapi_engine::Exclusions;
 use okapi_platform::{
-    Directory, EntryStatus, Trash, TrashError, Unreached, effective_user, tells_mount_roots,
+    Directory, EntryStatus, Trash, TrashError, effective_user, tells_mount_roots,
 };
 
-use super::compare::parent_of;
 use super::report::{CopyId, DuplicateReport, FileCopy, Group};
+use crate::listing::{Unlocated, located, trash_folder};
 pub use crate::trashing::Refusal;
 use crate::trashing::{Moved, deleted_now, moved, one_at_a_time};
 
@@ -66,15 +65,6 @@ impl KeepReason {
             Self::UnsupportedSystem => "unsupportedSystem",
             Self::Refused(_) => "refused",
         }
-    }
-}
-
-/// What the system refused with `error`, a file gone being no refusal.
-fn refused_or_gone(error: &io::Error) -> KeepReason {
-    if error.kind() == io::ErrorKind::NotFound {
-        KeepReason::Gone
-    } else {
-        KeepReason::Refused(error.into())
     }
 }
 
@@ -241,15 +231,6 @@ fn trace(report: &DuplicateReport, outcome: &TrashOutcome) {
     }
 }
 
-/// Whether `status`, read in the trash once moved, is `copy`: moving
-/// changes the inode's change date, so it is known by its identity, its
-/// size and its content's date.
-fn is_moved_copy(copy: &FileCopy, status: &EntryStatus) -> bool {
-    status.identity == copy.identity()
-        && status.size == copy.size()
-        && status.modified == copy.modified()
-}
-
 /// Whether `path` lies in a trash, a folder of its: a file there is on its
 /// way out, even under a folder searched on purpose.
 fn in_a_trash(path: &std::path::Path) -> bool {
@@ -259,29 +240,6 @@ fn in_a_trash(path: &std::path::Path) -> bool {
             .any(|component| trash_folder(component.as_os_str()))
     })
 }
-
-/// Whether a folder named `name` is named as a trash is, wherever it lies:
-/// freedesktop's (`Trash`, in the data folder; `.Trash` or `.Trash-<uid>`,
-/// at the top of another disk) or Windows' on a disk it shares, whatever its
-/// letters' case (Windows writes `$Recycle.Bin` on its own disk,
-/// `$RECYCLE.BIN` on the others).
-pub(crate) fn trash_folder(name: &OsStr) -> bool {
-    name.to_str().is_some_and(|name| {
-        name == TRASH_FOLDER
-            || name.starts_with(HIDDEN_TRASH)
-            || name.eq_ignore_ascii_case(WINDOWS_TRASH)
-    })
-}
-
-/// The trash folder of the freedesktop specification, in the data folder.
-const TRASH_FOLDER: &str = "Trash";
-/// What the trash of another disk is named, at its top (`.Trash`,
-/// `.Trash-1000`).
-const HIDDEN_TRASH: &str = ".Trash";
-/// What Windows names the trash at the top of each of its disks, since
-/// Vista. The `RECYCLER` of XP is left out: it is also a common name of a
-/// folder of the user's (« Recycler »).
-const WINDOWS_TRASH: &str = "$RECYCLE.BIN";
 
 /// What the trash's answer to moving `copy` makes of it.
 fn result_of(copy: &FileCopy, answer: Result<OsString, TrashError>) -> TrashResult {
@@ -352,7 +310,7 @@ impl Mover<'_> {
             name,
             copy.path(),
             self.deleted_at,
-            |status: &EntryStatus| is_moved_copy(copy, status),
+            |status: &EntryStatus| copy.seen().is_moved(status),
         );
         result_of(copy, moved)
     }
@@ -416,26 +374,23 @@ impl Mover<'_> {
     /// its name there, if it is still the file the search read.
     fn located<'c>(&self, copy: &'c FileCopy) -> Result<(Directory, &'c OsStr), KeepReason> {
         let root = self.report.root(copy.root()).ok_or(KeepReason::Changed)?;
-        let (folder, name) = parent_of(copy.path(), root).map_err(|unreached| match unreached {
-            Unreached::Changed => KeepReason::Changed,
-            Unreached::Io(error) => KeepReason::Refused((&error).into()),
-        })?;
-        match folder.status_of(name) {
-            Ok(status) if copy.seen().unchanged(&status) => Ok((folder, name)),
-            Ok(_) => Err(KeepReason::Changed),
-            Err(error) => Err(refused_or_gone(&error)),
-        }
+        located(copy.path(), root, copy.seen()).map_err(|unlocated| match unlocated {
+            Unlocated::Changed => KeepReason::Changed,
+            Unlocated::Gone => KeepReason::Gone,
+            Unlocated::Refused(error) => KeepReason::Refused((&error).into()),
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io;
     use std::time::{Duration, SystemTime};
 
     use okapi_platform::{EntryType, FileIdentity, Trash};
 
     use super::*;
-    use crate::duplicates::report::{Found, Root, SearchStats, Seen};
+    use crate::listing::{Found, Root, SearchStats, Seen};
 
     const SIZE: u64 = 10;
     /// Who moves the copies, and owns them unless told otherwise.
@@ -664,23 +619,6 @@ mod tests {
         ] {
             assert!(!in_a_trash(std::path::Path::new(path)), "{path}");
         }
-    }
-
-    #[test]
-    fn what_was_moved_is_the_copy_only_by_identity_size_and_date() {
-        let (report, modified) = report();
-        let copy = &report.groups()[0].copies()[0];
-        assert!(is_moved_copy(copy, &status(2, SIZE, modified)));
-        assert!(
-            !is_moved_copy(copy, &status(9, SIZE, modified)),
-            "another file"
-        );
-        assert!(
-            !is_moved_copy(copy, &status(2, SIZE + 1, modified)),
-            "cut or grown"
-        );
-        let later = modified + Duration::from_secs(1);
-        assert!(!is_moved_copy(copy, &status(2, SIZE, later)), "written");
     }
 
     #[test]

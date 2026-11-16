@@ -11,12 +11,11 @@ mod compare;
 mod report;
 mod search;
 mod trash;
-mod walk;
 
-pub use report::{CopyId, DuplicateReport, FileCopy, Group, SearchStats};
+pub use crate::listing::{SearchError, SearchStats};
+pub use report::{CopyId, DuplicateReport, FileCopy, Group};
 pub use search::{
-    DuplicateSearch, MIN_SIZE, Outcome, Progress, SearchError, SearchOptions, default_threads,
-    threads_for_roots,
+    DuplicateSearch, MIN_SIZE, Outcome, Progress, SearchOptions, default_threads, threads_for_roots,
 };
 pub use trash::{KeepReason, Refusal, TrashOutcome, TrashReceipt, TrashResult, trash};
 

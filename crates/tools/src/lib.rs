@@ -9,6 +9,8 @@ pub mod disk_usage;
 pub mod docker;
 #[cfg(feature = "duplicates")]
 pub mod duplicates;
+#[cfg(feature = "duplicates")]
+mod listing;
 #[cfg(feature = "monitor")]
 pub mod monitor;
 #[cfg(any(feature = "disk-usage", feature = "duplicates"))]

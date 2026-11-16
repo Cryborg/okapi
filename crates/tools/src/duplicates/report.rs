@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use okapi_engine::report_nonce;
-use okapi_platform::{EntryStatus, FileIdentity};
+use okapi_platform::FileIdentity;
+
+use crate::listing::{Found, Root, SearchStats, Seen};
 
 /// The identifier of a copy, valid only in the report that gave it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -22,44 +24,6 @@ pub struct FileCopy {
     /// The search root it lies below, by its rank in the report's roots.
     root: usize,
     status: Seen,
-}
-
-/// What the search read of a file, and what it must still be to be moved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Seen {
-    pub(crate) identity: FileIdentity,
-    pub(crate) size: u64,
-    pub(crate) modified: SystemTime,
-    pub(crate) changed: SystemTime,
-    pub(crate) links: u64,
-    pub(crate) owner: u32,
-}
-
-impl Seen {
-    pub(crate) const fn of(status: &EntryStatus) -> Self {
-        Self {
-            identity: status.identity,
-            size: status.size,
-            modified: status.modified,
-            changed: status.changed,
-            links: status.links,
-            owner: status.owner,
-        }
-    }
-
-    /// Whether `status` is still this file, unchanged: the same object, of
-    /// the same size, dates and owner. A write moves the inode's change
-    /// date, even one that sets the modification date back; only two writes
-    /// within one tick of a coarse clock could go unseen. FAT keeps no change
-    /// date of its own (a date set back sets it back too): the size is the
-    /// little this catches there.
-    pub(crate) fn unchanged(&self, status: &EntryStatus) -> bool {
-        status.identity == self.identity
-            && status.changed == self.changed
-            && status.size == self.size
-            && status.modified == self.modified
-            && status.owner == self.owner
-    }
 }
 
 impl FileCopy {
@@ -147,49 +111,6 @@ impl Group {
     }
 }
 
-/// A folder searched, as it was opened.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Root {
-    pub(crate) path: PathBuf,
-    pub(crate) identity: FileIdentity,
-    /// Whether its filesystem may show the files of another under other
-    /// identities (FUSE, network, stacked, or unknown): a copy found there
-    /// may be the very file it seems to duplicate.
-    pub(crate) may_alias: bool,
-    /// Whether its filesystem keeps no change date of its own (FAT, or
-    /// unknown): a copy written there then dated back looks unchanged.
-    pub(crate) undated: bool,
-}
-
-/// What the search met, beyond its groups.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct SearchStats {
-    pub directories: u64,
-    /// Plain files listed, of any size (but one mounted on another).
-    pub files: u64,
-    pub below_minimum: u64,
-    /// Files met again under another name (hard links): one copy each.
-    pub other_names: u64,
-    /// Folders, or entries of one, that could not be read.
-    pub unreadable: u64,
-    /// Folders replaced, or turned into links, while listed: not read.
-    pub changed_directories: u64,
-    pub hidden_directories: u64,
-    /// Folders holding a `.git` (but a folder the user chose): a project's
-    /// files are never offered.
-    pub projects: u64,
-    pub dependency_directories: u64,
-    /// Trash folders: what lies there is on its way out.
-    pub trash_directories: u64,
-    /// Mounts not entered: folders, or files mounted on another.
-    pub other_mounts: u64,
-    pub excluded: u64,
-    /// Files that changed, went, or could not be read while compared: never
-    /// in a group.
-    pub dropped: u64,
-}
-
 /// What a search found. It cannot be built outside this crate nor
 /// serialized: moving copies away takes the report and identifiers of its
 /// copies (invariant 1).
@@ -201,14 +122,6 @@ pub struct DuplicateReport {
     locations: Vec<(usize, usize)>,
     roots: Vec<Root>,
     stats: SearchStats,
-}
-
-/// A copy found, before it has its identifier.
-#[derive(Debug)]
-pub(crate) struct Found {
-    pub(crate) path: PathBuf,
-    pub(crate) root: usize,
-    pub(crate) status: Seen,
 }
 
 impl DuplicateReport {
@@ -316,64 +229,5 @@ impl DuplicateReport {
         let &(group, copy) = self.locations.get(id.index)?;
         let group = self.groups.get(group)?;
         Some((group, group.copies.get(copy)?))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use okapi_platform::EntryType;
-
-    use super::*;
-
-    fn status() -> EntryStatus {
-        let date = SystemTime::UNIX_EPOCH + Duration::from_secs(1000);
-        EntryStatus {
-            kind: EntryType::File,
-            identity: FileIdentity::new(1, 2),
-            last_change: date,
-            modified: date,
-            changed: date,
-            links: 1,
-            owner: 1000,
-            sticky: false,
-            locked: false,
-            size: 10,
-            allocated: None,
-            mount_root: Some(false),
-        }
-    }
-
-    #[test]
-    fn a_file_is_unchanged_only_when_all_that_was_read_is_alike() {
-        let seen = Seen::of(&status());
-        assert!(seen.unchanged(&status()));
-        let resized = EntryStatus {
-            size: 11,
-            ..status()
-        };
-        assert!(!seen.unchanged(&resized), "cut or grown");
-        let redated = EntryStatus {
-            modified: status().modified + Duration::from_secs(2),
-            ..status()
-        };
-        // No filesystem known moves one date without the other: a guard.
-        assert!(!seen.unchanged(&redated), "written, its change date kept");
-        let replaced = EntryStatus {
-            identity: FileIdentity::new(1, 3),
-            ..status()
-        };
-        assert!(!seen.unchanged(&replaced), "another file");
-        let changed = EntryStatus {
-            changed: status().changed + Duration::from_secs(1),
-            ..status()
-        };
-        assert!(!seen.unchanged(&changed), "written, its date set back");
-        let given = EntryStatus {
-            owner: 1001,
-            ..status()
-        };
-        assert!(!seen.unchanged(&given), "given to another");
     }
 }

@@ -1,6 +1,6 @@
-//! The listing: each folder searched, read down from its root one folder at
-//! a time, never through a link nor into another mount, keeps the plain
-//! files that could have a copy.
+//! One root's walk: read down from the root one folder at a time, never
+//! through a link nor into another mount, it keeps the plain files a tool
+//! may offer.
 
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsString;
@@ -12,9 +12,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use okapi_engine::Exclusions;
 use okapi_platform::{Directory, EntryStatus, EntryType, FileIdentity};
 
-use super::report::{Found, SearchStats, Seen};
-// A file in the trash is on its way out, never a copy that keeps another.
-use super::trash::trash_folder;
+// A file in the trash is on its way out, never one to offer.
+use super::{Found, SearchStats, Seen, trash_folder};
 
 /// How many entries of a folder are read between two looks at the
 /// cancellation.
@@ -32,18 +31,23 @@ const HIDDEN_PREFIX: u8 = b'.';
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Cancelled;
 
-/// What the listing honours.
+/// What the listing honours, as the tool gives it.
 pub(crate) struct Listing<'a> {
-    /// The folders searched: each is walked from its own root only.
-    pub(crate) roots: &'a HashSet<FileIdentity>,
     pub(crate) min_size: u64,
     pub(crate) exclusions: &'a Exclusions,
-    /// The mount points below the roots, read once for each: never touched,
-    /// a mount that stopped answering would hold the search for good.
-    pub(crate) mounts: &'a BTreeSet<PathBuf>,
     pub(crate) cancelled: &'a AtomicBool,
     /// The plain files listed so far, for the progress.
     pub(crate) files: &'a AtomicU64,
+}
+
+/// What every root's walk honours.
+pub(super) struct Scope<'a> {
+    pub(super) listing: &'a Listing<'a>,
+    /// The folders searched: each is walked from its own root only.
+    pub(super) roots: &'a HashSet<FileIdentity>,
+    /// The mount points below the roots, read once for each: never touched,
+    /// a mount that stopped answering would hold the search for good.
+    pub(super) mounts: &'a BTreeSet<PathBuf>,
 }
 
 /// A folder to read: opened from its parent, it must still be the one
@@ -58,6 +62,8 @@ struct Task {
 /// One root's listing.
 struct Walk<'a, 'b> {
     listing: &'b Listing<'a>,
+    roots: &'b HashSet<FileIdentity>,
+    mounts: &'b BTreeSet<PathBuf>,
     root: usize,
     device: u64,
     stats: &'b mut SearchStats,
@@ -68,8 +74,8 @@ struct Walk<'a, 'b> {
 /// Lists the root `root` (its rank among the roots), opened as `directory`
 /// at `path`, into `found`. A file met again under another name, in this
 /// root or an earlier one (`seen`), is listed once.
-pub(crate) fn walk(
-    listing: &Listing<'_>,
+pub(super) fn walk(
+    scope: &Scope<'_>,
     root: usize,
     directory: Directory,
     path: &Path,
@@ -86,7 +92,9 @@ pub(crate) fn walk(
         }
     };
     let mut walk = Walk {
-        listing,
+        listing: scope.listing,
+        roots: scope.roots,
+        mounts: scope.mounts,
         root,
         device,
         stats,
@@ -96,7 +104,7 @@ pub(crate) fn walk(
     let mut stack = Vec::new();
     walk.read(&Rc::new(directory), path, true, &mut stack)?;
     while let Some(task) = stack.pop() {
-        if listing.cancelled.load(Ordering::Acquire) {
+        if scope.listing.cancelled.load(Ordering::Acquire) {
             return Err(Cancelled);
         }
         if let Some(directory) = walk.open(&task) {
@@ -181,7 +189,7 @@ impl Walk<'_, '_> {
         let path = parent.join(&name);
         // A mount point is never even read: one that stopped answering would
         // hold the search for good.
-        if self.listing.mounts.contains(&path) {
+        if self.mounts.contains(&path) {
             self.stats.other_mounts += 1;
             tracing::debug!(path = %path.display(), "mount not entered");
             return;
@@ -220,7 +228,7 @@ impl Walk<'_, '_> {
         path: &Path,
         status: &EntryStatus,
     ) -> Option<FileIdentity> {
-        let reason = if self.listing.roots.contains(&status.identity) {
+        let reason = if self.roots.contains(&status.identity) {
             "searched as its own root"
         } else if name.as_encoded_bytes().first() == Some(&HIDDEN_PREFIX) {
             self.stats.hidden_directories += 1;
@@ -303,26 +311,66 @@ mod tests {
         }
     }
 
+    /// The roots and mounts of a walk that has none below its root.
+    fn scope<'a>(listing: &'a Listing<'a>) -> Scope<'a> {
+        static NO_ROOTS: std::sync::LazyLock<HashSet<FileIdentity>> =
+            std::sync::LazyLock::new(HashSet::new);
+        static NO_MOUNTS: BTreeSet<PathBuf> = BTreeSet::new();
+        Scope {
+            listing,
+            roots: &NO_ROOTS,
+            mounts: &NO_MOUNTS,
+        }
+    }
+
     #[test]
-    fn a_file_mounted_on_another_is_never_kept() {
-        let roots = HashSet::new();
+    fn a_walk_cancelled_reads_no_further() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::write(temporary.path().join("a"), "a").unwrap();
         let exclusions = Exclusions::none();
-        let mounts = BTreeSet::new();
-        let cancelled = AtomicBool::new(false);
+        let cancelled = AtomicBool::new(true);
         let files = AtomicU64::new(0);
         let listing = Listing {
-            roots: &roots,
             min_size: SIZE,
             exclusions: &exclusions,
-            mounts: &mounts,
             cancelled: &cancelled,
             files: &files,
         };
         let mut stats = SearchStats::default();
+        let mut found = Vec::new();
+        let walked = walk(
+            &scope(&listing),
+            0,
+            Directory::open(temporary.path()).unwrap(),
+            temporary.path(),
+            &mut stats,
+            &mut HashSet::new(),
+            &mut found,
+        );
+        assert_eq!(walked, Err(Cancelled));
+        assert!(found.is_empty());
+        assert_eq!(stats.files, 0);
+    }
+
+    #[test]
+    fn a_file_mounted_on_another_is_never_kept() {
+        let exclusions = Exclusions::none();
+        let cancelled = AtomicBool::new(false);
+        let files = AtomicU64::new(0);
+        let listing = Listing {
+            min_size: SIZE,
+            exclusions: &exclusions,
+            cancelled: &cancelled,
+            files: &files,
+        };
+        let scope = scope(&listing);
+        let mut stats = SearchStats::default();
         let mut seen = HashSet::new();
         let mut found = Vec::new();
         let mut walk = Walk {
-            listing: &listing,
+            listing: scope.listing,
+            roots: scope.roots,
+            mounts: scope.mounts,
             root: 0,
             device: 1,
             stats: &mut stats,

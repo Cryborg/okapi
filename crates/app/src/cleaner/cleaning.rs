@@ -3139,7 +3139,7 @@ mod tests {
         let dumps = sandbox.root.join("var/dumps");
         sandbox.file("var/dumps/core");
         settle_files();
-        let Some(closed) = Closed::new(&dumps) else {
+        let Some(_closed) = Closed::new(&dumps) else {
             return;
         };
         let rules = admin_rules(&sandbox);
@@ -3222,10 +3222,12 @@ mod tests {
             "its target alone"
         );
         assert!(!pip.exists(), "the user's part removed");
-        drop(closed);
-        assert!(
-            dumps.join("core").exists(),
-            "root's part is root's: never the user's own cleaning"
+        let history = sandbox.history();
+        assert_eq!(
+            (&history[0]["removed"], &history[0]["kept"]),
+            (&serde_json::json!(2), &serde_json::json!(0)),
+            "the user's file and root's answer, nothing more: root's part is \
+             never the user's own cleaning, which would keep what it cannot read"
         );
     }
 
@@ -3298,23 +3300,38 @@ mod tests {
             scanned_bytes: 1,
         };
         let note = "Elles appartiennent à un autre compte ou au système : Okapi ne les force pas.";
-        let show = |kind| {
-            super::show_receipt(
-                &cleaner,
-                &model,
-                &super::Receipt::new(false, &[refused(kind)]),
-            );
+        let show = |kinds: &[ErrorKind]| {
+            let outcomes: Vec<_> = kinds.iter().map(|kind| refused(*kind)).collect();
+            super::show_receipt(&cleaner, &model, &super::Receipt::new(false, &outcomes));
             slint::platform::update_timers_and_animations();
         };
-        show(ErrorKind::PermissionDenied);
+        let notes = || ElementHandle::find_by_accessible_label(&window, note).count();
+        show(&[ErrorKind::PermissionDenied]);
         assert!(shows_a_text_starting(
             &window,
             "Gardées : permission refusée par le système"
         ));
-        assert!(shows(&window, note));
-        show(ErrorKind::ResourceBusy);
+        assert_eq!(notes(), 1);
+        for other in [
+            ErrorKind::ResourceBusy,
+            ErrorKind::NotFound,
+            ErrorKind::Other,
+        ] {
+            show(&[other]);
+            assert!(shows_a_text_starting(&window, "Gardées : refus du système"));
+            assert_eq!(notes(), 0, "{other:?}: said of a refused permission alone");
+        }
+        show(&[
+            ErrorKind::ResourceBusy,
+            ErrorKind::PermissionDenied,
+            ErrorKind::PermissionDenied,
+        ]);
         assert!(shows_a_text_starting(&window, "Gardées : refus du système"));
-        assert!(!shows(&window, note), "said of a refused permission alone");
+        assert!(shows_a_text_starting(
+            &window,
+            "Gardées : permission refusée par le système"
+        ));
+        assert_eq!(notes(), 1, "once, under its own line");
     }
 
     #[test]

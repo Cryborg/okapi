@@ -852,6 +852,71 @@ mod tests {
         );
     }
 
+    /// Each note set aside leaves the next ones to be looked at; two targets
+    /// only root may read are two groups, each said by its own.
+    #[test]
+    fn every_note_is_looked_at_and_each_target_waits_on_its_own() {
+        let (rules, targets) = embedded();
+        let snap = origin_of(&rules, "Snap Cache");
+        let crash = origin_of(&rules, "Crash Reports");
+        let dumps = origin_of(&rules, "Core Dumps");
+        let thumbnails = origin_of(&rules, "Thumbnail Cache");
+        let refused = |origin: &Origin| {
+            unreadable(&[origin], &targets[origin], io::ErrorKind::PermissionDenied)
+        };
+        let issues = [
+            ScanIssue::Excluded {
+                origins: vec![crash.clone()],
+                path: PathBuf::from("/var/crash"),
+            },
+            unreadable(&[&snap], SNAP_CACHE, io::ErrorKind::Other),
+            unreadable(
+                &[&snap, &crash],
+                SNAP_CACHE,
+                io::ErrorKind::PermissionDenied,
+            ),
+            unreadable(
+                &[&thumbnails],
+                "/home/ana/.cache/thumbnails",
+                io::ErrorKind::PermissionDenied,
+            ),
+            refused(&crash),
+            refused(&snap),
+            refused(&dumps),
+        ];
+        let groups = unseen(&issues, &[&crash], &[Category::System], &[]);
+        let names: Vec<_> = groups.iter().map(|group| group.targets.clone()).collect();
+        assert_eq!(
+            names,
+            [
+                Some(BTreeSet::from([targets[&snap].clone()])),
+                Some(BTreeSet::from([targets[&dumps].clone()])),
+            ],
+            "the crash reports shown already; the snap cache and the core dumps after the others"
+        );
+        assert!(said_by(&refused(&snap), &groups));
+        assert!(said_by(&refused(&dumps), &groups));
+        assert!(!said_by(&refused(&crash), &groups));
+    }
+
+    /// The rule decides what it would be before the user chooses: a cache
+    /// reset is left to choose, as everywhere (invariant 5).
+    #[test]
+    fn a_target_only_root_may_read_is_preselected_as_its_rule() {
+        let (rules, targets) = embedded();
+        let fonts = origin_of(&rules, "System Font Cache");
+        let issue = unreadable(&[&fonts], &targets[&fonts], io::ErrorKind::PermissionDenied);
+        let [group] = unseen(&[issue], &[], &[Category::System], &[])
+            .try_into()
+            .unwrap();
+        assert!(!group.preselected);
+        assert!(!group.checked_by_default);
+        assert_eq!(
+            group.label_alone,
+            okapi_rules::group_label(Language::French, None, "System Font Cache")
+        );
+    }
+
     #[test]
     fn a_note_is_said_by_the_group_only_root_may_read_alone() {
         let (rules, _) = embedded();

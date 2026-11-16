@@ -1878,9 +1878,30 @@ pub mod tests {
         assert_eq!(
             admin_row_of(&GroupFacts {
                 admin: group.admin,
-                ..unseen
+                ..unseen.clone()
             }),
             ui::AdminRow::Unlocked
+        );
+        assert_eq!(
+            admin_row_of(&GroupFacts {
+                admin: AdminState::NothingToClean,
+                ..unseen.clone()
+            }),
+            ui::AdminRow::Nothing
+        );
+        assert_eq!(
+            admin_row_of(&GroupFacts {
+                targets: None,
+                ..unseen.clone()
+            }),
+            ui::AdminRow::Unreachable
+        );
+        assert_eq!(
+            admin_row_of(&GroupFacts {
+                needs_admin: false,
+                ..unseen
+            }),
+            ui::AdminRow::None
         );
     }
 

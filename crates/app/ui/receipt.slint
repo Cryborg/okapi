@@ -204,6 +204,7 @@ component ReceiptLine inherits VerticalLayout {
         : line.kind == ReceiptKind.replaced ? @tr("Gardées : remplacées depuis l'analyse")
         : line.kind == ReceiptKind.excluded ? @tr("Gardées : exclues par vos réglages")
         : line.kind == ReceiptKind.protected ? @tr("Gardées : protégées")
+        : line.kind == ReceiptKind.denied ? @tr("Gardées : permission refusée par le système")
         : line.kind == ReceiptKind.refused ? @tr("Gardées : refus du système")
         : line.kind == ReceiptKind.cancelled ? @tr("Gardées : nettoyage annulé avant leur tour")
         : line.kind == ReceiptKind.browser-open ? @tr("Gardées : leur navigateur est ouvert")
@@ -276,6 +277,16 @@ component ReceiptLine inherits VerticalLayout {
                 horizontal-alignment: right;
                 vertical-alignment: center;
             }
+        }
+    }
+    // Said open or folded: Okapi never forces them, nor asks for the rights
+    // again for them (D-19).
+    if line.kind == ReceiptKind.denied: VerticalLayout {
+        padding-left: Theme.results-indent;
+        padding-top: Theme.spacing-xxs;
+        padding-bottom: Theme.spacing-s;
+        Detail {
+            text: @tr("Elles appartiennent à un autre compte ou au système : Okapi ne les force pas.");
         }
     }
     if root.open: VerticalLayout {

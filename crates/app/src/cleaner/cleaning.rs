@@ -1184,6 +1184,7 @@ fn show_receipt(
                 LineKind::Kept(Kept::Replaced) => ui::ReceiptKind::Replaced,
                 LineKind::Kept(Kept::Excluded) => ui::ReceiptKind::Excluded,
                 LineKind::Kept(Kept::Protected) => ui::ReceiptKind::Protected,
+                LineKind::Kept(Kept::Denied) => ui::ReceiptKind::Denied,
                 LineKind::Kept(Kept::Refused) => ui::ReceiptKind::Refused,
                 LineKind::Kept(Kept::Cancelled) => ui::ReceiptKind::Cancelled,
                 LineKind::Kept(Kept::BrowserOpen) => ui::ReceiptKind::BrowserOpen,

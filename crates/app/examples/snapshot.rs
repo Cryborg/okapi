@@ -242,7 +242,8 @@ fn results(window: &ui::AppWindow, folded: bool, language: Language) {
 /// A receipt with every kind of line.
 fn receipt(window: &ui::AppWindow) {
     use ui::ReceiptKind::{
-        Cancelled, Changed, Excluded, Gone, Partial, Protected, Recent, Refused, Removed, Replaced,
+        Cancelled, Changed, Denied, Excluded, Gone, Partial, Protected, Recent, Refused, Removed,
+        Replaced,
     };
     let line = |kind, count| ui::ReceiptLineShown {
         kind,
@@ -259,7 +260,8 @@ fn receipt(window: &ui::AppWindow) {
         line(Partial, 3),
         line(Gone, 21),
         line(Recent, 5),
-        line(Refused, 4),
+        line(Denied, 3),
+        line(Refused, 1),
         line(Changed, 1),
         line(Replaced, 1),
         line(Excluded, 1),

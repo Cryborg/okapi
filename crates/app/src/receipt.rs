@@ -2,6 +2,7 @@
 //! and its entries by result, the kept ones by reason. Plain Rust over plain
 //! facts of each outcome, tested without a cleaning.
 
+use std::io::ErrorKind;
 use std::path::PathBuf;
 
 use okapi_engine::{CleanOutcome, CleanReceipt, CleanResult, KeepReason, ScanReport};
@@ -79,6 +80,11 @@ pub enum Kept {
     Replaced,
     Excluded,
     Protected,
+    /// The system refused the permission: another account's, or the
+    /// system's, which Okapi never forces (no rights asked for again).
+    Denied,
+    /// The system refused for another reason, or could not tell what the
+    /// cleaning must check.
     Refused,
     Cancelled,
     /// Its browser was open.
@@ -95,6 +101,10 @@ impl Kept {
             KeepReason::Replaced => Self::Replaced,
             KeepReason::Excluded => Self::Excluded,
             KeepReason::Protected => Self::Protected,
+            KeepReason::Failed {
+                kind: ErrorKind::PermissionDenied,
+                ..
+            } => Self::Denied,
             KeepReason::Failed { .. } => Self::Refused,
             KeepReason::Cancelled => Self::Cancelled,
             KeepReason::BrowserOpen => Self::BrowserOpen,
@@ -219,7 +229,6 @@ impl Receipt {
 
 #[cfg(test)]
 mod tests {
-    use std::io::ErrorKind;
 
     use super::*;
 
@@ -315,7 +324,7 @@ mod tests {
                 (LineKind::Partial, 1, 4),
                 (LineKind::Gone, 1, 7),
                 (LineKind::Kept(Kept::Recent), 1, 11),
-                (LineKind::Kept(Kept::Refused), 1, 13),
+                (LineKind::Kept(Kept::Denied), 1, 13),
             ]
         );
         assert_eq!(
@@ -358,6 +367,13 @@ mod tests {
             (
                 KeepReason::Failed {
                     kind: ErrorKind::PermissionDenied,
+                    code: None,
+                },
+                Kept::Denied,
+            ),
+            (
+                KeepReason::Failed {
+                    kind: ErrorKind::ResourceBusy,
                     code: None,
                 },
                 Kept::Refused,

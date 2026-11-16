@@ -397,6 +397,14 @@ msgid "Gardées : refus du système"
 msgstr "Kept: refused by the system"
 
 msgctxt "ReceiptLine"
+msgid "Gardées : permission refusée par le système"
+msgstr "Kept: permission refused by the system"
+
+msgctxt "ReceiptLine"
+msgid "Elles appartiennent à un autre compte ou au système : Okapi ne les force pas."
+msgstr "They belong to another account or to the system: Okapi does not force them."
+
+msgctxt "ReceiptLine"
 msgid "Gardées : nettoyage annulé avant leur tour"
 msgstr "Kept: cleaning cancelled before their turn"
 

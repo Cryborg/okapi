@@ -263,10 +263,15 @@ pub(super) fn unseen_groups<'a>(
 }
 
 /// Whether `issue` is said by a group of `groups` instead: a root of one
-/// rule, whose group waits for root's scan.
+/// rule the system refused to the user, whose group waits for root's scan.
+/// Another error on that rule's root stays a note.
 pub(super) fn said_by(issue: &ScanIssue, groups: &[GroupFacts]) -> bool {
     match issue {
-        ScanIssue::UnreadableRoot { origins, .. } => match origins.as_slice() {
+        ScanIssue::UnreadableRoot {
+            origins,
+            error: io::ErrorKind::PermissionDenied,
+            ..
+        } => match origins.as_slice() {
             [origin] => groups
                 .iter()
                 .any(|group| group.seen.is_none() && group.keys.contains(&origin.key())),
@@ -298,7 +303,8 @@ pub(super) struct Elevating {
     /// None when the request was not sent (traced where it was built).
     pub(super) running: Running<Option<RootScan>>,
     steps: Receiver<ElevationStep>,
-    /// The report whose groups it unlocks.
+    /// The report whose results it unlocks (its groups, and those only root
+    /// may read).
     report: Arc<ScanReport>,
     /// The helper was launched, as its steps said: pkexec asks, or has
     /// asked. Never given up then.
@@ -925,6 +931,13 @@ mod tests {
         let issue = unreadable(&[&snap], SNAP_CACHE, io::ErrorKind::PermissionDenied);
         let groups = unseen(std::slice::from_ref(&issue), &[], &[Category::System], &[]);
         assert!(said_by(&issue, &groups));
+        assert!(
+            !said_by(
+                &unreadable(&[&snap], SNAP_CACHE, io::ErrorKind::Other),
+                &groups
+            ),
+            "another error on its root is no refusal its group says"
+        );
         let read = GroupFacts {
             seen: Some((1, 1)),
             ..groups[0].clone()

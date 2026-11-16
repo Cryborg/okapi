@@ -380,7 +380,8 @@ struct PendingJob {
 struct RootPart {
     /// The age and exclusions root's scan unlocked the groups with.
     granted: rights::Granted,
-    /// Every target of the report held, as root's scan was asked for them.
+    /// Every target of the results held (those only root may read
+    /// included), as root's scan was asked for them.
     targets: BTreeSet<String>,
     /// The targets of the groups confirmed.
     confirmed: BTreeSet<String>,

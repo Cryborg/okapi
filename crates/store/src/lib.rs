@@ -4,7 +4,8 @@
 //! `$XDG_STATE_HOME/okapi/history.jsonl`, the summary of the last analysis
 //! beside it (`last-analysis.json`), how the user last left the interface
 //! (`interface.json`, there too), what they unchecked among the results
-//! (`selections.json`, there too), and every trace in the journal. A
+//! (`selections.json`, there too), the applications seen installed
+//! (`seen-apps.json`, there too), and every trace in the journal. A
 //! cleaning's receipt becomes its history line here, the one form both
 //! interfaces write; nothing here depends on an interface.
 
@@ -14,6 +15,7 @@ mod history;
 mod interface_state;
 pub mod journal;
 mod last_analysis;
+mod seen_apps;
 mod selections;
 mod settings;
 
@@ -29,6 +31,7 @@ pub use history::{
 };
 pub use interface_state::InterfaceState;
 pub use last_analysis::LastAnalysis;
+pub use seen_apps::{SeenApp, SeenApps};
 pub use selections::Selections;
 pub use settings::{Settings, Theme};
 

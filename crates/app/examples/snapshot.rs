@@ -1,7 +1,8 @@
 //! Draws a screen of the interface into a PNG, with made-up content, so that
 //! its layout can be looked at without a display:
 //! `cargo run -p okapi-app --example snapshot -- results /path/to/out.png`
-//! (`results-dark`: the same in the dark scheme).
+//! (`results-dark`: the same in the dark scheme; `results-en`: in English;
+//! `results-en-dark`: both).
 //! A development tool: it never reads the machine and never cleans.
 #![expect(clippy::unwrap_used, reason = "a development tool fails by panicking")]
 
@@ -9,6 +10,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::rc::Rc;
 
+use okapi_rules::Language;
 use slint::platform::software_renderer::{
     MinimalSoftwareWindow, PremultipliedRgbaColor, RepaintBufferType,
 };
@@ -29,6 +31,9 @@ mod ui {
 /// The sizes the mockups draw the window at.
 const LARGE: (u32, u32) = (1280, 800);
 const SMALL: (u32, u32) = (960, 640);
+/// Twice as wide as tall, as a hosting site shows a project's picture, and
+/// narrow enough for the Home page to keep the three columns of the mockups.
+const SOCIAL: (u32, u32) = (1440, 720);
 
 struct Offscreen(Rc<MinimalSoftwareWindow>);
 
@@ -47,8 +52,17 @@ fn size(whole: i32, tenths: i32, unit: ui::SizeUnit) -> ui::Size {
     }
 }
 
-/// The French description of the Linux rule shown as `label`.
-fn description_of(label: &str) -> slint::SharedString {
+/// What the machine would give in `language`: a text of its own (a folder's
+/// name, a package's summary), which Okapi shows as it is.
+fn said(language: Language, french: &'static str, english: &'static str) -> &'static str {
+    match language {
+        Language::French => french,
+        Language::English => english,
+    }
+}
+
+/// The description, in `language`, of the Linux rule shown as `label`.
+fn description_of(label: &str, language: Language) -> slint::SharedString {
     let rules = okapi_rules::RuleSet::embedded(okapi_rules::Os::Linux).unwrap();
     let system = rules.system();
     let browsers = rules.browsers();
@@ -82,7 +96,7 @@ fn description_of(label: &str) -> slint::SharedString {
         .find_map(|(name, description)| (name.as_str() == label).then_some(description))
         .flatten()
         .unwrap();
-    okapi_rules::description(okapi_rules::Language::French, english.as_str()).into()
+    okapi_rules::description(language, english.as_str()).into()
 }
 
 fn row(
@@ -90,14 +104,14 @@ fn row(
     label: &str,
     badge: ui::ResultBadge,
     checked: bool,
+    language: Language,
 ) -> ui::ResultRow {
     ui::ResultRow {
         kind: ui::RowKind::Group,
         nested: false,
         category,
-        // In French, as the window: the longer labels of the two.
-        label: okapi_rules::label(okapi_rules::Language::French, label).into(),
-        description: description_of(label),
+        label: okapi_rules::label(language, label).into(),
+        description: description_of(label, language),
         explained: false,
         checked_by_default: badge == ui::ResultBadge::Preselected,
         state: if checked {
@@ -140,18 +154,25 @@ fn header(category: ui::CategoryKind, folded: bool) -> ui::ResultRow {
 }
 
 /// The results, and the question about Chrome, open.
-fn browser(window: &ui::AppWindow) {
-    results(window, true);
+fn browser(window: &ui::AppWindow, language: Language) {
+    results(window, true, language);
     let cleaner = window.global::<ui::Cleaner>();
     cleaner.set_browser_name("Chrome".into());
-    cleaner.set_browser_caches("Cache, Cache du code".into());
+    cleaner.set_browser_caches(
+        format!(
+            "{}, {}",
+            okapi_rules::label(language, "Cache"),
+            okapi_rules::label(language, "Code Cache")
+        )
+        .into(),
+    );
     cleaner.set_browser_size(size(548, 0, ui::SizeUnit::Megabyte));
     cleaner.set_browser_step(ui::BrowserStep::Ask);
     cleaner.set_browser_asking(true);
 }
 
 /// The results, the system category folded when `folded`.
-fn results(window: &ui::AppWindow, folded: bool) {
+fn results(window: &ui::AppWindow, folded: bool, language: Language) {
     use ui::CategoryKind::{Apps, Browsers, System};
     use ui::ResultBadge::{Admin, Preselected, ToChoose};
     let system = [
@@ -169,7 +190,7 @@ fn results(window: &ui::AppWindow, folded: bool) {
     ];
     let mut rows = vec![header(System, folded)];
     rows.extend(system.iter().map(|(label, badge, checked)| {
-        let mut line = row(System, label, *badge, *checked);
+        let mut line = row(System, label, *badge, *checked, language);
         line.hidden = folded;
         // The mockup's example, and a text long enough to go to the line.
         line.explained = matches!(*label, "Thumbnail Cache" | "Man Page Cache");
@@ -185,7 +206,7 @@ fn results(window: &ui::AppWindow, folded: bool) {
     let cache = |label, badge, checked, hidden| ui::ResultRow {
         nested: true,
         hidden,
-        ..row(Browsers, label, badge, checked)
+        ..row(Browsers, label, badge, checked, language)
     };
     rows.extend([
         browser("Chrome", false),
@@ -197,9 +218,9 @@ fn results(window: &ui::AppWindow, folded: bool) {
     ]);
     rows.push(header(Apps, false));
     rows.extend([
-        row(Apps, "npm Cache", Preselected, true),
-        row(Apps, "pip Cache", Preselected, true),
-        row(Apps, "Hugging Face Xet Cache", ToChoose, false),
+        row(Apps, "npm Cache", Preselected, true, language),
+        row(Apps, "pip Cache", Preselected, true, language),
+        row(Apps, "Hugging Face Xet Cache", ToChoose, false, language),
     ]);
     let cleaner = window.global::<ui::Cleaner>();
     cleaner.set_results(ModelRc::new(VecModel::from(rows)));
@@ -444,7 +465,7 @@ fn default_cells() -> (Vec<ui::WidgetCell>, Vec<i32>) {
 }
 
 /// The Home page, an analysis of today kept and the system read.
-fn home(window: &ui::AppWindow) {
+fn home(window: &ui::AppWindow, language: Language) {
     let dashboard = window.global::<ui::Dashboard>();
     let (cells, rows) = default_cells();
     dashboard.set_cells(ModelRc::new(VecModel::from(cells)));
@@ -475,7 +496,7 @@ fn home(window: &ui::AppWindow) {
         uptime_hours: 3,
         uptime_minutes: 12,
     });
-    dashboard.set_disks(disks());
+    dashboard.set_disks(disks(language));
     dashboard.set_memory(memory());
     dashboard.set_processor(processor());
     dashboard.set_curve_span(59);
@@ -530,10 +551,11 @@ fn disk_line(
 }
 
 /// The disk usage screen: its start, an analysis running, its result.
-fn disk(window: &ui::AppWindow, step: ui::DiskStep) {
+fn disk(window: &ui::AppWindow, step: ui::DiskStep, language: Language) {
     use ui::DiskLineKind::{File, Folder, Others, Unexplained};
     use ui::DiskLineState::{OtherMount, Partial, Pending, Read, Unreadable};
 
+    let said = |french, english| said(language, french, english);
     let disk = window.global::<ui::DiskUsage>();
     disk.set_step(step);
     disk.set_volumes_state(ui::DiskVolumes::Ready);
@@ -547,8 +569,8 @@ fn disk(window: &ui::AppWindow, step: ui::DiskStep) {
         ),
         volume(
             ui::VolumeNaming::Own,
-            "Données",
-            "/run/media/franck/Données",
+            said("Données", "Data"),
+            said("/run/media/franck/Données", "/run/media/franck/Data"),
             ui::VolumePlace::Local,
             Some((412, 1000, 588, 59)),
         ),
@@ -557,7 +579,7 @@ fn disk(window: &ui::AppWindow, step: ui::DiskStep) {
     disk.set_target_path("/home/franck".into());
     disk.set_trail(ModelRc::new(VecModel::from(vec![
         slint::SharedString::new(),
-        "projets".into(),
+        said("projets", "projects").into(),
     ])));
     let mut lines = vec![
         disk_line(Folder, Read, "Okapi", 46_000, 1.0, 38),
@@ -565,17 +587,20 @@ fn disk(window: &ui::AppWindow, step: ui::DiskStep) {
         disk_line(
             File,
             Read,
-            "sauvegarde-du-dossier-photos-de-vacances-2024-version-finale.tar",
+            said(
+                "sauvegarde-du-dossier-photos-de-vacances-2024-version-finale.tar",
+                "backup-of-the-holiday-photos-folder-2024-final-version.tar",
+            ),
             9_800,
             0.21,
             8,
         ),
         disk_line(Folder, Read, "Bubble Blend", 8_200, 0.18, 7),
         disk_line(Others, Read, "", 4_500, 0.1, 4),
-        disk_line(Folder, Pending, "atelier", 0, 0.0, 0),
-        disk_line(Folder, Unreadable, "privé", 0, 0.0, 0),
-        disk_line(Folder, Unreadable, "partage", 0, 0.0, 0),
-        disk_line(Folder, OtherMount, "clé", 0, 0.0, 0),
+        disk_line(Folder, Pending, said("atelier", "workshop"), 0, 0.0, 0),
+        disk_line(Folder, Unreadable, said("privé", "private"), 0, 0.0, 0),
+        disk_line(Folder, Unreadable, said("partage", "shared"), 0, 0.0, 0),
+        disk_line(Folder, OtherMount, said("clé", "stick"), 0, 0.0, 0),
         disk_line(Unexplained, Read, "", 12_000, 0.0, 0),
     ];
     // « Autres » says how many it holds below its name, as the screen does.
@@ -592,7 +617,8 @@ fn disk(window: &ui::AppWindow, step: ui::DiskStep) {
     }
     disk.set_lines(ModelRc::new(VecModel::from(lines)));
     disk.set_folder_size(size(120, 0, ui::SizeUnit::Gigabyte));
-    disk.set_files_seen("128 400".into());
+    // As `shown::grouped` writes a count in each language.
+    disk.set_files_seen(said("128\u{202F}400", "128,400").into());
     disk.set_seen(size(96, 0, ui::SizeUnit::Gigabyte));
     disk.set_phase(if step == ui::DiskStep::Result {
         ui::DiskPhase::Complete
@@ -606,11 +632,11 @@ fn disk(window: &ui::AppWindow, step: ui::DiskStep) {
             kind: Folder,
             state: Read,
             name: "Okapi".into(),
-            path: "/home/franck/projets/Okapi".into(),
+            path: said("/home/franck/projets/Okapi", "/home/franck/projects/Okapi").into(),
             allocated: size(46, 0, ui::SizeUnit::Gigabyte),
             apparent: size(46, 0, ui::SizeUnit::Gigabyte),
             sparse: false,
-            files: "41 203".into(),
+            files: said("41\u{202F}203", "41,203").into(),
             folders: 12,
             cache: false,
             openable: true,
@@ -695,7 +721,7 @@ fn processor() -> ui::ProcessorShown {
     }
 }
 
-fn disks() -> ui::DisksShown {
+fn disks(language: Language) -> ui::DisksShown {
     use ui::VolumeNaming::{Home, Own, System};
     use ui::VolumePlace::{Local, Network, Removable};
     let volumes = vec![
@@ -703,8 +729,8 @@ fn disks() -> ui::DisksShown {
         volume(Home, "", "/home", Local, Some((234, 456, 222, 49))),
         volume(
             Own,
-            "Données",
-            "/run/media/ana/Données",
+            said(language, "Données", "Data"),
+            said(language, "/run/media/ana/Données", "/run/media/ana/Data"),
             Local,
             Some((287, 289, 2, 1)),
         ),
@@ -755,8 +781,8 @@ fn memory() -> ui::MemoryShown {
 
 /// The Home page with only Disques and Mémoire, at their two tallest sizes:
 /// `disks` Large and Memory Tall, or the other way round.
-fn home_tall(window: &ui::AppWindow, disks_large: bool) {
-    home(window);
+fn home_tall(window: &ui::AppWindow, disks_large: bool, language: Language) {
+    home(window, language);
     let (large, tall) = if disks_large {
         (ui::WidgetKind::Disks, ui::WidgetKind::Memory)
     } else {
@@ -802,9 +828,10 @@ fn snap_line(
 
 /// The updates screen: `pending` (folded or not), `searching`, `uptodate`
 /// or `locked`.
-fn updates(window: &ui::AppWindow, state: &str) {
+fn updates(window: &ui::AppWindow, state: &str, language: Language) {
     use ui::UpdateKind::{Other, Security};
 
+    let said = |french, english| said(language, french, english);
     window.set_page(ui::Page::Updates);
     let updates = window.global::<ui::Updates>();
     let today = ui::Moment {
@@ -836,12 +863,12 @@ fn updates(window: &ui::AppWindow, state: &str) {
         updates.set_system_more(41);
         updates.set_system_expanded(state == "pending-open");
         updates.set_system_lines(ModelRc::new(VecModel::from(vec![
-            system_line("openssl", "Outils de chiffrement et certificats SSL/TLS", "3.5.1-1ubuntu2", Security),
-            system_line("libssl3t64", "Bibliothèque de chiffrement utilisée par la plupart des logiciels", "3.5.1-1ubuntu2", Security),
-            system_line("sudo-rs", "Lancer une commande avec les droits administrateur", "0.2.8-1ubuntu1", Security),
-            system_line("libxml2", "Lecture des fichiers XML", "2.14.3+dfsg-1ubuntu0.1", Security),
-            system_line("linux-firmware", "Microprogrammes pour le matériel", "20260410-0ubuntu3", Security),
-            system_line("libreoffice-core", "Suite bureautique LibreOffice : fichiers communs au traitement de texte, au tableur, aux présentations et aux autres modules", "4:25.8.4-0ubuntu1", Other),
+            system_line("openssl", said("Outils de chiffrement et certificats SSL/TLS", "Encryption tools and SSL/TLS certificates"), "3.5.1-1ubuntu2", Security),
+            system_line("libssl3t64", said("Bibliothèque de chiffrement utilisée par la plupart des logiciels", "Encryption library used by most software"), "3.5.1-1ubuntu2", Security),
+            system_line("sudo-rs", said("Lancer une commande avec les droits administrateur", "Run a command with administrator rights"), "0.2.8-1ubuntu1", Security),
+            system_line("libxml2", said("Lecture des fichiers XML", "Reading of XML files"), "2.14.3+dfsg-1ubuntu0.1", Security),
+            system_line("linux-firmware", said("Microprogrammes pour le matériel", "Firmware for the hardware"), "20260410-0ubuntu3", Security),
+            system_line("libreoffice-core", said("Suite bureautique LibreOffice : fichiers communs au traitement de texte, au tableur, aux présentations et aux autres modules", "LibreOffice office suite: files shared by the word processor, the spreadsheet, the presentations and the other modules"), "4:25.8.4-0ubuntu1", Other),
         ])));
         updates.set_snap_lines(ModelRc::new(VecModel::from(vec![
             snap_line("App Center", "Canonical", true, "1.0.4", 117),
@@ -863,7 +890,7 @@ fn updates(window: &ui::AppWindow, state: &str) {
 }
 
 /// The lines of the applications screen, as on the mockup.
-fn app_lines() -> Vec<ui::AppLine> {
+fn app_lines(language: Language) -> Vec<ui::AppLine> {
     let line =
         |name: &str, source, app_size, data, data_size, old: Option<ui::Size>, system, bar| {
             ui::AppLine {
@@ -894,7 +921,11 @@ fn app_lines() -> Vec<ui::AppLine> {
             1.0,
         ),
         line(
-            "Google Cloud CLI avec un nom très long pour voir la troncature",
+            said(
+                language,
+                "Google Cloud CLI avec un nom très long pour voir la troncature",
+                "Google Cloud CLI with a very long name to see it cut short",
+            ),
             ui::AppSource::Snap,
             size(373, 1, ui::SizeUnit::Megabyte),
             ui::AppData::Measuring,
@@ -924,7 +955,7 @@ fn app_lines() -> Vec<ui::AppLine> {
             0.09,
         ),
         line(
-            "Fichiers",
+            said(language, "Fichiers", "Files"),
             ui::AppSource::Deb,
             size(12, 4, ui::SizeUnit::Megabyte),
             ui::AppData::Unknown,
@@ -938,10 +969,10 @@ fn app_lines() -> Vec<ui::AppLine> {
 
 /// The applications screen, as on the mockup: its detail open when
 /// `detail`, its uninstallation asked when `asking`.
-fn apps(app: &ui::AppWindow, detail: bool, asking: bool) {
+fn apps(app: &ui::AppWindow, detail: bool, asking: bool, language: Language) {
     app.set_page(ui::Page::Apps);
     let apps = app.global::<ui::Apps>();
-    apps.set_lines(ModelRc::new(VecModel::from(app_lines())));
+    apps.set_lines(ModelRc::new(VecModel::from(app_lines(language))));
     apps.set_app_count(12);
     apps.set_minutes_ago(1);
     apps.set_debs(ui::SourceShown::Read);
@@ -986,8 +1017,8 @@ fn apps(app: &ui::AppWindow, detail: bool, asking: bool) {
 }
 
 /// The tab of leftovers, as on the mockup; empty when `empty`.
-fn apps_leftovers(app: &ui::AppWindow, empty: bool) {
-    apps(app, false, false);
+fn apps_leftovers(app: &ui::AppWindow, empty: bool, language: Language) {
+    apps(app, false, false, language);
     app.global::<ui::Apps>().set_tab(ui::AppsTab::Leftovers);
     let leftovers = app.global::<ui::Leftovers>();
     leftovers.set_searched(true);
@@ -1041,8 +1072,8 @@ fn apps_leftovers(app: &ui::AppWindow, empty: bool) {
 }
 
 /// The uninstallation of a flatpak asked, with its translations.
-fn apps_flatpak(app: &ui::AppWindow) {
-    apps(app, false, false);
+fn apps_flatpak(app: &ui::AppWindow, language: Language) {
+    apps(app, false, false, language);
     let apps = app.global::<ui::Apps>();
     apps.set_has_flatpak(true);
     apps.set_flatpaks(ui::SourceShown::Read);
@@ -1085,36 +1116,45 @@ fn main() {
     let (screen, dark) = asked
         .strip_suffix("-dark")
         .map_or((asked.as_str(), false), |screen| (screen, true));
+    // Any screen in English: its name followed by `-en`, before `-dark`.
+    let (screen, language) = screen
+        .strip_suffix("-en")
+        .map_or((screen, Language::French), |screen| {
+            (screen, Language::English)
+        });
     let (width, height) = if screen.ends_with("-small") {
         SMALL
+    } else if screen.ends_with("-social") {
+        SOCIAL
     } else {
         LARGE
     };
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(Offscreen(window.clone()))).unwrap();
     let app = ui::AppWindow::new().unwrap();
-    slint::select_bundled_translation("").unwrap();
+    // The French source is the bundle's empty language, as in the interface.
+    slint::select_bundled_translation(said(language, "", "en")).unwrap();
     if dark {
         app.global::<ui::Preferences>().invoke_show_theme(true);
     }
     match screen {
-        "results" | "results-small" => results(&app, false),
-        "folded" => results(&app, true),
-        "browser" => browser(&app),
+        "results" | "results-small" => results(&app, false, language),
+        "folded" => results(&app, true, language),
+        "browser" => browser(&app, language),
         "receipt" => receipt(&app),
         "choosing" => choosing(&app),
         "scanning" => scanning(&app),
         "cleaning" => cleaning(&app),
         "ended" => ended(&app),
         "about" => app.set_page(ui::Page::About),
-        "home" | "home-small" => home(&app),
+        "home" | "home-small" | "home-social" => home(&app, language),
         "home-folded" => {
-            home(&app);
+            home(&app, language);
             app.set_sidebar_chosen_folded(true);
         }
-        "home-disks" => home_tall(&app, true),
+        "home-disks" => home_tall(&app, true, language),
         "home-customize" | "home-move" => {
-            home(&app);
+            home(&app, language);
             let dashboard = app.global::<ui::Dashboard>();
             dashboard.set_editing(true);
             // Disques picked up with the keyboard.
@@ -1137,11 +1177,11 @@ fn main() {
                 kind: ui::WidgetKind::Disks,
             });
         }
-        "home-memory" => home_tall(&app, false),
-        "disk-start" => disk(&app, ui::DiskStep::Start),
+        "home-memory" => home_tall(&app, false, language),
+        "disk-start" => disk(&app, ui::DiskStep::Start, language),
         // With the keys, running first: its end gives the list the focus.
-        "disk-scanning" | "disk-result-keys" => disk(&app, ui::DiskStep::Scanning),
-        "disk-result" | "disk-result-small" => disk(&app, ui::DiskStep::Result),
+        "disk-scanning" | "disk-result-keys" => disk(&app, ui::DiskStep::Scanning, language),
+        "disk-result" | "disk-result-small" => disk(&app, ui::DiskStep::Result, language),
         "updates" | "updates-open" | "updates-open-small" | "updates-searching"
         | "updates-uptodate" | "updates-locked" => {
             let state = match screen.trim_end_matches("-small") {
@@ -1149,17 +1189,17 @@ fn main() {
                 "updates-open" => "pending-open",
                 other => other.trim_start_matches("updates-"),
             };
-            updates(&app, state);
+            updates(&app, state, language);
         }
-        "apps" => apps(&app, true, false),
-        "apps-small" => apps(&app, false, false),
-        "apps-uninstall" => apps(&app, true, true),
-        "apps-uninstall-flatpak" => apps_flatpak(&app),
-        "apps-leftovers" => apps_leftovers(&app, false),
-        "apps-leftovers-empty" => apps_leftovers(&app, true),
+        "apps" => apps(&app, true, false, language),
+        "apps-small" => apps(&app, false, false, language),
+        "apps-uninstall" => apps(&app, true, true, language),
+        "apps-uninstall-flatpak" => apps_flatpak(&app, language),
+        "apps-leftovers" => apps_leftovers(&app, false, language),
+        "apps-leftovers-empty" => apps_leftovers(&app, true, language),
         "settings" => settings(&app),
         other => panic!(
-            "no screen {other} (any one dark with -dark): results, results-small, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings"
+            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));
@@ -1167,7 +1207,7 @@ fn main() {
     slint::platform::update_timers_and_animations();
     if screen == "disk-result-keys" {
         // Ended, the keyboard on the name cut short.
-        disk(&app, ui::DiskStep::Result);
+        disk(&app, ui::DiskStep::Result, language);
         app.global::<ui::DiskUsage>().set_current(2);
         // `changed` handlers run on the next turns of the event loop.
         slint::platform::update_timers_and_animations();

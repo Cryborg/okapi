@@ -464,6 +464,8 @@ impl RuleSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+
     use crate::effect::{CleanupAction, Effect};
 
     const MINIMAL: RuleSources<'static> = RuleSources {
@@ -611,6 +613,60 @@ mod tests {
                 .map(|(path, action)| (path.to_owned(), action))
                 .collect();
             assert_eq!(found_targets, expected, "{os}");
+        }
+    }
+
+    /// uv and pnpm are offered where their own default places are, never
+    /// everywhere (a `${HOME}` is always there); pnpm's store by its
+    /// versioned folder, which only a store holds.
+    #[test]
+    fn uv_and_pnpm_are_found_at_their_own_places() {
+        for (os, uv, pnpm) in [
+            (
+                Os::Linux,
+                vec!["${CACHE}/uv"],
+                vec![
+                    "${LOCAL_SHARE}/pnpm/store/v3",
+                    "${LOCAL_SHARE}/pnpm/store/v10",
+                ],
+            ),
+            (
+                Os::MacOs,
+                vec!["${HOME}/.cache/uv"],
+                vec!["${LIBRARY}/pnpm/store/v3", "${LIBRARY}/pnpm/store/v10"],
+            ),
+            (
+                Os::Windows,
+                vec!["${LOCALAPPDATA}/uv/cache"],
+                vec![
+                    "${LOCALAPPDATA}/pnpm/store/v3",
+                    "${LOCALAPPDATA}/pnpm/store/v10",
+                ],
+            ),
+        ] {
+            let rules = RuleSet::embedded(os).unwrap();
+            // Its action, and its places in any order.
+            let of = |id: &str| -> (CleanupAction, BTreeSet<String>) {
+                let rule = rules
+                    .apps()
+                    .iter()
+                    .find(|rule| rule.id().as_str() == id)
+                    .unwrap();
+                match rule.effect() {
+                    Effect::Maintenance { action, affected } => {
+                        (*action, affected.iter().map(ToString::to_string).collect())
+                    }
+                    Effect::Delete(_) => panic!("{os}: {id} deletes"),
+                }
+            };
+            let set = |places: Vec<&str>| {
+                places
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect::<BTreeSet<_>>()
+            };
+            assert_eq!(of("uv"), (CleanupAction::UvPrune, set(uv)), "{os}");
+            assert_eq!(of("pnpm"), (CleanupAction::PnpmPrune, set(pnpm)), "{os}");
         }
     }
 

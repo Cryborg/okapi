@@ -281,13 +281,16 @@ mod tests {
     /// Whether a rule of `effect` is a line of the results, its description
     /// shown: one that deletes, or a maintenance the interface offers (the
     /// journal's vacuum, by the privileged helper; Docker's build cache, by
-    /// its daemon; not the others).
+    /// its daemon; uv's and pnpm's, the user's to run; not the others).
     fn is_offered<D, A>(effect: &Effect<D, A>) -> bool {
         matches!(
             effect,
             Effect::Delete(_)
                 | Effect::Maintenance {
-                    action: CleanupAction::JournalVacuum | CleanupAction::DockerBuildPrune,
+                    action: CleanupAction::JournalVacuum
+                        | CleanupAction::DockerBuildPrune
+                        | CleanupAction::UvPrune
+                        | CleanupAction::PnpmPrune,
                     ..
                 }
         )

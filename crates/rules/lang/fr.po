@@ -580,6 +580,14 @@ msgid "Kernel and application crash dump files collected by apport or similar"
 msgstr "Rapports de plantage du noyau et des applications, recueillis par apport ou un outil semblable."
 
 msgctxt "description"
+msgid "The pnpm package store: its prune removes the packages no project on this computer uses any more, downloaded again when one needs them; your projects are not touched. The store stays if pnpm is no longer installed: it may then be removed by hand"
+msgstr "Magasin de paquets de pnpm : son élagage retire les paquets qu'aucun projet de cet ordinateur n'utilise plus, téléchargés de nouveau quand l'un en a besoin ; vos projets ne sont pas touchés. Si pnpm n'est plus installé, le magasin reste : il peut alors être retiré à la main."
+
+msgctxt "description"
+msgid "The uv cache: its prune removes the entries no longer used and the centralized project environments, made again when needed; your projects are not touched. The cache stays if uv is no longer installed: it may then be removed by hand"
+msgstr "Cache d'uv : son élagage retire les entrées qui ne servent plus et les environnements de projet centralisés, recréés au besoin ; vos projets ne sont pas touchés. Si uv n'est plus installé, le cache reste : il peut alors être retiré à la main."
+
+msgctxt "description"
 msgid "The build cache of the local Docker engine: its entries unused for at least {days} days go while the cache takes more than {gigabytes} GB; under that, nothing goes. Builds may take longer. Containers, images, volumes and the caches of other buildx builders are not touched"
 msgstr "Cache de construction du moteur Docker local : ses entrées inutilisées depuis au moins {days} jours partent tant que le cache occupe plus de {gigabytes} Go ; en dessous, rien ne part. Les constructions peuvent être plus longues. Les conteneurs, images, volumes et les caches des autres constructeurs buildx ne sont pas touchés."
 

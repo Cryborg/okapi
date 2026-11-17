@@ -790,10 +790,7 @@ fn a_name_the_rules_came_to_protect_stays() {
     let (_, rule) = file_and_directory(&fixture);
     let mut run = run_later(&fixture, vec![RuleEntry::Target(&rule)]);
     let report = run.scan();
-    run.misc = serde_json::from_str(
-        r#"{"type": "misc", "protectedEventLogs": ["file"], "trashPath": null}"#,
-    )
-    .unwrap();
+    run.misc = serde_json::from_str(r#"{"type": "misc", "protectedEventLogs": ["file"]}"#).unwrap();
     let receipt = clean(&run, &report, &ids(&report));
     assert!(results(&receipt).contains(&(
         fixture.path("data/file"),

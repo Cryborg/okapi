@@ -347,8 +347,7 @@ impl RuleSet {
             self.check_available(file, rules.template_paths())?;
         }
         self.check_available(RuleFileKind::Steam, self.steam.template_paths())?;
-        self.check_available(RuleFileKind::Databases, self.databases.template_paths())?;
-        self.check_available(RuleFileKind::Misc, self.misc.template_paths())
+        self.check_available(RuleFileKind::Databases, self.databases.template_paths())
     }
 
     fn check_available<'a>(
@@ -477,7 +476,7 @@ mod tests {
         gpu_cache: r#"{"type": "gpu-cache", "apps": []}"#,
         steam: r#"{"type": "steam", "libraries": [], "redistPatterns": []}"#,
         databases: r#"{"type": "databases", "targets": []}"#,
-        misc: r#"{"type": "misc", "protectedEventLogs": [], "trashPath": null}"#,
+        misc: r#"{"type": "misc", "protectedEventLogs": []}"#,
     };
 
     fn load_minimal_with(file: RuleFileKind, text: &str) -> Result<RuleSet, RulesError> {
@@ -505,11 +504,6 @@ mod tests {
             assert!(!rules.steam().redistributable_patterns().is_empty(), "{os}");
             assert!(!rules.browsers().chromium().is_empty(), "{os}");
             assert!(!rules.browsers().firefox().is_empty(), "{os}");
-            assert_eq!(
-                rules.misc().trash_path().is_some(),
-                os != Os::Windows,
-                "{os}"
-            );
         }
     }
 
@@ -1049,10 +1043,8 @@ mod tests {
             )
             .map(|_| ()),
             serde_json::from_str::<DatabaseRules>(r#"{"type": "misc", "targets": []}"#).map(|_| ()),
-            serde_json::from_str::<MiscRules>(
-                r#"{"type": "steam", "protectedEventLogs": [], "trashPath": null}"#,
-            )
-            .map(|_| ()),
+            serde_json::from_str::<MiscRules>(r#"{"type": "steam", "protectedEventLogs": []}"#)
+                .map(|_| ()),
         ];
         for (index, result) in errors.into_iter().enumerate() {
             let error = result.unwrap_err().to_string();
@@ -1161,12 +1153,6 @@ mod tests {
                          {{"label": "B", "basePath": "{FOREIGN}", "dbFiles": ["b"]}}]}}"#
                 ),
             ),
-            (
-                RuleFileKind::Misc,
-                format!(
-                    r#"{{"type": "misc", "protectedEventLogs": [], "trashPath": "{FOREIGN}"}}"#
-                ),
-            ),
         ];
         for (file, text) in cases {
             assert_foreign_path_rejected(file, &text);
@@ -1206,7 +1192,7 @@ mod tests {
     fn rejects_unknown_fields_at_the_top_of_a_file() {
         let error = load_minimal_with(
             RuleFileKind::Misc,
-            r#"{"type": "misc", "protectedEventLogs": [], "trashPath": null, "postCleanupScript": "rm -rf ~"}"#,
+            r#"{"type": "misc", "protectedEventLogs": [], "postCleanupScript": "rm -rf ~"}"#,
         )
         .unwrap_err();
         assert!(
@@ -1219,11 +1205,17 @@ mod tests {
 
     #[test]
     fn a_validation_error_points_at_the_line_of_the_faulty_value() {
-        for text in [
-            "{\"type\": \"misc\",\n \"trashPath\": \"${CACHE}/../x\",\n \"protectedEventLogs\": []\n}",
-            "{\"type\": \"misc\",\n \"protectedEventLogs\": [\"a\", \"a\"],\n \"trashPath\": null\n}",
+        for (file, text) in [
+            (
+                RuleFileKind::System,
+                "{\"type\": \"system\",\n \"cleanTargets\": [{\"path\": \"${CACHE}/../x\", \"subcategory\": \"X\"}]\n}",
+            ),
+            (
+                RuleFileKind::Misc,
+                "{\"type\": \"misc\",\n \"protectedEventLogs\": [\"a\", \"a\"]}",
+            ),
         ] {
-            let error = load_minimal_with(RuleFileKind::Misc, text).unwrap_err();
+            let error = load_minimal_with(file, text).unwrap_err();
             assert!(
                 matches!(&error, RulesError::Parse { source, .. } if source.line() == 2),
                 "{error}"

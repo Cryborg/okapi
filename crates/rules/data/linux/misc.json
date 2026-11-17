@@ -1,5 +1,4 @@
 {
   "type": "misc",
-  "protectedEventLogs": [],
-  "trashPath": "${LOCAL_SHARE}/Trash/files"
+  "protectedEventLogs": []
 }

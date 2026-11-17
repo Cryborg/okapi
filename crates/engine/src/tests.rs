@@ -122,8 +122,7 @@ fn app(json: &str) -> AppCacheRule {
 }
 
 fn no_protected_names() -> MiscRules {
-    serde_json::from_str(r#"{"type": "misc", "protectedEventLogs": [], "trashPath": null}"#)
-        .unwrap()
+    serde_json::from_str(r#"{"type": "misc", "protectedEventLogs": []}"#).unwrap()
 }
 
 struct Run<'a> {
@@ -512,10 +511,8 @@ fn a_protected_name_keeps_its_directory_open() {
     fixture.age(&fixture.path("logs/archive"), 2 * HOUR);
     let rule = target_at(&root);
     let mut run = Run::new(&fixture, vec![RuleEntry::Target(&rule)]);
-    run.misc = serde_json::from_str(
-        r#"{"type": "misc", "protectedEventLogs": ["security.evtx"], "trashPath": null}"#,
-    )
-    .unwrap();
+    run.misc = serde_json::from_str(r#"{"type": "misc", "protectedEventLogs": ["security.evtx"]}"#)
+        .unwrap();
     let report = run.scan();
     assert_eq!(
         offered_paths(&report),
@@ -1892,10 +1889,8 @@ fn single_file_targets_report_exactly_what_held_them_back() {
     };
     let targets = [file(&protected), file(&directory)];
     let mut run = Run::new(&fixture, targets.iter().map(RuleEntry::File).collect());
-    run.misc = serde_json::from_str(
-        r#"{"type": "misc", "protectedEventLogs": ["security.evtx"], "trashPath": null}"#,
-    )
-    .unwrap();
+    run.misc = serde_json::from_str(r#"{"type": "misc", "protectedEventLogs": ["security.evtx"]}"#)
+        .unwrap();
     let report = run.scan();
     assert_eq!(offered_paths(&report), Vec::<PathBuf>::new());
     assert_eq!(report.stats().protected_names(), 1);

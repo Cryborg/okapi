@@ -17,6 +17,5 @@
     "microsoft-windows-groupPolicy%4operational.evtx",
     "microsoft-windows-codeintegrity%4operational.evtx",
     "microsoft-windows-appLocker%4exe and dll.evtx"
-  ],
-  "trashPath": null
+  ]
 }

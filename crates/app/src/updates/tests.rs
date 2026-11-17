@@ -56,6 +56,8 @@ struct Fake {
     /// When set, the next system's reading waits for another program until
     /// a word comes.
     hold: Mutex<Option<mpsc::Receiver<()>>>,
+    /// When set, the next reading of the snaps waits until a word comes.
+    hold_snaps: Mutex<Option<mpsc::Receiver<()>>>,
     readings: AtomicU32,
     refreshes: AtomicU32,
     /// While set, downloading the lists finds no network.
@@ -102,6 +104,7 @@ impl Default for Fake {
                 ))
             },
             hold: Mutex::new(None),
+            hold_snaps: Mutex::new(None),
             readings: AtomicU32::new(0),
             refreshes: AtomicU32::new(0),
             offline: AtomicBool::new(false),
@@ -177,6 +180,10 @@ impl Sources for Fake {
         (self.stamp)()
     }
     fn snaps(&self) -> Result<Vec<Refresh>, SnapdError> {
+        let hold = self.hold_snaps.lock().unwrap().take();
+        if let Some(hold) = hold {
+            hold.recv().unwrap();
+        }
         if self.installed.load(Ordering::SeqCst) {
             return (self.snaps_after)();
         }
@@ -879,6 +886,56 @@ fn a_snaps_thread_that_dies_ends_the_search_too() {
     assert_eq!(updates(&window).get_snaps_state(), ui::SourceState::Failed);
     assert_eq!(updates(&window).get_system_count(), 7);
     assert!(!updates(&window).get_reboot(), "never read");
+}
+
+#[test]
+fn a_system_thread_that_dies_says_so_without_waiting_for_the_snaps() {
+    // Catches a failure said only once the other thread, which holds the
+    // channel open, ends.
+    let (go, hold) = mpsc::channel();
+    let fake = Arc::new(Fake {
+        system: || panic!("a reading that dies"),
+        snaps: two_snaps,
+        hold_snaps: Mutex::new(Some(hold)),
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read_until(&window, |window| {
+        updates(window).get_system_state() == ui::SourceState::Failed
+    });
+    assert_eq!(updates(&window).get_step(), ui::UpdatesStep::Searching);
+    assert_eq!(
+        updates(&window).get_system_failure(),
+        ui::SourceFailure::Broken
+    );
+    go.send(()).unwrap();
+    read(&window);
+    assert_eq!(updates(&window).get_snap_lines().row_count(), 2);
+}
+
+#[test]
+fn a_snaps_thread_that_dies_says_so_without_waiting_for_the_system() {
+    let (go, hold) = mpsc::channel();
+    let fake = Arc::new(Fake {
+        system: eight,
+        snaps: || panic!("a reading that dies"),
+        reboot: || {
+            Ok(Some(RebootRequired {
+                packages: Some(Vec::new()),
+            }))
+        },
+        hold: Mutex::new(Some(hold)),
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read_until(&window, |window| {
+        updates(window).get_snaps_state() == ui::SourceState::Failed
+    });
+    assert_eq!(updates(&window).get_step(), ui::UpdatesStep::Searching);
+    assert!(!updates(&window).get_reboot(), "owed, never read");
+    go.send(()).unwrap();
+    read(&window);
+    assert_eq!(updates(&window).get_system_count(), 7);
 }
 
 #[test]

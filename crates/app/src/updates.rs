@@ -254,25 +254,25 @@ impl UpdatesScreen {
         search.in_scope(|| tracing::info!("updates searched"));
         let (sender, events) = mpsc::channel();
         let sources = Arc::clone(&self.0.borrow().seams.sources);
-        let system = spawn("updates-system", {
+        let system = spawn(SYSTEM_THREAD, {
             let sources = Arc::clone(&sources);
             let sender = sender.clone();
             let search = search.clone();
             move || {
                 let _search = search.entered();
-                let waiting = |waiting| told(&sender, Event::Waiting(waiting));
-                told(
-                    &sender,
-                    Event::System(updates::read_system(&*sources, refresh, &waiting)),
-                );
+                let mut teller = Teller::new(sender, SYSTEM_THREAD, &[Owed::System]);
+                let waiting = |waiting| told(&teller.sender, Event::Waiting(waiting));
+                let reading = updates::read_system(&*sources, refresh, &waiting);
+                teller.tell(Event::System(reading));
             }
         });
-        let snaps = spawn("updates-snaps", {
+        let snaps = spawn(SNAPS_THREAD, {
             let sender = sender.clone();
             move || {
                 let _search = search.entered();
-                told(&sender, Event::Snaps(updates::read_snaps(&*sources)));
-                told(&sender, Event::Reboot(updates::read_reboot(&*sources)));
+                let mut teller = Teller::new(sender, SNAPS_THREAD, &[Owed::Snaps, Owed::Reboot]);
+                teller.tell(Event::Snaps(updates::read_snaps(&*sources)));
+                teller.tell(Event::Reboot(updates::read_reboot(&*sources)));
             }
         });
         drop(sender);
@@ -319,7 +319,9 @@ impl UpdatesScreen {
     }
 
     /// Shows what the search's threads have told, and ends it once they
-    /// have all told; a thread gone without a word failed.
+    /// have all told. A thread that dies tells its failure itself
+    /// ([`Teller`]); all of them gone with something still awaited failed
+    /// it too.
     fn take(&self) {
         loop {
             let event = {
@@ -351,7 +353,7 @@ impl UpdatesScreen {
                         system,
                         snaps,
                         reboot,
-                        "an updates thread ended without its reading"
+                        "the updates threads gone with a reading still awaited"
                     );
                     if system {
                         self.show_system(failed_reading());
@@ -616,6 +618,78 @@ impl UpdatesScreen {
 fn older_than(at: Timestamp, now: Timestamp, age: Duration) -> bool {
     now.as_second().saturating_sub(at.as_second())
         >= i64::try_from(age.as_secs()).unwrap_or(i64::MAX)
+}
+
+/// The threads of a search.
+const SYSTEM_THREAD: &str = "updates-system";
+const SNAPS_THREAD: &str = "updates-snaps";
+
+/// What a thread of a search owes the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Owed {
+    System,
+    Snaps,
+    Reboot,
+}
+
+impl Owed {
+    /// What `event` pays, if anything.
+    const fn paid_by(event: &Event) -> Option<Self> {
+        match event {
+            Event::Waiting(_) => None,
+            Event::System(_) => Some(Self::System),
+            Event::Snaps(_) => Some(Self::Snaps),
+            Event::Reboot(_) => Some(Self::Reboot),
+        }
+    }
+
+    /// What is shown of it when it never came.
+    const fn failed(self) -> Event {
+        match self {
+            Self::System => Event::System(failed_reading()),
+            Self::Snaps => Event::Snaps(Outcome::Failed(Failure::Broken)),
+            Self::Reboot => Event::Reboot(None),
+        }
+    }
+}
+
+/// A thread's end of the search: what it tells, and, once dropped (its
+/// end, or a panic unwinding), the failure of what it still owed, at once:
+/// the other thread, which holds the channel open, is never waited for.
+struct Teller {
+    sender: mpsc::Sender<Event>,
+    thread: &'static str,
+    owed: Vec<Owed>,
+}
+
+impl Teller {
+    fn new(sender: mpsc::Sender<Event>, thread: &'static str, owed: &[Owed]) -> Self {
+        Self {
+            sender,
+            thread,
+            owed: owed.to_vec(),
+        }
+    }
+
+    fn tell(&mut self, event: Event) {
+        if let Some(paid) = Owed::paid_by(&event) {
+            self.owed.retain(|owed| *owed != paid);
+        }
+        told(&self.sender, event);
+    }
+}
+
+impl Drop for Teller {
+    fn drop(&mut self) {
+        for owed in std::mem::take(&mut self.owed) {
+            tracing::error!(
+                thread = self.thread,
+                ?owed,
+                "an updates thread ended without its reading: its failure told"
+            );
+            told(&self.sender, owed.failed());
+        }
+    }
 }
 
 /// What a thread tells the window; a window gone (the app closing) has

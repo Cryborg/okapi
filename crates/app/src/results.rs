@@ -41,10 +41,30 @@ const fn description_values(action: CleanupAction) -> &'static [(&'static str, u
     }
 }
 
+/// What prunes uv's cache: the user runs it, Okapi only shows it.
+const UV_PRUNE: &str = "uv cache prune";
+/// What prunes pnpm's store, as [`UV_PRUNE`].
+const PNPM_PRUNE: &str = "pnpm store prune";
+
+/// The command the user runs for the maintenance `action`, when it is one
+/// Okapi only shows (invariant 4): its one source, never a rule.
+#[must_use]
+pub const fn by_hand_command(action: CleanupAction) -> Option<&'static str> {
+    match action {
+        CleanupAction::UvPrune => Some(UV_PRUNE),
+        CleanupAction::PnpmPrune => Some(PNPM_PRUNE),
+        CleanupAction::JournalVacuum
+        | CleanupAction::DockerBuildPrune
+        | CleanupAction::WindowsComponents
+        | CleanupAction::DeliveryOptimization => None,
+    }
+}
+
 /// What the results need of one group of the report, of a target only root
 /// may read ([`GroupFacts::unseen`]), of a maintenance root runs
-/// ([`GroupFacts::maintenance`]), or of Docker's prune
-/// ([`GroupFacts::daemon_operation`]).
+/// ([`GroupFacts::maintenance`]), of Docker's prune
+/// ([`GroupFacts::daemon_operation`]), or of one the user runs
+/// ([`GroupFacts::by_hand`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupFacts {
     /// Its label: under its browser's line, a browser's cache needs no more.
@@ -78,9 +98,18 @@ pub struct GroupFacts {
     pub keys: BTreeSet<OriginKey>,
     /// What the user's own scan saw of it. [`Self::numbers`] are shown.
     pub seen: Seen,
-    /// The operation a daemon does for the user's session (Docker's build
-    /// cache), when the line is one: never a group of the report.
-    pub daemon: Option<DaemonOperation>,
+    /// Who runs its maintenance when not Okapi (Docker, or the user): the
+    /// line is then never a group of the report.
+    pub run_by: Option<RunBy>,
+}
+
+/// Who runs a maintenance Okapi neither scans nor cleans.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunBy {
+    /// Docker, asked by the cleaning.
+    Docker(DaemonOperation),
+    /// The user, the command shown to copy (invariant 4).
+    User { command: &'static str },
 }
 
 /// Docker's prune of its build cache, asked on `socket`, and whether Docker
@@ -224,7 +253,7 @@ impl GroupFacts {
                 entries: group.items().len(),
                 bytes: group.total_size(),
             },
-            daemon: None,
+            run_by: None,
         }
     }
 
@@ -308,7 +337,7 @@ impl GroupFacts {
         let origin = found.origin();
         tracing::info!(?origin, ?daemon, "a maintenance Docker runs");
         Self {
-            daemon: Some(daemon),
+            run_by: Some(RunBy::Docker(daemon)),
             ..Self::of_rule(
                 origin,
                 okapi_rules::label(language, found.label().as_str()),
@@ -318,6 +347,28 @@ impl GroupFacts {
                 false,
             )
         }
+    }
+
+    /// What the results need of the maintenance `found` the user runs by
+    /// hand, its texts in `language`: a line never checked (invariant 5),
+    /// its command shown to copy, never run (invariant 4); none for a
+    /// maintenance that is not the user's.
+    #[must_use]
+    pub fn by_hand(found: &MaintenanceFound, language: Language) -> Option<Self> {
+        let command = by_hand_command(found.action())?;
+        let origin = found.origin();
+        tracing::info!(?origin, command, "a maintenance the user does by hand");
+        Some(Self {
+            run_by: Some(RunBy::User { command }),
+            ..Self::of_rule(
+                origin,
+                okapi_rules::label(language, found.label().as_str()),
+                maintenance_description(found, language),
+                Preselection::ToChoose,
+                Seen::Operation,
+                false,
+            )
+        })
     }
 
     /// The line of the rule `origin` that root's scan alone sets, asked of
@@ -363,17 +414,28 @@ impl GroupFacts {
             custom: false,
             keys: BTreeSet::from([origin.key()]),
             seen,
-            daemon: None,
+            run_by: None,
+        }
+    }
+
+    /// The command its line shows to copy: the one the user runs by hand;
+    /// none for any other line.
+    #[must_use]
+    pub const fn command(&self) -> Option<&'static str> {
+        match &self.run_by {
+            Some(RunBy::User { command }) => Some(*command),
+            Some(RunBy::Docker(_)) | None => None,
         }
     }
 
     /// Whether its checkbox may be checked: a group the user removes, one
-    /// root's scan offers, or an operation of a daemon that accepts the
-    /// user.
+    /// root's scan offers, or Docker's prune when Docker accepts the user;
+    /// never one the user runs by hand.
     #[must_use]
     pub fn is_checkable(&self) -> bool {
-        match &self.daemon {
-            Some(daemon) => daemon.access == Access::Allowed,
+        match &self.run_by {
+            Some(RunBy::Docker(daemon)) => daemon.access == Access::Allowed,
+            Some(RunBy::User { .. }) => false,
             None => !self.needs_admin || matches!(self.admin, AdminState::Unlocked { .. }),
         }
     }
@@ -454,15 +516,16 @@ impl Results {
     /// The groups of an analysis of `chosen`: those of its report, by their
     /// index there, then those root's scan alone sets
     /// ([`GroupFacts::unseen`], [`GroupFacts::maintenance`]) and Docker's
-    /// prune ([`GroupFacts::daemon_operation`]), which no index
+    /// prune ([`GroupFacts::daemon_operation`]) and the maintenances the
+    /// user runs by hand ([`GroupFacts::by_hand`]), which no index
     /// of the report names (invariant 1);
-    /// those the engine checks by default are checked.
+    /// those the engine checks by default are checked, when they may be.
     #[must_use]
     pub fn new(groups: Vec<GroupFacts>, chosen: BTreeSet<Category>) -> Self {
         let checked = groups
             .iter()
             .enumerate()
-            .filter(|(_, group)| group.checked_by_default)
+            .filter(|(_, group)| group.checked_by_default && group.is_checkable())
             .map(|(index, _)| index)
             .collect();
         Self {
@@ -737,7 +800,7 @@ impl Results {
             return;
         };
         if !group.is_checkable() {
-            tracing::warn!(index, admin = ?group.admin, daemon = ?group.daemon, "a group out of reach cannot be checked");
+            tracing::warn!(index, admin = ?group.admin, run_by = ?group.run_by, "a group out of reach cannot be checked");
             return;
         }
         if !self.checked.remove(&index) {
@@ -886,9 +949,19 @@ impl Results {
             .filter(|index| {
                 self.groups
                     .get(*index)
-                    .is_some_and(|group| !group.needs_admin && group.daemon.is_none())
+                    .is_some_and(|group| !group.needs_admin && group.run_by.is_none())
             })
             .collect()
+    }
+
+    /// The command the line `row` shows to copy: the one the user runs by
+    /// hand for its group; none for any other line.
+    #[must_use]
+    pub fn command_at(&self, row: usize) -> Option<&'static str> {
+        let Line::Group { index, .. } = self.rows().into_iter().nth(row)? else {
+            return None;
+        };
+        self.group(index)?.command()
     }
 
     /// The socket of Docker, when its prune is checked and Docker accepts
@@ -897,7 +970,10 @@ impl Results {
     pub fn docker_checked(&self) -> Option<PathBuf> {
         self.checked
             .iter()
-            .find_map(|index| self.groups.get(*index)?.daemon.as_ref())
+            .find_map(|index| match self.groups.get(*index)?.run_by.as_ref()? {
+                RunBy::Docker(daemon) => Some(daemon),
+                RunBy::User { .. } => None,
+            })
             .filter(|daemon| daemon.access == Access::Allowed)
             .map(|daemon| daemon.socket.clone())
     }
@@ -956,7 +1032,7 @@ mod tests {
                 entries: 2,
                 bytes: 10,
             },
-            daemon: None,
+            run_by: None,
         }
     }
 
@@ -1258,11 +1334,106 @@ mod tests {
             preselection: Preselection::ToChoose,
             checked_by_default: false,
             seen: Seen::Operation,
-            daemon: Some(DaemonOperation {
+            run_by: Some(RunBy::Docker(DaemonOperation {
                 socket: PathBuf::from("/run/docker.sock"),
                 access,
-            }),
+            })),
             ..group(&[Category::Apps], false, false)
+        }
+    }
+
+    /// uv's prune, the user's to run.
+    fn by_hand_line() -> GroupFacts {
+        GroupFacts {
+            preselection: Preselection::ToChoose,
+            checked_by_default: false,
+            seen: Seen::Operation,
+            run_by: Some(RunBy::User { command: UV_PRUNE }),
+            ..group(&[Category::Apps], false, false)
+        }
+    }
+
+    /// A line the user runs by hand is never checked, by no box, not even
+    /// when said checked by default (invariant 5), and never a group to
+    /// clean nor Docker's prune.
+    #[test]
+    fn a_line_the_user_runs_by_hand_is_never_checked() {
+        let mut results = Results::new(
+            vec![
+                group(&[Category::Apps], true, false),
+                by_hand_line(),
+                docker_line(Access::Allowed),
+                GroupFacts {
+                    checked_by_default: true,
+                    ..by_hand_line()
+                },
+            ],
+            BTreeSet::from([Category::Apps]),
+        );
+        assert_eq!(
+            results.checked(),
+            &BTreeSet::from([0]),
+            "not even one said checked by default"
+        );
+        results.toggle_group(1);
+        results.toggle_row(0);
+        results.toggle_row(0);
+        assert!(!results.checked().contains(&1));
+        assert!(!results.checked().contains(&3));
+        results.toggle_group(2);
+        assert_eq!(results.user_checked(), BTreeSet::from([0]));
+        assert!(results.admin_checked().0.is_empty());
+        assert_eq!(
+            results.docker_checked(),
+            Some(PathBuf::from("/run/docker.sock")),
+            "Docker's alone"
+        );
+    }
+
+    /// The command a line names, by its row (what the trace of its Copy
+    /// button says): its own, never another's, none for a line that shows
+    /// none. What reaches the system's clipboard is seen on the device only.
+    #[test]
+    fn each_line_names_its_own_command() {
+        let results = Results::new(
+            vec![
+                group(&[Category::Apps], true, false),
+                by_hand_line(),
+                docker_line(Access::Allowed),
+                GroupFacts {
+                    run_by: Some(RunBy::User {
+                        command: PNPM_PRUNE,
+                    }),
+                    ..by_hand_line()
+                },
+            ],
+            BTreeSet::from([Category::Apps]),
+        );
+        // The category's row first, then its groups in order.
+        assert_eq!(results.command_at(2), Some("uv cache prune"));
+        assert_eq!(results.command_at(4), Some("pnpm store prune"));
+        for row in [0, 1, 3, 5] {
+            assert_eq!(results.command_at(row), None, "row {row}");
+        }
+    }
+
+    #[test]
+    fn only_uv_and_pnpm_are_run_by_hand() {
+        assert_eq!(
+            by_hand_command(CleanupAction::UvPrune),
+            Some("uv cache prune")
+        );
+        assert_eq!(
+            by_hand_command(CleanupAction::PnpmPrune),
+            Some("pnpm store prune")
+        );
+        for action in [
+            CleanupAction::JournalVacuum,
+            CleanupAction::DockerBuildPrune,
+            CleanupAction::WindowsComponents,
+            CleanupAction::DeliveryOptimization,
+        ] {
+            assert_eq!(by_hand_command(action), None, "{action:?}");
         }
     }
 

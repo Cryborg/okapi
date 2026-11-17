@@ -28,7 +28,7 @@ use okapi_helper::{Operation, Reply};
 use crate::elevation::{ElevationFailure, ElevationStep, Launcher};
 use crate::kept_selections::{KeptSelections, Unkept};
 use crate::results::{
-    AdminState, CheckState, DaemonOperation, GroupFacts, Line, Preselection, Results, Seen,
+    AdminState, CheckState, DaemonOperation, GroupFacts, Line, Preselection, Results, RunBy, Seen,
 };
 use crate::shown::{show, shown, size};
 use crate::ui;
@@ -708,8 +708,6 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
             kind: ui::RowKind::Category,
             nested: false,
             category: kind(*category),
-            label: slint::SharedString::default(),
-            description: slint::SharedString::default(),
             explained: false,
             checked_by_default: false,
             state: state(*check),
@@ -720,6 +718,7 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
             note: ui::RowNote::None,
             entries: shown(*entries),
             size: size(*bytes),
+            ..ui::ResultRow::default()
         },
         Line::Browser {
             browser,
@@ -734,7 +733,6 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
             nested: false,
             category: ui::CategoryKind::Browsers,
             label: browser.name().into(),
-            description: slint::SharedString::default(),
             explained: false,
             checked_by_default: false,
             state: state(*check),
@@ -745,6 +743,7 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
             note: ui::RowNote::None,
             entries: shown(*entries),
             size: size(*bytes),
+            ..ui::ResultRow::default()
         },
         Line::Group {
             index,
@@ -785,6 +784,7 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
                 hidden: *hidden,
                 badge: badge_of(group),
                 note: note_of(group),
+                command: command_of(group),
                 entries: shown(group.numbers().0),
                 size: size(group.numbers().1),
             }
@@ -792,13 +792,20 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
     }
 }
 
+/// The command a group's line shows to copy: the one the user runs by hand
+/// for it, none for any other.
+fn command_of(group: &GroupFacts) -> SharedString {
+    group.command().map(SharedString::from).unwrap_or_default()
+}
+
 /// The badge of a group: "Administrator" while locked; unlocked, an
 /// administrator's group is to choose, never preselected (invariant 5), as
-/// is an operation of a daemon, whatever the daemon says of the user.
+/// is a maintenance Okapi does not run (Docker's, whatever Docker says of
+/// the user, or the user's own).
 fn badge_of(group: &GroupFacts) -> ui::ResultBadge {
-    if group.daemon.is_none() && !group.is_checkable() {
+    if group.run_by.is_none() && !group.is_checkable() {
         ui::ResultBadge::Admin
-    } else if !group.checked_by_default {
+    } else if !group.checked_by_default || !group.is_checkable() {
         ui::ResultBadge::ToChoose
     } else {
         ui::ResultBadge::Preselected
@@ -808,11 +815,15 @@ fn badge_of(group: &GroupFacts) -> ui::ResultBadge {
 /// What the note under a group says: why it is left to the user, or where
 /// it stands while out of reach; nothing for a group preselected.
 fn note_of(group: &GroupFacts) -> ui::RowNote {
-    if let Some(daemon) = &group.daemon {
-        return match daemon.access {
-            Access::Allowed => ui::RowNote::Daemon,
-            Access::NotAllowed => ui::RowNote::DaemonRefused,
-        };
+    match &group.run_by {
+        Some(RunBy::Docker(daemon)) => {
+            return match daemon.access {
+                Access::Allowed => ui::RowNote::Daemon,
+                Access::NotAllowed => ui::RowNote::DaemonRefused,
+            };
+        }
+        Some(RunBy::User { .. }) => return ui::RowNote::ByHand,
+        None => {}
     }
     match badge_of(group) {
         ui::ResultBadge::Preselected => ui::RowNote::None,
@@ -1075,11 +1086,15 @@ impl CleanerScreen {
             }
         };
         let weak = Rc::downgrade(&screen.0);
-        cleaner.on_toggle(move |index| {
-            if let Some(state) = weak.upgrade() {
-                Self(state).toggle(index);
+        let on_row = move |action: fn(&Self, i32)| {
+            let weak = weak.clone();
+            move |row: i32| {
+                if let Some(state) = weak.upgrade() {
+                    action(&Self(state), row);
+                }
             }
-        });
+        };
+        cleaner.on_toggle(on_row(Self::toggle));
         cleaner.on_analyze(on(Self::analyze));
         cleaner.on_cancel(on(Self::cancel));
         cleaner.on_choose_again(on(Self::back_to_choosing));
@@ -1095,12 +1110,8 @@ impl CleanerScreen {
                 Self(state).change_results(row, Results::fold_row);
             }
         });
-        let weak = Rc::downgrade(&screen.0);
-        cleaner.on_explain(move |row| {
-            if let Some(state) = weak.upgrade() {
-                Self(state).explain(row);
-            }
-        });
+        cleaner.on_explain(on_row(Self::explain));
+        cleaner.on_command_copied(on_row(Self::command_copied));
         cleaner.on_deselect_all(on(Self::deselect_all));
         cleaner.on_clean(on(Self::clean));
         cleaner.on_confirm_delete(on(Self::confirm_delete));
@@ -1644,7 +1655,8 @@ impl CleanerScreen {
 
     /// The lines of the maintenances `report` found that root runs
     /// ([`GroupFacts::maintenance`]), or Docker for the session, when its
-    /// socket is there ([`GroupFacts::daemon_operation`]).
+    /// socket is there ([`GroupFacts::daemon_operation`]), or the user by
+    /// hand ([`GroupFacts::by_hand`]).
     /// Never one whose operation would refuse whatever the rights: its line
     /// would wait for them for ever.
     fn maintenances_of(&self, report: &ScanReport) -> Vec<GroupFacts> {
@@ -1674,16 +1686,18 @@ impl CleanerScreen {
                         },
                     ));
                 }
-                GroupFacts::maintenance(found, state.language, &state.helper_targets)
+                GroupFacts::by_hand(found, state.language).or_else(|| {
+                    GroupFacts::maintenance(found, state.language, &state.helper_targets)
+                })
             })
             .collect()
     }
 
     /// Keeps the report of an analysis that found something, with `lines`
-    /// that root's scan alone sets (the groups only root may read, the
-    /// maintenances root runs); its results checked as the engine says, less
-    /// the groups the user unchecked before (choices kept only ever
-    /// uncheck).
+    /// that the report does not hold (the groups only root may read, the
+    /// maintenances root runs, Docker's and the user's by hand); its results
+    /// checked as the engine says, less the groups the user unchecked before
+    /// (choices kept only ever uncheck).
     fn hold(&self, report: ScanReport, lines: Vec<GroupFacts>) {
         let mut state = self.0.borrow_mut();
         let chosen = state
@@ -1759,6 +1773,20 @@ impl CleanerScreen {
             }
         }
         self.check_write();
+    }
+
+    /// Traces that the command of the line at `row` was copied: asked
+    /// only, Slint does not say whether the system's clipboard got it.
+    fn command_copied(&self, row: i32) {
+        let state = self.0.borrow();
+        let copied = usize::try_from(row)
+            .ok()
+            .and_then(|row| state.held.as_ref()?.results.command_at(row));
+        if let Some(command) = copied {
+            tracing::info!(row, command, "copy of a command asked");
+        } else {
+            tracing::warn!(row, "a command copied from no line that shows one");
+        }
     }
 
     /// Unfolds or folds the description of the group the line `row` shows.
@@ -2025,7 +2053,7 @@ pub mod tests {
                 entries: 1,
                 bytes: 1,
             },
-            daemon: None,
+            run_by: None,
         }
     }
 
@@ -2134,6 +2162,45 @@ pub mod tests {
                 with(journal(), |group| group.admin = AdminState::NothingToClean),
                 ui::ResultBadge::Admin,
                 ui::RowNote::Nothing,
+            ),
+        ]);
+    }
+
+    /// A maintenance Okapi does not run: never "Administrator", whether it
+    /// may be checked or not; its note says who runs it.
+    #[test]
+    fn a_note_says_who_runs_a_maintenance_okapi_does_not() {
+        let not_okapis = |run_by| GroupFacts {
+            needs_admin: false,
+            targets: None,
+            preselection: Preselection::ToChoose,
+            seen: Seen::Operation,
+            run_by: Some(run_by),
+            ..locked()
+        };
+        let docker = |access| {
+            not_okapis(RunBy::Docker(DaemonOperation {
+                socket: PathBuf::from("/run/docker.sock"),
+                access,
+            }))
+        };
+        assert_notes(vec![
+            (
+                not_okapis(RunBy::User {
+                    command: "uv cache prune",
+                }),
+                ui::ResultBadge::ToChoose,
+                ui::RowNote::ByHand,
+            ),
+            (
+                docker(Access::Allowed),
+                ui::ResultBadge::ToChoose,
+                ui::RowNote::Daemon,
+            ),
+            (
+                docker(Access::NotAllowed),
+                ui::ResultBadge::ToChoose,
+                ui::RowNote::DaemonRefused,
             ),
         ]);
     }

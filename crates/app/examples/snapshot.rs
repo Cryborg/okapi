@@ -135,6 +135,7 @@ fn row(
             ui::ResultBadge::ToChoose => ui::RowNote::CacheReset,
             ui::ResultBadge::Preselected => ui::RowNote::None,
         },
+        command: slint::SharedString::new(),
         entries: 1528,
         size: size(936, 7, ui::SizeUnit::Megabyte),
     }
@@ -155,6 +156,7 @@ fn header(category: ui::CategoryKind, folded: bool) -> ui::ResultRow {
         hidden: false,
         badge: ui::ResultBadge::Preselected,
         note: ui::RowNote::None,
+        command: slint::SharedString::new(),
         entries: 86_300,
         size: size(10, 8, ui::SizeUnit::Gigabyte),
     }
@@ -256,6 +258,16 @@ fn results(window: &ui::AppWindow, folded: bool, language: Language) {
                 enabled: false,
                 ..docker
             },
+            // uv's prune, the user's to run: its command as the interface's
+            // one source says it (`by_hand_command`), which this example
+            // cannot reach.
+            ui::ResultRow {
+                note: ui::RowNote::ByHand,
+                explained: true,
+                enabled: false,
+                command: "uv cache prune".into(),
+                ..row(Apps, "uv Unused Packages", ToChoose, false, language)
+            },
         ]
         .map(|line| ui::ResultRow {
             hidden: folded,
@@ -282,19 +294,20 @@ fn results(window: &ui::AppWindow, folded: bool, language: Language) {
     window.set_page(ui::Page::Cleaner);
 }
 
-/// The results, every category folded but Docker's lines.
-fn results_docker(window: &ui::AppWindow, language: Language) {
+/// The results, every category folded but the lines of `notes` (Docker's,
+/// or the user's by hand).
+fn results_of(window: &ui::AppWindow, language: Language, notes: &[ui::RowNote]) {
     results(window, true, language);
     let cleaner = window.global::<ui::Cleaner>();
     let rows: Vec<ui::ResultRow> = cleaner
         .get_results()
         .iter()
         .map(|mut row| {
-            let docker = matches!(row.note, ui::RowNote::Daemon | ui::RowNote::DaemonRefused);
+            let shown = notes.contains(&row.note);
             if row.kind == ui::RowKind::Category {
                 row.folded = row.category != ui::CategoryKind::Apps;
             } else {
-                row.hidden = !docker;
+                row.hidden = !shown;
             }
             row
         })
@@ -1392,7 +1405,12 @@ fn main() {
     match screen {
         "results" | "results-small" => results(&app, false, language),
         "folded" => results(&app, true, language),
-        "results-docker" => results_docker(&app, language),
+        "results-docker" => results_of(
+            &app,
+            language,
+            &[ui::RowNote::Daemon, ui::RowNote::DaemonRefused],
+        ),
+        "results-by-hand" => results_of(&app, language, &[ui::RowNote::ByHand]),
         "browser" => browser(&app, language),
         "receipt" => receipt(&app),
         "choosing" => choosing(&app),
@@ -1431,7 +1449,7 @@ fn main() {
         "history" | "history-small" => history(&app, false, language),
         "history-empty" => history(&app, true, language),
         other => panic!(
-            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, results-docker, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings, history, history-small, history-empty"
+            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings, history, history-small, history-empty"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

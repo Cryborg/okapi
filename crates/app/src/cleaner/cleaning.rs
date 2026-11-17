@@ -5056,4 +5056,95 @@ mod tests {
         );
         assert_eq!(super::docker_shown(None, false).end, ui::OperationEnd::None);
     }
+
+    /// uv's cache and pnpm's store found: a line each, its box disabled (the
+    /// rule that it is never checked is `results.rs`'s; here, nothing to
+    /// clean comes of it), its command shown exactly (no space nor line feed
+    /// after it, which would run it on a paste), its button pressed, nothing
+    /// run.
+    #[test]
+    fn uv_and_pnpm_show_the_command_the_user_runs_by_hand() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/uv/archive-v0/old");
+        sandbox.file("home/.local/share/pnpm/store/v10/files/old");
+        settle_files();
+        let (window, _screen) = on_results(sandbox_seams(&sandbox));
+        let of_line = |label: &str, role: &str| {
+            ElementHandle::find_by_accessible_label(&window, role)
+                .find(|element| {
+                    element
+                        .accessible_description()
+                        .is_some_and(|description| description == label)
+                })
+                .unwrap_or_else(|| panic!("no {role} for {label}"))
+        };
+        for (label, command) in [
+            ("Paquets uv inutilisés", "uv cache prune"),
+            ("Paquets pnpm inutilisés", "pnpm store prune"),
+        ] {
+            let line = found(&window, label);
+            assert_eq!(line.accessible_checked(), Some(false), "{label}");
+            line.invoke_accessible_default_action();
+            assert_eq!(line.accessible_checked(), Some(false), "a disabled box");
+            let field = of_line(label, "Commande à copier");
+            assert_eq!(field.accessible_value().as_deref(), Some(command));
+            assert_eq!(field.accessible_read_only(), Some(true), "{label}");
+            of_line(label, "Copier").invoke_accessible_default_action();
+        }
+        assert!(shows(
+            &window,
+            "À faire vous-même : la commande ci-dessous, dans un terminal."
+        ));
+        let cleaner = window.global::<ui::Cleaner>();
+        assert_eq!(cleaner.get_selected_operations(), 0);
+        assert_eq!(cleaner.get_selected_entries(), 0);
+        assert_eq!(
+            button(&window, "Nettoyer").accessible_enabled(),
+            Some(false),
+            "nothing to clean"
+        );
+    }
+
+    /// No cache of uv, and a folder of pnpm without its versioned store: no
+    /// line of theirs.
+    #[test]
+    fn without_their_cache_uv_and_pnpm_have_no_line() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        sandbox.file("home/.local/share/pnpm/store/other/old");
+        settle_files();
+        let (window, _screen) = on_results(sandbox_seams(&sandbox));
+        for label in ["Paquets uv inutilisés", "Paquets pnpm inutilisés"] {
+            assert!(
+                ElementHandle::find_by_accessible_label(&window, label)
+                    .next()
+                    .is_none(),
+                "{label}"
+            );
+        }
+    }
+
+    /// pnpm alone, its store of pnpm 9 and before (`v3`): its line alone,
+    /// with its own command.
+    #[test]
+    fn pnpm_alone_shows_its_line_alone() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.local/share/pnpm/store/v3/files/old");
+        settle_files();
+        let (window, _screen) = on_results(sandbox_seams(&sandbox));
+        assert_eq!(
+            found(&window, "Paquets pnpm inutilisés").accessible_checked(),
+            Some(false)
+        );
+        assert!(
+            ElementHandle::find_by_accessible_label(&window, "Paquets uv inutilisés")
+                .next()
+                .is_none()
+        );
+        let commands: Vec<_> =
+            ElementHandle::find_by_accessible_label(&window, "Commande à copier")
+                .filter_map(|field| field.accessible_value())
+                .collect();
+        assert_eq!(commands, ["pnpm store prune"]);
+    }
 }

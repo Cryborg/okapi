@@ -137,6 +137,8 @@ component ResultLine inherits VerticalLayout {
         ? @tr("Élagué par Docker : à cocher vous-même.")
         : line.note == RowNote.daemon-refused
         ? @tr("Docker refuse votre compte : il faut être dans le groupe docker, puis rouvrir la session.")
+        : line.note == RowNote.by-hand
+        ? @tr("À faire vous-même : la commande ci-dessous, dans un terminal.")
         : line.note == RowNote.rights-obtained
         ? @tr("Droits obtenus : à cocher vous-même.")
         : line.note == RowNote.to-choose
@@ -150,10 +152,11 @@ component ResultLine inherits VerticalLayout {
         : line.note == RowNote.unmeasured
         ? @tr("Se mesure avec les droits administrateur : « Obtenir les droits » ci-dessus.")
         : @tr("Demande les droits administrateur : « Obtenir les droits » ci-dessus.");
-    // What it holds is unknown until root's scan, or, for a daemon's
-    // operation, until it ran.
+    // What it holds is unknown until root's scan; never measured for a
+    // maintenance Okapi does not run.
     property <bool> unmeasured: line.note == RowNote.unseen || line.note == RowNote.unmeasured
-        || line.note == RowNote.daemon || line.note == RowNote.daemon-refused;
+        || line.note == RowNote.daemon || line.note == RowNote.daemon-refused
+        || line.note == RowNote.by-hand;
 
     if !line.hidden: Rectangle {
         min-height: Theme.results-row-height;
@@ -313,6 +316,72 @@ component ResultLine inherits VerticalLayout {
                         if line.badge == ResultBadge.admin: Detail {
                             text: root.note;
                             accessible-role: none;
+                        }
+                        // The command the user runs by hand: selectable,
+                        // and copied by its button; never run (invariant 4).
+                        if line.command != "": HorizontalLayout {
+                            alignment: start;
+                            spacing: Theme.spacing-s;
+                            Rectangle {
+                                background: Theme.surface-2;
+                                border-width: Theme.border-width;
+                                border-color: Theme.border;
+                                border-radius: Theme.radius-small;
+                                HorizontalLayout {
+                                    padding-top: Theme.spacing-xxs;
+                                    padding-bottom: Theme.spacing-xxs;
+                                    padding-left: Theme.spacing-s;
+                                    padding-right: Theme.spacing-s;
+                                    command-text := TextInput {
+                                        text: line.command;
+                                        read-only: true;
+                                        single-line: true;
+                                        color: Theme.text;
+                                        font-size: Theme.font-small;
+                                        selection-background-color: Theme.accent-soft;
+                                        selection-foreground-color: Theme.text;
+                                        vertical-alignment: center;
+                                        accessible-label: @tr("Commande à copier");
+                                        accessible-description: root.name;
+                                        // Read-only, it still takes the
+                                        // middle click's paste (Slint
+                                        // 1.18): the command comes back.
+                                        edited => {
+                                            self.text = line.command;
+                                        }
+                                        changed has-focus => {
+                                            if self.has-focus {
+                                                root.focused(root.y, root.height);
+                                            }
+                                        }
+                                    }
+                                }
+                                FocusRing {
+                                    shown: command-text.has-focus;
+                                    border-radius: Theme.radius-small;
+                                }
+                            }
+                            ActionButton {
+                                text: @tr("Copier");
+                                kind: ButtonKind.ghost;
+                                compact: true;
+                                // Two lines have such a button: their names
+                                // tell them apart.
+                                accessible-description: root.name;
+                                clicked => {
+                                    // A paste in the field is undone by its
+                                    // `edited`: it holds the line's command.
+                                    command-text.select-all();
+                                    command-text.copy();
+                                    command-text.clear-selection();
+                                    Cleaner.command-copied(root.index);
+                                }
+                                changed focused => {
+                                    if self.focused {
+                                        root.focused(root.y, root.height);
+                                    }
+                                }
+                            }
                         }
                         // Below the name, never beside it: a long name keeps
                         // its room at any width. Out of the checkbox: a click

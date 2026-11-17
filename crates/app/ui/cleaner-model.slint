@@ -69,10 +69,11 @@ export enum RowKind { category, browser, group }
 // waiting for them, unreadable to the user, or a maintenance measured by
 // root only, what it holds unknown; never the helper's to clean; nothing
 // for root to clean. Docker's prune, left to the user, or out of reach when
-// Docker refuses them. None for a group preselected.
+// Docker refuses them. A maintenance the user runs by hand. None for a
+// group preselected.
 export enum RowNote {
     none, cache-reset, operation, yours, rights-obtained, to-choose,
-    locked, unseen, unmeasured, unreachable, nothing, daemon, daemon-refused,
+    locked, unseen, unmeasured, unreachable, nothing, daemon, daemon-refused, by-hand,
 }
 
 // Where the rights asked for stand: their request being made (which
@@ -123,6 +124,9 @@ export struct ResultRow {
     hidden: bool,
     badge: ResultBadge,
     note: RowNote,
+    // The command the user runs by hand for it (`by-hand`), shown to copy;
+    // empty for any other.
+    command: string,
     entries: int,
     size: Size,
 }
@@ -297,6 +301,9 @@ export global Cleaner {
     callback toggle-result(int);
     callback fold(int);
     callback explain(int);
+    // The command of the line at this index was copied (asked: the system
+    // does not say whether it got it).
+    callback command-copied(int);
     callback deselect-all();
     callback clean();
     callback analyze();

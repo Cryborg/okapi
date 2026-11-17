@@ -1743,10 +1743,6 @@ fn large_files(window: &ui::AppWindow, scene: LargeScene, language: Language) {
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "one arm per screen drawn: a table, read as one"
-)]
 fn main() {
     let mut arguments = std::env::args().skip(1);
     let asked = arguments.next().unwrap_or_else(|| String::from("results"));

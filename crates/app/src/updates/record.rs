@@ -160,7 +160,7 @@ pub(super) fn entry(
         ),
     };
     let went = went(target, told, snaps_read);
-    let done = went.iter().all(|went| *went == Some(true));
+    let done = !went.is_empty() && went.iter().all(|went| *went == Some(true));
     // Ended done by its daemon yet some wait still: they say so.
     let cause = Reason::of_end(ended.end).unwrap_or(Reason::Waiting);
     let line_reason = (!done && !went.contains(&Some(true))).then_some(cause);
@@ -437,6 +437,14 @@ mod tests {
         );
         assert_eq!(line(&written), (false, Some("broken")));
         assert_eq!(each(&written), [(false, Some("unknown")); 3]);
+    }
+
+    #[test]
+    fn nothing_asked_is_never_said_done() {
+        let ended = Ended::before(End::Done);
+        let told = outcome(&Target::System(Vec::new()), &ended, None, None);
+        let written = entry(&Target::System(Vec::new()), &ended, &told, None, TIME);
+        assert!(!written.done);
     }
 
     #[test]

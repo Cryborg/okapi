@@ -304,7 +304,10 @@ impl UpdatesScreen {
     /// Traced, as nothing else will say it.
     pub fn closing(&self) {
         let state = self.0.borrow();
-        if state.install.active() {
+        if matches!(
+            state.install,
+            Install::Running(_) | Install::Verifying { .. }
+        ) {
             tracing::warn!("closed during an installation: its history line is lost");
         } else if state.recording.is_some() {
             tracing::warn!("closed while an installation's history line is written");
@@ -745,9 +748,12 @@ impl UpdatesScreen {
             state.recording = None;
             state.record_timer.stop();
         }
-        if !recorded {
+        if recorded {
+            tracing::info!("installation recorded");
+        } else {
             tracing::warn!("installation not recorded: said");
         }
+
         self.with_window(|window| {
             window
                 .global::<ui::Updates>()

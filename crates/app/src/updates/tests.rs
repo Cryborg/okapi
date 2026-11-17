@@ -92,6 +92,8 @@ struct Fake {
     unrecordable: bool,
     /// When set, the next line written waits for a word, then fails.
     hold_record: Mutex<Option<mpsc::Receiver<()>>>,
+    /// The lines held so, answered.
+    held_answered: AtomicU32,
     /// Writing a line panics: its thread dies without an answer.
     record_dies: bool,
 }
@@ -144,6 +146,7 @@ impl Default for Fake {
             recorded: Mutex::new(Vec::new()),
             unrecordable: false,
             hold_record: Mutex::new(None),
+            held_answered: AtomicU32::new(0),
             record_dies: false,
         }
     }
@@ -296,6 +299,7 @@ fn seams_of(fake: &Arc<Fake>) -> UpdatesSeams {
             let hold = recording.hold_record.lock().unwrap().take();
             if let Some(hold) = hold {
                 hold.recv().unwrap();
+                recording.held_answered.fetch_add(1, Ordering::SeqCst);
                 return Err(HistoryUnavailable::NoDirectory);
             }
             if recording.unrecordable {
@@ -1169,10 +1173,9 @@ fn a_late_answer_of_a_line_never_speaks_for_the_next_installation() {
         fake.recorded.lock().unwrap().len() == 2 && updates(window).get_result_shown()
     });
     go.send(()).unwrap();
-    for _ in 0..4 {
-        read_once();
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    // The first line has answered, failed; the window has looked since.
+    read_until(&window, |_| fake.held_answered.load(Ordering::SeqCst) == 1);
+    read_once();
     assert!(!updates(&window).get_result_unrecorded());
 }
 

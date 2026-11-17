@@ -250,7 +250,7 @@ mod tests {
             .unwrap();
         assert!(
             analysis.outdated(directory.path()).unwrap(),
-            "even cancelled"
+            "any line, cancelled ones too"
         );
     }
 

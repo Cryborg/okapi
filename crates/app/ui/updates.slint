@@ -77,7 +77,8 @@ export global UpdatesWords {
 
     // What was read last says up to date, by lists known to be recent from
     // every source there is: an old or undated list says nothing of what
-    // came out since. Still the last reading's while another is searched.
+    // came out since. While another is searched, each source's last word
+    // until it answers again.
     pure public function up-to-date() -> bool {
         !Updates.refresh-failed && !Updates.lists-old
             && Updates.system-state != SourceState.failed && Updates.snaps-state != SourceState.failed

@@ -458,17 +458,30 @@ const fn source_shown(source: PackageSource) -> ui::AppSource {
     }
 }
 
-/// An installation of updates' row: how it ended (not known as soon as one
-/// update's fate is not, then by its line), and what became of each update
-/// asked.
+/// An installation of updates' row, from what became of each update asked:
+/// done when every one went; else not known as soon as one's fate is not;
+/// else by its line. An update without a reason of its own takes its
+/// line's (said once for all when none went).
 fn update_row(line: &UpdateEntry) -> ui::HistoryRow {
+    let unknown_keys: Vec<&str> = std::iter::once(&line.reason)
+        .chain(line.packages.iter().map(|package| &package.reason))
+        .filter_map(Option::as_deref)
+        .filter(|key| Reason::of_key(key).is_none())
+        .collect();
+    if !unknown_keys.is_empty() {
+        tracing::warn!(
+            time = line.time,
+            ?unknown_keys,
+            "reasons of an update this version does not know: said not known"
+        );
+    }
     let line_reason = reason_read(line.reason.as_deref());
     let updated: Vec<ui::UpdatedShown> = line
         .packages
         .iter()
         .map(|package| {
-            let reason = reason_read(package.reason.as_deref());
-            let state = match reason {
+            let own = reason_read(package.reason.as_deref());
+            let state = match own.or(line_reason) {
                 _ if package.done => ui::UpdateState::Installed,
                 Some(Reason::Waiting) => ui::UpdateState::Waiting,
                 Some(Reason::Unknown) => ui::UpdateState::Unknown,
@@ -478,19 +491,21 @@ fn update_row(line: &UpdateEntry) -> ui::HistoryRow {
                 name: package.name.as_str().into(),
                 version: package.version.as_str().into(),
                 state,
-                why: why_said(reason),
+                // The line's cause is said once, on the line.
+                why: why_said(own),
             }
         })
         .collect();
     let installed = line.packages.iter().filter(|package| package.done).count();
+    let all_went = !line.packages.is_empty() && installed == line.packages.len();
     let unknown = line_reason == Some(Reason::Unknown)
         || updated
             .iter()
             .any(|update| update.state == ui::UpdateState::Unknown);
-    let end = if unknown {
-        ui::UpdateEnd::Unknown
-    } else if line.done {
+    let end = if all_went {
         ui::UpdateEnd::Done
+    } else if unknown {
+        ui::UpdateEnd::Unknown
     } else if line_reason == Some(Reason::Cancelled) {
         ui::UpdateEnd::Cancelled
     } else if installed > 0 {
@@ -512,14 +527,9 @@ fn update_row(line: &UpdateEntry) -> ui::HistoryRow {
 }
 
 /// The reason a line keeps by `key`; one this version does not know is
-/// taken for not knowing (traced).
+/// taken for not knowing (traced once per line by [`update_row`]).
 fn reason_read(key: Option<&str>) -> Option<Reason> {
-    key.map(|key| {
-        Reason::of_key(key).unwrap_or_else(|| {
-            tracing::warn!(key, "a reason of an update this version does not know");
-            Reason::Unknown
-        })
-    })
+    key.map(|key| Reason::of_key(key).unwrap_or(Reason::Unknown))
 }
 
 /// The cause `reason` names, as the History says it; none for a reason

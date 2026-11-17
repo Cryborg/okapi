@@ -407,6 +407,13 @@ fn kept_updates(directory: &Path) {
             Some("cancelled"),
         ),
         update(2, PackageSource::Snap, Vec::new(), Some("cancelled")),
+        // As written when snapd said done and every snap waits still.
+        update(
+            1,
+            PackageSource::Snap,
+            vec![package("deja", "1.0", false, None)],
+            Some("waiting"),
+        ),
     ];
     let mut history = History::open(directory).unwrap();
     for line in &lines {
@@ -427,6 +434,7 @@ fn each_update_shows_how_it_ended_and_each_package_asked() {
     assert_eq!(
         ends,
         [
+            (ui::UpdateEnd::Failed, ui::InstallWhy::None),
             (ui::UpdateEnd::Cancelled, ui::InstallWhy::None),
             (ui::UpdateEnd::Cancelled, ui::InstallWhy::None),
             (ui::UpdateEnd::Unknown, ui::InstallWhy::None),
@@ -469,13 +477,20 @@ fn each_update_shows_how_it_ended_and_each_package_asked() {
         ),
         (
             "Mise à jour, Applis · issue inconnue, aujourd'hui à 8 h",
-            &["vlc 3.0.21 : non installée"],
+            &["vlc 3.0.21 : état inconnu"],
         ),
         (
             "Mise à jour, Système · annulée, aujourd'hui à 9 h",
             &[
                 "Annulée avant toute installation.",
                 "mesa 25.2 : non installée",
+            ],
+        ),
+        (
+            "Mise à jour, Applis · aucune installée, aujourd'hui à 11 h",
+            &[
+                "Aucune mise à jour n'a été installée.",
+                "deja 1.0 : encore en attente",
             ],
         ),
     ] {

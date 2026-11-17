@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
 use okapi_engine::{CleanOutcome, CleanReceipt, CleanResult, KeepReason};
+use okapi_rules::CleanupAction;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -54,6 +55,11 @@ pub struct HistoryEntry {
     /// was one; absent otherwise, so a line of the user's alone is unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub admin: Option<AdminRecord>,
+    /// The operations that removed no file of their own (Docker's build
+    /// cache pruned), when there were some; absent otherwise. Their bytes
+    /// are in `removed_bytes`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operations: Vec<OperationRecord>,
     /// Every entry, when the user keeps a deletion log: written on a line
     /// of its own (`kind: "deletions"`, the same `time`) just before the
     /// cleaning's, so that the cleaning's stays short to read back however
@@ -68,6 +74,71 @@ pub struct HistoryEntry {
 struct DeletionLog<'a> {
     time: i64,
     entries: &'a [HistoryOutcome],
+}
+
+/// What became of an operation of a cleaning that removes no file of its
+/// own, a daemon doing the work (Docker's build cache pruned).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationRecord {
+    /// Its rule's operation, by its name in the rules (`docker-build-prune`).
+    pub action: CleanupAction,
+    #[serde(flatten)]
+    pub end: OperationEnd,
+}
+
+/// How an operation of a cleaning ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "end", rename_all = "camelCase")]
+pub enum OperationEnd {
+    /// It ran to its end: how many entries it removed, and their room.
+    Done { entries: usize, bytes: u64 },
+    /// It removed nothing: it was not asked, or the daemon refused before
+    /// anything ran.
+    NotDone { reason: OperationReason },
+    /// It was asked and no answer said what it did: what it removed is
+    /// unknown.
+    Unknown { reason: OperationReason },
+}
+
+impl OperationEnd {
+    /// Whether what it removed is unknown, and so what the cleaning freed.
+    #[must_use]
+    pub const fn leaves_freed_unknown(self) -> bool {
+        matches!(self, Self::Unknown { .. })
+    }
+
+    /// Whether it may have removed something: room or entries it says, or
+    /// an end no answer said.
+    #[must_use]
+    pub const fn may_have_removed(self) -> bool {
+        match self {
+            Self::Done { entries, bytes } => entries > 0 || bytes > 0,
+            Self::Unknown { .. } => true,
+            Self::NotDone { .. } => false,
+        }
+    }
+}
+
+/// Why an operation of a cleaning did not end as asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OperationReason {
+    /// The cleaning was cancelled: before the daemon was asked, or while it
+    /// worked.
+    Cancelled,
+    /// The daemon does not run.
+    Absent,
+    /// The daemon refuses the user.
+    NotAllowed,
+    /// The daemon could not be reached otherwise.
+    Unreached,
+    /// The daemon refused the operation.
+    Refused,
+    /// The daemon failed or fell silent once asked.
+    Unanswered,
+    /// The daemon's answer could not be read.
+    Unreadable,
 }
 
 /// What became of the part of a cleaning that needed the administrator.
@@ -167,24 +238,49 @@ impl HistoryEntry {
                 }),
             stops,
             admin,
+            operations: Vec::new(),
             entries: deletion_log.then_some(outcomes),
         }
     }
 
-    /// What it freed; unknown when root's part did not end, as what it
-    /// removed may then be missing.
+    /// The line with `operations` too: their bytes counted as removed, the
+    /// cleaning complete only when each was done.
+    #[must_use]
+    pub fn with_operations(mut self, operations: Vec<OperationRecord>) -> Self {
+        self.removed_bytes = operations
+            .iter()
+            .filter_map(|operation| match operation.end {
+                OperationEnd::Done { bytes, .. } => Some(bytes),
+                OperationEnd::NotDone { .. } | OperationEnd::Unknown { .. } => None,
+            })
+            .fold(self.removed_bytes, u64::saturating_add);
+        self.complete &= operations
+            .iter()
+            .all(|operation| matches!(operation.end, OperationEnd::Done { .. }));
+        self.operations = operations;
+        self
+    }
+
+    /// What it freed; unknown when root's part did not end, or an operation
+    /// ended unknown, as what they removed may then be missing.
     #[must_use]
     pub fn freed(&self) -> Option<u64> {
-        freed(self.removed_bytes, self.admin.as_ref())
+        freed(self.removed_bytes, self.admin.as_ref(), &self.operations)
     }
 }
 
 /// What a cleaning that removed `removed_bytes` freed, as
 /// [`HistoryEntry::freed`] says it.
-fn freed(removed_bytes: u64, admin: Option<&AdminRecord>) -> Option<u64> {
-    admin
-        .is_none_or(|admin| admin.done)
-        .then_some(removed_bytes)
+fn freed(
+    removed_bytes: u64,
+    admin: Option<&AdminRecord>,
+    operations: &[OperationRecord],
+) -> Option<u64> {
+    let known = admin.is_none_or(|admin| admin.done)
+        && !operations
+            .iter()
+            .any(|operation| operation.end.leaves_freed_unknown());
+    known.then_some(removed_bytes)
 }
 
 impl HistoryOutcome {
@@ -771,8 +867,8 @@ fn same_file(one: &File, other: &File) -> bool {
 pub struct LastCleaning {
     /// Seconds since the clock's origin, negative before it.
     pub time: i64,
-    /// What it freed; unknown when root's part did not end, as what it
-    /// removed may then be missing.
+    /// What it freed; unknown when root's part did not end, or an
+    /// operation ended unknown, as what they removed may then be missing.
     pub freed: Option<u64>,
 }
 
@@ -786,6 +882,8 @@ struct LastLine {
     time: i64,
     removed_bytes: Option<u64>,
     admin: Option<AdminRecord>,
+    #[serde(default)]
+    operations: Vec<OperationRecord>,
 }
 
 /// Where the last line of a history file lies.
@@ -876,7 +974,7 @@ fn parse(history: &File, start: u64, end: u64, path: &Path) -> Result<LineRead, 
         .ok_or_else(|| file::json_error(path, serde::de::Error::missing_field("removedBytes")))?;
     Ok(LineRead::Cleaning(LastCleaning {
         time: read.time,
-        freed: freed(removed_bytes, read.admin.as_ref()),
+        freed: freed(removed_bytes, read.admin.as_ref(), &read.operations),
     }))
 }
 
@@ -947,6 +1045,7 @@ mod tests {
             gone: 3,
             kept: 4,
             complete: false,
+            operations: Vec::new(),
             admin: None,
             entries,
         }
@@ -1345,6 +1444,80 @@ mod tests {
         assert!(HistoryEntry::of_outcomes(Vec::new(), done, Some(with_root), now, false).complete);
     }
 
+    /// The history's files keep these names: what reads them relies on it.
+    #[test]
+    fn each_reason_of_an_operation_is_kept_by_its_name() {
+        for (reason, name) in [
+            (OperationReason::Cancelled, "cancelled"),
+            (OperationReason::Absent, "absent"),
+            (OperationReason::NotAllowed, "notAllowed"),
+            (OperationReason::Unreached, "unreached"),
+            (OperationReason::Refused, "refused"),
+            (OperationReason::Unanswered, "unanswered"),
+            (OperationReason::Unreadable, "unreadable"),
+        ] {
+            assert_eq!(serde_json::to_value(reason).unwrap(), name);
+        }
+    }
+
+    /// An operation that removes no file (Docker's build cache): its bytes
+    /// counted as removed, the cleaning complete only when it was done, the
+    /// field absent when there is none, read back as written.
+    #[test]
+    fn a_line_says_its_operations_their_bytes_removed() {
+        let now = SystemTime::UNIX_EPOCH;
+        let done = vec![(
+            CleanResult::Removed { bytes: 5 },
+            HistoryOutcome::of_result(None, CleanResult::Removed { bytes: 5 }, None),
+        )];
+        let plain = HistoryEntry::of_outcomes(Vec::new(), done.clone(), None, now, false);
+        assert!(
+            serde_json::to_value(&plain)
+                .unwrap()
+                .get("operations")
+                .is_none()
+        );
+        let record = |end| OperationRecord {
+            action: CleanupAction::DockerBuildPrune,
+            end,
+        };
+        let line_with = |end| {
+            HistoryEntry::of_outcomes(Vec::new(), done.clone(), None, now, false)
+                .with_operations(vec![record(end)])
+        };
+        let pruned = record(OperationEnd::Done {
+            entries: 3,
+            bytes: 1_000,
+        });
+        let line = line_with(pruned.end);
+        assert_eq!(line.removed_bytes, 1_005);
+        assert!(line.complete);
+        assert_eq!(line.freed(), Some(1_005));
+        assert_eq!(
+            serde_json::to_value(&line).unwrap()["operations"],
+            serde_json::json!([{ "action": "docker-build-prune", "end": "done", "entries": 3, "bytes": 1000 }])
+        );
+        let read: HistoryEntry =
+            serde_json::from_str(&serde_json::to_string(&line).unwrap()).unwrap();
+        assert_eq!(read.operations, [pruned]);
+
+        let refused = line_with(OperationEnd::NotDone {
+            reason: OperationReason::NotAllowed,
+        });
+        assert_eq!(refused.removed_bytes, 5);
+        assert!(!refused.complete, "an operation not done");
+        assert_eq!(refused.freed(), Some(5), "nothing went: known");
+
+        let cut = line_with(OperationEnd::Unknown {
+            reason: OperationReason::Unanswered,
+        });
+        assert_eq!(cut.freed(), None, "what it removed is unknown");
+        assert_eq!(
+            serde_json::to_value(&cut).unwrap()["operations"],
+            serde_json::json!([{ "action": "docker-build-prune", "end": "unknown", "reason": "unanswered" }])
+        );
+    }
+
     /// The form the helper answers with is read back as it was written.
     #[test]
     fn an_outcome_reads_back_as_written() {
@@ -1679,6 +1852,32 @@ mod tests {
             Some(LastCleaning {
                 time: 300,
                 freed: Some(5)
+            })
+        );
+    }
+
+    /// An operation whose end is unknown makes what the last cleaning freed
+    /// unknown, as root's part does.
+    #[test]
+    fn a_last_cleaning_with_an_operation_ended_unknown_freed_an_unknown_room() {
+        let directory = tempfile::tempdir().unwrap();
+        recorded(directory.path(), &[(100, 7, None)]);
+        let mut entry = entry(1, None).with_operations(vec![OperationRecord {
+            action: CleanupAction::DockerBuildPrune,
+            end: OperationEnd::Unknown {
+                reason: OperationReason::Cancelled,
+            },
+        }]);
+        entry.time = 300;
+        History::open(directory.path())
+            .unwrap()
+            .record(&entry)
+            .unwrap();
+        assert_eq!(
+            last(directory.path()),
+            Some(LastCleaning {
+                time: 300,
+                freed: None
             })
         );
     }

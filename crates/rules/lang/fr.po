@@ -612,12 +612,12 @@ msgid "Hard links snapd keeps to the snaps it downloaded, to reuse them without 
 msgstr "Liens durs que snapd garde vers les snaps téléchargés, pour les réutiliser sans téléchargement ; snapd le réduit lui-même. Seuls les fichiers qu'aucun snap installé ne partage sont proposés."
 
 msgctxt "description"
-msgid "Per-snap user cache directories inside the Snap sandbox. Close these apps first: an open browser's cache is emptied anyway"
-msgstr "Dossiers de cache de chaque snap, dans son bac à sable, pour votre compte. Fermez d'abord ces applications : le cache d'un navigateur ouvert est vidé quand même."
+msgid "Per-snap user cache directories inside the Snap sandbox. Close these apps first"
+msgstr "Dossiers de cache de chaque snap, dans son bac à sable, pour votre compte. Fermez d'abord ces applications."
 
 msgctxt "description"
-msgid "Per-app cache directories for installed Flatpak applications. Close these apps first: an open browser's cache is emptied anyway"
-msgstr "Dossiers de cache de chaque application Flatpak installée. Fermez d'abord ces applications : le cache d'un navigateur ouvert est vidé quand même."
+msgid "Per-app cache directories for installed Flatpak applications. Close these apps first"
+msgstr "Dossiers de cache de chaque application Flatpak installée. Fermez d'abord ces applications."
 
 msgctxt "description"
 msgid "Temporary files from Flatpak repository operations and downloads"

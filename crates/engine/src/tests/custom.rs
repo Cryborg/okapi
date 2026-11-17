@@ -119,6 +119,24 @@ fn a_variable_s_folder_or_one_of_its_ancestors_is_refused_by_identity() {
 }
 
 #[test]
+fn a_folder_holding_the_temporary_directory_is_refused() {
+    let fixture = Fixture::new();
+    fixture.file("scratch/temp/old", 1, 2 * HOUR);
+    let scratch = folder(&fixture.path("scratch"));
+    let mut run = Run::new(&fixture, vec![RuleEntry::Custom(&scratch)]);
+    run.variables = fixture.variables(&[(Variable::TempDirectory, "scratch/temp")]);
+    let report = run.scan();
+    assert_eq!(
+        refusals(&report),
+        [(
+            fixture.path("scratch"),
+            CustomFolderRefusal::Protected(Variable::TempDirectory)
+        )],
+        "a rule may walk around it, a folder the user chose never holds it"
+    );
+}
+
+#[test]
 fn a_personal_folder_or_one_of_its_ancestors_is_refused_but_not_one_below() {
     let fixture = Fixture::new();
     fixture.directory("guest/Media/Pictures/tmp");

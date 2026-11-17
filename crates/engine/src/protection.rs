@@ -20,8 +20,11 @@ pub struct UnreadableVariable {
 }
 
 /// The directories of the template variables, which no scan root may equal or
-/// contain, `${TMPDIR}`'s own directory excepted (invariant 6): emptying such a
-/// root would empty `${HOME}`, `${CONFIG}` or a whole drive.
+/// contain, `${TMPDIR}`'s own directory and its ancestors excepted when they
+/// hold no other variable (invariant 6): emptying such a root would empty
+/// `${HOME}`, `${CONFIG}` or a whole drive. `/tmp` holds `${TMPDIR}` under
+/// `pam_tmpdir` (`/tmp/user/<uid>`): it is walked, never entering
+/// `${TMPDIR}`'s directory nor its ancestors.
 ///
 /// Roots are compared by identity, not by path. A root exists, so if a
 /// variable lies below it, the root is one of the variable's ancestors, found
@@ -31,8 +34,12 @@ pub struct UnreadableVariable {
 #[derive(Debug)]
 pub struct ProtectedRoots {
     /// The identity of each existing value and of all its ancestors, with the
-    /// variable it protects. `${TMPDIR}`'s own directory is not in it.
+    /// variable it protects, `${TMPDIR}` left out: its ancestors are in
+    /// `temporary_ancestors`, its own directory in `directories` only.
     ancestors: BTreeMap<FileIdentity, Variable>,
+    /// The identity of each ancestor of `${TMPDIR}`'s directory: a root, it
+    /// is walked, never entered below one.
+    temporary_ancestors: BTreeSet<FileIdentity>,
     /// The identity of each existing value itself.
     directories: BTreeSet<FileIdentity>,
 }
@@ -53,6 +60,7 @@ impl ProtectedRoots {
     ) -> Result<Self, UnreadableVariable> {
         let mut protected = Self {
             ancestors: BTreeMap::new(),
+            temporary_ancestors: BTreeSet::new(),
             directories: BTreeSet::new(),
         };
         for (variable, value) in variables.iter() {
@@ -66,28 +74,45 @@ impl ProtectedRoots {
                 if depth == 0 {
                     protected.directories.insert(identity);
                 }
-                // `${TMPDIR}` is the one directory a rule may empty: its own
-                // identity is allowed, its ancestors are not.
-                if depth > 0 || variable != Variable::TempDirectory {
+                // `${TMPDIR}` is the one directory a rule may empty, and a
+                // rule may walk its ancestors (`/tmp` under `pam_tmpdir`):
+                // another variable there still forbids both.
+                if variable != Variable::TempDirectory {
                     protected.ancestors.entry(identity).or_insert(variable);
+                } else if depth > 0 {
+                    protected.temporary_ancestors.insert(identity);
                 }
             }
         }
         Ok(protected)
     }
 
-    /// The variable that forbids walking a root of this identity, if any: one
-    /// whose directory is the root or lies below it. A root that is
-    /// `${TMPDIR}` is allowed, unless it also holds another variable.
+    /// The variable that forbids walking a rule's root of this identity, if
+    /// any: one whose directory is the root or lies below it. A root that is
+    /// `${TMPDIR}` or one of its ancestors is allowed, unless it also holds
+    /// another variable.
     pub(crate) fn refusal(&self, identity: FileIdentity) -> Option<Variable> {
         self.ancestors.get(&identity).copied()
     }
 
+    /// [`Self::refusal`] of a folder the user chose, which is never an
+    /// ancestor of `${TMPDIR}` either.
+    pub(crate) fn folder_refusal(&self, identity: FileIdentity) -> Option<Variable> {
+        self.refusal(identity).or_else(|| {
+            self.temporary_ancestors
+                .contains(&identity)
+                .then_some(Variable::TempDirectory)
+        })
+    }
+
     /// Whether a directory met below a root is a variable's directory or one of
-    /// their ancestors, reached through a bind mount: it is never entered.
+    /// their ancestors, reached through a bind mount or below an ancestor of
+    /// `${TMPDIR}`: it is never entered.
     #[must_use]
     pub fn is_protected_directory(&self, identity: FileIdentity) -> bool {
-        self.directories.contains(&identity) || self.ancestors.contains_key(&identity)
+        self.directories.contains(&identity)
+            || self.ancestors.contains_key(&identity)
+            || self.temporary_ancestors.contains(&identity)
     }
 }
 
@@ -175,15 +200,43 @@ mod tests {
     }
 
     #[test]
-    fn allows_the_temporary_directory_itself_but_not_its_ancestors() {
-        let fixture = fixture(&["outer/temp"]);
-        let temp = fixture.root.join("outer/temp");
+    fn allows_the_temporary_directory_and_its_ancestors_as_rule_roots_never_entered() {
+        // `/tmp/user/<uid>` under `pam_tmpdir`.
+        let fixture = fixture(&["tmp/user/temp"]);
+        let temp = fixture.root.join("tmp/user/temp");
         let protected = protected(&[(Variable::TempDirectory, temp.clone())]);
-        assert_eq!(protected.refusal(identity(&temp)), None);
-        let outer = fixture.root.join("outer");
+        for allowed in [
+            &temp,
+            &fixture.root.join("tmp/user"),
+            &fixture.root.join("tmp"),
+        ] {
+            assert_eq!(protected.refusal(identity(allowed)), None, "{allowed:?}");
+        }
+        for kept in [&temp, &fixture.root.join("tmp/user")] {
+            assert!(protected.is_protected_directory(identity(kept)), "{kept:?}");
+        }
+        // A folder the user chose is never one of its ancestors.
         assert_eq!(
-            protected.refusal(identity(&outer)),
+            protected.folder_refusal(identity(&fixture.root.join("tmp"))),
             Some(Variable::TempDirectory)
+        );
+        assert_eq!(protected.folder_refusal(identity(&temp)), None);
+    }
+
+    #[test]
+    fn refuses_an_ancestor_of_the_temporary_directory_that_holds_another_variable() {
+        let fixture = fixture(&["tmp/user/temp", "tmp/guest"]);
+        let protected = protected(&[
+            (Variable::TempDirectory, fixture.root.join("tmp/user/temp")),
+            (Variable::Home, fixture.root.join("tmp/guest")),
+        ]);
+        assert_eq!(
+            protected.refusal(identity(&fixture.root.join("tmp"))),
+            Some(Variable::Home)
+        );
+        assert_eq!(
+            protected.refusal(identity(&fixture.root.join("tmp/user"))),
+            None
         );
     }
 

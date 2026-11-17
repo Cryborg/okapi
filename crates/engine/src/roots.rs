@@ -1028,7 +1028,8 @@ impl Planner<'_> {
     }
 
     /// Keeps the roots a walk may enter: not a variable's directory nor one of
-    /// its ancestors (invariant 6), not excluded. Not judged as a mount here:
+    /// its ancestors, `${TMPDIR}` and its ancestors excepted (invariant 6),
+    /// not excluded. Not judged as a mount here:
     /// a rule's own path may be one (`/tmp`); an expanded root was judged by
     /// [`Self::reach`]. A rule age beyond the clock
     /// leaves nothing old enough; it is reported once the rule has a root.

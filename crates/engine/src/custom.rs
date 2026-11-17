@@ -155,7 +155,7 @@ impl CustomFolder {
             tracing::debug!(folder = %self.0.display(), ?owner, user = ?guard.user, "custom folder not the user's");
             return Err(CustomFolderRefusal::NotOwned);
         }
-        if let Some(variable) = guard.protected.refusal(identity) {
+        if let Some(variable) = guard.protected.folder_refusal(identity) {
             return Err(CustomFolderRefusal::Protected(variable));
         }
         if let Some(refusal) = guard.personal.refusal(identity) {

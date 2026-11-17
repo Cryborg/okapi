@@ -29,7 +29,8 @@ use crate::watch::{Progress, Watch};
 /// included). Below
 /// a root, no link is followed and no other device is entered, and a root
 /// never equals or holds a variable's directory, `${TMPDIR}`'s own directory
-/// excepted (invariant 6).
+/// and its ancestors excepted when they hold no other variable, a walk never
+/// entering them (invariant 6).
 ///
 /// A maintenance operation is never scanned: it is offered when its place is
 /// there ([`ScanReport::maintenances`]), what it would remove left to whoever

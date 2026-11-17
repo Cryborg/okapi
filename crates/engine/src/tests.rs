@@ -554,6 +554,33 @@ fn a_root_that_holds_a_variable_is_refused_and_the_temporary_directory_is_not() 
     ));
 }
 
+#[test]
+fn the_system_temporary_directory_is_walked_around_the_users_under_pam_tmpdir() {
+    let fixture = Fixture::new();
+    let tmp = fixture.directory("tmp");
+    let old = fixture.file("tmp/old", 1, 2 * HOUR);
+    let kept = [
+        fixture.file("tmp/user/1000/old", 1, 2 * HOUR),
+        fixture.file("tmp/user/1001/old", 1, 2 * HOUR),
+    ];
+    let rule = target_at(&tmp);
+    let variables = || fixture.variables(&[(Variable::TempDirectory, "tmp/user/1000")]);
+    let mut run = clean::run_later(&fixture, vec![RuleEntry::Target(&rule)]);
+    run.variables = variables();
+    let report = run.scan();
+    assert_eq!(offered_paths(&report), std::slice::from_ref(&old));
+    assert_eq!(
+        report.stats().reserved_directories(),
+        1,
+        "/tmp/user, walked around"
+    );
+    assert!(report.issues().is_empty(), "{:?}", report.issues());
+    let receipt = clean::clean(&run, &report, &clean::ids(&report));
+    assert!(receipt.is_complete());
+    assert!(!old.exists());
+    assert!(kept.iter().all(|file| file.exists()));
+}
+
 /// Scans the `${TMPDIR}` rule, the variable set to `temp`, which holds one old
 /// file; gives whether its group is selected before the user chooses.
 fn temp_directory_selected(fixture: &Fixture, temp: PathBuf) -> bool {

@@ -32,8 +32,8 @@ const HISTORY_VERSION: u32 = 1;
 /// to another file, a line of a deletion log whose cleaning line is missing,
 /// a cleaning line written by an earlier Okapi with its deletion log in it)
 /// is not read, which is traced. The lines of updates installed after it
-/// count too, up to a few kilobytes each: a year of daily updates without a
-/// cleaning says no last cleaning.
+/// count too, one entry per package each: enough of them without a
+/// cleaning in between say no last cleaning.
 const MAX_LINE: u64 = 1024 * 1024;
 /// The blocks the history is read by from its end, none of them kept.
 const BLOCK: u64 = 64 * 1024;
@@ -421,22 +421,25 @@ pub enum PackageSource {
 
 /// One installation of updates (the system's, or snaps), as kept in the
 /// history beside the cleanings: its line says its kind. Written once the
-/// list was read again, so that what each update came to is known.
+/// list was read again, so that what each update came to is known. It
+/// says no bytes: a reader that knows no kind would take the line for a
+/// cleaning's.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateEntry {
     /// When it ended, in seconds since the clock's origin, negative before
     /// it.
     pub time: i64,
+    /// Deb or snap: flatpak's updates are not read yet.
     pub source: PackageSource,
     /// Every update asked, in the order asked.
     pub packages: Vec<UpdatedPackage>,
-    /// It ran to its end without an error. Never bytes: a reader that knows
-    /// no kind would take the line for a cleaning's.
+    /// Every update asked is known to have gone (whatever its daemon said:
+    /// the list read again decides).
     pub done: bool,
-    /// Why it was not done, by a stable name of the caller's, when none of
-    /// its packages went or what went is unknown; absent when some went and
-    /// others did not, which say why themselves.
+    /// Why it was not done, by a stable name of the caller's, said once for
+    /// all when none is known to have gone; absent when some went, the
+    /// others then saying why themselves.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// The system asked to be restarted to finish it.
@@ -451,10 +454,12 @@ pub struct UpdatedPackage {
     pub name: String,
     /// The version it was to be updated to.
     pub version: String,
-    /// It went.
+    /// It is known to have gone. Not done is not always not installed: its
+    /// reason may say its fate is not known (the caller's name for it).
     pub done: bool,
-    /// Why it did not, by a stable name of the caller's, when its line does
-    /// not say it for all.
+    /// Why it is not done, by a stable name of the caller's: when its line
+    /// does not say it for all, or when its fate is not known (said even
+    /// beside the line's reason).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -1687,7 +1692,7 @@ mod tests {
         }
     }
 
-    /// IDEE-5's second example: snaps, one refused while its app was open.
+    /// Snaps, one refused while its app was open.
     pub(super) fn snaps_updated(time: i64) -> UpdateEntry {
         UpdateEntry {
             time,
@@ -1747,7 +1752,7 @@ mod tests {
                 ..snaps_updated(1_763_300_500)
             },
         );
-        // The format IDEE-5 fixed, word for word.
+        // The format on disk, which readers rely on: every field named.
         assert_eq!(
             lines(directory.path()),
             [

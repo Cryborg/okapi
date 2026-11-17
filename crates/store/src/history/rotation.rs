@@ -2,8 +2,9 @@
 //! it, a history larger than [`ROTATION_SIZE`] is set aside as
 //! `history.1.jsonl`, the one set aside before replaced, its lines (its
 //! deletion logs among them) lost. Each file thus holds about the limit,
-//! plus what is written between two cleanings (uninstallations included)
-//! and the largest cleaning's lines, a cleaning's deletion log never cut;
+//! plus what is written between two cleanings (uninstallations and updates
+//! included) and the largest cleaning's lines, a cleaning's deletion log
+//! never cut;
 //! while setting aside is refused or in use, the history grows on, which is
 //! traced, the louder the further beyond the limit.
 //!

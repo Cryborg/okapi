@@ -73,7 +73,7 @@ pub(super) enum Install {
         /// When it ended, in seconds, once something was asked of the
         /// system: its history line is dated so. None: its thread never
         /// started, nothing to record.
-        asked_until: Option<i64>,
+        ended_at: Option<i64>,
     },
 }
 
@@ -296,6 +296,18 @@ impl UpdatesScreen {
             Install::Idle | Install::Verifying { .. } => {
                 tracing::warn!("a cancel with nothing to cancel: ignored");
             }
+        }
+    }
+
+    /// The window closes: an installation under way, or read again, goes on
+    /// without Okapi, its history line lost; one being written may be cut.
+    /// Traced, as nothing else will say it.
+    pub fn closing(&self) {
+        let state = self.0.borrow();
+        if state.install.active() {
+            tracing::warn!("closed during an installation: its history line is lost");
+        } else if state.recording.is_some() {
+            tracing::warn!("closed while an installation's history line is written");
         }
     }
 
@@ -582,16 +594,16 @@ impl UpdatesScreen {
     }
 
     /// The list is read again after `ended`, then the outcome told.
-    fn verify(&self, target: Target, ended: Ended, asked_until: Option<i64>) {
+    fn verify(&self, target: Target, ended: Ended, ended_at: Option<i64>) {
         tracing::info!(
             ?ended,
-            asked = asked_until.is_some(),
+            asked = ended_at.is_some(),
             "installation ended: the list read again"
         );
         self.0.borrow_mut().install = Install::Verifying {
             target,
             ended,
-            asked_until,
+            ended_at,
         };
         self.with_window(|window| {
             window
@@ -608,7 +620,7 @@ impl UpdatesScreen {
         let Install::Verifying {
             target,
             ended,
-            asked_until,
+            ended_at,
         } = install
         else {
             self.0.borrow_mut().install = install;
@@ -622,7 +634,7 @@ impl UpdatesScreen {
                 (state.system_reading == ui::SourceState::Read).then_some(state.system.as_slice()),
                 state.snaps.as_deref(),
             );
-            let entry = asked_until
+            let entry = ended_at
                 .map(|time| record::entry(&target, &ended, &told, state.snaps.as_deref(), time));
             (told, entry)
         };

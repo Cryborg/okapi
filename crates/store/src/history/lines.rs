@@ -352,7 +352,7 @@ mod tests {
     use super::super::tests::{
         append, entry, outcome, recorded, snaps_updated, uninstalled, updated,
     };
-    use super::super::{History, HistoryEntry, HistoryOutcome, PackageSource};
+    use super::super::{History, HistoryEntry, HistoryOutcome, PackageSource, UpdateEntry};
     use super::*;
 
     fn read_all(directory: &Path) -> HistoryRead<Vec<HistoryOutcome>> {
@@ -458,16 +458,32 @@ mod tests {
         cleaned_with_log(directory.path(), 100, 2);
         updated(directory.path(), &snaps_updated(200));
         uninstalled(directory.path(), 300);
+        let cancelled = UpdateEntry {
+            reason: Some("cancelled".to_owned()),
+            restart_required: true,
+            ..snaps_updated(400)
+        };
+        updated(directory.path(), &cancelled);
         let read = read_all(directory.path());
         assert_eq!(read.skipped, 0);
         assert_eq!(
             summaries(&read),
-            [('c', 100, Some(2)), ('m', 200, None), ('u', 300, None)]
+            [
+                ('c', 100, Some(2)),
+                ('m', 200, None),
+                ('u', 300, None),
+                ('m', 400, None)
+            ]
         );
         assert_eq!(
             read.records[1],
             HistoryRecord::Update(snaps_updated(200)),
             "every field, each package's reason only where it was written"
+        );
+        assert_eq!(
+            read.records[3],
+            HistoryRecord::Update(cancelled),
+            "the line's reason"
         );
     }
 
@@ -479,7 +495,10 @@ mod tests {
             &b"{\"version\":1,\"tim\n"[..],
             b"{\"version\":2,\"time\":150,\"removedBytes\":1}\n",
             b"{\"version\":1,\"kind\":\"install\",\"time\":160}\n",
-            b"{\"version\":1,\"kind\":\"update\",\"time\":165,\"done\":true}\n",
+            // An update whole but for one field each.
+            b"{\"version\":1,\"kind\":\"update\",\"time\":165,\"source\":\"snap\",\"done\":true,\"restartRequired\":false}\n",
+            b"{\"version\":1,\"kind\":\"update\",\"time\":166,\"source\":\"snap\",\"packages\":[],\"restartRequired\":false}\n",
+            b"{\"version\":1,\"kind\":\"update\",\"time\":167,\"source\":\"snap\",\"packages\":[],\"done\":true}\n",
             b"{\"version\":1,\"time\":170}\n",
             b"{\"version\":1,\"kind\":\"uninstall\",\"time\":180}\n",
             b"not json\n",
@@ -489,7 +508,7 @@ mod tests {
         uninstalled(directory.path(), 300);
         let read = read_all(directory.path());
         assert_eq!(summaries(&read), [('c', 100, None), ('u', 300, None)]);
-        assert_eq!(read.skipped, 7);
+        assert_eq!(read.skipped, 9);
     }
 
     #[test]

@@ -88,14 +88,13 @@ impl LastAnalysis {
     /// command line: only they open or write the history, so its date tells,
     /// however long the history. An uninstallation outdates it too, having
     /// removed files the analysis may have counted (the caches of a snap
-    /// whose data went), and so do updates (apt's cache of packages, a
-    /// snap's old revisions). A cleaning that removed nothing counts too, as
-    /// do updates refused or cancelled, and so would a history touched by
-    /// hand: the summary is then said
-    /// outdated, which costs a new analysis. Not seen: an operation cut
-    /// short before its line was written, a history
-    /// restored with an older date, a clock set back, or a history on a
-    /// filesystem whose clock lags. Without a history, the one set aside
+    /// whose data went), and so do updates (the caches of the packages and
+    /// snaps downloaded). A cleaning that removed nothing counts too, as do
+    /// updates refused or cancelled, and so would a history touched by
+    /// hand: the summary is then said outdated, which costs a new analysis.
+    /// Not seen: an operation cut short before its line was written, a
+    /// history restored with an older date, a clock set back, or a history
+    /// on a filesystem whose clock lags. Without a history, the one set aside
     /// tells, by when it was set aside (a history set aside before its next
     /// one was created, by a cleaning about to remove). Neither: not outdated.
     ///
@@ -228,6 +227,31 @@ mod tests {
                 "history changed at {changed} ms"
             );
         }
+    }
+
+    #[test]
+    fn an_update_recorded_after_the_analysis_makes_it_outdated() {
+        let directory = tempfile::tempdir().unwrap();
+        let analysis = LastAnalysis {
+            time: crate::history::seconds(SystemTime::now()) - 3600,
+            reclaimable_bytes: 1,
+            entries: 1,
+        };
+        History::open(directory.path())
+            .unwrap()
+            .record_update(&crate::UpdateEntry {
+                time: analysis.time,
+                source: crate::PackageSource::Deb,
+                packages: Vec::new(),
+                done: false,
+                reason: Some("cancelled".to_owned()),
+                restart_required: false,
+            })
+            .unwrap();
+        assert!(
+            analysis.outdated(directory.path()).unwrap(),
+            "even cancelled"
+        );
     }
 
     #[test]

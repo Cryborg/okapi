@@ -9,7 +9,6 @@ import { DashboardWords } from "dashboard-widgets.slint";
 import { DayKind, Moment } from "dashboard-model.slint";
 import { AppWords } from "apps.slint";
 import { ReceiptLine, Stat } from "receipt.slint";
-import { UpdatesWords } from "updates.slint";
 import { InstallWhy } from "updates-model.slint";
 import { AppSource } from "apps-model.slint";
 import {
@@ -41,7 +40,7 @@ global HistoryWords {
 
     // Whom an installation of updates updated.
     pure public function updated-name(operation: HistoryRow) -> string {
-        operation.source == AppSource.deb ? UpdatesWords.system-name() : @tr("Applis")
+        operation.source == AppSource.deb ? @tr("Système") : @tr("Applis")
     }
 
     // How an installation of updates ended, in a few words.
@@ -73,7 +72,7 @@ global HistoryWords {
             return @tr("Annulée avant toute installation.");
         }
         if operation.update-end == UpdateEnd.unknown {
-            return @tr("Okapi ne sait pas ce qui a été installé : l'installation s'est arrêtée en cours de route, ou ne répondait plus.");
+            return @tr("Ce qui a été installé n'est pas connu.");
         }
         @tr("Aucune mise à jour n'a été installée.")
     }

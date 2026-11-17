@@ -334,74 +334,84 @@ fn the_arrows_choose_the_next_and_previous_operation() {
     assert_eq!(history.get_chosen(), 0);
 }
 
-fn package(name: &str, done: bool, reason: Option<&str>) -> UpdatedPackage {
+fn package(name: &str, version: &str, done: bool, reason: Option<&str>) -> UpdatedPackage {
     UpdatedPackage {
         name: name.to_owned(),
-        version: "2.0".to_owned(),
+        version: version.to_owned(),
         done,
         reason: reason.map(str::to_owned),
     }
 }
 
-fn updated(directory: &Path, entry: &UpdateEntry) {
-    History::open(directory)
-        .unwrap()
-        .record_update(entry)
-        .unwrap();
+/// An installation of updates `hours` before noon.
+fn update(
+    hours: i64,
+    source: PackageSource,
+    packages: Vec<UpdatedPackage>,
+    reason: Option<&str>,
+) -> UpdateEntry {
+    UpdateEntry {
+        time: before(hours),
+        source,
+        done: !packages.is_empty() && packages.iter().all(|package| package.done),
+        packages,
+        reason: reason.map(str::to_owned),
+        restart_required: false,
+    }
 }
 
-/// The system, all done, a restart asked; snaps, one refused while its app
-/// was open; the system stopped in dpkg; snaps none of which went, for a
-/// reason this version does not know.
+/// The system all done, a restart asked; snaps, one refused while its app
+/// was open and one waiting still; the system stopped in dpkg; snaps none
+/// of which went, for a reason this version does not know; the system
+/// cancelled before anything; an empty line, as by hand.
 fn kept_updates(directory: &Path) {
-    updated(
-        directory,
-        &UpdateEntry {
-            time: before(5),
-            source: PackageSource::Deb,
-            packages: vec![package("openssl", true, None), package("bash", true, None)],
-            done: true,
-            reason: None,
+    let lines = [
+        UpdateEntry {
             restart_required: true,
+            ..update(
+                7,
+                PackageSource::Deb,
+                vec![
+                    package("openssl", "3.5.1", true, None),
+                    package("bash", "5.2.37", true, None),
+                ],
+                None,
+            )
         },
-    );
-    updated(
-        directory,
-        &UpdateEntry {
-            time: before(4),
-            source: PackageSource::Snap,
-            packages: vec![
-                package("spotify", false, Some("appsOpen")),
-                package("firefox", true, None),
-                package("obs-studio", false, Some("waiting")),
+        update(
+            6,
+            PackageSource::Snap,
+            vec![
+                package("spotify", "1.2.74", false, Some("appsOpen")),
+                package("firefox", "145.0", true, None),
+                package("obs-studio", "32.0.2", false, Some("waiting")),
             ],
-            done: false,
-            reason: None,
-            restart_required: false,
-        },
-    );
-    updated(
-        directory,
-        &UpdateEntry {
-            time: before(3),
-            source: PackageSource::Deb,
-            packages: vec![package("zsh", false, Some("unknown"))],
-            done: false,
-            reason: Some("unanswered".to_owned()),
-            restart_required: false,
-        },
-    );
-    updated(
-        directory,
-        &UpdateEntry {
-            time: before(2),
-            source: PackageSource::Snap,
-            packages: vec![package("vlc", false, None)],
-            done: false,
-            reason: Some("aLaterReason".to_owned()),
-            restart_required: false,
-        },
-    );
+            None,
+        ),
+        update(
+            5,
+            PackageSource::Deb,
+            vec![package("zsh", "5.9", false, Some("unknown"))],
+            Some("unanswered"),
+        ),
+        update(
+            4,
+            PackageSource::Snap,
+            vec![package("vlc", "3.0.21", false, None)],
+            Some("aLaterReason"),
+        ),
+        update(
+            3,
+            PackageSource::Deb,
+            vec![package("mesa", "25.2", false, None)],
+            Some("cancelled"),
+        ),
+        update(2, PackageSource::Snap, Vec::new(), Some("cancelled")),
+    ];
+    let mut history = History::open(directory).unwrap();
+    for line in &lines {
+        history.record_update(line).unwrap();
+    }
 }
 
 #[test]
@@ -412,32 +422,19 @@ fn each_update_shows_how_it_ended_and_each_package_asked() {
     let (window, _screen) = shown_history(seams(directory.path()));
     let ends: Vec<_> = rows(&window)
         .iter()
-        .map(|row| (row.kind, row.update_end, row.update_why))
+        .map(|row| (row.update_end, row.update_why))
         .collect();
     assert_eq!(
         ends,
         [
-            (
-                ui::HistoryKind::Update,
-                ui::UpdateEnd::Failed,
-                ui::InstallWhy::None
-            ),
-            (
-                ui::HistoryKind::Update,
-                ui::UpdateEnd::Unknown,
-                ui::InstallWhy::Unanswered
-            ),
-            (
-                ui::HistoryKind::Update,
-                ui::UpdateEnd::Partly,
-                ui::InstallWhy::None
-            ),
-            (
-                ui::HistoryKind::Update,
-                ui::UpdateEnd::Done,
-                ui::InstallWhy::None
-            ),
-        ]
+            (ui::UpdateEnd::Cancelled, ui::InstallWhy::None),
+            (ui::UpdateEnd::Cancelled, ui::InstallWhy::None),
+            (ui::UpdateEnd::Unknown, ui::InstallWhy::None),
+            (ui::UpdateEnd::Unknown, ui::InstallWhy::Unanswered),
+            (ui::UpdateEnd::Partly, ui::InstallWhy::None),
+            (ui::UpdateEnd::Done, ui::InstallWhy::None),
+        ],
+        "an empty line never said done, a reason unknown never said known"
     );
     let line = |label: &str| {
         ElementHandle::find_by_accessible_label(&window, label)
@@ -446,34 +443,39 @@ fn each_update_shows_how_it_ended_and_each_package_asked() {
     };
     for (label, said) in [
         (
-            "Mise à jour, Système · 2 installées, aujourd'hui à 7 h",
+            "Mise à jour, Système · 2 installées, aujourd'hui à 5 h",
             &[
                 "Toutes les mises à jour demandées ont été installées.",
                 "Le système a demandé un redémarrage pour la terminer.",
-                "openssl 2.0 : installée",
+                "openssl 3.5.1 : installée",
+                "bash 5.2.37 : installée",
             ][..],
         ),
         (
-            "Mise à jour, Applis · installées : 1 sur 3, aujourd'hui à 8 h",
+            "Mise à jour, Applis · installées : 1 sur 3, aujourd'hui à 6 h",
             &[
                 "Une partie des mises à jour demandées n'a pas été installée.",
-                "spotify 2.0 : non installée. Une appli à mettre à jour était ouverte.",
-                "obs-studio 2.0 : encore en attente",
+                "spotify 1.2.74 : non installée. Une appli à mettre à jour était ouverte.",
+                "obs-studio 32.0.2 : encore en attente",
             ],
         ),
         (
-            "Mise à jour, Système · issue inconnue, aujourd'hui à 9 h",
+            "Mise à jour, Système · issue inconnue, aujourd'hui à 7 h",
             &[
-                "Okapi ne sait pas ce qui a été installé : l'installation s'est arrêtée en cours de route, ou ne répondait plus.",
+                "Ce qui a été installé n'est pas connu.",
                 "Le gestionnaire de mises à jour ne répondait plus.",
-                "zsh 2.0 : état inconnu",
+                "zsh 5.9 : état inconnu",
             ],
         ),
         (
-            "Mise à jour, Applis · aucune installée, aujourd'hui à 10 h",
+            "Mise à jour, Applis · issue inconnue, aujourd'hui à 8 h",
+            &["vlc 3.0.21 : non installée"],
+        ),
+        (
+            "Mise à jour, Système · annulée, aujourd'hui à 9 h",
             &[
-                "Aucune mise à jour n'a été installée.",
-                "vlc 2.0 : non installée",
+                "Annulée avant toute installation.",
+                "mesa 25.2 : non installée",
             ],
         ),
     ] {

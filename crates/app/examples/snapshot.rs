@@ -517,7 +517,7 @@ fn history_updates(today: impl Fn(i32, i32) -> ui::Moment) -> [ui::HistoryRow; 2
             days_above: 1,
             source: ui::AppSource::Deb,
             update_end: ui::UpdateEnd::Done,
-            update_installed: 47,
+            update_installed: 2,
             restart_required: true,
             updated: ModelRc::new(VecModel::from(system)),
             ..ui::HistoryRow::default()

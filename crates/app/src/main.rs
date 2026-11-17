@@ -194,15 +194,7 @@ fn window(
         refreshed.refresh();
         written_apps.settings_written();
     }));
-    let closing = screen.clone();
-    let closing_apps = apps.clone();
-    window.window().on_close_requested(move || {
-        // The cleaner first: its history line is waited for.
-        match closing.close_requested() {
-            slint::CloseRequestResponse::HideWindow => closing_apps.close_requested(),
-            held @ slint::CloseRequestResponse::KeepWindowShown => held,
-        }
-    });
+    close_when_done(&window, screen.clone(), apps.clone(), updates.clone());
     tracing::debug!(page = ?window.get_page(), "page shown");
     let sized = window.as_weak();
     window.on_sidebar_shown(move |chosen_folded, narrow| {
@@ -229,6 +221,27 @@ fn window(
         duplicates,
         large_files,
     })
+}
+
+/// Closes `window` once what must be written is: the cleaner's history line
+/// first, then an uninstallation's; an installation of updates goes on
+/// without Okapi, which is traced.
+fn close_when_done(
+    window: &AppWindow,
+    cleaner: CleanerScreen,
+    apps: AppsScreen,
+    updates: UpdatesScreen,
+) {
+    window.window().on_close_requested(move || {
+        let response = match cleaner.close_requested() {
+            slint::CloseRequestResponse::HideWindow => apps.close_requested(),
+            held @ slint::CloseRequestResponse::KeepWindowShown => held,
+        };
+        if matches!(response, slint::CloseRequestResponse::HideWindow) {
+            updates.closing();
+        }
+        response
+    });
 }
 
 /// The screens that follow the page shown, beside the Home page.

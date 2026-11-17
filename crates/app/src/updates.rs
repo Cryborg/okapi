@@ -725,7 +725,7 @@ impl Drop for Teller {
 /// nothing left to show.
 fn told<T>(sender: &mpsc::Sender<T>, event: T) {
     if sender.send(event).is_err() {
-        tracing::debug!("the updates screen is gone");
+        tracing::debug!("no one listens any more: the screen gone, or the answer given up");
     }
 }
 

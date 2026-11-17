@@ -3933,6 +3933,10 @@ msgid "Mise à jour"
 msgstr "Update"
 
 msgctxt "HistoryWords"
+msgid "Système"
+msgstr "System"
+
+msgctxt "HistoryWords"
 msgid "Applis"
 msgstr "Apps"
 
@@ -3971,8 +3975,8 @@ msgid "Annulée avant toute installation."
 msgstr "Cancelled before anything was installed."
 
 msgctxt "HistoryWords"
-msgid "Okapi ne sait pas ce qui a été installé : l'installation s'est arrêtée en cours de route, ou ne répondait plus."
-msgstr "Okapi does not know what was installed: the installation stopped partway, or no longer answered."
+msgid "Ce qui a été installé n'est pas connu."
+msgstr "What was installed is not known."
 
 msgctxt "HistoryWords"
 msgid "Aucune mise à jour n'a été installée."

@@ -28,7 +28,7 @@ use crate::disk_usage::READ_EVERY;
 use crate::receipt::{OutcomeFacts, ReceiptLines};
 use crate::shown::{show, shown, size};
 use crate::ui;
-use crate::updates::record;
+use crate::updates::record::Reason;
 
 /// The thread that reads the history.
 const READER_NAME: &str = "okapi-history-read";
@@ -458,49 +458,51 @@ const fn source_shown(source: PackageSource) -> ui::AppSource {
     }
 }
 
-/// An installation of updates' row: how it ended, by what became of each
-/// update asked (one done by its daemon may have left some waiting), then
-/// by its line.
+/// An installation of updates' row: how it ended (not known as soon as one
+/// update's fate is not, then by its line), and what became of each update
+/// asked.
 fn update_row(line: &UpdateEntry) -> ui::HistoryRow {
-    let installed = line.packages.iter().filter(|package| package.done).count();
-    let unknown = line
+    let line_reason = reason_read(line.reason.as_deref());
+    let updated: Vec<ui::UpdatedShown> = line
         .packages
         .iter()
-        .any(|package| package.reason.as_deref() == Some(record::UNKNOWN));
+        .map(|package| {
+            let reason = reason_read(package.reason.as_deref());
+            let state = match reason {
+                _ if package.done => ui::UpdateState::Installed,
+                Some(Reason::Waiting) => ui::UpdateState::Waiting,
+                Some(Reason::Unknown) => ui::UpdateState::Unknown,
+                Some(Reason::Cause(_) | Reason::Cancelled) | None => ui::UpdateState::NotInstalled,
+            };
+            ui::UpdatedShown {
+                name: package.name.as_str().into(),
+                version: package.version.as_str().into(),
+                state,
+                why: why_said(reason),
+            }
+        })
+        .collect();
+    let installed = line.packages.iter().filter(|package| package.done).count();
+    let unknown = line_reason == Some(Reason::Unknown)
+        || updated
+            .iter()
+            .any(|update| update.state == ui::UpdateState::Unknown);
     let end = if unknown {
         ui::UpdateEnd::Unknown
-    } else if installed == line.packages.len() {
+    } else if line.done {
         ui::UpdateEnd::Done
-    } else if line.reason.as_deref() == Some(record::CANCELLED) {
+    } else if line_reason == Some(Reason::Cancelled) {
         ui::UpdateEnd::Cancelled
     } else if installed > 0 {
         ui::UpdateEnd::Partly
     } else {
         ui::UpdateEnd::Failed
     };
-    let updated = line
-        .packages
-        .iter()
-        .map(|package| {
-            let state = match package.reason.as_deref() {
-                _ if package.done => ui::UpdateState::Installed,
-                Some(record::WAITING) => ui::UpdateState::Waiting,
-                Some(record::UNKNOWN) => ui::UpdateState::Unknown,
-                _ => ui::UpdateState::NotInstalled,
-            };
-            ui::UpdatedShown {
-                name: package.name.as_str().into(),
-                version: package.version.as_str().into(),
-                state,
-                why: why_said(package.reason.as_deref()),
-            }
-        })
-        .collect();
     ui::HistoryRow {
         kind: ui::HistoryKind::Update,
         source: source_shown(line.source),
         update_end: end,
-        update_why: why_said(line.reason.as_deref()),
+        update_why: why_said(line_reason),
         update_installed: shown(installed),
         update_left: shown(line.packages.len() - installed),
         updated: model(updated),
@@ -509,19 +511,23 @@ fn update_row(line: &UpdateEntry) -> ui::HistoryRow {
     }
 }
 
-/// The cause a reason of an update's line names, as the History says it;
-/// none for a reason that is no cause (cancelled, waiting, unknown), or one
-/// this version does not know (traced).
-fn why_said(reason: Option<&str>) -> ui::InstallWhy {
+/// The reason a line keeps by `key`; one this version does not know is
+/// taken for not knowing (traced).
+fn reason_read(key: Option<&str>) -> Option<Reason> {
+    key.map(|key| {
+        Reason::of_key(key).unwrap_or_else(|| {
+            tracing::warn!(key, "a reason of an update this version does not know");
+            Reason::Unknown
+        })
+    })
+}
+
+/// The cause `reason` names, as the History says it; none for a reason
+/// that is no cause.
+fn why_said(reason: Option<Reason>) -> ui::InstallWhy {
     match reason {
-        None | Some(record::CANCELLED | record::WAITING | record::UNKNOWN) => ui::InstallWhy::None,
-        Some(key) => record::why_of_key(key).map_or_else(
-            || {
-                tracing::warn!(key, "a reason of an update this version does not know");
-                ui::InstallWhy::None
-            },
-            crate::updates::why_shown,
-        ),
+        Some(Reason::Cause(why)) => crate::updates::why_shown(why),
+        Some(Reason::Cancelled | Reason::Waiting | Reason::Unknown) | None => ui::InstallWhy::None,
     }
 }
 

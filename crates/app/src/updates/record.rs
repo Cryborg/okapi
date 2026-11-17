@@ -10,76 +10,132 @@ use okapi_tools::updates::install::{End, Ended, Why};
 use super::install::{Outcome, Target, waits};
 use crate::ui;
 
-/// It was cancelled before anything was installed, or while dpkg ran.
-pub(crate) const CANCELLED: &str = "cancelled";
-/// The update waits still once the list was read again, no cause said.
-pub(crate) const WAITING: &str = "waiting";
-/// Whether the update went is not known: dpkg ran then stopped, or the
-/// daemon fell silent, or the list could not be read again.
-pub(crate) const UNKNOWN: &str = "unknown";
+/// Why an update, or a whole installation, did not go, as its line keeps
+/// it by name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reason {
+    /// What the installation failed of.
+    Cause(Why),
+    /// It was cancelled.
+    Cancelled,
+    /// It waits still once the list was read again, no cause said.
+    Waiting,
+    /// Whether it went is not known: dpkg ran then stopped, the daemon fell
+    /// silent, or the list could not be read again.
+    Unknown,
+}
 
-/// Every cause, for its name to be read back, each at its place
-/// (`why_place` makes the compiler name a cause left out).
-const WHYS: [Why; 10] = [
-    Why::Busy,
-    Why::Interrupted,
-    Why::Offline,
-    Why::NoSpace,
-    Why::Refused,
-    Why::Changed,
-    Why::AppsOpen,
-    Why::Unsigned,
-    Why::Unanswered,
-    Why::Broken,
+/// Every reason, each at its place (`reason_place` makes the compiler name
+/// one left out), for its name to be read back.
+const REASONS: [Reason; 13] = [
+    Reason::Cancelled,
+    Reason::Waiting,
+    Reason::Unknown,
+    Reason::Cause(Why::Busy),
+    Reason::Cause(Why::Interrupted),
+    Reason::Cause(Why::Offline),
+    Reason::Cause(Why::NoSpace),
+    Reason::Cause(Why::Refused),
+    Reason::Cause(Why::Changed),
+    Reason::Cause(Why::AppsOpen),
+    Reason::Cause(Why::Unsigned),
+    Reason::Cause(Why::Unanswered),
+    Reason::Cause(Why::Broken),
 ];
 
-/// The name the history keeps `why` by: never changed once written.
-pub(crate) const fn why_key(why: Why) -> &'static str {
-    match why {
-        Why::Busy => "busy",
-        Why::Interrupted => "interrupted",
-        Why::Offline => "offline",
-        Why::NoSpace => "noSpace",
-        Why::Refused => "refused",
-        Why::Changed => "changed",
-        Why::AppsOpen => "appsOpen",
-        Why::Unsigned => "unsigned",
-        Why::Unanswered => "unanswered",
-        Why::Broken => "broken",
+impl Reason {
+    /// The name the history keeps it by: never changed once written.
+    pub(crate) const fn key(self) -> &'static str {
+        match self {
+            Self::Cancelled => "cancelled",
+            Self::Waiting => "waiting",
+            Self::Unknown => "unknown",
+            Self::Cause(why) => match why {
+                Why::Busy => "busy",
+                Why::Interrupted => "interrupted",
+                Why::Offline => "offline",
+                Why::NoSpace => "noSpace",
+                Why::Refused => "refused",
+                Why::Changed => "changed",
+                Why::AppsOpen => "appsOpen",
+                Why::Unsigned => "unsigned",
+                Why::Unanswered => "unanswered",
+                Why::Broken => "broken",
+            },
+        }
+    }
+
+    /// The reason named `key`, if it names one.
+    pub(crate) fn of_key(key: &str) -> Option<Self> {
+        REASONS.into_iter().find(|reason| reason.key() == key)
+    }
+
+    /// Why it ended as `end`, when it was not done.
+    const fn of_end(end: End) -> Option<Self> {
+        match end {
+            End::Done => None,
+            End::Cancelled => Some(Self::Cancelled),
+            End::Failed(why) => Some(Self::Cause(why)),
+        }
     }
 }
 
-/// Where `why` is in [`WHYS`]; a cause added fails to compile here until it
-/// is placed there too.
+/// Where `reason` is in [`REASONS`]; one added fails to compile here until
+/// it is placed there too.
 #[cfg(test)]
-const fn why_place(why: Why) -> usize {
-    match why {
-        Why::Busy => 0,
-        Why::Interrupted => 1,
-        Why::Offline => 2,
-        Why::NoSpace => 3,
-        Why::Refused => 4,
-        Why::Changed => 5,
-        Why::AppsOpen => 6,
-        Why::Unsigned => 7,
-        Why::Unanswered => 8,
-        Why::Broken => 9,
+const fn reason_place(reason: Reason) -> usize {
+    match reason {
+        Reason::Cancelled => 0,
+        Reason::Waiting => 1,
+        Reason::Unknown => 2,
+        Reason::Cause(why) => match why {
+            Why::Busy => 3,
+            Why::Interrupted => 4,
+            Why::Offline => 5,
+            Why::NoSpace => 6,
+            Why::Refused => 7,
+            Why::Changed => 8,
+            Why::AppsOpen => 9,
+            Why::Unsigned => 10,
+            Why::Unanswered => 11,
+            Why::Broken => 12,
+        },
     }
 }
 
-/// The cause named `key`, if it names one.
-pub(crate) fn why_of_key(key: &str) -> Option<Why> {
-    WHYS.into_iter().find(|why| why_key(*why) == key)
+/// Whether each update of the installation of `target` went: told by
+/// `told`, the outcome shown, and `snaps_read`, the list of snaps read
+/// again (`None`: not read). `Some(true)`: it went; `Some(false)`: it did
+/// not; `None`: not known. The system's all together, as PackageKit
+/// installs them all or none until dpkg runs; once dpkg ran and stopped, or
+/// the daemon fell silent, what went is not known. Snaps one by one by the
+/// list read again, as the outcome counts them; not read again, they are
+/// known only done.
+fn went(target: &Target, told: &Outcome, snaps_read: Option<&[SnapUpdate]>) -> Vec<Option<bool>> {
+    let silent = told.why == Some(Why::Unanswered);
+    let all = match told.end {
+        ui::InstallEnd::Done => Some(true),
+        ui::InstallEnd::Stopped => None,
+        ui::InstallEnd::Cancelled | ui::InstallEnd::Failed if silent => None,
+        ui::InstallEnd::Cancelled | ui::InstallEnd::Failed => Some(false),
+    };
+    match target {
+        Target::System(asked) => vec![all; asked.len()],
+        Target::Snaps(asked) => asked
+            .iter()
+            .map(|snap| match snaps_read {
+                Some(read) => Some(!waits(snap, read)),
+                None => all.filter(|went| *went),
+            })
+            .collect(),
+    }
 }
 
 /// The line of the installation of `target` that ended as `ended`, at
 /// `time`, whose outcome shown is `told`; `snaps_read` is the list of snaps
-/// read again (`None`: not read). Done when the outcome says so. Each
-/// update went, did not, or is not known: the system's all together, as
-/// PackageKit installs them all or none until dpkg runs; once dpkg ran and
-/// stopped, or the daemon fell silent, what went is not known. Snaps are
-/// told one by one by the list read again, as the outcome counts them; not
-/// read again, they are known only done.
+/// read again (`None`: not read). Done when every update asked went. A
+/// reason is said once for all on the line when none went, else by each
+/// update that did not.
 pub(super) fn entry(
     target: &Target,
     ended: &Ended,
@@ -87,59 +143,40 @@ pub(super) fn entry(
     snaps_read: Option<&[SnapUpdate]>,
     time: i64,
 ) -> UpdateEntry {
-    let done = told.end == ui::InstallEnd::Done;
-    let silent = told.why == Some(Why::Unanswered);
-    // Each one went (`Some(true)`), did not, or is not known (`None`).
-    let all = match told.end {
-        ui::InstallEnd::Done => Some(true),
-        ui::InstallEnd::Stopped => None,
-        ui::InstallEnd::Cancelled | ui::InstallEnd::Failed if silent => None,
-        ui::InstallEnd::Cancelled | ui::InstallEnd::Failed => Some(false),
-    };
-    let (source, asked) = match target {
+    let (source, asked): (PackageSource, Vec<(&str, &str)>) = match target {
         Target::System(asked) => (
             PackageSource::Deb,
             asked
                 .iter()
-                .map(|update| (update.name.as_str(), update.version.as_str(), all))
-                .collect::<Vec<_>>(),
+                .map(|update| (update.name.as_str(), update.version.as_str()))
+                .collect(),
         ),
         Target::Snaps(asked) => (
             PackageSource::Snap,
             asked
                 .iter()
-                .map(|snap| {
-                    let went = match (snaps_read, told.counts.is_some()) {
-                        (Some(read), true) => Some(!waits(snap, read)),
-                        _ => all.filter(|went| *went),
-                    };
-                    (snap.name.as_str(), snap.version.as_str(), went)
-                })
+                .map(|snap| (snap.name.as_str(), snap.version.as_str()))
                 .collect(),
         ),
     };
-    // Why it was not done; one said done by its outcome needs none.
-    let cause = match ended.end {
-        _ if done => None,
-        End::Done => Some(WAITING),
-        End::Cancelled => Some(CANCELLED),
-        End::Failed(why) => Some(why_key(why)),
-    };
-    // None known gone: the line says why for all.
-    let line_reason = cause.filter(|_| !asked.iter().any(|(.., went)| *went == Some(true)));
+    let went = went(target, told, snaps_read);
+    let done = went.iter().all(|went| *went == Some(true));
+    // Ended done by its daemon yet some wait still: they say so.
+    let cause = Reason::of_end(ended.end).unwrap_or(Reason::Waiting);
+    let line_reason = (!done && !went.contains(&Some(true))).then_some(cause);
     let packages = asked
         .into_iter()
-        .map(|(name, version, went)| UpdatedPackage {
+        .zip(went)
+        .map(|((name, version), went)| UpdatedPackage {
             name: name.to_owned(),
             version: version.to_owned(),
             done: went == Some(true),
             reason: match went {
                 Some(true) => None,
-                None => Some(UNKNOWN),
-                Some(false) if line_reason.is_some() => None,
-                Some(false) => Some(cause.unwrap_or(WAITING)),
+                None => Some(Reason::Unknown),
+                Some(false) => line_reason.is_none().then_some(cause),
             }
-            .map(str::to_owned),
+            .map(|reason| reason.key().to_owned()),
         })
         .collect();
     UpdateEntry {
@@ -147,7 +184,7 @@ pub(super) fn entry(
         source,
         packages,
         done,
-        reason: line_reason.map(str::to_owned),
+        reason: line_reason.map(|reason| reason.key().to_owned()),
         restart_required: ended.system_restart,
     }
 }
@@ -196,8 +233,8 @@ mod tests {
 
     /// The line of `target` ended as `ended`, the system and the snaps
     /// read again as `system_read` and `snaps_read`, told as the outcome
-    /// shown is; checked against that outcome: done when it says done, and
-    /// as many gone as it counts installed.
+    /// shown is; checked against that outcome: done only when it says done
+    /// and every update went, and as many gone as it counts installed.
     fn line_of(
         target: &Target,
         ended: &Ended,
@@ -206,10 +243,13 @@ mod tests {
     ) -> UpdateEntry {
         let told = outcome(target, ended, system_read, snaps_read);
         let written = entry(target, ended, &told, snaps_read, TIME);
+        assert!(
+            !written.done || told.end == ui::InstallEnd::Done,
+            "{ended:?}: {told:?}"
+        );
         assert_eq!(
             written.done,
-            told.end == ui::InstallEnd::Done,
-            "{ended:?}: {told:?}"
+            written.packages.iter().all(|package| package.done)
         );
         if let Some(counts) = &told.counts {
             let gone = written
@@ -278,7 +318,7 @@ mod tests {
     #[test]
     fn the_system_ended_before_dpkg_says_none_went_and_why_once() {
         for (end, reason) in [
-            (End::Cancelled, CANCELLED),
+            (End::Cancelled, "cancelled"),
             (End::Failed(Why::Busy), "busy"),
             (End::Failed(Why::Changed), "changed"),
         ] {
@@ -303,14 +343,14 @@ mod tests {
                     reached_dpkg: true,
                     ..Ended::before(End::Cancelled)
                 },
-                CANCELLED,
+                "cancelled",
             ),
             // Fallen silent before dpkg: it may be finishing without Okapi.
             (Ended::before(End::Failed(Why::Unanswered)), "unanswered"),
         ] {
             let written = line_of(&system(), &ended, None, None);
             assert_eq!(line(&written), (false, Some(reason)), "{ended:?}");
-            assert_eq!(each(&written), [(false, Some(UNKNOWN)); 3], "{ended:?}");
+            assert_eq!(each(&written), [(false, Some("unknown")); 3], "{ended:?}");
         }
     }
 
@@ -346,12 +386,20 @@ mod tests {
     }
 
     #[test]
-    fn snaps_done_by_snapd_yet_waiting_are_done_and_said_waiting() {
-        // The outcome says done, the one waiting said so.
+    fn snaps_done_by_snapd_yet_waiting_are_said_waiting_never_done() {
+        // The outcome says done, as snapd did: the line, only when all went.
         let read = [snap("firefox")];
         let written = line_of(&snaps(), &Ended::before(End::Done), None, Some(&read));
-        assert_eq!(line(&written), (true, None));
-        assert_eq!(packages(&written)[1], ("firefox", false, Some(WAITING)));
+        assert_eq!(line(&written), (false, None));
+        assert_eq!(packages(&written)[1], ("firefox", false, Some("waiting")));
+        let all_waiting = [snap("spotify"), snap("firefox"), snap("obs-studio")];
+        let written = line_of(
+            &snaps(),
+            &Ended::before(End::Done),
+            None,
+            Some(&all_waiting),
+        );
+        assert_eq!(line(&written), (false, Some("waiting")));
     }
 
     #[test]
@@ -368,6 +416,14 @@ mod tests {
     }
 
     #[test]
+    fn snaps_cancelled_after_some_went_say_it_by_those_left() {
+        let read = [snap("spotify")];
+        let written = line_of(&snaps(), &Ended::before(End::Cancelled), None, Some(&read));
+        assert_eq!(line(&written), (false, None));
+        assert_eq!(packages(&written)[0], ("spotify", false, Some("cancelled")));
+    }
+
+    #[test]
     fn snaps_not_read_again_are_known_only_done() {
         let written = line_of(&snaps(), &Ended::before(End::Done), None, None);
         assert_eq!(line(&written), (true, None));
@@ -380,19 +436,19 @@ mod tests {
             None,
         );
         assert_eq!(line(&written), (false, Some("broken")));
-        assert_eq!(each(&written), [(false, Some(UNKNOWN)); 3]);
+        assert_eq!(each(&written), [(false, Some("unknown")); 3]);
     }
 
     #[test]
-    fn each_cause_comes_back_from_its_name_and_no_other() {
-        for (place, why) in WHYS.into_iter().enumerate() {
-            assert_eq!(why_place(why), place, "{why:?}");
-            assert_eq!(why_of_key(why_key(why)), Some(why));
+    fn each_reason_comes_back_from_its_name_and_no_other() {
+        for (place, reason) in REASONS.into_iter().enumerate() {
+            assert_eq!(reason_place(reason), place, "{reason:?}");
+            assert_eq!(Reason::of_key(reason.key()), Some(reason));
         }
-        let keys: std::collections::BTreeSet<_> = WHYS.into_iter().map(why_key).collect();
-        assert_eq!(keys.len(), WHYS.len(), "names unique");
-        for other in [CANCELLED, WAITING, UNKNOWN, "Busy", ""] {
-            assert_eq!(why_of_key(other), None, "{other}");
+        let keys: std::collections::BTreeSet<_> = REASONS.into_iter().map(Reason::key).collect();
+        assert_eq!(keys.len(), REASONS.len(), "names unique");
+        for other in ["Busy", "appRunning", ""] {
+            assert_eq!(Reason::of_key(other), None, "{other}");
         }
     }
 }

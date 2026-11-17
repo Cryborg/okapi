@@ -90,6 +90,10 @@ struct Fake {
     /// The history lines written, and whether writing one fails.
     recorded: Mutex<Vec<UpdateEntry>>,
     unrecordable: bool,
+    /// When set, the next line written waits for a word, then fails.
+    hold_record: Mutex<Option<mpsc::Receiver<()>>>,
+    /// Writing a line panics: its thread dies without an answer.
+    record_dies: bool,
 }
 
 impl Default for Fake {
@@ -139,6 +143,8 @@ impl Default for Fake {
             said_after_hold: Vec::new(),
             recorded: Mutex::new(Vec::new()),
             unrecordable: false,
+            hold_record: Mutex::new(None),
+            record_dies: false,
         }
     }
 }
@@ -286,6 +292,12 @@ fn seams_of(fake: &Arc<Fake>) -> UpdatesSeams {
         installer: Arc::clone(fake) as Arc<dyn Installer>,
         record: Arc::new(move |entry: &UpdateEntry| {
             recording.recorded.lock().unwrap().push(entry.clone());
+            assert!(!recording.record_dies, "the history's writer dies");
+            let hold = recording.hold_record.lock().unwrap().take();
+            if let Some(hold) = hold {
+                hold.recv().unwrap();
+                return Err(HistoryUnavailable::NoDirectory);
+            }
             if recording.unrecordable {
                 Err(HistoryUnavailable::NoDirectory)
             } else {
@@ -1109,6 +1121,8 @@ fn each_installation_writes_one_line_in_the_history_once_read_again() {
         .collect();
     // App Center waits still in the list read again: by its name.
     assert_eq!(went, [("snap-store", false), ("obs-studio", true)]);
+    assert!(!line.done, "one waits still");
+    assert_eq!(line.packages[0].reason.as_deref(), Some("waiting"));
     assert_eq!(line.packages[1].version, "32.0.2");
     assert!(!updates(&window).get_result_unrecorded());
 }
@@ -1133,6 +1147,47 @@ fn a_line_that_cannot_be_written_is_said_with_the_outcome() {
     assert_eq!(recorded.len(), 1);
     assert!(recorded[0].done);
     assert_eq!(recorded[0].packages.len(), 7, "held back never asked");
+}
+
+#[test]
+fn a_late_answer_of_a_line_never_speaks_for_the_next_installation() {
+    // Catches the first line's failure said on the second one's outcome.
+    let (go, hold) = mpsc::channel();
+    let fake = Arc::new(Fake {
+        snaps: two_snaps,
+        snaps_after: || two_snaps().map(|snaps| snaps.into_iter().take(1).collect()),
+        hold_record: Mutex::new(Some(hold)),
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_snaps();
+    installed(&window);
+    // The first line is being written; App Center is tried again.
+    updates(&window).invoke_retry_update();
+    read_until(&window, |window| {
+        fake.recorded.lock().unwrap().len() == 2 && updates(window).get_result_shown()
+    });
+    go.send(()).unwrap();
+    for _ in 0..4 {
+        read_once();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!updates(&window).get_result_unrecorded());
+}
+
+#[test]
+fn a_writer_that_dies_says_the_line_was_not_written() {
+    let fake = Arc::new(Fake {
+        system: eight,
+        record_dies: true,
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    installed(&window);
+    read_until(&window, |window| updates(window).get_result_unrecorded());
 }
 
 fn removing(removals: Vec<Vec<&'static str>>) -> Arc<Fake> {

@@ -41,7 +41,7 @@
 | **Duplicates** | Finds files with identical content (BLAKE3) and moves the copies you pick to the trash. The last copy of a file never leaves. |
 | **Applications** | Lists installed apps (deb, snap, flatpak) with the space each one really takes, uninstalls them, and finds the folders that uninstalled apps left behind. |
 | **Updates** | Shows pending apt and snap updates, with security updates flagged, and installs them. |
-| **History** | The cleanings and uninstallations Okapi keeps, newest first, with each receipt, and the paths removed when the deletion log is on. The oldest go once the history grows past a size limit. |
+| **History** | The cleanings, uninstallations and updates Okapi keeps, newest first, with each receipt, and the paths removed when the deletion log is on. The oldest go once the history grows past a size limit. |
 | **Command line** | `okapi` scans and cleans from a terminal or a script, with JSON output and meaningful exit codes. |
 
 The interface is available in French and English, in a light and a dark theme, and is designed to be used with the keyboard and a screen reader.

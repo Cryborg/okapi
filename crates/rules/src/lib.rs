@@ -37,7 +37,8 @@ pub use app::{
 };
 pub use browser::{
     BrowserCacheDirectory, BrowserKind, BrowserRules, ChromiumBrowser, ChromiumBrowserKind,
-    ChromiumCacheDirectories, FirefoxBrowser, FirefoxKind, SafariPaths,
+    ChromiumCacheDirectories, ChromiumInstall, FirefoxBrowser, FirefoxInstall, FirefoxKind,
+    Packaging, SafariPaths,
 };
 pub use database::{DatabaseRules, DatabaseTarget, ProfileLayout};
 pub use effect::{CleanupAction, Effect};

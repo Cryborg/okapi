@@ -2757,6 +2757,32 @@ mod tests {
         assert_eq!(sandbox.history()[0]["removed"], 1, "pip alone");
     }
 
+    /// The rules as shipped: the system's targets, the snaps' among them,
+    /// are not analysed here (`/tmp` is the machine's), their reservation of a
+    /// browser's caches is the engine's to test.
+    #[test]
+    fn firefox_in_a_snap_is_asked_about_as_any_firefox() {
+        let sandbox = Sandbox::new();
+        let lock = sandbox.file("home/snap/firefox/common/.mozilla/firefox/a.default/.parentlock");
+        let held = fs::File::open(&lock).unwrap();
+        held.lock().unwrap();
+        let cache =
+            sandbox.file("home/snap/firefox/common/.cache/mozilla/firefox/a.default/cache2/entry");
+        let pip = sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let (window, _screen) = on_results(sandbox.read(&sandbox.root.join("state")));
+        confirm_and_ask(&window);
+        assert!(shows(&window, "Firefox est ouvert"));
+        assert!(shows(&window, "Firefox : Cache"));
+        let_the_screen_settle();
+        button(&window, "Ignorer Firefox").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(!pip.exists());
+        assert!(cache.exists());
+        assert_eq!(sandbox.history()[0]["removed"], 1, "pip alone");
+        drop(held);
+    }
+
     #[test]
     fn a_browser_closed_meanwhile_is_not_asked_about() {
         let sandbox = Sandbox::new();

@@ -183,21 +183,29 @@ impl ChromiumBrowserKind {
     }
 }
 
-/// Where one Chromium-based browser keeps its data.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ChromiumBrowser {
-    key: ChromiumBrowserKind,
-    base: TemplatePath,
-    cache: Option<TemplatePath>,
+/// How an installation of a browser was packaged, apart from the system's
+/// own: in a sandbox of its own, with its own place in the user's home.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Packaging {
+    /// A snap: its data under `~/snap/<name>`, its processes numbered as the
+    /// system numbers them.
+    Snap,
+    /// A Flatpak: its data under `~/.var/app/<id>`, its processes in a pid
+    /// namespace of its own, so that the number a lock names is not the
+    /// system's.
+    Flatpak,
 }
 
-impl ChromiumBrowser {
-    #[must_use]
-    pub const fn kind(&self) -> ChromiumBrowserKind {
-        self.key
-    }
+/// Where one installation of a Chromium-based browser keeps its data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChromiumInstall {
+    base: TemplatePath,
+    cache: Option<TemplatePath>,
+    packaging: Option<Packaging>,
+}
 
+impl ChromiumInstall {
     /// The user-data directory that holds the profiles.
     #[must_use]
     pub const fn base(&self) -> &TemplatePath {
@@ -209,6 +217,76 @@ impl ChromiumBrowser {
     #[must_use]
     pub const fn cache(&self) -> Option<&TemplatePath> {
         self.cache.as_ref()
+    }
+
+    /// How it was packaged; `None` for the system's own installation.
+    #[must_use]
+    pub const fn packaging(&self) -> Option<Packaging> {
+        self.packaging
+    }
+}
+
+/// Where one Chromium-based browser keeps its data, in each of its
+/// installations.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(from = "RawChromiumBrowser")]
+pub struct ChromiumBrowser {
+    key: ChromiumBrowserKind,
+    installs: Vec<ChromiumInstall>,
+}
+
+impl ChromiumBrowser {
+    #[must_use]
+    pub const fn kind(&self) -> ChromiumBrowserKind {
+        self.key
+    }
+
+    /// Its installations: the system's own first, then the packaged ones.
+    #[must_use]
+    pub fn installs(&self) -> &[ChromiumInstall] {
+        &self.installs
+    }
+}
+
+/// A Chromium-based browser as written: its own installation's paths, and
+/// those of its packaged ones.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawChromiumBrowser {
+    key: ChromiumBrowserKind,
+    base: TemplatePath,
+    cache: Option<TemplatePath>,
+    sandboxed: Option<NonEmpty<RawSandboxedChromium>>,
+}
+
+/// A packaged installation of a Chromium-based browser, as written: it
+/// always keeps its caches apart.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSandboxedChromium {
+    base: TemplatePath,
+    cache: TemplatePath,
+    packaging: Packaging,
+}
+
+impl From<RawChromiumBrowser> for ChromiumBrowser {
+    fn from(raw: RawChromiumBrowser) -> Self {
+        let own = ChromiumInstall {
+            base: raw.base,
+            cache: raw.cache,
+            packaging: None,
+        };
+        let sandboxed = raw.sandboxed.into_iter().flat_map(NonEmpty::into_vec);
+        Self {
+            key: raw.key,
+            installs: std::iter::once(own)
+                .chain(sandboxed.map(|install| ChromiumInstall {
+                    base: install.base,
+                    cache: Some(install.cache),
+                    packaging: Some(install.packaging),
+                }))
+                .collect(),
+        }
     }
 }
 
@@ -258,22 +336,16 @@ impl FirefoxKind {
     }
 }
 
-/// Where Firefox, or a browser built on it, keeps its profiles and their
-/// caches.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FirefoxBrowser {
-    key: FirefoxKind,
+/// Where one installation of Firefox, or of a browser built on it, keeps
+/// its profiles and their caches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FirefoxInstall {
     bases: NonEmpty<TemplatePath>,
     cache: BoundedPath,
+    packaging: Option<Packaging>,
 }
 
-impl FirefoxBrowser {
-    #[must_use]
-    pub const fn kind(&self) -> FirefoxKind {
-        self.key
-    }
-
+impl FirefoxInstall {
     /// The directories that may hold its profiles, each a place it has used
     /// (`~/.mozilla/firefox`, then `~/.config/mozilla/firefox`).
     #[must_use]
@@ -286,6 +358,74 @@ impl FirefoxBrowser {
     #[must_use]
     pub fn cache(&self) -> &TemplatePath {
         &self.cache
+    }
+
+    /// How it was packaged; `None` for the system's own installation.
+    #[must_use]
+    pub const fn packaging(&self) -> Option<Packaging> {
+        self.packaging
+    }
+}
+
+/// Firefox, or a browser built on it, in each of its installations.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(from = "RawFirefoxBrowser")]
+pub struct FirefoxBrowser {
+    key: FirefoxKind,
+    installs: Vec<FirefoxInstall>,
+}
+
+impl FirefoxBrowser {
+    #[must_use]
+    pub const fn kind(&self) -> FirefoxKind {
+        self.key
+    }
+
+    /// Its installations: the system's own first, then the packaged ones.
+    #[must_use]
+    pub fn installs(&self) -> &[FirefoxInstall] {
+        &self.installs
+    }
+}
+
+/// A Firefox-based browser as written: its own installation's paths, and
+/// those of its packaged ones.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawFirefoxBrowser {
+    key: FirefoxKind,
+    bases: NonEmpty<TemplatePath>,
+    cache: BoundedPath,
+    sandboxed: Option<NonEmpty<RawSandboxedFirefox>>,
+}
+
+/// A packaged installation of a Firefox-based browser, as written.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSandboxedFirefox {
+    bases: NonEmpty<TemplatePath>,
+    cache: BoundedPath,
+    packaging: Packaging,
+}
+
+impl From<RawFirefoxBrowser> for FirefoxBrowser {
+    fn from(raw: RawFirefoxBrowser) -> Self {
+        let own = FirefoxInstall {
+            bases: raw.bases,
+            cache: raw.cache,
+            packaging: None,
+        };
+        let sandboxed = raw.sandboxed.into_iter().flat_map(NonEmpty::into_vec);
+        Self {
+            key: raw.key,
+            installs: std::iter::once(own)
+                .chain(sandboxed.map(|install| FirefoxInstall {
+                    bases: install.bases,
+                    cache: install.cache,
+                    packaging: Some(install.packaging),
+                }))
+                .collect(),
+        }
     }
 }
 
@@ -389,10 +529,22 @@ fn firefox_directories_once<'de, D: serde::Deserializer<'de>>(
 
 /// The content of `browsers.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(try_from = "RawBrowserRules")]
 pub struct BrowserRules {
-    #[serde(rename = "type", deserialize_with = "browsers_kind")]
     pub(crate) kind: RuleFileKind,
+    chromium_cache_directories: ChromiumCacheDirectories,
+    chromium: Vec<ChromiumBrowser>,
+    firefox_cache_directories: NonEmpty<BrowserCacheDirectory>,
+    firefox: Vec<FirefoxBrowser>,
+    safari: Option<SafariPaths>,
+}
+
+/// `browsers.json` as written, each list checked alone.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RawBrowserRules {
+    #[serde(rename = "type", deserialize_with = "browsers_kind")]
+    kind: RuleFileKind,
     #[serde(rename = "chromiumCacheDirs")]
     chromium_cache_directories: ChromiumCacheDirectories,
     #[serde(deserialize_with = "chromium_once")]
@@ -405,6 +557,27 @@ pub struct BrowserRules {
     #[serde(deserialize_with = "firefox_once")]
     firefox: Vec<FirefoxBrowser>,
     safari: Option<SafariPaths>,
+}
+
+impl TryFrom<RawBrowserRules> for BrowserRules {
+    type Error = ValidationError;
+
+    fn try_from(raw: RawBrowserRules) -> Result<Self, Self::Error> {
+        let rules = Self {
+            kind: raw.kind,
+            chromium_cache_directories: raw.chromium_cache_directories,
+            chromium: raw.chromium,
+            firefox_cache_directories: raw.firefox_cache_directories,
+            firefox: raw.firefox,
+            safari: raw.safari,
+        };
+        // One directory is one installation's, of one browser: two would
+        // share its caches and its lock.
+        listed_once(rules.template_paths().collect(), "browsers", |path| {
+            path.to_string()
+        })?;
+        Ok(rules)
+    }
 }
 
 impl BrowserRules {
@@ -435,15 +608,19 @@ impl BrowserRules {
         self.safari.as_ref()
     }
 
+    /// The directories each browser keeps its data in, every installation of
+    /// it included: profiles and caches alike, no other rule's to empty.
     pub(crate) fn template_paths(&self) -> impl Iterator<Item = &TemplatePath> {
         let chromium = self
             .chromium
             .iter()
-            .flat_map(|browser| std::iter::once(browser.base()).chain(browser.cache()));
+            .flat_map(ChromiumBrowser::installs)
+            .flat_map(|install| std::iter::once(install.base()).chain(install.cache()));
         let firefox = self
             .firefox
             .iter()
-            .flat_map(|browser| browser.bases().iter().chain([browser.cache()]));
+            .flat_map(FirefoxBrowser::installs)
+            .flat_map(|install| install.bases().iter().chain([install.cache()]));
         chromium
             .chain(firefox)
             .chain(self.safari.iter().map(SafariPaths::cache))
@@ -463,7 +640,8 @@ mod tests {
         let browser: ChromiumBrowser =
             serde_json::from_str(r#"{"key": "operaGX", "base": "${CONFIG}/opera-gx"}"#).unwrap();
         assert_eq!(browser.kind(), ChromiumBrowserKind::OperaGx);
-        assert_eq!(browser.cache(), None);
+        assert_eq!(browser.installs().len(), 1);
+        assert_eq!(browser.installs()[0].cache(), None);
     }
 
     #[test]
@@ -472,23 +650,157 @@ mod tests {
             r#"{"key": "chrome", "base": "${CONFIG}/c", "cache": "${CACHE}/c"}"#,
         )
         .unwrap();
-        assert_eq!(chromium.base().to_string(), "${CONFIG}/c");
-        assert_eq!(chromium.cache().unwrap().to_string(), "${CACHE}/c");
+        let [own] = chromium.installs() else {
+            panic!("{chromium:?}")
+        };
+        assert_eq!(own.base().to_string(), "${CONFIG}/c");
+        assert_eq!(own.cache().unwrap().to_string(), "${CACHE}/c");
+        assert_eq!(own.packaging(), None);
         let firefox: FirefoxBrowser = serde_json::from_str(
             r#"{"key": "firefox", "bases": ["${HOME}/.mozilla/firefox", "${CONFIG}/mozilla/firefox"],
                 "cache": "${CACHE}/mozilla/firefox"}"#,
         )
         .unwrap();
         assert_eq!(firefox.kind(), FirefoxKind::Firefox);
-        let bases: Vec<String> = firefox.bases().iter().map(ToString::to_string).collect();
+        let [own] = firefox.installs() else {
+            panic!("{firefox:?}")
+        };
+        let bases: Vec<String> = own.bases().iter().map(ToString::to_string).collect();
         assert_eq!(
             bases,
             ["${HOME}/.mozilla/firefox", "${CONFIG}/mozilla/firefox"]
         );
-        assert_eq!(firefox.cache().to_string(), "${CACHE}/mozilla/firefox");
+        assert_eq!(own.cache().to_string(), "${CACHE}/mozilla/firefox");
+        assert_eq!(own.packaging(), None);
         let safari: SafariPaths =
             serde_json::from_str(r#"{"cache": "${CACHES}/com.apple.Safari"}"#).unwrap();
         assert_eq!(safari.cache().to_string(), "${CACHES}/com.apple.Safari");
+    }
+
+    #[test]
+    fn a_packaged_installation_follows_the_systems_own() {
+        let chromium: ChromiumBrowser = serde_json::from_str(
+            r#"{"key": "chromium", "base": "${CONFIG}/chromium", "cache": "${CACHE}/chromium",
+                "sandboxed": [
+                    {"base": "${HOME}/snap/chromium/common/chromium",
+                     "cache": "${HOME}/snap/chromium/common/.cache/chromium", "packaging": "snap"},
+                    {"base": "${HOME}/.var/app/org.chromium.Chromium/config/chromium",
+                     "cache": "${HOME}/.var/app/org.chromium.Chromium/cache/chromium",
+                     "packaging": "flatpak"}
+                ]}"#,
+        )
+        .unwrap();
+        let installs: Vec<(String, Option<String>, Option<Packaging>)> = chromium
+            .installs()
+            .iter()
+            .map(|install| {
+                (
+                    install.base().to_string(),
+                    install.cache().map(ToString::to_string),
+                    install.packaging(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            installs,
+            [
+                (
+                    "${CONFIG}/chromium".to_owned(),
+                    Some("${CACHE}/chromium".to_owned()),
+                    None
+                ),
+                (
+                    "${HOME}/snap/chromium/common/chromium".to_owned(),
+                    Some("${HOME}/snap/chromium/common/.cache/chromium".to_owned()),
+                    Some(Packaging::Snap)
+                ),
+                (
+                    "${HOME}/.var/app/org.chromium.Chromium/config/chromium".to_owned(),
+                    Some("${HOME}/.var/app/org.chromium.Chromium/cache/chromium".to_owned()),
+                    Some(Packaging::Flatpak)
+                ),
+            ]
+        );
+        let firefox: FirefoxBrowser = serde_json::from_str(
+            r#"{"key": "firefox", "bases": ["${HOME}/.mozilla/firefox"], "cache": "${CACHE}/mozilla/firefox",
+                "sandboxed": [{"bases": ["${HOME}/snap/firefox/common/.mozilla/firefox"],
+                               "cache": "${HOME}/snap/firefox/common/.cache/mozilla/firefox",
+                               "packaging": "snap"}]}"#,
+        )
+        .unwrap();
+        let [own, snap] = firefox.installs() else {
+            panic!("{firefox:?}")
+        };
+        assert_eq!(own.cache().to_string(), "${CACHE}/mozilla/firefox");
+        let bases: Vec<String> = snap.bases().iter().map(ToString::to_string).collect();
+        assert_eq!(bases, ["${HOME}/snap/firefox/common/.mozilla/firefox"]);
+        assert_eq!(
+            snap.cache().to_string(),
+            "${HOME}/snap/firefox/common/.cache/mozilla/firefox"
+        );
+        assert_eq!(snap.packaging(), Some(Packaging::Snap));
+    }
+
+    #[test]
+    fn a_packaged_installation_says_how_and_keeps_its_caches_apart() {
+        for (json, start) in [
+            (
+                r#"{"key": "chrome", "base": "${CONFIG}/c", "sandboxed": []}"#,
+                "empty list",
+            ),
+            (
+                r#"{"key": "chrome", "base": "${CONFIG}/c",
+                    "sandboxed": [{"base": "${HOME}/s/c", "cache": "${HOME}/s/k"}]}"#,
+                "missing field `packaging`",
+            ),
+            (
+                r#"{"key": "chrome", "base": "${CONFIG}/c",
+                    "sandboxed": [{"base": "${HOME}/s/c", "packaging": "snap"}]}"#,
+                "missing field `cache`",
+            ),
+            (
+                r#"{"key": "chrome", "base": "${CONFIG}/c",
+                    "sandboxed": [{"base": "${HOME}/s/c", "cache": "${HOME}/s/k", "packaging": "appimage"}]}"#,
+                "unknown variant `appimage`",
+            ),
+            (
+                r#"{"key": "chrome", "base": "${CONFIG}/c", "packaging": "snap"}"#,
+                "unknown field `packaging`",
+            ),
+        ] {
+            let error = error_of::<ChromiumBrowser>(json);
+            assert!(error.starts_with(start), "{error}");
+        }
+        let no_base = error_of::<FirefoxBrowser>(
+            r#"{"key": "zen", "bases": ["${HOME}/.zen"], "cache": "${CACHE}/zen",
+                "sandboxed": [{"bases": [], "cache": "${HOME}/f/cache/zen", "packaging": "flatpak"}]}"#,
+        );
+        assert!(no_base.starts_with("empty list"), "{no_base}");
+        let alone = error_of::<FirefoxBrowser>(
+            r#"{"key": "zen", "bases": ["${HOME}/.zen"], "cache": "${CACHE}/zen",
+                "sandboxed": [{"bases": ["${HOME}/f/.zen"], "cache": "${CACHE}", "packaging": "flatpak"}]}"#,
+        );
+        assert!(alone.contains("alone would empty"), "{alone}");
+    }
+
+    #[test]
+    fn a_directory_is_one_installations_of_one_browser() {
+        let cache2 = r#"{"dir": "cache2", "label": "Cache"}"#;
+        for (chromium, firefox) in [
+            (
+                r#"{"key": "chrome", "base": "${CONFIG}/c", "cache": "${CACHE}/c",
+                    "sandboxed": [{"base": "${HOME}/f/c", "cache": "${CACHE}/c", "packaging": "flatpak"}]}"#,
+                "",
+            ),
+            (
+                r#"{"key": "chrome", "base": "${CONFIG}/c"}"#,
+                r#"{"key": "zen", "bases": ["${CONFIG}/c"], "cache": "${CACHE}/zen"}"#,
+            ),
+        ] {
+            let error = error_of::<BrowserRules>(&browsers(chromium, firefox, cache2));
+            assert!(error.starts_with("duplicate value"), "{error}");
+            assert!(error.contains("`browsers`"), "{error}");
+        }
     }
 
     #[test]

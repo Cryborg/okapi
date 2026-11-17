@@ -453,6 +453,7 @@ component NoteLine inherits HorizontalLayout {
         horizontal-stretch: 1;
         text: note.kind == IssueKind.unreadable-root ? @tr("Dossier illisible, non compté : {}", note.path)
             : note.kind == IssueKind.unsafe-root ? @tr("Dossier qui n'est pas ce que la règle attend, laissé de côté : {}", note.path)
+            : note.kind == IssueKind.browser-data ? @tr("Dossier d'un navigateur, laissé à son propre nettoyage : {}", note.path)
             : note.kind == IssueKind.protected-root ? @tr("Dossier qui contient un dossier protégé, laissé de côté : {}", note.path)
             : note.kind == IssueKind.excluded ? @tr("Dossier exclu par vos réglages : {}", note.path)
             : note.kind == IssueKind.custom-folder-refused ? @tr("Dossier à nettoyer refusé, Réglages dit pourquoi : {}", note.path)

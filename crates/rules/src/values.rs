@@ -82,6 +82,10 @@ impl<T> NonEmpty<T> {
             Ok(Self(items))
         }
     }
+
+    pub(crate) fn into_vec(self) -> Vec<T> {
+        self.0
+    }
 }
 
 impl<T> Deref for NonEmpty<T> {

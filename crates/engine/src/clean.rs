@@ -36,8 +36,8 @@ pub enum KeepReason {
     Changed,
     /// An exclusion in force covers it, or a directory on the way to it.
     Excluded,
-    /// It, or its scan root, holds a variable's directory (invariant 6) or
-    /// another scan root, or it has a protected name.
+    /// It, or its scan root, holds a variable's directory (invariant 6),
+    /// another scan root or a browser's data, or it has a protected name.
     Protected,
     /// The system refuses, or cannot tell what the cleaning must check; `code`
     /// is the system's own error number, when there is one.

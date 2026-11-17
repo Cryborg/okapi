@@ -13,10 +13,14 @@ pub const FIREFOX_LOCK: &str = ".parentlock";
 pub const FIREFOX_LOCK: &str = "parent.lock";
 
 /// How a browser tells that it runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LockKind {
     /// A link there while it runs, to `<host>-<pid>` (Chromium).
     Link,
+    /// [`Self::Link`] of a browser in a pid namespace of its own (a
+    /// Flatpak): the number it names is not the system's, so a link there
+    /// says the browser runs, though Okapi cannot name the process.
+    SandboxedLink,
     /// A file kept, locked while it runs (Firefox): the lock, not the
     /// file, says it runs.
     FileLock,
@@ -44,8 +48,12 @@ pub use linux::{Holder, RunningBrowser, UnknownHolder, holder, lock_is_live};
 #[cfg(not(target_os = "linux"))]
 #[must_use]
 pub fn lock_is_live(lock: &std::path::Path, kind: LockKind) -> bool {
-    kind == LockKind::FileLock
-        || !matches!(std::fs::symlink_metadata(lock), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    match kind {
+        LockKind::FileLock => true,
+        LockKind::Link | LockKind::SandboxedLink => {
+            !matches!(std::fs::symlink_metadata(lock), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+        }
+    }
 }
 
 /// Who locks a file, as `/proc/locks` says.
@@ -177,6 +185,9 @@ mod linux {
         /// Okapi runs in a namespace of its own (a container, a sandbox):
         /// the system hides the file locks of the processes outside it.
         Confined,
+        /// The browser runs in a pid namespace of its own (a Flatpak): the
+        /// process its link names is numbered there, not as Okapi sees it.
+        Sandboxed,
     }
 
     /// A browser found running, held by a descriptor of its process: a
@@ -229,7 +240,24 @@ mod linux {
     fn read(lock: &Path, kind: LockKind) -> Read {
         match kind {
             LockKind::Link => read_link(lock),
+            LockKind::SandboxedLink => read_sandboxed_link(lock),
             LockKind::FileLock => read_file_lock(lock),
+        }
+    }
+
+    /// Whether the link `lock` of a browser in a sandbox is there: its
+    /// target is never read, the number it names being the sandbox's.
+    fn read_sandboxed_link(lock: &Path) -> Read {
+        match fs::symlink_metadata(lock) {
+            Ok(_) => {
+                tracing::debug!(lock = %lock.display(), "browser lock of a sandbox");
+                Read::Unknown(UnknownHolder::Sandboxed)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Read::Absent,
+            Err(error) => {
+                tracing::debug!(lock = %lock.display(), %error, "browser lock unreadable");
+                Read::Unknown(UnknownHolder::Unreadable)
+            }
         }
     }
 
@@ -334,7 +362,8 @@ mod linux {
     /// Whether `lock`, of `kind`, stands for a browser that runs: absent,
     /// unlocked, or a link of this machine naming a process gone (a lock
     /// left by a crash), it does not; anything else does, a process that
-    /// took the number included. A file lock the system lists is held, its
+    /// took the number included, and any link of a sandbox, whose number is
+    /// not the system's. A file lock the system lists is held, its
     /// locker gone or not (a lock taken by `flock` lives on in the processes
     /// that inherited it).
     #[must_use]
@@ -393,6 +422,12 @@ mod linux {
                 return false;
             }
         };
+        // As the system names its open files: through the links of its path
+        // as given (a snap's `current`), read now.
+        let directory = fs::canonicalize(directory).unwrap_or_else(|error| {
+            tracing::debug!(directory = %directory.display(), %error, "browser directory not resolved: compared as given");
+            directory.to_path_buf()
+        });
         // A descriptor closed while listed is no file held: skipped, said.
         descriptors
             .filter_map(|descriptor| {
@@ -401,7 +436,7 @@ mod linux {
                     .inspect_err(|error| tracing::debug!(pid, %error, "open file of the lock holder unreadable"))
                     .ok()
             })
-            .any(|open: PathBuf| open.starts_with(directory))
+            .any(|open: PathBuf| open.starts_with(&directory))
     }
 
     #[cfg(test)]
@@ -616,6 +651,39 @@ mod linux {
         }
 
         #[test]
+        fn a_browser_is_vouched_for_through_the_links_of_its_directory() {
+            let (directory, user_data, file) = user_data();
+            // A snap's `current`, which names the revision it runs from.
+            let current = directory.path().join("current");
+            symlink(&user_data, &current).unwrap();
+            let mut browser = holding(&file);
+            lock_to(&user_data, &format!("{}-{}", this_host(), browser.id()));
+            let held = holder(&current.join(CHROMIUM_LOCK), LockKind::Link, &current);
+            browser.kill().unwrap();
+            browser.wait().unwrap();
+            assert!(matches!(held, Holder::Process(_)), "{held:?}");
+        }
+
+        #[test]
+        fn a_link_of_a_sandbox_that_cannot_be_read_is_held() {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let (_directory, user_data, _file) = user_data();
+            let lock = lock_to(&user_data, "host-1");
+            fs::set_permissions(&user_data, fs::Permissions::from_mode(0o000)).unwrap();
+            let readable = fs::symlink_metadata(&lock).is_ok();
+            let live = lock_is_live(&lock, LockKind::SandboxedLink);
+            let held = holder(&lock, LockKind::SandboxedLink, &user_data);
+            fs::set_permissions(&user_data, fs::Permissions::from_mode(0o700)).unwrap();
+            if readable {
+                eprintln!("skipped: root reads the lock");
+                return;
+            }
+            assert!(live);
+            assert!(matches!(held, Holder::Unknown(UnknownHolder::Unreadable)));
+        }
+
+        #[test]
         fn a_file_lock_held_by_okapi_itself_is_never_closed() {
             let (_directory, profile, _file) = user_data();
             let lock = profile.join(super::super::FIREFOX_LOCK);
@@ -645,6 +713,37 @@ mod linux {
             fs::remove_file(&lock).unwrap();
             fs::create_dir(&lock).unwrap();
             assert!(lock_is_live(&lock, LockKind::FileLock), "a directory");
+        }
+
+        #[test]
+        fn a_link_of_a_sandbox_is_held_whatever_process_it_names() {
+            let (_directory, user_data, _file) = user_data();
+            let lock = user_data.join(CHROMIUM_LOCK);
+            assert!(!lock_is_live(&lock, LockKind::SandboxedLink));
+            assert!(matches!(
+                holder(&lock, LockKind::SandboxedLink, &user_data),
+                Holder::Absent
+            ));
+            assert!(
+                sees_every_lock(),
+                "these tests need the system's first pid namespace"
+            );
+            // A number above any the system gives: the sandbox's own.
+            let lock = lock_to(&user_data, &format!("{}-{}", this_host(), i32::MAX));
+            assert!(
+                !lock_is_live(&lock, LockKind::Link),
+                "read as the system's, the browser would pass for closed"
+            );
+            assert!(lock_is_live(&lock, LockKind::SandboxedLink));
+            assert!(matches!(
+                holder(&lock, LockKind::SandboxedLink, &user_data),
+                Holder::Unknown(UnknownHolder::Sandboxed)
+            ));
+            let lock = lock_to(&user_data, "not a host and a number");
+            assert!(matches!(
+                holder(&lock, LockKind::SandboxedLink, &user_data),
+                Holder::Unknown(UnknownHolder::Sandboxed)
+            ));
         }
 
         #[test]

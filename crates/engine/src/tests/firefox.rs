@@ -364,7 +364,7 @@ fn a_cache_directory_that_is_a_link_is_never_walked() {
 }
 
 #[test]
-fn a_root_shared_with_an_application_rule_takes_every_profile_lock_along() {
+fn an_application_rule_on_a_profiles_cache_leaves_it_to_the_browser_and_its_locks() {
     let fixture = Fixture::new();
     profile(&fixture, XDG, "a.default");
     let open = profile(&fixture, XDG, "b.default");
@@ -385,6 +385,379 @@ fn a_root_shared_with_an_application_rule_takes_every_profile_lock_along() {
     let run = run_later(&fixture, all);
     let report = run.scan();
     let _running = running(&open.join(FIREFOX_LOCK));
+    let receipt = clean(&run, &report, &ids(&report));
+    assert_eq!(
+        receipt.outcomes()[0].result(),
+        CleanResult::Kept(KeepReason::BrowserOpen)
+    );
+    assert!(entry.exists());
+}
+
+/// Where the fixture's snaps are, and Firefox's in it.
+const SNAPS: &str = "snap";
+const SNAP_BASE: &str = "snap/firefox/common/.mozilla/firefox";
+const SNAP_CACHE: &str = "snap/firefox/common/.cache/mozilla/firefox";
+
+/// Firefox as `firefox` places it, and in a snap too.
+fn firefox_and_its_snap(fixture: &Fixture) -> FirefoxBrowser {
+    serde_json::from_str(&format!(
+        r#"{{"key": "firefox", "bases": ["{}"], "cache": "{}",
+             "sandboxed": [{{"packaging": "snap", "bases": ["{}"], "cache": "{}"}}]}}"#,
+        fixture.path(XDG).display(),
+        fixture.path("cache/mozilla/firefox").display(),
+        fixture.path(SNAP_BASE).display(),
+        fixture.path(SNAP_CACHE).display(),
+    ))
+    .unwrap()
+}
+
+/// The system target of the snaps' caches, as `system.json` writes it.
+fn snaps_target(fixture: &Fixture) -> CleanTarget {
+    target(&format!(
+        r#"{{"path": "{}", "subcategory": "Snap App Cache", "childSubdir": "common/.cache"}}"#,
+        fixture.path(SNAPS).display()
+    ))
+}
+
+/// What the snaps' target offers, Firefox's rules scanned with it.
+fn offered_by_the_snaps_target(fixture: &Fixture, options: ScanOptions) -> Vec<PathBuf> {
+    let browser = firefox_and_its_snap(fixture);
+    let directories = directories();
+    let target = snaps_target(fixture);
+    let mut all = vec![RuleEntry::Target(&target)];
+    all.extend(entries(&browser, &directories));
+    let mut run = Run::new(fixture, all);
+    run.options = options;
+    let report = run.scan();
+    let mut offered: Vec<PathBuf> = report
+        .groups()
+        .iter()
+        .filter(|group| group.label().to_string() == "Snap App Cache")
+        .flat_map(ScanGroup::items)
+        .map(|item| item.path().to_path_buf())
+        .collect();
+    offered.sort();
+    offered
+}
+
+/// The snap's cache besides Firefox's (in the order of their paths), and in
+/// Firefox's what none of its rules empties: what the snaps' target must
+/// leave.
+fn snap_caches(fixture: &Fixture) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    // Neighbours a reservation too wide would keep: beside Firefox's cache,
+    // and the same names in another snap.
+    let others = vec![
+        fixture.file("snap/firefox/common/.cache/fontconfig/old", 1, 2 * HOUR),
+        fixture.file("snap/firefox/common/.cache/loose", 1, 2 * HOUR),
+        fixture.file("snap/firefox/common/.cache/mozilla/other/x", 1, 2 * HOUR),
+        fixture.file("snap/other/common/.cache/mozilla/firefox/x", 1, 2 * HOUR),
+    ];
+    let firefoxs = vec![
+        fixture.file(
+            &format!("{SNAP_CACHE}/a.default/safebrowsing/x"),
+            1,
+            2 * HOUR,
+        ),
+        fixture.file(&format!("{SNAP_CACHE}/loose"), 1, 2 * HOUR),
+    ];
+    (others, firefoxs)
+}
+
+#[test]
+fn the_snaps_target_leaves_the_cache_of_a_browser_in_a_snap_to_it() {
+    let fixture = Fixture::new();
+    profile(&fixture, SNAP_BASE, "a.default");
+    let (others, _) = snap_caches(&fixture);
+    let entry = fixture.file(&format!("{SNAP_CACHE}/a.default/cache2/entry"), 1, 2 * HOUR);
+    let browser = firefox_and_its_snap(&fixture);
+    let directories = directories();
+    let target = snaps_target(&fixture);
+    let mut all = vec![RuleEntry::Target(&target)];
+    all.extend(entries(&browser, &directories));
+    let report = Run::new(&fixture, all).scan();
+    let firefox = Some(BrowserKind::Firefox(FirefoxKind::Firefox));
+    assert_eq!(
+        groups(&report),
+        [
+            ("Snap App Cache".to_owned(), None, true, others),
+            ("Cache".to_owned(), firefox, true, vec![entry]),
+        ],
+        "Firefox's cache by its own rule, with its lock; nothing else of it"
+    );
+    assert!(report.issues().is_empty(), "{:?}", report.issues());
+}
+
+#[test]
+fn a_browsers_cache_is_reserved_whatever_its_profiles_and_the_categories() {
+    // Never launched in the snap.
+    let fixture = Fixture::new();
+    let (others, _) = snap_caches(&fixture);
+    let options = fixture.options(Exclusions::none());
+    assert_eq!(offered_by_the_snaps_target(&fixture, options), others);
+    // A base refused: the snap's profiles cannot be judged.
+    let fixture = Fixture::new();
+    let (others, _) = snap_caches(&fixture);
+    fixture.directory("elsewhere/a.default");
+    fixture.directory("snap/firefox/common/.mozilla");
+    symlink(fixture.path("elsewhere"), fixture.path(SNAP_BASE)).unwrap();
+    let options = fixture.options(Exclusions::none());
+    assert_eq!(offered_by_the_snaps_target(&fixture, options), others);
+    // The browsers not chosen.
+    let fixture = Fixture::new();
+    profile(&fixture, SNAP_BASE, "a.default");
+    let (others, _) = snap_caches(&fixture);
+    let options = fixture
+        .options(Exclusions::none())
+        .with_categories(BTreeSet::from([Category::System]));
+    assert_eq!(offered_by_the_snaps_target(&fixture, options), others);
+}
+
+#[test]
+fn a_browsers_cache_moved_into_an_entry_keeps_it_at_cleaning() {
+    let fixture = Fixture::new();
+    let (_, firefoxs) = snap_caches(&fixture);
+    let browser = firefox_and_its_snap(&fixture);
+    let directories = directories();
+    let target = snaps_target(&fixture);
+    let mut all = vec![RuleEntry::Target(&target)];
+    all.extend(entries(&browser, &directories));
+    let run = run_later(&fixture, all);
+    let report = run.scan();
+    let fontconfig = fixture.path("snap/firefox/common/.cache/fontconfig");
+    assert!(offered_paths(&report).contains(&fontconfig), "whole");
+    fs::rename(fixture.path(SNAP_CACHE), fontconfig.join("firefox")).unwrap();
+    let receipt = clean(&run, &report, &ids(&report));
+    assert!(receipt.outcomes().iter().any(|outcome| {
+        outcome.path() == Some(fontconfig.as_path())
+            && outcome.result() == CleanResult::Kept(KeepReason::Protected)
+    }));
+    for moved in firefoxs {
+        let relative = moved.strip_prefix(fixture.path(SNAP_CACHE)).unwrap();
+        assert!(fontconfig.join("firefox").join(relative).exists());
+    }
+}
+
+#[test]
+fn a_root_of_another_rule_on_a_browsers_cache_is_refused() {
+    let fixture = Fixture::new();
+    snap_caches(&fixture);
+    let browser = firefox_and_its_snap(&fixture);
+    let directories = directories();
+    let mine = target_at(&fixture.path(SNAP_CACHE));
+    let mut all = vec![RuleEntry::Target(&mine)];
+    all.extend(entries(&browser, &directories));
+    let report = Run::new(&fixture, all).scan();
+    assert_eq!(offered_paths(&report), Vec::<PathBuf>::new());
+    assert!(
+        matches!(
+            report.issues(),
+            [ScanIssue::UnsafeRoot { path, reason: crate::report::UnsafeReason::BrowserData, .. }]
+                if *path == fixture.path(SNAP_CACHE)
+        ),
+        "{:?}",
+        report.issues()
+    );
+}
+
+#[test]
+fn a_folder_chosen_below_a_browsers_cache_is_refused() {
+    let fixture = Fixture::new();
+    snap_caches(&fixture);
+    let browser = firefox_and_its_snap(&fixture);
+    let directories = directories();
+    let chosen =
+        crate::custom::CustomFolder::new(fixture.path(&format!("{SNAP_CACHE}/a.default"))).unwrap();
+    let mut all = vec![RuleEntry::Custom(&chosen)];
+    all.extend(entries(&browser, &directories));
+    let report = Run::new(&fixture, all).scan();
+    assert_eq!(offered_paths(&report), Vec::<PathBuf>::new());
+    assert!(
+        matches!(
+            report.issues(),
+            [ScanIssue::UnsafeRoot { path, reason: crate::report::UnsafeReason::BrowserData, .. }]
+                if *path == fixture.path(&format!("{SNAP_CACHE}/a.default"))
+        ),
+        "{:?}",
+        report.issues()
+    );
+}
+
+#[test]
+fn a_withheld_root_on_a_browsers_cache_is_not_refused() {
+    let fixture = Fixture::new();
+    snap_caches(&fixture);
+    let browser = firefox_and_its_snap(&fixture);
+    let directories = directories();
+    // `links/alias/firefox` is the cache, reached across a link: withheld.
+    fixture.directory("links");
+    symlink(
+        fixture.path("snap/firefox/common/.cache/mozilla"),
+        fixture.path("links/alias"),
+    )
+    .unwrap();
+    let across = target(&format!(
+        r#"{{"path": "{}", "subcategory": "Across", "childSubdir": "firefox"}}"#,
+        fixture.path("links").display()
+    ));
+    let mut all = vec![RuleEntry::Target(&across)];
+    all.extend(entries(&browser, &directories));
+    let report = Run::new(&fixture, all).scan();
+    assert_eq!(offered_paths(&report), Vec::<PathBuf>::new());
+    assert!(
+        !report.issues().iter().any(|issue| matches!(
+            issue,
+            ScanIssue::UnsafeRoot {
+                reason: crate::report::UnsafeReason::BrowserData,
+                ..
+            }
+        )),
+        "never walked, it only joins the rules that share it: {:?}",
+        report.issues()
+    );
+}
+
+#[test]
+fn a_browsers_installations_fill_the_same_groups_with_all_their_locks() {
+    let fixture = Fixture::new();
+    let own = profile(&fixture, XDG, "a.default");
+    let snapped = profile(&fixture, SNAP_BASE, "b.default");
+    let entries_found = vec![
+        cached(&fixture, "a.default", "cache2"),
+        fixture.file(&format!("{SNAP_CACHE}/b.default/cache2/entry"), 1, 2 * HOUR),
+    ];
+    let browser = firefox_and_its_snap(&fixture);
+    let directories = directories();
+    let report = Run::new(&fixture, entries(&browser, &directories)).scan();
+    let firefox = Some(BrowserKind::Firefox(FirefoxKind::Firefox));
+    assert_eq!(
+        groups(&report),
+        [("Cache".to_owned(), firefox, true, entries_found)]
+    );
+    let locks: Vec<&Path> = report.groups()[0]
+        .locks()
+        .iter()
+        .map(BrowserLock::user_data)
+        .collect();
+    assert_eq!(locks, [own.as_path(), snapped.as_path()]);
+}
+
+#[test]
+fn a_base_refused_in_one_installation_leaves_only_its_caches() {
+    let fixture = Fixture::new();
+    profile(&fixture, XDG, "a.default");
+    let own = cached(&fixture, "a.default", "cache2");
+    // The snap's profile, launched, under its second base: its first one,
+    // refused, may hold a copy of it that is open.
+    profile(&fixture, "snap/firefox/current/firefox", "b.default");
+    fixture.file(&format!("{SNAP_CACHE}/b.default/cache2/entry"), 1, 2 * HOUR);
+    fixture.directory("elsewhere/b.default");
+    fixture.directory("snap/firefox/common/.mozilla");
+    symlink(fixture.path("elsewhere"), fixture.path(SNAP_BASE)).unwrap();
+    let browser: FirefoxBrowser = serde_json::from_str(&format!(
+        r#"{{"key": "firefox", "bases": ["{}"], "cache": "{}",
+             "sandboxed": [{{"packaging": "snap", "bases": ["{}", "{}"], "cache": "{}"}}]}}"#,
+        fixture.path(XDG).display(),
+        fixture.path("cache/mozilla/firefox").display(),
+        fixture.path(SNAP_BASE).display(),
+        fixture.path("snap/firefox/current/firefox").display(),
+        fixture.path(SNAP_CACHE).display(),
+    ))
+    .unwrap();
+    let directories = directories();
+    // The base after the refused one is reserved all the same.
+    let second = target_at(&fixture.path("snap/firefox/current/firefox"));
+    let mut all = vec![RuleEntry::Target(&second)];
+    all.extend(entries(&browser, &directories));
+    let report = Run::new(&fixture, all).scan();
+    assert_eq!(offered_paths(&report), [own]);
+    assert!(
+        report.issues().iter().any(|issue| matches!(
+            issue,
+            ScanIssue::UnsafeRoot { path, reason: crate::report::UnsafeReason::BrowserData, .. }
+                if *path == fixture.path("snap/firefox/current/firefox")
+        )),
+        "{:?}",
+        report.issues()
+    );
+}
+
+#[test]
+fn an_open_installation_keeps_the_caches_of_the_others() {
+    let fixture = Fixture::new();
+    profile(&fixture, XDG, "a.default");
+    let snapped = profile(&fixture, SNAP_BASE, "b.default");
+    // An installation without a cache has nothing to empty, nor a lock to
+    // wait for.
+    fixture.directory(&format!("{SNAP_CACHE}/b.default"));
+    let own = cached(&fixture, "a.default", "cache2");
+    let browser = firefox_and_its_snap(&fixture);
+    let directories = directories();
+    let run = run_later(&fixture, entries(&browser, &directories));
+    let report = run.scan();
+    let _running = running(&snapped.join(FIREFOX_LOCK));
+    let receipt = clean(&run, &report, &ids(&report));
+    let results: Vec<CleanResult> = receipt
+        .outcomes()
+        .iter()
+        .map(crate::CleanOutcome::result)
+        .collect();
+    assert_eq!(results, [CleanResult::Kept(KeepReason::BrowserOpen)]);
+    assert!(own.exists());
+}
+
+/// Firefox in a snap whose profiles are under `snap/firefox/current/firefox`,
+/// `current` a link to the revision `1`, its profile `b.default` launched in
+/// both revisions (a refresh copies them).
+fn firefox_in_revisions(fixture: &Fixture) -> (FirefoxBrowser, PathBuf) {
+    for revision in ["1", "2"] {
+        profile(
+            fixture,
+            &format!("snap/firefox/{revision}/firefox"),
+            "b.default",
+        );
+    }
+    symlink("1", fixture.path("snap/firefox/current")).unwrap();
+    let entry = fixture.file(&format!("{SNAP_CACHE}/b.default/cache2/entry"), 1, 2 * HOUR);
+    let browser = serde_json::from_str(&format!(
+        r#"{{"key": "firefox", "bases": ["{}"], "cache": "{}",
+             "sandboxed": [{{"packaging": "snap", "bases": ["{}"], "cache": "{}"}}]}}"#,
+        fixture.path(XDG).display(),
+        fixture.path("cache/mozilla/firefox").display(),
+        fixture.path("snap/firefox/current/firefox").display(),
+        fixture.path(SNAP_CACHE).display(),
+    ))
+    .unwrap();
+    (browser, entry)
+}
+
+#[test]
+fn a_snaps_profile_is_judged_in_the_revision_it_runs_from_after_a_refresh() {
+    // Refreshed, then launched from the new revision.
+    let fixture = Fixture::new();
+    let (browser, entry) = firefox_in_revisions(&fixture);
+    let directories = directories();
+    let run = run_later(&fixture, entries(&browser, &directories));
+    let report = run.scan();
+    fs::remove_file(fixture.path("snap/firefox/current")).unwrap();
+    symlink("2", fixture.path("snap/firefox/current")).unwrap();
+    let new_revision =
+        running(&fixture.path(&format!("snap/firefox/2/firefox/b.default/{FIREFOX_LOCK}")));
+    let receipt = clean(&run, &report, &ids(&report));
+    assert_eq!(
+        receipt.outcomes()[0].result(),
+        CleanResult::Kept(KeepReason::BrowserOpen)
+    );
+    assert!(entry.exists());
+    drop(new_revision);
+    // Refreshed as it runs from the revision analysed.
+    let fixture = Fixture::new();
+    let (browser, entry) = firefox_in_revisions(&fixture);
+    let run = run_later(&fixture, entries(&browser, &directories));
+    let report = run.scan();
+    let _running =
+        running(&fixture.path(&format!("snap/firefox/1/firefox/b.default/{FIREFOX_LOCK}")));
+    fs::remove_file(fixture.path("snap/firefox/current")).unwrap();
+    symlink("2", fixture.path("snap/firefox/current")).unwrap();
     let receipt = clean(&run, &report, &ids(&report));
     assert_eq!(
         receipt.outcomes()[0].result(),

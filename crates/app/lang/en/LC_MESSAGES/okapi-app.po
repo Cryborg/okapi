@@ -727,6 +727,10 @@ msgid "Dossier qui n'est pas ce que la règle attend, laissé de côté : {}"
 msgstr "Folder that is not what the rule expects, left aside: {}"
 
 msgctxt "NoteLine"
+msgid "Dossier d'un navigateur, laissé à son propre nettoyage : {}"
+msgstr "A browser's folder, left to its own cleaning: {}"
+
+msgctxt "NoteLine"
 msgid "Dossier qui contient un dossier protégé, laissé de côté : {}"
 msgstr "Folder holding a protected folder, left aside: {}"
 

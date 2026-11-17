@@ -739,10 +739,11 @@ mod tests {
             .firefox()
             .iter()
             .map(|browser| {
+                let own = &browser.installs()[0];
                 (
                     browser.kind().key(),
-                    browser.bases().iter().map(ToString::to_string).collect(),
-                    browser.cache().to_string(),
+                    own.bases().iter().map(ToString::to_string).collect(),
+                    own.cache().to_string(),
                 )
             })
             .collect();
@@ -778,23 +779,144 @@ mod tests {
         }
     }
 
+    /// Where a packaged installation keeps its caches: below the cache the
+    /// system targets of snaps and Flatpaks empty, never that cache itself,
+    /// so that their walk leaves the browser's to the browser's own rules.
+    fn packaged_cache_place(packaging: crate::Packaging, cache: &str) -> Option<&str> {
+        let (prefix, cache_of_the_app) = match packaging {
+            crate::Packaging::Snap => ("${HOME}/snap/", "/common/.cache/"),
+            crate::Packaging::Flatpak => ("${HOME}/.var/app/", "/cache/"),
+        };
+        let (app, below) = cache.strip_prefix(prefix)?.split_once(cache_of_the_app)?;
+        (!app.contains('/') && !below.is_empty()).then_some(app)
+    }
+
+    #[test]
+    fn the_places_of_packaged_caches_are_those_the_system_targets_empty() {
+        let rules = RuleSet::embedded(Os::Linux).unwrap();
+        let expanded: Vec<(String, String)> = rules
+            .system()
+            .clean_targets()
+            .iter()
+            .filter_map(|target| match target.effect() {
+                Effect::Delete(deletion) => Some((
+                    deletion.path().to_string(),
+                    deletion.child_subdirectory()?.to_string(),
+                )),
+                Effect::Maintenance { .. } => None,
+            })
+            .collect();
+        for packaging in [crate::Packaging::Snap, crate::Packaging::Flatpak] {
+            let (path, subdirectory) = match packaging {
+                crate::Packaging::Snap => ("${HOME}/snap", "common/.cache"),
+                crate::Packaging::Flatpak => ("${HOME}/.var/app", "cache"),
+            };
+            assert!(
+                expanded.contains(&(path.to_owned(), subdirectory.to_owned())),
+                "{packaging:?}: {expanded:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_browsers_directory_is_below_another_ones() {
+        for os in Os::ALL {
+            let rules = RuleSet::embedded(os).unwrap();
+            let directories: Vec<String> = rules
+                .browsers()
+                .template_paths()
+                .map(ToString::to_string)
+                .collect();
+            for directory in &directories {
+                for other in &directories {
+                    assert!(
+                        !other.starts_with(&format!("{directory}/")),
+                        "{os}: {other} is below {directory}, whose browser's lock would not cover it"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_packaged_browser_keeps_its_caches_below_its_apps_and_its_data_with_them() {
+        for os in Os::ALL {
+            let rules = RuleSet::embedded(os).unwrap();
+            let browsers = rules.browsers();
+            let installs: Vec<(&str, Option<crate::Packaging>, Vec<String>, String)> = browsers
+                .chromium()
+                .iter()
+                .flat_map(|browser| {
+                    browser.installs().iter().map(|install| {
+                        (
+                            browser.kind().key(),
+                            install.packaging(),
+                            vec![install.base().to_string()],
+                            install.cache().map(ToString::to_string).unwrap_or_default(),
+                        )
+                    })
+                })
+                .chain(browsers.firefox().iter().flat_map(|browser| {
+                    browser.installs().iter().map(|install| {
+                        (
+                            browser.kind().key(),
+                            install.packaging(),
+                            install.bases().iter().map(ToString::to_string).collect(),
+                            install.cache().to_string(),
+                        )
+                    })
+                }))
+                .collect();
+            let packaged: Vec<_> = installs
+                .iter()
+                .filter_map(|(key, packaging, bases, cache)| {
+                    packaging.map(|packaging| (*key, packaging, bases, cache))
+                })
+                .collect();
+            assert_eq!(
+                packaged.is_empty(),
+                os != Os::Linux,
+                "{os}: snaps and Flatpaks are Linux's"
+            );
+            for (key, packaging, bases, cache) in packaged {
+                let app = packaged_cache_place(packaging, cache)
+                    .unwrap_or_else(|| panic!("{key}: {cache} is not below a {packaging:?} cache"));
+                let home = match packaging {
+                    crate::Packaging::Snap => format!("${{HOME}}/snap/{app}/"),
+                    crate::Packaging::Flatpak => format!("${{HOME}}/.var/app/{app}/"),
+                };
+                for base in bases {
+                    assert!(base.starts_with(&home), "{key}: {base} is not {app}'s");
+                }
+            }
+        }
+        assert_eq!(
+            packaged_cache_place(crate::Packaging::Snap, "${HOME}/snap/firefox/common/.cache"),
+            None,
+            "the app's cache itself"
+        );
+        assert_eq!(
+            packaged_cache_place(
+                crate::Packaging::Snap,
+                "${HOME}/snap/firefox/common/cache/x"
+            ),
+            None
+        );
+        assert_eq!(
+            packaged_cache_place(
+                crate::Packaging::Flatpak,
+                "${HOME}/.var/app/org.mozilla.firefox/cache/mozilla/firefox"
+            ),
+            Some("org.mozilla.firefox")
+        );
+    }
+
     #[test]
     fn no_application_rule_empties_a_browser_cache_without_its_lock() {
         for os in Os::ALL {
             let rules = RuleSet::embedded(os).unwrap();
             let browsers = rules.browsers();
-            let homes: Vec<String> = browsers
-                .chromium()
-                .iter()
-                .flat_map(|browser| std::iter::once(browser.base()).chain(browser.cache()))
-                .chain(
-                    browsers
-                        .firefox()
-                        .iter()
-                        .flat_map(|browser| browser.bases().iter().chain([browser.cache()])),
-                )
-                .map(ToString::to_string)
-                .collect();
+            let homes: Vec<String> = browsers.template_paths().map(ToString::to_string).collect();
             for rule in rules
                 .apps()
                 .iter()

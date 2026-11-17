@@ -446,7 +446,7 @@ fn a_lock_left_by_a_crash_keeps_nothing() {
 }
 
 #[test]
-fn a_root_shared_with_another_rule_takes_the_browser_s_lock_along() {
+fn another_rule_on_a_browsers_root_is_refused_and_the_browser_keeps_its_lock() {
     let fixture = Fixture::new();
     let entry = fixture.file("config/chrome/Default/Cache/a", 1, 2 * HOUR);
     let browsers = [browser(&fixture, "chrome", "chrome")];
@@ -464,15 +464,232 @@ fn a_root_shared_with_another_rule_takes_the_browser_s_lock_along() {
     let report = run.scan();
     lock_chrome(&fixture);
     let receipt = clean(&run, &report, &ids(&report));
+    assert!(matches!(
+        report.issues(),
+        [ScanIssue::UnsafeRoot {
+            reason: crate::report::UnsafeReason::BrowserData,
+            ..
+        }]
+    ));
     assert_eq!(
         receipt.outcomes()[0].result(),
         CleanResult::Kept(KeepReason::BrowserOpen),
-        "the application rule's group holds the browser's lock too"
+        "the browser's own group, with its lock"
     );
     assert_eq!(
         report.groups()[0].browser(),
-        None,
-        "its label is the rule's"
+        Some(BrowserKind::Chromium(ChromiumBrowserKind::Chrome))
+    );
+    assert!(entry.exists());
+}
+
+/// Chromium as `config/chromium` and `cache/chromium` place it, in a snap
+/// and in a Flatpak too.
+fn chromium_everywhere(fixture: &Fixture) -> ChromiumBrowser {
+    let at = |relative: &str| fixture.path(relative).display().to_string();
+    serde_json::from_str(&format!(
+        r#"{{"key": "chromium", "base": "{}", "cache": "{}", "sandboxed": [
+               {{"packaging": "snap", "base": "{}", "cache": "{}"}},
+               {{"packaging": "flatpak", "base": "{}", "cache": "{}"}}]}}"#,
+        at("config/chromium"),
+        at("cache/chromium"),
+        at("snap/chromium/common/chromium"),
+        at("snap/chromium/common/.cache/chromium"),
+        at("flatpak/config/chromium"),
+        at("flatpak/cache/chromium"),
+    ))
+    .unwrap()
+}
+
+/// The bases of `chromium_everywhere`, each installation's.
+const CHROMIUM_BASES: [&str; 3] = [
+    "config/chromium",
+    "flatpak/config/chromium",
+    "snap/chromium/common/chromium",
+];
+
+#[test]
+fn only_a_flatpaks_lock_names_a_process_of_its_own_sandbox() {
+    let fixture = Fixture::new();
+    let mut cached: Vec<PathBuf> = CHROMIUM_BASES
+        .iter()
+        .map(|base| fixture.file(&format!("{base}/Default/Cache/a"), 1, 2 * HOUR))
+        .collect();
+    cached.sort();
+    let browsers = [chromium_everywhere(&fixture)];
+    let directories = directories();
+    let report = Run::new(&fixture, entries(&browsers, &directories)).scan();
+    let kinds: Vec<(PathBuf, okapi_platform::LockKind)> = report.groups()[0]
+        .locks()
+        .iter()
+        .map(|lock| (lock.user_data().to_path_buf(), lock.lock_kind()))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            (
+                fixture.path("config/chromium"),
+                okapi_platform::LockKind::Link
+            ),
+            (
+                fixture.path("flatpak/config/chromium"),
+                okapi_platform::LockKind::SandboxedLink
+            ),
+            (
+                fixture.path("snap/chromium/common/chromium"),
+                okapi_platform::LockKind::Link
+            ),
+        ]
+    );
+    assert_eq!(offered_paths(&report), cached, "every installation's cache");
+}
+
+#[test]
+fn a_flatpak_whose_link_names_no_process_of_the_system_keeps_every_cache() {
+    let fixture = Fixture::new();
+    let cached: Vec<PathBuf> = CHROMIUM_BASES
+        .iter()
+        .map(|base| fixture.file(&format!("{base}/Default/Cache/a"), 1, 2 * HOUR))
+        .collect();
+    let browsers = [chromium_everywhere(&fixture)];
+    let directories = directories();
+    let host = fs::read_to_string("/proc/sys/kernel/hostname").unwrap();
+    let lock_in = |base: &str| {
+        symlink(
+            format!("{}-{}", host.trim(), i32::MAX),
+            fixture.path(base).join(CHROMIUM_LOCK),
+        )
+        .unwrap();
+    };
+    // In the snap, the number is the system's: a browser gone.
+    let run = run_later(&fixture, entries(&browsers, &directories));
+    let report = run.scan();
+    lock_in("snap/chromium/common/chromium");
+    let receipt = clean(&run, &report, &ids(&report));
+    assert!(
+        receipt
+            .outcomes()
+            .iter()
+            .all(|outcome| matches!(outcome.result(), CleanResult::Removed { .. }))
+    );
+    assert!(cached.iter().all(|entry| !entry.exists()));
+    // In the Flatpak, it is the sandbox's: the browser may run.
+    let cached: Vec<PathBuf> = CHROMIUM_BASES
+        .iter()
+        .map(|base| fixture.file(&format!("{base}/Default/Cache/b"), 1, 2 * HOUR))
+        .collect();
+    let run = run_later(&fixture, entries(&browsers, &directories));
+    let report = run.scan();
+    lock_in("flatpak/config/chromium");
+    let receipt = clean(&run, &report, &ids(&report));
+    let results: Vec<CleanResult> = receipt
+        .outcomes()
+        .iter()
+        .map(crate::CleanOutcome::result)
+        .collect();
+    assert_eq!(results, [CleanResult::Kept(KeepReason::BrowserOpen); 3]);
+    assert!(cached.iter().all(|entry| entry.exists()));
+}
+
+#[test]
+fn a_rule_on_or_below_a_chromium_base_is_refused() {
+    let fixture = Fixture::new();
+    fixture.file("flatpak/config/chromium/Local State", 1, 2 * HOUR);
+    fixture.file("config/chromium/Default/Cookies", 1, 2 * HOUR);
+    let on = target_at(&fixture.path("flatpak/config/chromium"));
+    let below = target_at(&fixture.path("config/chromium/Default"));
+    let browsers = [chromium_everywhere(&fixture)];
+    let directories = directories();
+    let mut all = vec![RuleEntry::Target(&on), RuleEntry::Target(&below)];
+    all.extend(entries(&browsers, &directories));
+    let report = Run::new(&fixture, all).scan();
+    assert_eq!(offered_paths(&report), Vec::<PathBuf>::new());
+    let mut refused: Vec<&Path> = report
+        .issues()
+        .iter()
+        .filter_map(|issue| match issue {
+            ScanIssue::UnsafeRoot {
+                path,
+                reason: crate::report::UnsafeReason::BrowserData,
+                ..
+            } => Some(path.as_path()),
+            _ => None,
+        })
+        .collect();
+    refused.sort();
+    assert_eq!(
+        refused,
+        [
+            fixture.path("config/chromium/Default"),
+            fixture.path("flatpak/config/chromium")
+        ]
+    );
+}
+
+#[test]
+fn a_chromium_cache_is_reserved_without_its_base() {
+    let fixture = Fixture::new();
+    let other = fixture.file("snap/chromium/common/.cache/fontconfig/old", 1, 2 * HOUR);
+    fixture.file(
+        "snap/chromium/common/.cache/chromium/Default/Cache/a",
+        1,
+        2 * HOUR,
+    );
+    let target = target(&format!(
+        r#"{{"path": "{}", "subcategory": "Snap App Cache", "childSubdir": "common/.cache"}}"#,
+        fixture.path("snap").display()
+    ));
+    let browsers = [chromium_everywhere(&fixture)];
+    let directories = directories();
+    let mut all = vec![RuleEntry::Target(&target)];
+    all.extend(entries(&browsers, &directories));
+    let report = Run::new(&fixture, all).scan();
+    assert_eq!(offered_paths(&report), [other]);
+}
+
+#[test]
+fn a_snaps_lock_is_read_where_its_current_revision_is_at_cleaning() {
+    let fixture = Fixture::new();
+    fixture.file(
+        "snap/brave/1/.config/brave/Default/Preferences",
+        1,
+        2 * HOUR,
+    );
+    fixture.directory("snap/brave/2/.config/brave");
+    let entry = fixture.file(
+        "snap/brave/common/.cache/brave/Default/Cache/a",
+        1,
+        2 * HOUR,
+    );
+    symlink("1", fixture.path("snap/brave/current")).unwrap();
+    let brave: ChromiumBrowser = serde_json::from_str(&format!(
+        r#"{{"key": "brave", "base": "{}", "sandboxed": [
+               {{"packaging": "snap", "base": "{}", "cache": "{}"}}]}}"#,
+        fixture.path("config/brave").display(),
+        fixture.path("snap/brave/current/.config/brave").display(),
+        fixture.path("snap/brave/common/.cache/brave").display(),
+    ))
+    .unwrap();
+    let browsers = [brave];
+    let directories = directories();
+    let run = run_later(&fixture, entries(&browsers, &directories));
+    let report = run.scan();
+    // Refreshed meanwhile, and launched from its new revision: the test's
+    // own process, which runs, stands for it.
+    fs::remove_file(fixture.path("snap/brave/current")).unwrap();
+    symlink("2", fixture.path("snap/brave/current")).unwrap();
+    let host = fs::read_to_string("/proc/sys/kernel/hostname").unwrap();
+    symlink(
+        format!("{}-{}", host.trim(), std::process::id()),
+        fixture
+            .path("snap/brave/2/.config/brave")
+            .join(CHROMIUM_LOCK),
+    )
+    .unwrap();
+    let receipt = clean(&run, &report, &ids(&report));
+    assert_eq!(
+        receipt.outcomes()[0].result(),
+        CleanResult::Kept(KeepReason::BrowserOpen)
     );
     assert!(entry.exists());
 }

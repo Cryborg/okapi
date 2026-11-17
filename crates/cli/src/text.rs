@@ -955,6 +955,12 @@ fn unsafe_reason(language: Language, reason: UnsafeReason) -> &'static str {
         (UnsafeReason::NotADirectory, false) => "it is not a directory",
         (UnsafeReason::NotAFile, true) => "ce n'est pas un fichier",
         (UnsafeReason::NotAFile, false) => "it is not a file",
+        (UnsafeReason::BrowserData, true) => {
+            "c'est là qu'un navigateur garde ses données : seul son nettoyage, qui attend sa fermeture, y touche"
+        }
+        (UnsafeReason::BrowserData, false) => {
+            "a browser keeps its data there: only its own cleaning, which waits for it to close, touches it"
+        }
     }
 }
 

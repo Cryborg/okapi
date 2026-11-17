@@ -90,8 +90,9 @@ pub(crate) struct WalkContext<'a> {
     pub(crate) exclusions: &'a Exclusions,
     pub(crate) misc: &'a MiscRules,
     pub(crate) protected: &'a ProtectedRoots,
-    /// The identities of every scan root, withheld ones included: a root met
-    /// below another one keeps its own entries (none, when withheld) and is
+    /// The identities of every scan root, withheld ones included, and of
+    /// every directory a browser keeps its data in: a root met below another
+    /// one keeps its own entries (none, when withheld or a browser's) and is
     /// never entered by the outer walk.
     pub(crate) roots: &'a BTreeSet<FileIdentity>,
     pub(crate) readers: Readers,
@@ -129,7 +130,8 @@ pub(crate) enum HoldBack {
     Unreadable,
     /// Another device, or the root of a mount.
     OtherFilesystem,
-    /// Another scan root, or a variable's directory or one of its ancestors.
+    /// Another scan root, a browser's data, or a variable's directory or one
+    /// of its ancestors.
     Reserved,
     /// A file changed after the cutoff.
     Recent,

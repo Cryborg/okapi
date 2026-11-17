@@ -26,14 +26,31 @@
     { "dir": "startupCache", "label": "Startup Cache", "cacheReset": true, "description": "Compiled scripts of the browser's own interface: rebuilt at the next launch, which is slower" }
   ],
   "chromium": [
-    { "key": "chrome", "base": "${CONFIG}/google-chrome", "cache": "${CACHE}/google-chrome" },
-    { "key": "edge", "base": "${CONFIG}/microsoft-edge", "cache": "${CACHE}/microsoft-edge" },
-    { "key": "brave", "base": "${CONFIG}/BraveSoftware/Brave-Browser", "cache": "${CACHE}/BraveSoftware/Brave-Browser" },
-    { "key": "opera", "base": "${CONFIG}/opera", "cache": "${CACHE}/opera" },
+    { "key": "chrome", "base": "${CONFIG}/google-chrome", "cache": "${CACHE}/google-chrome", "sandboxed": [
+      { "packaging": "flatpak", "base": "${HOME}/.var/app/com.google.Chrome/config/google-chrome", "cache": "${HOME}/.var/app/com.google.Chrome/cache/google-chrome" }
+    ] },
+    { "key": "edge", "base": "${CONFIG}/microsoft-edge", "cache": "${CACHE}/microsoft-edge", "sandboxed": [
+      { "packaging": "flatpak", "base": "${HOME}/.var/app/com.microsoft.Edge/config/microsoft-edge", "cache": "${HOME}/.var/app/com.microsoft.Edge/cache/microsoft-edge" }
+    ] },
+    { "key": "brave", "base": "${CONFIG}/BraveSoftware/Brave-Browser", "cache": "${CACHE}/BraveSoftware/Brave-Browser", "sandboxed": [
+      { "packaging": "snap", "base": "${HOME}/snap/brave/current/.config/BraveSoftware/Brave-Browser", "cache": "${HOME}/snap/brave/common/.cache/BraveSoftware/Brave-Browser" },
+      { "packaging": "flatpak", "base": "${HOME}/.var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser", "cache": "${HOME}/.var/app/com.brave.Browser/cache/BraveSoftware/Brave-Browser" }
+    ] },
+    { "key": "opera", "base": "${CONFIG}/opera", "cache": "${CACHE}/opera", "sandboxed": [
+      { "packaging": "snap", "base": "${HOME}/snap/opera/current/.config/opera", "cache": "${HOME}/snap/opera/common/.cache/opera" },
+      { "packaging": "flatpak", "base": "${HOME}/.var/app/com.opera.Opera/config/opera", "cache": "${HOME}/.var/app/com.opera.Opera/cache/opera" }
+    ] },
     { "key": "operaGX", "base": "${CONFIG}/opera-gx", "cache": "${CACHE}/opera-gx" },
-    { "key": "vivaldi", "base": "${CONFIG}/vivaldi", "cache": "${CACHE}/vivaldi" },
+    { "key": "vivaldi", "base": "${CONFIG}/vivaldi", "cache": "${CACHE}/vivaldi", "sandboxed": [
+      { "packaging": "snap", "base": "${HOME}/snap/vivaldi/current/.config/vivaldi", "cache": "${HOME}/snap/vivaldi/common/.cache/vivaldi" },
+      { "packaging": "flatpak", "base": "${HOME}/.var/app/com.vivaldi.Vivaldi/config/vivaldi", "cache": "${HOME}/.var/app/com.vivaldi.Vivaldi/cache/vivaldi" }
+    ] },
     { "key": "arc", "base": "${CONFIG}/arc/User Data", "cache": "${CACHE}/arc/User Data" },
-    { "key": "chromium", "base": "${CONFIG}/chromium", "cache": "${CACHE}/chromium" },
+    { "key": "chromium", "base": "${CONFIG}/chromium", "cache": "${CACHE}/chromium", "sandboxed": [
+      { "packaging": "snap", "base": "${HOME}/snap/chromium/common/chromium", "cache": "${HOME}/snap/chromium/common/.cache/chromium" },
+      { "packaging": "flatpak", "base": "${HOME}/.var/app/org.chromium.Chromium/config/chromium", "cache": "${HOME}/.var/app/org.chromium.Chromium/cache/chromium" },
+      { "packaging": "flatpak", "base": "${HOME}/.var/app/io.github.ungoogled_software.ungoogled_chromium/config/chromium", "cache": "${HOME}/.var/app/io.github.ungoogled_software.ungoogled_chromium/cache/chromium" }
+    ] },
     { "key": "thorium", "base": "${CONFIG}/thorium", "cache": "${CACHE}/thorium" },
     { "key": "supermium", "base": "${CONFIG}/supermium", "cache": "${CACHE}/supermium" },
     { "key": "helium", "base": "${CONFIG}/helium", "cache": "${CACHE}/helium" },
@@ -41,11 +58,22 @@
     { "key": "catsxp", "base": "${CONFIG}/ArcSoft/CatsXP", "cache": "${CACHE}/ArcSoft/CatsXP" }
   ],
   "firefox": [
-    { "key": "firefox", "bases": ["${HOME}/.mozilla/firefox", "${CONFIG}/mozilla/firefox"], "cache": "${CACHE}/mozilla/firefox" },
-    { "key": "librewolf", "bases": ["${HOME}/.librewolf"], "cache": "${CACHE}/librewolf" },
-    { "key": "waterfox", "bases": ["${HOME}/.waterfox"], "cache": "${CACHE}/waterfox" },
-    { "key": "floorp", "bases": ["${HOME}/.floorp"], "cache": "${CACHE}/floorp" },
-    { "key": "zen", "bases": ["${HOME}/.zen"], "cache": "${CACHE}/zen" }
+    { "key": "firefox", "bases": ["${HOME}/.mozilla/firefox", "${CONFIG}/mozilla/firefox"], "cache": "${CACHE}/mozilla/firefox", "sandboxed": [
+      { "packaging": "snap", "bases": ["${HOME}/snap/firefox/common/.mozilla/firefox", "${HOME}/snap/firefox/current/.config/mozilla/firefox"], "cache": "${HOME}/snap/firefox/common/.cache/mozilla/firefox" },
+      { "packaging": "flatpak", "bases": ["${HOME}/.var/app/org.mozilla.firefox/.mozilla/firefox", "${HOME}/.var/app/org.mozilla.firefox/config/mozilla/firefox"], "cache": "${HOME}/.var/app/org.mozilla.firefox/cache/mozilla/firefox" }
+    ] },
+    { "key": "librewolf", "bases": ["${HOME}/.librewolf"], "cache": "${CACHE}/librewolf", "sandboxed": [
+      { "packaging": "flatpak", "bases": ["${HOME}/.var/app/io.gitlab.librewolf-community/.librewolf"], "cache": "${HOME}/.var/app/io.gitlab.librewolf-community/cache/librewolf" }
+    ] },
+    { "key": "waterfox", "bases": ["${HOME}/.waterfox"], "cache": "${CACHE}/waterfox", "sandboxed": [
+      { "packaging": "flatpak", "bases": ["${HOME}/.var/app/net.waterfox.waterfox/.waterfox"], "cache": "${HOME}/.var/app/net.waterfox.waterfox/cache/waterfox" }
+    ] },
+    { "key": "floorp", "bases": ["${HOME}/.floorp"], "cache": "${CACHE}/floorp", "sandboxed": [
+      { "packaging": "flatpak", "bases": ["${HOME}/.var/app/one.ablaze.floorp/.floorp"], "cache": "${HOME}/.var/app/one.ablaze.floorp/cache/floorp" }
+    ] },
+    { "key": "zen", "bases": ["${HOME}/.zen"], "cache": "${CACHE}/zen", "sandboxed": [
+      { "packaging": "flatpak", "bases": ["${HOME}/.var/app/app.zen_browser.zen/.zen"], "cache": "${HOME}/.var/app/app.zen_browser.zen/cache/zen" }
+    ] }
   ],
   "safari": null
 }

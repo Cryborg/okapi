@@ -16,7 +16,7 @@ use std::time::{Duration, Instant, SystemTime};
 use okapi_engine::{
     Cancel, Category, CleanReceipt, CustomFolder, DEFAULT_MIN_AGE, DEFAULT_MIN_AGE_MINUTES,
     DefaultChoice, Exclusions, Limit, Origin, Progress, ScanIssue, ScanOptions, ScanReport, Stop,
-    Watch, clean_watched, scan_watched, settings_min_age,
+    UnsafeReason, Watch, clean_watched, scan_watched, settings_min_age,
 };
 use okapi_rules::{CleanupAction, Language, Os, RuleSet, TemplateVariables};
 use okapi_store::{LastAnalysis, Settings};
@@ -859,6 +859,11 @@ fn note_shown(issue: &ScanIssue) -> Option<ui::IssueShown> {
         ScanIssue::Unsupported { .. } => (ui::IssueKind::Unsupported, SharedString::default()),
         ScanIssue::Unresolvable { .. } => (ui::IssueKind::Unresolvable, SharedString::default()),
         ScanIssue::UnreadableRoot { path: at, .. } => (ui::IssueKind::UnreadableRoot, path(at)),
+        ScanIssue::UnsafeRoot {
+            path: at,
+            reason: UnsafeReason::BrowserData,
+            ..
+        } => (ui::IssueKind::BrowserData, path(at)),
         ScanIssue::UnsafeRoot { path: at, .. } => (ui::IssueKind::UnsafeRoot, path(at)),
         ScanIssue::ProtectedRoot { path: at, .. } => (ui::IssueKind::ProtectedRoot, path(at)),
         ScanIssue::Excluded { path: at, .. } => (ui::IssueKind::Excluded, path(at)),

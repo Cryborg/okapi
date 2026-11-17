@@ -7,11 +7,11 @@ use std::time::{Duration, SystemTime};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 
-use okapi_platform::{CHROMIUM_LOCK, FIREFOX_LOCK, FileIdentity};
+use okapi_platform::{CHROMIUM_LOCK, FIREFOX_LOCK, FileIdentity, LockKind};
 use okapi_rules::{
-    AgeDays, AppCacheRule, BrowserCacheDirectory, BrowserKind, ChromiumBrowser, CleanTarget,
-    Effect, FirefoxBrowser, Label, MiscRules, Name, PathMatcher, RelativePath, SingleFileTarget,
-    TemplatePath, TemplateVariables, Variable,
+    AgeDays, AppCacheRule, BrowserCacheDirectory, BrowserKind, ChromiumBrowser, ChromiumInstall,
+    CleanTarget, Effect, FirefoxBrowser, FirefoxInstall, Label, MiscRules, Name, Packaging,
+    PathMatcher, RelativePath, SingleFileTarget, TemplatePath, TemplateVariables, Variable,
 };
 
 use crate::custom::{CustomFolder, CustomFolderRefusal, Guard, PersonalFolders};
@@ -93,28 +93,44 @@ const OTHER_PROFILES: &str = "Profile ";
 /// A canonical directory and its device, `None` when it is not known.
 type Home = (PathBuf, Option<u64>);
 
-/// Where a browser keeps what its caches are found under, read once for all
-/// its directories.
+/// Where a browser keeps what its caches are found under, in each of its
+/// installations, read once for all its directories.
 #[derive(Debug, Clone)]
 pub(crate) struct BrowserBases {
+    installs: Vec<InstallBases>,
+    /// The locks that say the browser runs, of every installation: one per
+    /// place a lock is read at (per profile for Firefox). The caches of
+    /// every profile and installation wait for all of them.
+    locks: BTreeSet<BrowserLock>,
+}
+
+/// What one installation of a browser keeps its caches under.
+#[derive(Debug, Clone)]
+struct InstallBases {
     /// Chromium's user-data directory, which holds its profiles and its
     /// shared caches; Firefox keeps no cache with its profiles.
     base: Option<Home>,
     /// Where the OS keeps its disk caches apart, if it does.
     cache: Option<Home>,
     /// The profiles' names; none when a Chromium browser keeps all at its
-    /// base. A Firefox browser without any has no bases.
+    /// base. A Firefox installation without any is not kept.
     profiles: Vec<OsString>,
-    /// The locks that say the browser runs: one per profile for Firefox. The
-    /// caches of every profile wait for all of them.
-    locks: BTreeSet<BrowserLock>,
+}
+
+/// How a Chromium-based browser of `packaging` tells that it runs: its
+/// link names a process of the system, or of a Flatpak's own pid namespace.
+const fn chromium_lock_kind(packaging: Option<Packaging>) -> LockKind {
+    match packaging {
+        Some(Packaging::Flatpak) => LockKind::SandboxedLink,
+        None | Some(Packaging::Snap) => LockKind::Link,
+    }
 }
 
 /// What a Firefox base holds.
 #[derive(Default)]
 struct FirefoxProfiles {
-    /// Its profiles, by name and path.
-    judged: Vec<(OsString, PathBuf)>,
+    /// The names of its profiles.
+    judged: Vec<OsString>,
     /// The names of directories that may be profiles but cannot be judged:
     /// links, on another filesystem, or with a lock that cannot be read.
     doubtful: Vec<OsString>,
@@ -195,6 +211,10 @@ pub(crate) struct Planner<'a> {
     pub(crate) stats: ScanStats,
     /// The bases of each browser met, `None` when it has none to scan.
     pub(crate) browsers: BTreeMap<BrowserKind, Option<BrowserBases>>,
+    /// The directories a browser keeps its data in, by identity, as they
+    /// were opened (canonical): no other rule walks or empties them, nor
+    /// anything below them, whatever the browser's profiles.
+    pub(crate) reserved: BTreeMap<FileIdentity, PathBuf>,
 }
 
 impl Planner<'_> {
@@ -239,20 +259,23 @@ impl Planner<'_> {
             keep_hard_linked: false,
             locks: bases.locks.clone(),
         };
-        // A shared directory is under the base only; a profile's, under the
-        // base and the cache, in each profile (or at their roots without any).
-        let homes = bases
-            .base
-            .iter()
-            .chain(bases.cache.iter().filter(|_| !shared));
         let mut roots = Vec::new();
-        for (home, device) in homes {
-            if shared || bases.profiles.is_empty() {
-                roots.extend(self.reach(&origin, home.join(first.as_str()), rest, *device));
-            } else {
-                for profile in &bases.profiles {
-                    let segments = directory.directory().segments();
-                    roots.extend(self.reach(&origin, home.join(profile), segments, *device));
+        for install in &bases.installs {
+            // A shared directory is under the base only; a profile's, under
+            // the base and the cache, in each profile (or at their roots
+            // without any).
+            let homes = install
+                .base
+                .iter()
+                .chain(install.cache.iter().filter(|_| !shared));
+            for (home, device) in homes {
+                if shared || install.profiles.is_empty() {
+                    roots.extend(self.reach(&origin, home.join(first.as_str()), rest, *device));
+                } else {
+                    for profile in &install.profiles {
+                        let segments = directory.directory().segments();
+                        roots.extend(self.reach(&origin, home.join(profile), segments, *device));
+                    }
                 }
             }
         }
@@ -273,20 +296,62 @@ impl Planner<'_> {
         bases
     }
 
+    /// A Chromium browser's installations that have a base, each with its
+    /// lock; `None` when none has.
     fn chromium_bases(
         &mut self,
         origin: &Origin,
         browser: &ChromiumBrowser,
     ) -> Option<BrowserBases> {
-        let base = self.open_base(origin, browser.base())?;
-        let base_device = self.device(origin, &base).ok()?;
-        let cache = match browser.cache() {
-            Some(cache) => self.open_base(origin, cache).and_then(|cache| {
-                let device = self.device(origin, &cache).ok()?;
+        let kind = BrowserKind::Chromium(browser.kind());
+        let mut installs = Vec::new();
+        let mut locks = BTreeSet::new();
+        for install in browser.installs() {
+            if let Some((bases, install_locks)) = self.chromium_install(origin, kind, install) {
+                locks.extend(install_locks);
+                installs.push(bases);
+            }
+        }
+        (!installs.is_empty()).then_some(BrowserBases { installs, locks })
+    }
+
+    /// One installation of a Chromium browser and its locks, if it has a
+    /// base. Its base and its cache are reserved as soon as they are opened,
+    /// the cache even without a base.
+    fn chromium_install(
+        &mut self,
+        origin: &Origin,
+        kind: BrowserKind,
+        install: &ChromiumInstall,
+    ) -> Option<(InstallBases, BTreeSet<BrowserLock>)> {
+        let base = self.open_base(origin, install.base());
+        let cache = install
+            .cache()
+            .and_then(|cache| self.open_base(origin, cache))
+            .and_then(|cache| {
+                let device = self.reserve(origin, &cache).ok()?;
                 Some((cache, device))
-            }),
-            None => None,
+            });
+        let Some(base) = base else {
+            tracing::debug!(browser = kind.key(), base = %install.base(), "browser base absent or refused: its caches are left");
+            return None;
         };
+        let Ok(base_device) = self.reserve(origin, &base) else {
+            tracing::debug!(browser = kind.key(), base = ?base, "browser base gone or unreadable: its caches are left");
+            return None;
+        };
+        let locks = self
+            .lock_places(install.base(), &base)
+            .into_iter()
+            .map(|place| {
+                BrowserLock::new(
+                    kind,
+                    place.join(CHROMIUM_LOCK),
+                    place.clone(),
+                    chromium_lock_kind(install.packaging()),
+                )
+            })
+            .collect();
         let entries = match fs::read_dir(&base) {
             Ok(entries) => entries,
             Err(error) if is_absent(&error) => return None,
@@ -297,7 +362,7 @@ impl Planner<'_> {
             .filter_map(|entry| match entry {
                 Ok(entry) => Some(entry.file_name()),
                 Err(error) => {
-                    tracing::debug!(base = ?base, %error, "browser base entry unreadable");
+                    tracing::debug!(browser = kind.key(), base = ?base, %error, "browser base entry unreadable");
                     self.stats.unreadable += 1;
                     None
                 }
@@ -311,60 +376,118 @@ impl Planner<'_> {
             .collect();
         profiles.sort();
         tracing::debug!(
-            browser = browser.kind().key(),
+            browser = kind.key(),
             base = ?base,
+            packaging = ?install.packaging(),
             profiles = profiles.len(),
             "browser bases"
         );
-        let lock = BrowserLock::new(
-            BrowserKind::Chromium(browser.kind()),
-            base.join(CHROMIUM_LOCK),
-            base.clone(),
-        );
-        Some(BrowserBases {
-            base: Some((base, base_device)),
-            cache,
-            profiles,
-            locks: BTreeSet::from([lock]),
-        })
+        Some((
+            InstallBases {
+                base: Some((base, base_device)),
+                cache,
+                profiles,
+            },
+            locks,
+        ))
+    }
+
+    /// Where the locks of a browser whose base `template` opened as `base`
+    /// are read when cleaning: at `base`, and through the links of its path
+    /// as written when they lead elsewhere, read again then. A snap's
+    /// `current` follows its refreshes, which the revision `base` names does
+    /// not, while a refresh made as it runs leaves it running from `base`:
+    /// either lock held keeps its caches.
+    fn lock_places(&self, template: &TemplatePath, base: &Path) -> Vec<PathBuf> {
+        let mut places = vec![base.to_path_buf()];
+        // It resolved when opened: the same variables resolve it again.
+        match template.resolve(self.planning.variables) {
+            Ok(written) if written != base => places.push(written),
+            Ok(_) => {}
+            Err(error) => {
+                tracing::debug!(base = ?base, %error, "browser base no longer resolves: its lock read where it was opened only");
+            }
+        }
+        places
     }
 
     /// A Firefox browser's profiles: the directories of its cache that are,
-    /// under one of its bases, a plain directory holding the lock a running
-    /// browser takes (a profile never launched has neither the lock nor a
-    /// cache), and under none a directory that cannot be judged. A base
-    /// absent is passed over; one refused or unreadable leaves the browser
-    /// without bases, a profile there being unknown.
+    /// under one of the bases of its installation, a plain directory holding
+    /// the lock a running browser takes (a profile never launched has
+    /// neither the lock nor a cache), and under none a directory that cannot
+    /// be judged. A base absent is passed over; one refused or unreadable
+    /// leaves its installation without bases, a profile there being unknown.
     fn firefox_bases(&mut self, origin: &Origin, browser: &FirefoxBrowser) -> Option<BrowserBases> {
         let kind = BrowserKind::Firefox(browser.kind());
-        let Some(cache) = self.open_base(origin, browser.cache()) else {
-            tracing::debug!(browser = kind.key(), cache = %browser.cache(), "browser cache absent or refused: nothing to clean");
+        let mut installs = Vec::new();
+        let mut locks = BTreeSet::new();
+        for install in browser.installs() {
+            if let Some((bases, install_locks)) = self.firefox_install(origin, kind, install) {
+                locks.extend(install_locks);
+                installs.push(bases);
+            }
+        }
+        (!installs.is_empty()).then_some(BrowserBases { installs, locks })
+    }
+
+    /// One installation of a Firefox browser, with the locks of its
+    /// profiles; `None` when it has no profile to clean or one of its bases
+    /// cannot be judged. Its cache is
+    /// reserved before anything is judged, and each of its bases as it is
+    /// opened, the ones after a base refused included.
+    fn firefox_install(
+        &mut self,
+        origin: &Origin,
+        kind: BrowserKind,
+        install: &FirefoxInstall,
+    ) -> Option<(InstallBases, BTreeSet<BrowserLock>)> {
+        let packaging = install.packaging();
+        let Some(cache) = self.open_base(origin, install.cache()) else {
+            tracing::debug!(browser = kind.key(), cache = %install.cache(), "browser cache absent or refused: nothing to clean");
             return None;
         };
-        let Ok(cache_device) = self.device(origin, &cache) else {
+        let Ok(cache_device) = self.reserve(origin, &cache) else {
             tracing::debug!(browser = kind.key(), cache = ?cache, "browser cache gone or unreadable: nothing to clean");
             return None;
         };
         let mut profiles = BTreeSet::new();
         let mut doubtful = BTreeSet::new();
-        let mut locks = BTreeSet::new();
-        for template in browser.bases() {
+        let mut install_locks = BTreeSet::new();
+        let mut unknown = false;
+        for template in install.bases() {
             let Ok(found) = self.read_base(origin, template) else {
                 tracing::info!(browser = kind.key(), base = %template, "browser base refused: its caches are left");
-                return None;
+                unknown = true;
+                continue;
             };
             let Some(base) = found else {
                 continue;
             };
-            let Some(base_profiles) = self.firefox_profiles(origin, &base) else {
+            let Some(base_profiles) = self
+                .reserve(origin, &base)
+                .ok()
+                .and_then(|device| self.firefox_profiles(origin, &base, device))
+            else {
                 tracing::info!(browser = kind.key(), base = ?base, "browser base unreadable or gone while read: its caches are left");
-                return None;
+                unknown = true;
+                continue;
             };
-            for (name, profile) in base_profiles.judged {
-                locks.insert(BrowserLock::new(kind, profile.join(FIREFOX_LOCK), profile));
+            let places = self.lock_places(template, &base);
+            for name in base_profiles.judged {
+                for place in &places {
+                    install_locks.insert(BrowserLock::new(
+                        kind,
+                        place.join(&name).join(FIREFOX_LOCK),
+                        place.join(&name),
+                        LockKind::FileLock,
+                    ));
+                }
                 profiles.insert(name);
             }
             doubtful.extend(base_profiles.doubtful);
+        }
+        if unknown {
+            return None;
         }
         // A profile of the same name elsewhere could be the one open.
         for name in &doubtful {
@@ -374,6 +497,7 @@ impl Planner<'_> {
         }
         tracing::info!(
             browser = kind.key(),
+            ?packaging,
             profiles = profiles.len(),
             not_judged = doubtful.len(),
             "browser profiles"
@@ -381,24 +505,31 @@ impl Planner<'_> {
         if profiles.is_empty() {
             return None;
         }
-        Some(BrowserBases {
-            base: None,
-            cache: Some((cache, cache_device)),
-            profiles: profiles.into_iter().collect(),
-            locks,
-        })
+        Some((
+            InstallBases {
+                base: None,
+                cache: Some((cache, cache_device)),
+                profiles: profiles.into_iter().collect(),
+            },
+            install_locks,
+        ))
     }
 
-    /// The profiles under the Firefox base `base`; `None` when it, or one of
-    /// its entries, cannot be read (reported): a profile there is unknown.
-    fn firefox_profiles(&mut self, origin: &Origin, base: &Path) -> Option<FirefoxProfiles> {
+    /// The profiles under the Firefox base `base`, on `device`; `None` when
+    /// it, or one of its entries, cannot be read (reported): a profile there
+    /// is unknown.
+    fn firefox_profiles(
+        &mut self,
+        origin: &Origin,
+        base: &Path,
+        device: Option<u64>,
+    ) -> Option<FirefoxProfiles> {
         let entries = match fs::read_dir(base) {
             // Gone since it was opened: as a base absent.
             Err(error) if is_absent(&error) => return Some(FirefoxProfiles::default()),
             Err(error) => return self.unreadable(origin, base.to_path_buf(), error.kind()),
             Ok(entries) => entries,
         };
-        let device = self.device(origin, base).ok()?;
         let mut found = FirefoxProfiles::default();
         for entry in entries {
             let name = match entry {
@@ -419,7 +550,7 @@ impl Planner<'_> {
             match fs::symlink_metadata(profile.join(FIREFOX_LOCK)) {
                 Ok(_) => {
                     tracing::debug!(profile = ?profile, "profile");
-                    found.judged.push((name, profile));
+                    found.judged.push(name);
                 }
                 Err(error) if is_absent(&error) => {
                     tracing::debug!(profile = ?profile, "no lock: not a profile launched");
@@ -434,16 +565,36 @@ impl Planner<'_> {
         Some(found)
     }
 
+    /// [`Self::device`] of a directory a browser keeps its data in, which no
+    /// other rule may then walk: reserved by its identity, if it has one.
+    fn reserve(&mut self, origin: &Origin, directory: &Path) -> Result<Option<u64>, ()> {
+        let identity = self.identity(origin, directory)?;
+        match identity {
+            Some(identity) => {
+                tracing::debug!(?origin, directory = ?directory, "browser data reserved");
+                self.reserved.insert(identity, directory.to_path_buf());
+            }
+            None => {
+                tracing::debug!(?origin, directory = ?directory, "browser data without an identity: not reserved");
+            }
+        }
+        Ok(identity.map(FileIdentity::device))
+    }
+
     /// The device of the directory `base`, `None` when it is not known; an
     /// error when `base` is gone or unreadable (reported).
     fn device(&mut self, origin: &Origin, base: &Path) -> Result<Option<u64>, ()> {
-        match fs::symlink_metadata(base) {
-            Ok(metadata) => {
-                Ok((self.planning.readers.identity)(&metadata).map(FileIdentity::device))
-            }
+        Ok(self.identity(origin, base)?.map(FileIdentity::device))
+    }
+
+    /// The identity of `path`, `None` when it is not known; an error when
+    /// `path` is gone or unreadable (reported).
+    fn identity(&mut self, origin: &Origin, path: &Path) -> Result<Option<FileIdentity>, ()> {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) => Ok((self.planning.readers.identity)(&metadata)),
             Err(error) if is_absent(&error) => Err(()),
             Err(error) => {
-                self.unreadable::<()>(origin, base.to_path_buf(), error.kind());
+                self.unreadable::<()>(origin, path.to_path_buf(), error.kind());
                 Err(())
             }
         }
@@ -1002,5 +1153,37 @@ impl Planner<'_> {
             reason,
         });
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use okapi_rules::{Os, RuleSet};
+
+    use super::*;
+
+    #[test]
+    fn a_chromium_in_a_flatpak_is_never_judged_by_the_number_its_lock_names() {
+        for os in Os::ALL {
+            let rules = RuleSet::embedded(os).unwrap();
+            for install in rules
+                .browsers()
+                .chromium()
+                .iter()
+                .flat_map(ChromiumBrowser::installs)
+            {
+                let expected = if install.base().to_string().starts_with("${HOME}/.var/app/") {
+                    LockKind::SandboxedLink
+                } else {
+                    LockKind::Link
+                };
+                assert_eq!(
+                    chromium_lock_kind(install.packaging()),
+                    expected,
+                    "{os}: {}",
+                    install.base()
+                );
+            }
+        }
     }
 }

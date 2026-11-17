@@ -3,7 +3,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use okapi_platform::FileIdentity;
+use okapi_platform::{FileIdentity, LockKind};
 use okapi_rules::{
     BrowserKind, CleanTarget, Label, RelativePath, RuleId, TemplateError, TemplatePath, Variable,
 };
@@ -206,6 +206,9 @@ pub enum UnsafeReason {
     NotADirectory,
     /// A regular file was expected.
     NotAFile,
+    /// It is where a browser keeps its data: only that browser's rules,
+    /// which wait for its lock, empty it.
+    BrowserData,
 }
 
 /// Something a scan could not do, or chose not to do.
@@ -339,7 +342,8 @@ impl ScanStats {
     }
 
     /// Entries that are a variable's directory or one of its ancestors (reached
-    /// through a bind mount), or another scan root (nested, or a file target).
+    /// through a bind mount), another scan root (nested, or a file target),
+    /// or a directory a browser keeps its data in.
     #[must_use]
     pub const fn reserved_directories(&self) -> u64 {
         self.reserved_directories
@@ -619,8 +623,9 @@ pub struct ScanReport {
     locations: Vec<(usize, usize)>,
     issues: Vec<ScanIssue>,
     stats: ScanStats,
-    /// The identity of every root, walked or withheld: cleaning judges an
-    /// entry against them as the scan did.
+    /// The identity of every root, walked or withheld, and of every directory
+    /// a browser keeps its data in: cleaning judges an entry against them as
+    /// the scan did.
     roots: BTreeSet<FileIdentity>,
     maintenances: Vec<MaintenanceFound>,
 }
@@ -679,8 +684,8 @@ impl ScanReport {
     }
 
     /// The locks held of the browsers whose caches these identifiers are in,
-    /// one per lock file (a profile of Firefox has its own): what to ask the
-    /// user about before cleaning them.
+    /// one per place a lock is read at (a profile of Firefox has its own):
+    /// what to ask the user about before cleaning them.
     #[must_use]
     pub fn open_browsers(&self, ids: &[ItemId]) -> Vec<BrowserLock> {
         let locks: BTreeSet<&BrowserLock> = ids
@@ -718,16 +723,26 @@ pub struct BrowserLock {
     /// The lock itself: a link that may point nowhere (Chromium), or a file
     /// that stays, locked while the browser runs (Firefox).
     lock: PathBuf,
-    /// The directory that holds the lock: what the browser keeps open.
+    /// The directory the lock is in, as it was read: what the browser keeps
+    /// open, compared through its links when it is asked about.
     user_data: PathBuf,
+    /// How the lock tells that the browser runs: by its family, and for a
+    /// link by the namespace its installation runs in.
+    kind: LockKind,
 }
 
 impl BrowserLock {
-    pub(crate) const fn new(browser: BrowserKind, lock: PathBuf, user_data: PathBuf) -> Self {
+    pub(crate) const fn new(
+        browser: BrowserKind,
+        lock: PathBuf,
+        user_data: PathBuf,
+        kind: LockKind,
+    ) -> Self {
         Self {
             browser,
             lock,
             user_data,
+            kind,
         }
     }
 
@@ -736,13 +751,10 @@ impl BrowserLock {
         self.browser
     }
 
-    /// How the browser tells that it runs: by its family.
+    /// How the browser tells that it runs.
     #[must_use]
-    pub const fn lock_kind(&self) -> okapi_platform::LockKind {
-        match self.browser {
-            BrowserKind::Chromium(_) => okapi_platform::LockKind::Link,
-            BrowserKind::Firefox(_) => okapi_platform::LockKind::FileLock,
-        }
+    pub const fn lock_kind(&self) -> LockKind {
+        self.kind
     }
 
     #[must_use]

@@ -1,8 +1,9 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use okapi_platform::{IDENTITY_SUPPORTED, ROOT_USER};
+use okapi_platform::{FileIdentity, IDENTITY_SUPPORTED, ROOT_USER};
 use okapi_rules::{RuleSet, TemplateVariables};
 
 use crate::custom::PersonalFolders;
@@ -190,7 +191,7 @@ pub(crate) fn scan_entries(
         report.cancel(0, 0, 0);
         return report.finish();
     }
-    let Some((protected, roots_by_rule)) = plan(entries, planning, &mut report) else {
+    let Some(planned) = plan(entries, planning, &mut report) else {
         return report.finish();
     };
 
@@ -198,11 +199,8 @@ pub(crate) fn scan_entries(
         roots,
         mut groups,
         attributes,
-    } = group_rules(roots_by_rule, entries.len());
+    } = group_rules(planned.roots_by_rule, entries.len());
     let attributes = merge_attributes(attributes, &mut groups);
-    // Every root reserves its place, chosen or not: the walks of the chosen
-    // ones skip the others below them.
-    let root_identities: BTreeSet<_> = roots.iter().map(|(_, root)| root.identity).collect();
     let roots = chosen_roots(roots, &attributes, &mut groups, planning.options);
     let roots_total = roots
         .iter()
@@ -243,8 +241,8 @@ pub(crate) fn scan_entries(
                     cutoff: root.cutoff,
                     exclusions: planning.options.exclusions(),
                     misc: planning.misc,
-                    protected: &protected,
-                    roots: &root_identities,
+                    protected: &planned.protected,
+                    roots: &planned.places,
                     readers: planning.readers,
                     limits,
                     remover,
@@ -283,7 +281,7 @@ pub(crate) fn scan_entries(
         report.cancel(roots_done, roots_total, progress.entries_seen());
         return report.finish();
     }
-    report.roots(root_identities);
+    report.roots(planned.places);
     report.maintenances(maintenance::found(entries, planning));
     for (group, attributes) in attributes {
         report.group(
@@ -307,14 +305,15 @@ fn found_below(found: Found, root: &PlannedRoot, keep_hard_linked: bool) -> Foun
     }
 }
 
-/// The roots the rules name, checked, each with the rule it comes from; what
-/// kept a root out is recorded in `report`. `None` when the variables'
-/// directories cannot be told (the scan then stops).
+/// The roots the rules name, checked, each with the rule it comes from, and
+/// the directories reserved to browsers; what kept a root out is recorded in
+/// `report`. `None` when the variables' directories cannot be told (the scan
+/// then stops).
 fn plan(
     entries: &[RuleEntry<'_>],
     planning: &Planning<'_>,
     report: &mut ReportBuilder,
-) -> Option<(ProtectedRoots, Vec<(usize, PlannedRoot)>)> {
+) -> Option<Planned> {
     let protected = match protection(
         planning.variables,
         planning.options,
@@ -332,8 +331,9 @@ fn plan(
         issues: Vec::new(),
         stats: ScanStats::default(),
         browsers: BTreeMap::new(),
+        reserved: BTreeMap::new(),
     };
-    let roots_by_rule: Vec<(usize, PlannedRoot)> = entries
+    let mut roots_by_rule: Vec<(usize, PlannedRoot)> = entries
         .iter()
         .enumerate()
         .flat_map(|(rule, entry)| {
@@ -343,11 +343,78 @@ fn plan(
                 .map(move |root| (rule, root))
         })
         .collect();
-    for issue in planner.issues {
+    // Known once every rule is planned, before rules sharing a root are
+    // joined.
+    roots_by_rule.retain(|(_, root)| {
+        let Some(directory) = browser_data_taken(root, &planner.reserved) else {
+            return true;
+        };
+        tracing::info!(root = ?root.path, origins = ?root.attributes.origins, browser_data = ?directory, "root of a browser's data: left to its rules");
+        planner.issues.push(ScanIssue::UnsafeRoot {
+            origins: root.attributes.origins.clone(),
+            path: root.path.clone(),
+            reason: UnsafeReason::BrowserData,
+        });
+        false
+    });
+    let Planner {
+        issues,
+        stats,
+        reserved,
+        ..
+    } = planner;
+    for issue in issues {
         report.issue(issue);
     }
-    report.add_stats(&planner.stats);
-    Some((protected, roots_by_rule))
+    report.add_stats(&stats);
+    let places = roots_by_rule
+        .iter()
+        .map(|(_, root)| root.identity)
+        .chain(reserved.into_keys())
+        .collect();
+    Some(Planned {
+        protected,
+        roots_by_rule,
+        places,
+    })
+}
+
+/// The directory a browser keeps its data in that `root`, of a rule that is
+/// no browser's, is or is below (by its canonical path), if any: emptying it
+/// would not wait for the browser's lock. A browser's own roots are below
+/// its directories; a withheld root is never walked, and still joins the
+/// rules that share it (invariant 5).
+fn browser_data_taken<'a>(
+    root: &PlannedRoot,
+    reserved: &'a BTreeMap<FileIdentity, PathBuf>,
+) -> Option<&'a Path> {
+    let a_browsers = root
+        .attributes
+        .origins
+        .iter()
+        .all(|origin| matches!(origin, Origin::Browser { .. }));
+    if root.kind == PlannedKind::Withheld || a_browsers {
+        return None;
+    }
+    reserved
+        .get(&root.identity)
+        .or_else(|| {
+            reserved
+                .values()
+                .find(|directory| root.path.starts_with(directory))
+        })
+        .map(PathBuf::as_path)
+}
+
+/// What [`plan`] finds.
+struct Planned {
+    protected: ProtectedRoots,
+    /// The roots, each with the rule it comes from.
+    roots_by_rule: Vec<(usize, PlannedRoot)>,
+    /// The identities of every root, chosen or not, and of every directory a
+    /// browser keeps its data in: each one's place, which the walks of the
+    /// others leave.
+    places: BTreeSet<FileIdentity>,
 }
 
 /// The roots of a group `options` choose, each with its categories: those of

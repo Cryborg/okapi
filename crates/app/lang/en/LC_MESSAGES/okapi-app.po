@@ -4246,6 +4246,10 @@ msgctxt "ResultLine"
 msgid "Votre dossier : à cocher vous-même à chaque nettoyage."
 msgstr "Your folder: check it yourself at each cleaning."
 
+msgctxt "ResultLine"
+msgid "Supprimé définitivement, sans retour possible : à cocher vous-même."
+msgstr "Deleted for good, with no way back: check it yourself."
+
 msgctxt "NoteLine"
 msgid "Dossier à nettoyer refusé, Réglages dit pourquoi : {}"
 msgstr "Folder to clean refused, Settings says why: {}"

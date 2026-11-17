@@ -257,6 +257,7 @@ impl Planner<'_> {
             selected_by_default: directory.is_selected_by_default(),
             needs_admin: false,
             keep_hard_linked: false,
+            trash: false,
             locks: bases.locks.clone(),
         };
         let mut roots = Vec::new();
@@ -624,6 +625,7 @@ impl Planner<'_> {
             selected_by_default: target.is_selected_by_default() && presumed_temporary,
             needs_admin: target.needs_admin(),
             keep_hard_linked: deletion.keeps_hard_linked(),
+            trash: deletion.is_trash(),
             locks: BTreeSet::new(),
         };
         let roots = match deletion.child_subdirectory() {
@@ -666,17 +668,12 @@ impl Planner<'_> {
                 CustomFolderRefusal::Unreadable(io::ErrorKind::InvalidData),
             );
         };
-        let attributes = GroupAttributes {
-            origins: vec![origin.clone()],
+        let attributes = GroupAttributes::plain(
+            origin.clone(),
             label,
-            descriptions: Vec::new(),
-            rule_group: None,
-            cache_reset: false,
-            selected_by_default: RuleEntry::Custom(folder).is_selected_by_default(),
-            needs_admin: false,
-            keep_hard_linked: false,
-            locks: BTreeSet::new(),
-        };
+            Vec::new(),
+            RuleEntry::Custom(folder).is_selected_by_default(),
+        );
         let issues = self.issues.len();
         let planned = self.check_roots(&origin, vec![Candidate::walked(path)], None, &attributes);
         // Gone since it was judged: said, as when it was not there.
@@ -717,6 +714,7 @@ impl Planner<'_> {
             selected_by_default: rule.is_selected_by_default(),
             needs_admin: false,
             keep_hard_linked: false,
+            trash: false,
             locks: BTreeSet::new(),
         };
         let mut roots = Vec::new();
@@ -795,17 +793,12 @@ impl Planner<'_> {
         }
         // The global age was checked before planning: it is within the clock.
         let cutoff = self.planning.options.cutoff(None)?;
-        let attributes = GroupAttributes {
-            origins: vec![origin],
-            label: target.subcategory().clone(),
-            descriptions: target.description().cloned().into_iter().collect(),
-            rule_group: None,
-            cache_reset: false,
-            selected_by_default: target.is_selected_by_default(),
-            needs_admin: false,
-            keep_hard_linked: false,
-            locks: BTreeSet::new(),
-        };
+        let attributes = GroupAttributes::plain(
+            origin,
+            target.subcategory().clone(),
+            target.description().cloned().into_iter().collect(),
+            target.is_selected_by_default(),
+        );
         // A bind mount of a file: never offered by this rule, it still joins
         // the rules that share it (invariant 5, strictest age).
         if mount_root {

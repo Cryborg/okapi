@@ -139,6 +139,8 @@ component ResultLine inherits VerticalLayout {
         ? @tr("Docker refuse votre compte : il faut être dans le groupe docker, puis rouvrir la session.")
         : line.note == RowNote.by-hand
         ? @tr("À faire vous-même : la commande ci-dessous, dans un terminal.")
+        : line.note == RowNote.trash
+        ? @tr("Supprimé définitivement, sans retour possible : à cocher vous-même.")
         : line.note == RowNote.rights-obtained
         ? @tr("Droits obtenus : à cocher vous-même.")
         : line.note == RowNote.to-choose

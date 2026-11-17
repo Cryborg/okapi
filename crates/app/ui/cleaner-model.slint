@@ -63,16 +63,16 @@ export enum ResultBadge { preselected, to-choose, admin }
 export enum RowKind { category, browser, group }
 
 // What the note under a group says. Left to the user: a cache reset; a
-// maintenance of the system; a folder of the user's; one of the
-// administrator's that root's scan unlocked; or a temporary folder outside
-// /tmp. Out of reach without the administrator: waiting for the rights;
-// waiting for them, unreadable to the user, or a maintenance measured by
-// root only, what it holds unknown; never the helper's to clean; nothing
-// for root to clean. Docker's prune, left to the user, or out of reach when
-// Docker refuses them. A maintenance the user runs by hand. None for a
-// group preselected.
+// maintenance of the system; a folder of the user's; the trash, whose
+// entries go for good; one of the administrator's that root's scan
+// unlocked; or a temporary folder outside /tmp. Out of reach without the
+// administrator: waiting for the rights; waiting for them, unreadable to
+// the user, or a maintenance measured by root only, what it holds
+// unknown; never the helper's to clean; nothing for root to clean.
+// Docker's prune, left to the user, or out of reach when Docker refuses
+// them. A maintenance the user runs by hand. None for a group preselected.
 export enum RowNote {
-    none, cache-reset, operation, yours, rights-obtained, to-choose,
+    none, cache-reset, operation, yours, trash, rights-obtained, to-choose,
     locked, unseen, unmeasured, unreachable, nothing, daemon, daemon-refused, by-hand,
 }
 

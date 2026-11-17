@@ -4,13 +4,16 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use okapi_platform::{EntryStatus, EntryType, FileIdentity, Ownership, ROOT_USER, sticky_allows};
+use okapi_platform::{
+    EntryStatus, EntryType, FileIdentity, InformationRefusal, Ownership, ROOT_USER, sticky_allows,
+};
 use okapi_rules::MiscRules;
 
 use crate::options::Exclusions;
 use crate::paths::{is_absent, is_absent_kind, is_session_name};
 use crate::protection::ProtectedRoots;
 use crate::report::{EntryKind, Limit, ScanStats};
+use crate::trash::{TrashGate, TrashRefusal};
 use crate::watch::{PROGRESS_EVERY, Progress, Watch};
 
 /// Reads the identity of a file from its metadata.
@@ -113,7 +116,8 @@ pub(crate) struct WalkContext<'a> {
     pub(crate) keep_hard_linked: bool,
     /// A directory changed after the cutoff is held back whole, never
     /// offered entry by entry: what was just moved there keeps the dates it
-    /// had elsewhere (a folder the user chose, where nothing is a cache).
+    /// had elsewhere (a folder the user chose, where nothing is a cache); an
+    /// entry of a trash, which goes whole or not at all.
     pub(crate) recent_holds_below: bool,
 }
 
@@ -372,8 +376,11 @@ impl<'w> ScanProgress<'w> {
     }
 }
 
-struct Walker<'a, 'p, 'w> {
+struct Walker<'a, 'p, 'w, 'g> {
     context: WalkContext<'a>,
+    /// The gate the entries right below the root pass, the root being a
+    /// trash's `files` folder: an entry goes whole, or not at all.
+    trash: Option<&'g TrashGate>,
     device: u64,
     visited: usize,
     walk: Walk,
@@ -404,14 +411,20 @@ struct Walker<'a, 'p, 'w> {
 /// checks every entry again, through descriptors.
 ///
 /// The root itself is never judged as a mount: it may be one (`/tmp`).
+///
+/// With `trash`, the root is a trash's `files` folder: an entry right below
+/// it is read only if its `.trashinfo` says it went there long enough ago,
+/// and is offered whole or not at all.
 pub(crate) fn walk(
     root: &Path,
     root_identity: FileIdentity,
     context: WalkContext<'_>,
+    trash: Option<&TrashGate>,
     progress: &mut ScanProgress<'_>,
 ) -> Walk {
     let mut walker = Walker {
         context,
+        trash,
         device: root_identity.device(),
         visited: 0,
         walk: Walk::default(),
@@ -432,7 +445,7 @@ pub(crate) fn walk(
     walker.walk
 }
 
-impl Walker<'_, '_, '_> {
+impl Walker<'_, '_, '_, '_> {
     /// Lists `directory`, after checking that what was opened is still the
     /// directory of `identity` (not a link swapped in since it was judged);
     /// gives its ownership too.
@@ -472,8 +485,12 @@ impl Walker<'_, '_, '_> {
                 resolved.complete = false;
                 break;
             }
+            let top_level = depth_left == self.context.limits.depth;
             let child = match entry {
-                Ok(entry) => self.entry(&entry.path(), depth_left, listed),
+                Ok(entry) => match self.trash.filter(|_| top_level) {
+                    Some(gate) => self.trashed(gate, &entry.path(), depth_left, listed),
+                    None => self.entry(&entry.path(), depth_left, listed),
+                },
                 Err(error) => {
                     tracing::debug!(%error, "directory entry unreadable");
                     self.walk.stats.unreadable += 1;
@@ -485,6 +502,44 @@ impl Walker<'_, '_, '_> {
             resolved.found.extend(child.found);
         }
         resolved
+    }
+
+    /// An entry right below a trash's `files` folder: read only when `gate`
+    /// admits it, and offered whole or not at all, never emptied in part
+    /// (what would stay behind its `.trashinfo` would restore incomplete).
+    fn trashed(
+        &mut self,
+        gate: &TrashGate,
+        path: &Path,
+        depth_left: usize,
+        listed: Option<Ownership>,
+    ) -> Resolved {
+        // Read before its information: a cancelled scan reads nothing more.
+        if self.progress.watch.is_cancelled() {
+            self.cancelled = true;
+            return Resolved::held_back();
+        }
+        let Some(name) = path.file_name() else {
+            tracing::error!(path = ?path, "entry of the trash without a name: kept");
+            self.walk.stats.unreadable += 1;
+            return Resolved::held_back();
+        };
+        if let Err(refusal) = gate.admits(name) {
+            tracing::debug!(path = ?path, %refusal, "entry of the trash kept: its information does not let it go");
+            if let TrashRefusal::Information(InformationRefusal::Io(_)) = refusal {
+                self.walk.stats.unreadable += 1;
+            } else {
+                self.walk.stats.trash_kept += 1;
+            }
+            return Resolved::held_back();
+        }
+        let resolved = self.entry(path, depth_left, listed);
+        if resolved.complete || self.cancelled {
+            return resolved;
+        }
+        tracing::debug!(path = ?path, "entry of the trash kept whole: part of it may not go, or it went");
+        self.walk.stats.trash_kept += 1;
+        Resolved::held_back()
     }
 
     fn limit(&mut self, limit: Limit) -> Resolved {

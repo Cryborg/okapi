@@ -319,6 +319,7 @@ pub struct ScanStats {
     pub(crate) protected_names: u64,
     pub(crate) not_owned: u64,
     pub(crate) hard_linked: u64,
+    pub(crate) trash_kept: u64,
 }
 
 impl ScanStats {
@@ -395,6 +396,14 @@ impl ScanStats {
         self.hard_linked
     }
 
+    /// Entries of a trash held back whole: their `.trashinfo` does not say
+    /// they went there long enough ago, or part of them may not go (that
+    /// part counted besides, by why it stays).
+    #[must_use]
+    pub const fn trash_kept(&self) -> u64 {
+        self.trash_kept
+    }
+
     /// Counts one entry held back for `reason`.
     pub(crate) const fn count(&mut self, reason: HoldBack) {
         let counter = match reason {
@@ -426,6 +435,7 @@ impl ScanStats {
             protected_names,
             not_owned,
             hard_linked,
+            trash_kept,
         } = *other;
         self.links += links;
         self.special_files += special_files;
@@ -438,6 +448,7 @@ impl ScanStats {
         self.protected_names += protected_names;
         self.not_owned += not_owned;
         self.hard_linked += hard_linked;
+        self.trash_kept += trash_kept;
     }
 }
 
@@ -563,6 +574,12 @@ impl ScanGroup {
             Some(Origin::Custom { folder }) => Some(folder),
             _ => None,
         }
+    }
+
+    /// Whether it empties a trash: what it removes is gone for good.
+    #[must_use]
+    pub const fn is_trash(&self) -> bool {
+        self.attributes.trash
     }
 
     /// The locks of the browsers whose caches the group holds.
@@ -793,11 +810,36 @@ pub(crate) struct GroupAttributes {
     pub(crate) needs_admin: bool,
     /// Its files with other names are kept ([`crate::walk::WalkContext`]).
     pub(crate) keep_hard_linked: bool,
+    /// Its roots are the `files` folders of trashes ([`crate::trash`]).
+    pub(crate) trash: bool,
     /// The locks of the browsers it empties, those of every rule it gathers.
     pub(crate) locks: BTreeSet<BrowserLock>,
 }
 
 impl GroupAttributes {
+    /// The attributes of the rule `origin` alone, which resets no cache,
+    /// needs no administrator, keeps no file of other names, empties no
+    /// trash and waits for no browser.
+    pub(crate) fn plain(
+        origin: Origin,
+        label: Label,
+        descriptions: Vec<Label>,
+        selected_by_default: bool,
+    ) -> Self {
+        Self {
+            origins: vec![origin],
+            label,
+            descriptions,
+            rule_group: None,
+            cache_reset: false,
+            selected_by_default,
+            needs_admin: false,
+            keep_hard_linked: false,
+            trash: false,
+            locks: BTreeSet::new(),
+        }
+    }
+
     /// Whether one of its rules is a folder the user chose.
     pub(crate) fn holds_a_custom_folder(&self) -> bool {
         self.origins
@@ -807,7 +849,7 @@ impl GroupAttributes {
 
     /// Merges the rules of another group sharing a root: the group is
     /// unselected and a cache reset if either rule is, and keeps the files
-    /// with other names if either rule does.
+    /// with other names, or empties a trash, if either rule does.
     pub(crate) fn merge(&mut self, other: Self) {
         self.origins.extend(other.origins);
         for description in other.descriptions {
@@ -819,12 +861,14 @@ impl GroupAttributes {
         self.selected_by_default &= other.selected_by_default;
         self.needs_admin |= other.needs_admin;
         self.keep_hard_linked |= other.keep_hard_linked;
+        self.trash |= other.trash;
         self.locks.extend(other.locks);
     }
 }
 
 /// An entry found, with the root it was found under, the cutoff it was
-/// judged against and whether its files with other names were kept.
+/// judged against, whether its files with other names were kept and whether
+/// it is an entry of a trash.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FoundItem {
     pub(crate) found: Found,
@@ -832,6 +876,9 @@ pub(crate) struct FoundItem {
     pub(crate) root_identity: FileIdentity,
     pub(crate) cutoff: SystemTime,
     pub(crate) keep_hard_linked: bool,
+    /// Its root is the `files` folder of a trash: the `.trashinfo` of the
+    /// entry right below it that holds this one is read before it goes.
+    pub(crate) trash: bool,
 }
 
 /// Builds a report, numbering its entries.

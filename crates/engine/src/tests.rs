@@ -34,6 +34,9 @@ mod firefox;
 // Its cleaning test shares the cleaning's helpers.
 #[cfg(target_os = "linux")]
 mod custom;
+// Its cleaning tests share the cleaning's helpers.
+#[cfg(target_os = "linux")]
+mod trash;
 
 const HOUR: Duration = Duration::from_hours(1);
 
@@ -1528,6 +1531,7 @@ fn a_root_replaced_after_its_check_is_reported() {
         &root,
         FileIdentity::new(0, 0),
         context,
+        None,
         &mut crate::walk::ScanProgress::new(&watch),
     );
     assert_eq!(

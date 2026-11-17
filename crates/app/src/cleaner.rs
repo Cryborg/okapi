@@ -832,6 +832,9 @@ fn note_of(group: &GroupFacts) -> ui::RowNote {
         ui::ResultBadge::Preselected => ui::RowNote::None,
         // Its own folder, whatever a rule it joins says.
         ui::ResultBadge::ToChoose if group.custom => ui::RowNote::Yours,
+        ui::ResultBadge::ToChoose if group.preselection == Preselection::GoneForGood => {
+            ui::RowNote::Trash
+        }
         ui::ResultBadge::ToChoose if group.preselection == Preselection::CacheReset => {
             ui::RowNote::CacheReset
         }
@@ -2123,12 +2126,21 @@ pub mod tests {
                 ui::RowNote::CacheReset,
             ),
             (
-                with(ordinary, |group| {
+                with(ordinary.clone(), |group| {
                     group.preselection = Preselection::ToChoose;
                     group.checked_by_default = false;
                 }),
                 ui::ResultBadge::ToChoose,
                 ui::RowNote::ToChoose,
+            ),
+            // The trash, said gone for good.
+            (
+                with(ordinary, |group| {
+                    group.checked_by_default = false;
+                    group.preselection = Preselection::GoneForGood;
+                }),
+                ui::ResultBadge::ToChoose,
+                ui::RowNote::Trash,
             ),
             (
                 with(locked(), unlocked),

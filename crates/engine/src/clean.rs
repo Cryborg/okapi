@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
 use okapi_platform::{
-    DESCRIPTOR_REMOVAL_SUPPORTED, Directory, EntryStatus, EntryType, FileIdentity,
-    IDENTITY_SUPPORTED, Reached, Unreached, reach_path, reach_with, tells_mount_roots,
+    DESCRIPTOR_REMOVAL_SUPPORTED, Deletion, Directory, EntryStatus, EntryType, FileIdentity,
+    IDENTITY_SUPPORTED, InformationRefusal, Reached, Unreached, reach_path, reach_with,
+    tells_mount_roots,
 };
 use okapi_rules::{MiscRules, RuleSet, TemplateVariables};
 
@@ -14,6 +15,7 @@ use crate::options::ScanOptions;
 use crate::preconditions::{Stop, protection, stops_before_reading};
 use crate::protection::ProtectedRoots;
 use crate::report::{BrowserLock, EntryKind, FoundItem, ItemId, Origin, ScanGroup, ScanReport};
+use crate::trash::{FolderRefusal, TrashGate, TrashRefusal};
 use crate::walk::{HoldBack, Limits, Observed, Readers, WalkContext, by_name};
 use crate::watch::{Progress, Watch};
 
@@ -631,6 +633,14 @@ impl Cleaner<'_> {
         let (parent, name, status) = self
             .judge_entry(item, &mut context, pass, dates)
             .map_err(|result| (result, None))?;
+        let trashed = if item.trash {
+            Some(
+                self.trashed(item, context.cutoff, pass)
+                    .map_err(|reason| (CleanResult::Kept(reason), None))?,
+            )
+        } else {
+            None
+        };
         let depth = depth_below_root(item);
         let mut walking = Walking {
             context,
@@ -663,9 +673,72 @@ impl Cleaner<'_> {
             // Gone before we touched it; gone after we emptied it counts as
             // removed, with what we removed.
             Ok(false) if removed.entries == 0 => Err((CleanResult::Gone, None)),
-            Ok(_) => Ok(removed.bytes),
+            // Left the trash while we emptied it: restored, most likely,
+            // and emptied where it went. Never said removed.
+            Ok(false) if trashed.is_some() => {
+                tracing::warn!(path = ?item.found.path, removed = ?removed, "entry left the trash while it was emptied");
+                Err((removed.stopped(KeepReason::Replaced), None))
+            }
+            Ok(present) => {
+                // Its `.trashinfo` goes after it, never before, and only
+                // when we removed it whole: one gone meanwhile was put back
+                // or emptied by another, whose `.trashinfo` is theirs.
+                if pass == CleanPass::Remove
+                    && present
+                    && let Some((gate, deletion)) = &trashed
+                    && depth == 1
+                {
+                    gate.forget(name, deletion);
+                }
+                Ok(removed.bytes)
+            }
             Err(reason) => Err((removed.stopped(reason), walking.blocked)),
         }
+    }
+
+    /// The gate of the trash `item` is in, and what the `.trashinfo` of its
+    /// entry right below the trash's `files` folder says, read now: the
+    /// entry went there at least a margin before `cutoff` (invariant 2) and,
+    /// when checking, its `.trashinfo` may follow it.
+    fn trashed(
+        &self,
+        item: &FoundItem,
+        cutoff: SystemTime,
+        pass: CleanPass,
+    ) -> Result<(TrashGate, Deletion), KeepReason> {
+        let path = &item.found.path;
+        let gate = TrashGate::open(&item.root, cutoff, self.remover).map_err(|refusal| {
+            tracing::info!(path = ?path, %refusal, "information folder of the trash unusable: entry kept");
+            match refusal {
+                FolderRefusal::Changed => KeepReason::Replaced,
+                FolderRefusal::Unreadable(error) => keep(&error),
+                FolderRefusal::Absent | FolderRefusal::NotATrash => KeepReason::Changed,
+            }
+        })?;
+        let Some(entry) = path
+            .strip_prefix(&item.root)
+            .ok()
+            .and_then(|below| below.iter().next())
+        else {
+            tracing::error!(path = ?path, root = ?item.root, "entry of the trash outside its root: kept");
+            return Err(KeepReason::Replaced);
+        };
+        let deletion = gate.admits(entry).map_err(|refusal| {
+            tracing::info!(path = ?path, %refusal, "entry of the trash kept: its information does not let it go");
+            match refusal {
+                TrashRefusal::Recent { .. } => KeepReason::Recent,
+                TrashRefusal::Information(InformationRefusal::Io(error)) => keep(&error),
+                TrashRefusal::Information(_) | TrashRefusal::NotOwned { .. } => KeepReason::Changed,
+            }
+        })?;
+        // An entry whose `.trashinfo` could not follow it is not removed.
+        if pass == CleanPass::Check {
+            gate.ensure_forgettable(&deletion).map_err(|error| {
+                tracing::info!(path = ?path, %error, code = error.raw_os_error(), "information of the trash not removable: entry kept");
+                keep(&error)
+            })?;
+        }
+        Ok((gate, deletion))
     }
 
     /// Reaches the entry and judges it alone: its root, its identity, its age,

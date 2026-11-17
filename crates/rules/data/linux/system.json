@@ -4,6 +4,7 @@
     { "path": "${TMPDIR}", "subcategory": "User Temp Files", "minAgeDays": 30, "description": "Temporary files created by applications and the current user session" },
     { "path": "/tmp", "subcategory": "System Temp Files", "minAgeDays": 30, "description": "System-wide temporary files; typically cleared on reboot by tmpfiles.d" },
     { "path": "/var/tmp", "subcategory": "Persistent Temp Files", "minAgeDays": 30, "description": "Temporary files that persist across reboots; safe to clean periodically" },
+    { "path": "${LOCAL_SHARE}/Trash/files", "subcategory": "Trash", "minAgeDays": 30, "trash": true, "description": "What has been in the trash for more than 30 days, by the date it was put there, each file or folder whole. Deleted for good: it can no longer be restored" },
     { "path": "${CACHE}/thumbnails", "subcategory": "Thumbnail Cache", "description": "Thumbnails file managers make for previews (freedesktop spec): made again when a folder is opened again. The images themselves are not touched" },
     { "path": "/var/crash", "subcategory": "Crash Reports", "needsAdmin": true, "description": "Kernel and application crash dump files collected by apport or similar" },
     { "path": "/var/log/journal", "subcategory": "Journal Logs", "needsAdmin": true, "cleanupAction": "journal-vacuum", "description": "Archived journals of systemd whose first entry is more than {days} days old, then the oldest ones while the journal takes more than {gigabytes} GB, as journalctl --vacuum-time and --vacuum-size do. The journal being written is never touched" },

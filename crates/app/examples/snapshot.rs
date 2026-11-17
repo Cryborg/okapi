@@ -180,12 +180,13 @@ fn browser(window: &ui::AppWindow, language: Language) {
     cleaner.set_browser_asking(true);
 }
 
-/// The results, the system category folded when `folded`.
-fn results(window: &ui::AppWindow, folded: bool, language: Language) {
-    use ui::CategoryKind::{Apps, Browsers, System};
+/// The rows of the system category, hidden when `folded`.
+fn system_rows(folded: bool, language: Language) -> Vec<ui::ResultRow> {
+    use ui::CategoryKind::System;
     use ui::ResultBadge::{Admin, Preselected, ToChoose};
     let system = [
         ("Thumbnail Cache", Preselected, true),
+        ("Trash", ToChoose, false),
         ("Crash Reports", Admin, false),
         ("Journal Logs", Admin, false),
         ("APT Package Cache", Admin, false),
@@ -203,20 +204,30 @@ fn results(window: &ui::AppWindow, folded: bool, language: Language) {
     rows.extend(system.iter().map(|(label, badge, checked)| {
         let mut line = row(System, label, *badge, *checked, language);
         line.hidden = folded;
-        // The mockup's example, and a text long enough to go to the line.
-        line.explained = matches!(*label, "Thumbnail Cache" | "Man Page Cache");
-        // A target only root may read: what it holds unknown.
-        if *label == "Snap Cache" {
-            line.note = ui::RowNote::Unseen;
-            line.explained = true;
-        }
-        // The journal's vacuum: measured by root's scan only.
-        if *label == "Journal Logs" {
-            line.note = ui::RowNote::Unmeasured;
-            line.explained = true;
-        }
+        // A target only root may read, what it holds unknown; the trash,
+        // gone for good; the journal's vacuum, measured by root's scan only.
+        line.note = match *label {
+            "Snap Cache" => ui::RowNote::Unseen,
+            "Trash" => ui::RowNote::Trash,
+            "Journal Logs" => ui::RowNote::Unmeasured,
+            _ => line.note,
+        };
+        // The mockup's example, a text long enough to go to the line, or a
+        // row with a note above.
+        line.explained = matches!(
+            *label,
+            "Thumbnail Cache" | "Man Page Cache" | "Snap Cache" | "Trash" | "Journal Logs"
+        );
         line
     }));
+    rows
+}
+
+/// The results, the system category folded when `folded`.
+fn results(window: &ui::AppWindow, folded: bool, language: Language) {
+    use ui::CategoryKind::{Apps, Browsers};
+    use ui::ResultBadge::{Preselected, ToChoose};
+    let mut rows = system_rows(folded, language);
     // Folded, the browsers and the applications too: the user's folders show.
     rows.push(header(Browsers, folded));
     let browser = |name: &str, closed| ui::ResultRow {

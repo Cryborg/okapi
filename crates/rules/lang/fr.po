@@ -424,6 +424,10 @@ msgid "Transmission"
 msgstr "Transmission"
 
 msgctxt "label"
+msgid "Trash"
+msgstr "Corbeille"
+
+msgctxt "label"
 msgid "TypeScript Typings Cache"
 msgstr "Cache des types TypeScript"
 
@@ -570,6 +574,10 @@ msgstr "Fichiers temporaires communs à tout le système, que tmpfiles.d vide d'
 msgctxt "description"
 msgid "Temporary files that persist across reboots; safe to clean periodically"
 msgstr "Fichiers temporaires gardés d'un redémarrage à l'autre : on peut les vider de temps en temps sans risque."
+
+msgctxt "description"
+msgid "What has been in the trash for more than 30 days, by the date it was put there, each file or folder whole. Deleted for good: it can no longer be restored"
+msgstr "Ce qui est dans la corbeille depuis plus de 30 jours, d'après la date où il y a été mis, chaque fichier ou dossier en entier. Supprimé définitivement : il ne pourra plus être restauré."
 
 msgctxt "description"
 msgid "Thumbnails file managers make for previews (freedesktop spec): made again when a folder is opened again. The images themselves are not touched"

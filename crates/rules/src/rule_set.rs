@@ -507,6 +507,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_trash_says_how_long_what_it_offers_has_been_there() {
+        let rules = RuleSet::embedded(Os::Linux).unwrap();
+        let trashes: Vec<_> = rules
+            .system()
+            .clean_targets()
+            .iter()
+            .filter_map(|target| match target.effect() {
+                crate::Effect::Delete(deletion) if deletion.is_trash() => Some((target, deletion)),
+                _ => None,
+            })
+            .collect();
+        let [(target, deletion)] = trashes.as_slice() else {
+            panic!("one trash on Linux, found {}", trashes.len());
+        };
+        let days = deletion.min_age().unwrap().days();
+        let english = target.description().unwrap().as_str();
+        assert!(english.contains(&format!("{days} days")), "{english}");
+        let french = crate::description(crate::Language::French, english);
+        assert!(french.contains(&format!("{days} jours")), "{french}");
+    }
+
     /// Every string of a JSON value, decoded (an escaped `\u2014` included).
     fn strings(value: &serde_json::Value, found: &mut Vec<String>) {
         match value {

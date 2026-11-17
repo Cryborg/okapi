@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use okapi_engine::{Category, MaintenanceFound, Origin, OriginKey, ScanGroup};
-use okapi_rules::{BrowserKind, CleanupAction, Effect, Label, Language, RuleSet};
+use okapi_rules::{BrowserKind, CleanupAction, Effect, Label, Language, RuleSet, TargetDeletion};
 use okapi_tools::docker::Access;
 
 use crate::shown::from_home;
@@ -145,19 +145,24 @@ pub enum Preselection {
     Preselected,
     /// A performance cache: emptying it slows the next launch.
     CacheReset,
+    /// The trash: what goes from it is gone for good.
+    GoneForGood,
     /// Left to the user for another reason: a maintenance, a temporary
     /// directory outside `/tmp`.
     ToChoose,
 }
 
 impl Preselection {
-    /// What rules preselected or not, cache resets or not, say.
+    /// What rules preselected or not, cache resets or not, emptying a trash
+    /// or not, say.
     #[must_use]
-    pub const fn of(preselected: bool, cache_reset: bool) -> Self {
-        match (preselected, cache_reset) {
-            (true, _) => Self::Preselected,
-            (false, true) => Self::CacheReset,
-            (false, false) => Self::ToChoose,
+    pub const fn of(preselected: bool, cache_reset: bool, trash: bool) -> Self {
+        match (preselected, cache_reset, trash) {
+            // Whatever else is said of it: never checked beforehand.
+            (_, _, true) => Self::GoneForGood,
+            (true, _, false) => Self::Preselected,
+            (false, true, false) => Self::CacheReset,
+            (false, false, false) => Self::ToChoose,
         }
     }
 
@@ -227,6 +232,7 @@ impl GroupFacts {
             preselection: Preselection::of(
                 group.is_selected_by_default(),
                 group.is_cache_reset(),
+                group.is_trash(),
             ),
             needs_admin,
             targets: needs_admin
@@ -277,9 +283,14 @@ impl GroupFacts {
             .iter()
             .find(|target| Origin::of_target(target) == *origin)?;
         let descriptions: Vec<Label> = target.description().cloned().into_iter().collect();
+        let deletion = match target.effect() {
+            Effect::Delete(deletion) => Some(deletion),
+            Effect::Maintenance { .. } => None,
+        };
         let preselection = Preselection::of(
             target.is_selected_by_default(),
-            matches!(target.effect(), Effect::Delete(deletion) if deletion.is_cache_reset()),
+            deletion.is_some_and(TargetDeletion::is_cache_reset),
+            deletion.is_some_and(TargetDeletion::is_trash),
         );
         Some(Self::waiting_for_root(
             origin,
@@ -1021,7 +1032,7 @@ mod tests {
             description: String::new(),
             browser: None,
             categories: categories.iter().copied().collect(),
-            preselection: Preselection::of(preselected, !preselected),
+            preselection: Preselection::of(preselected, !preselected, false),
             needs_admin,
             targets: None,
             admin: AdminState::Locked,
@@ -1289,6 +1300,26 @@ mod tests {
             Some(Line::Category { state, enabled, .. }) => (*state, *enabled),
             other => panic!("expected the category first: {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_trash_is_left_to_the_user_whatever_else_its_rules_say() {
+        for (preselected, cache_reset) in [(true, false), (false, true), (false, false)] {
+            assert_eq!(
+                Preselection::of(preselected, cache_reset, true),
+                Preselection::GoneForGood,
+                "{preselected} {cache_reset}"
+            );
+        }
+        assert!(!Preselection::GoneForGood.is_preselected());
+        assert_eq!(
+            Preselection::of(true, false, false),
+            Preselection::Preselected
+        );
+        assert_eq!(
+            Preselection::of(false, false, false),
+            Preselection::ToChoose
+        );
     }
 
     #[test]

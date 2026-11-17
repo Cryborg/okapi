@@ -10,6 +10,10 @@ use crate::values::Label;
 
 /// How a system target deletes.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the rule's own flags, each independent of the others but those validation refuses together"
+)]
 pub struct TargetDeletion {
     path: TemplatePath,
     child_subdirectory: Option<RelativePath>,
@@ -17,6 +21,7 @@ pub struct TargetDeletion {
     deep_recency_check: bool,
     cache_reset: bool,
     keep_hard_linked: bool,
+    trash: bool,
 }
 
 impl TargetDeletion {
@@ -58,6 +63,14 @@ impl TargetDeletion {
     pub const fn keeps_hard_linked(&self) -> bool {
         self.keep_hard_linked
     }
+
+    /// Whether `path` is the `files` folder of a freedesktop trash: an entry
+    /// of it is offered whole, and only once its `.trashinfo` says it went
+    /// there longer ago than [`Self::min_age`]; it is removed for good.
+    #[must_use]
+    pub const fn is_trash(&self) -> bool {
+        self.trash
+    }
 }
 
 /// A system directory to clean: temporary files, logs, crash dumps, package caches.
@@ -88,11 +101,12 @@ impl CleanTarget {
     }
 
     /// Whether the target is selected before the user chooses: never for a
-    /// performance cache nor a maintenance operation (invariant 5).
+    /// performance cache, a maintenance operation nor a trash, whose entries
+    /// go for good (invariant 5).
     #[must_use]
     pub const fn is_selected_by_default(&self) -> bool {
         match &self.effect {
-            Effect::Delete(deletion) => !deletion.cache_reset,
+            Effect::Delete(deletion) => !deletion.cache_reset && !deletion.trash,
             Effect::Maintenance { .. } => false,
         }
     }
@@ -132,6 +146,8 @@ struct RawCleanTarget {
     cache_reset: bool,
     #[serde(default)]
     keep_hard_linked: bool,
+    #[serde(default)]
+    trash: bool,
     cleanup_action: Option<CleanupAction>,
     description: Option<Label>,
 }
@@ -140,22 +156,43 @@ impl TryFrom<RawCleanTarget> for CleanTarget {
     type Error = ValidationError;
 
     fn try_from(raw: RawCleanTarget) -> Result<Self, Self::Error> {
-        let conflict = |second| ValidationError::ConflictingFields {
+        let conflict = |first, second| ValidationError::ConflictingFields {
             rule: raw.path.to_string(),
-            first: "cleanupAction",
+            first,
             second,
         };
+        let action_conflict = |second| conflict("cleanupAction", second);
         let effect = match raw.cleanup_action {
-            Some(_) if raw.child_subdir.is_some() => return Err(conflict("childSubdir")),
-            Some(_) if raw.min_age_days.is_some() => return Err(conflict("minAgeDays")),
-            Some(_) if raw.deep_recency_check => return Err(conflict("deepRecencyCheck")),
-            Some(_) if raw.cache_reset => return Err(conflict("cacheReset")),
-            Some(_) if raw.keep_hard_linked => return Err(conflict("keepHardLinked")),
+            Some(_) if raw.child_subdir.is_some() => return Err(action_conflict("childSubdir")),
+            Some(_) if raw.min_age_days.is_some() => return Err(action_conflict("minAgeDays")),
+            Some(_) if raw.deep_recency_check => return Err(action_conflict("deepRecencyCheck")),
+            Some(_) if raw.cache_reset => return Err(action_conflict("cacheReset")),
+            Some(_) if raw.keep_hard_linked => return Err(action_conflict("keepHardLinked")),
+            Some(_) if raw.trash => return Err(action_conflict("trash")),
             Some(action) => Effect::Maintenance {
                 action,
                 affected: raw.path,
             },
             None => {
+                if raw.trash {
+                    // What it holds is the user's, offered by when it went
+                    // there, never root's to empty.
+                    for (set, second) in [
+                        (raw.child_subdir.is_some(), "childSubdir"),
+                        (raw.needs_admin, "needsAdmin"),
+                        (raw.cache_reset, "cacheReset"),
+                        (raw.keep_hard_linked, "keepHardLinked"),
+                    ] {
+                        if set {
+                            return Err(conflict("trash", second));
+                        }
+                    }
+                    if raw.min_age_days.is_none() {
+                        return Err(ValidationError::TrashWithoutAge {
+                            rule: raw.path.to_string(),
+                        });
+                    }
+                }
                 raw.path.ensure_bounded_deletion()?;
                 Effect::Delete(TargetDeletion {
                     path: raw.path,
@@ -164,6 +201,7 @@ impl TryFrom<RawCleanTarget> for CleanTarget {
                     deep_recency_check: raw.deep_recency_check,
                     cache_reset: raw.cache_reset,
                     keep_hard_linked: raw.keep_hard_linked,
+                    trash: raw.trash,
                 })
             }
         };
@@ -262,6 +300,7 @@ mod tests {
         assert_eq!(deletion.min_age(), None);
         assert!(!deletion.deep_recency_check());
         assert!(!deletion.keeps_hard_linked());
+        assert!(!deletion.is_trash());
     }
 
     #[test]
@@ -338,6 +377,51 @@ mod tests {
                 "{error}"
             );
         }
+    }
+
+    #[test]
+    fn a_trash_is_never_selected_and_needs_its_age_alone() {
+        let trash = target(
+            r#"{"path": "${LOCAL_SHARE}/Trash/files", "subcategory": "Trash", "minAgeDays": 30, "trash": true}"#,
+        )
+        .unwrap();
+        assert!(!trash.is_selected_by_default());
+        let Effect::Delete(deletion) = trash.effect() else {
+            panic!("expected a deletion");
+        };
+        assert!(deletion.is_trash());
+        assert!(!deletion.is_cache_reset());
+        assert_eq!(deletion.min_age().map(AgeDays::days), Some(30));
+
+        let error =
+            target(r#"{"path": "${LOCAL_SHARE}/Trash/files", "subcategory": "T", "trash": true}"#)
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("needs `minAgeDays`"), "{error}");
+        for (extra, second) in [
+            (r#""childSubdir": "x""#, "childSubdir"),
+            (r#""needsAdmin": true"#, "needsAdmin"),
+            (r#""cacheReset": true"#, "cacheReset"),
+            (r#""keepHardLinked": true"#, "keepHardLinked"),
+        ] {
+            let json = format!(
+                r#"{{"path": "${{LOCAL_SHARE}}/Trash/files", "subcategory": "T", "minAgeDays": 30, "trash": true, {extra}}}"#
+            );
+            let error = target(&json).unwrap_err().to_string();
+            assert!(
+                error.contains(&format!("combines `trash` and `{second}`")),
+                "{error}"
+            );
+        }
+        let error = target(
+            r#"{"path": "/var/log/journal", "subcategory": "J", "cleanupAction": "journal-vacuum", "trash": true}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("combines `cleanupAction` and `trash`"),
+            "{error}"
+        );
     }
 
     #[test]

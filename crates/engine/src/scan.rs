@@ -17,6 +17,7 @@ use crate::report::{
     ScanStats, UnsafeReason,
 };
 use crate::roots::{BrowserRule, PlannedKind, PlannedRoot, Planner, Planning, RuleEntry};
+use crate::trash::{FolderRefusal, TrashGate};
 use crate::walk::{Found, Limits, Readers, RootProblem, ScanProgress, WalkContext, walk};
 use crate::watch::{Progress, Watch};
 
@@ -230,6 +231,7 @@ pub(crate) fn scan_entries(
         let remover = needs_admin.then_some(ROOT_USER).or(planning.user);
         let keep_hard_linked =
             group_attributes.is_some_and(|attributes| attributes.keep_hard_linked);
+        let trash = group_attributes.is_some_and(|attributes| attributes.trash);
         let withheld = root.kind == PlannedKind::Withheld;
         let found = match &root.kind {
             PlannedKind::File(found) => {
@@ -249,10 +251,12 @@ pub(crate) fn scan_entries(
                     remover,
                     root_owner: None,
                     keep_hard_linked,
-                    recent_holds_below: group_attributes
-                        .is_some_and(GroupAttributes::holds_a_custom_folder),
+                    // An entry of a trash goes whole: one changed lately
+                    // would only be read to be kept.
+                    recent_holds_below: trash
+                        || group_attributes.is_some_and(GroupAttributes::holds_a_custom_folder),
                 };
-                walk_root(&mut report, &root, &origins, context, &mut progress)
+                walk_root(&mut report, &root, &origins, context, trash, &mut progress)
             }
         };
         if watch.is_cancelled() {
@@ -275,7 +279,7 @@ pub(crate) fn scan_entries(
         found_by_group.entry(group).or_default().extend(
             found
                 .into_iter()
-                .map(|found| found_below(found, &root, keep_hard_linked)),
+                .map(|found| found_below(found, &root, keep_hard_linked, trash)),
         );
     }
     if watch.is_cancelled() {
@@ -295,14 +299,15 @@ pub(crate) fn scan_entries(
 
 /// `found` below `root`, its group keeping its files with other names or
 /// not (`keep_hard_linked`: the group's, its rules merged, never the root's
-/// own rule's alone).
-fn found_below(found: Found, root: &PlannedRoot, keep_hard_linked: bool) -> FoundItem {
+/// own rule's alone), emptying a trash or not (`trash`, the same way).
+fn found_below(found: Found, root: &PlannedRoot, keep_hard_linked: bool, trash: bool) -> FoundItem {
     FoundItem {
         found,
         root: root.path.clone(),
         root_identity: root.identity,
         cutoff: root.cutoff,
         keep_hard_linked,
+        trash,
     }
 }
 
@@ -469,16 +474,76 @@ fn roots_by_category(
     counted
 }
 
-/// Walks one directory root and records in `report` what kept it from being
-/// walked whole.
+/// The gate of the trash whose `files` folder is `root`, its entries let go
+/// by their `.trashinfo` ([`TrashGate`]); `None`, said, when none may go:
+/// its `info` folder is unusable, or the remover is unknown or root, who
+/// never empties what the user put there (nor reads its `.trashinfo`).
+fn trash_gate(
+    report: &mut ReportBuilder,
+    root: &PlannedRoot,
+    origins: &[Origin],
+    remover: Option<u32>,
+) -> Option<TrashGate> {
+    let Some(remover) = remover.filter(|remover| *remover != ROOT_USER) else {
+        tracing::info!(root = ?root.path, ?remover, "a trash is never emptied by root nor by a user unknown: not walked");
+        return None;
+    };
+    let information = okapi_platform::information_folder(&root.path);
+    match TrashGate::open(&root.path, root.cutoff, Some(remover)) {
+        Ok(gate) => Some(gate),
+        Err(FolderRefusal::Absent) => {
+            tracing::info!(root = ?root.path, "trash without its information folder: nothing of it offered");
+            None
+        }
+        Err(FolderRefusal::NotATrash) => {
+            tracing::error!(root = ?root.path, "a trash rule names no `files` folder of a trash: not walked");
+            for origin in origins {
+                report.issue(ScanIssue::Unsupported {
+                    origin: origin.clone(),
+                });
+            }
+            None
+        }
+        Err(FolderRefusal::Changed) => {
+            tracing::info!(information = ?information, "information folder of the trash a link, or not a folder: nothing of it offered");
+            report.issue(ScanIssue::UnsafeRoot {
+                origins: origins.to_vec(),
+                path: information.unwrap_or_else(|| root.path.clone()),
+                reason: UnsafeReason::Replaced,
+            });
+            None
+        }
+        Err(FolderRefusal::Unreadable(error)) => {
+            tracing::info!(information = ?information, %error, code = error.raw_os_error(), "information folder of the trash unreadable: nothing of it offered");
+            report.issue(ScanIssue::UnreadableRoot {
+                origins: origins.to_vec(),
+                path: information.unwrap_or_else(|| root.path.clone()),
+                error: error.kind(),
+            });
+            None
+        }
+    }
+}
+
+/// Walks one directory root, the `files` folder of a trash when `trash`,
+/// and records in `report` what kept it from being walked whole.
 fn walk_root(
     report: &mut ReportBuilder,
     root: &PlannedRoot,
     origins: &[Origin],
     context: WalkContext<'_>,
+    trash: bool,
     progress: &mut ScanProgress<'_>,
 ) -> Vec<Found> {
-    let walked = walk(&root.path, root.identity, context, progress);
+    let gate = if trash {
+        let Some(gate) = trash_gate(report, root, origins, context.remover) else {
+            return Vec::new();
+        };
+        Some(gate)
+    } else {
+        None
+    };
+    let walked = walk(&root.path, root.identity, context, gate.as_ref(), progress);
     tracing::debug!(
         root = ?root.path,
         found = walked.found.len(),

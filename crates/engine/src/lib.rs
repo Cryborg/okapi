@@ -20,6 +20,7 @@ mod report;
 mod roots;
 mod scan;
 mod size;
+mod trash;
 mod walk;
 mod watch;
 

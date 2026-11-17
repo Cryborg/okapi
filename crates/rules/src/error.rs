@@ -72,6 +72,9 @@ pub enum ValidationError {
         second: &'static str,
     },
 
+    #[error("`{rule}` empties a trash: it needs `minAgeDays`, how long an entry stays there")]
+    TrashWithoutAge { rule: String },
+
     #[error("anchor path `{anchor_path}` must end with the anchor `{anchor}`")]
     AnchorPathMismatch { anchor: String, anchor_path: String },
 

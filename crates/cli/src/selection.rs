@@ -12,8 +12,9 @@ pub enum Decision {
     Selected,
     /// Shown, but outside the categories asked for.
     OutsideCategories,
-    /// Never removed unless chosen: a cache reset, a maintenance operation
-    /// or a folder the user chose (invariant 5); a run never chooses one.
+    /// Never removed unless chosen: a cache reset, a maintenance operation,
+    /// a folder the user chose or the trash (invariant 5); a run never
+    /// chooses one.
     NotPreselected,
     /// Its removal needs the administrator, through the privileged helper.
     NeedsAdmin,

@@ -1,7 +1,8 @@
 // The Mises à jour widget of the Home page: what the updates screen read
 // last, in its words, and the way to that screen. Nothing installs from the
-// Home page. Apart from dashboard-widgets.slint, which updates.slint
-// imports: it imports both.
+// Home page. A file of its own: updates.slint imports
+// dashboard-widgets.slint, so the widget, which needs both, cannot live in
+// the latter.
 import { Theme } from "theme.slint";
 import { ActionButton, ButtonKind, Detail } from "widgets.slint";
 import { Dashboard, ReadingState, WidgetKind } from "dashboard-model.slint";
@@ -17,11 +18,11 @@ export component UpdatesWidget inherits WidgetCard {
     // Neither source could be read.
     property <bool> nothing-read: Updates.system-state != SourceState.read && Updates.snaps-state != SourceState.read;
     property <string> heading: root.waits ? UpdatesWords.summary()
-        : UpdatesWords.settled() ? (Updates.system-state == SourceState.read ? @tr("Tout est à jour") : @tr("Les applis sont à jour"))
+        : UpdatesWords.up-to-date() ? (Updates.system-state == SourceState.read ? @tr("Tout est à jour") : @tr("Les applis sont à jour"))
         : root.nothing-read ? @tr("Recherche en échec")
         : @tr("Aucune mise à jour trouvée");
     // Why it is not said up to date, when nothing waits.
-    property <string> unsure: root.waits || UpdatesWords.settled() ? ""
+    property <string> unsure: root.waits || UpdatesWords.up-to-date() ? ""
         : root.nothing-read ? @tr("Les mises à jour n'ont pas pu être recherchées. Le détail est dans Mises à jour.")
         : @tr("La recherche n'a pas tout vérifié. Le détail est dans Mises à jour.");
 
@@ -30,7 +31,7 @@ export component UpdatesWidget inherits WidgetCard {
     // searched.
     state: !Updates.has-read ? ReadingState.reading
         : UpdatesWords.no-source() ? ReadingState.unavailable : ReadingState.read;
-    note: Updates.install-step != InstallStep.idle ? @tr("Installation…")
+    note: Updates.install-step == InstallStep.running || Updates.install-step == InstallStep.verifying ? @tr("Installation…")
         : Updates.step == UpdatesStep.searching ? @tr("Recherche…") : "";
     summary: root.heading;
 

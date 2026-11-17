@@ -4929,10 +4929,6 @@ msgid "Recherche…"
 msgstr "Searching…"
 
 msgctxt "UpdatesWidget"
-msgid "{} de sécurité"
-msgstr "{} for security"
-
-msgctxt "UpdatesWidget"
 msgid "Recherché {}"
 msgstr "Searched {}"
 

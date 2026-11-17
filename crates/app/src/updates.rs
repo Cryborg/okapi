@@ -252,7 +252,7 @@ impl UpdatesScreen {
                     older_than(read_at, (state.seams.now)(), READ_AGAIN_AFTER)
                 })
         };
-        tracing::debug!(due, "updates looked at");
+        tracing::debug!(due, last_read = ?self.0.borrow().read_at, "updates looked at");
         if due {
             self.search(false);
         } else {

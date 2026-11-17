@@ -75,12 +75,18 @@ export global UpdatesWords {
             && (Updates.snaps-state != SourceState.read || Updates.snap-lines.length == 0)
     }
 
-    // Up to date, read by lists known to be recent from every source there
-    // is: an old or undated list says nothing of what came out since.
-    pure public function settled() -> bool {
-        Updates.step == UpdatesStep.read && !Updates.refresh-failed && !Updates.lists-old
+    // What was read last says up to date, by lists known to be recent from
+    // every source there is: an old or undated list says nothing of what
+    // came out since. Still the last reading's while another is searched.
+    pure public function up-to-date() -> bool {
+        !Updates.refresh-failed && !Updates.lists-old
             && Updates.system-state != SourceState.failed && Updates.snaps-state != SourceState.failed
             && nothing-waits()
+    }
+
+    // Up to date, by a reading over.
+    pure public function settled() -> bool {
+        Updates.step == UpdatesStep.read && up-to-date()
     }
 
     pure public function kind(kind: UpdateKind) -> string {

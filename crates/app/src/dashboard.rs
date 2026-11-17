@@ -853,6 +853,7 @@ impl DashboardScreen {
             state.read_updates.clone().filter(|_| shown)
         };
         if let Some(read) = read {
+            tracing::debug!("updates read for the dashboard, when not lately");
             read();
         }
     }

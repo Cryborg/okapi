@@ -70,7 +70,10 @@ impl WidgetKind {
     /// asks a daemon (the updates, from snapd's store) comes only when the
     /// user adds it.
     pub(crate) const fn in_default(self) -> bool {
-        !matches!(self, Self::Updates)
+        match self {
+            Self::Reclaimable | Self::Disks | Self::Memory | Self::Processor | Self::System => true,
+            Self::Updates => false,
+        }
     }
 }
 

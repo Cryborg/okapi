@@ -2266,6 +2266,30 @@ fn the_home_page_reads_the_updates_again_only_once_old() {
 }
 
 #[test]
+fn the_widget_keeps_the_last_verdict_while_another_search_runs() {
+    // Catches « pas tout vérifié » said each time a search starts.
+    let fake = Arc::new(Fake::default());
+    let (window, _directory) = on_home(&fake, true);
+    read(&window);
+    assert_eq!(widget_said(&window), "Tout est à jour");
+    let (go, hold) = mpsc::channel();
+    *fake.hold_snaps.lock().unwrap() = Some(hold);
+    later(6 * 60);
+    button(&window, "Nettoyeur").invoke_accessible_default_action();
+    slint::platform::update_timers_and_animations();
+    button(&window, "Accueil").invoke_accessible_default_action();
+    slint::platform::update_timers_and_animations();
+    read_until(&window, |_| fake.readings.load(Ordering::SeqCst) == 2);
+    read_once();
+    assert_eq!(updates(&window).get_step(), ui::UpdatesStep::Searching);
+    assert_eq!(widget_said(&window), "Tout est à jour");
+    assert!(shows(&window, "Recherche…"));
+    go.send(()).unwrap();
+    read(&window);
+    assert_eq!(widget_said(&window), "Tout est à jour");
+}
+
+#[test]
 fn the_home_page_without_the_widget_reads_no_update_until_it_is_added() {
     let fake = Arc::new(Fake::default());
     let (window, _directory) = on_home(&fake, false);

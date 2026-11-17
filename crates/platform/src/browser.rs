@@ -329,10 +329,21 @@ mod linux {
             tracing::debug!(lock = %lock.display(), host, "browser lock of another machine");
             return Read::Unknown(UnknownHolder::OtherMachine);
         }
+        named(pid, sees_every_lock())
+    }
+
+    /// What a link of this machine naming `pid` says to an Okapi that sees
+    /// every process of the system (`sees_every`) or only those of its own
+    /// pid namespace (a container, a sandbox): there, a number it cannot
+    /// open may still be a browser that runs outside.
+    fn named(pid: u32, sees_every: bool) -> Read {
         if pid == std::process::id() {
-            return Read::Unknown(UnknownHolder::Okapi);
+            Read::Unknown(UnknownHolder::Okapi)
+        } else if sees_every {
+            Read::Named(pid)
+        } else {
+            Read::Unknown(UnknownHolder::Confined)
         }
-        Read::Named(pid)
     }
 
     /// A descriptor of process `pid`.
@@ -478,6 +489,15 @@ mod linux {
         }
 
         /// A temporary user-data directory, canonical, with a file in it.
+        /// For the tests of a process a lock names: outside the system's
+        /// first pid namespace, no number is taken for a process.
+        fn in_the_systems_pid_namespace() {
+            assert!(
+                sees_every_lock(),
+                "these tests need the system's first pid namespace"
+            );
+        }
+
         fn user_data() -> (tempfile::TempDir, PathBuf, PathBuf) {
             let directory = tempfile::tempdir().unwrap();
             let user_data = directory.path().canonicalize().unwrap();
@@ -496,10 +516,7 @@ mod linux {
         /// `child` once `file` is locked by `locker`, a process the lock
         /// names.
         fn once_locked(mut child: Child, file: &Path, locker: impl Fn(u32) -> bool) -> Child {
-            assert!(
-                sees_every_lock(),
-                "these tests need the system's first pid namespace"
-            );
+            in_the_systems_pid_namespace();
             for _ in 0..500 {
                 if matches!(read(file, LockKind::FileLock), Read::Named(pid) if locker(pid)) {
                     return child;
@@ -651,7 +668,24 @@ mod linux {
         }
 
         #[test]
+        fn a_link_read_in_a_pid_namespace_of_its_own_is_held_by_someone_unknown() {
+            let other = std::process::id() + 1;
+            assert!(matches!(named(other, true), Read::Named(pid) if pid == other));
+            assert!(matches!(
+                named(other, false),
+                Read::Unknown(UnknownHolder::Confined)
+            ));
+            for sees_every in [true, false] {
+                assert!(matches!(
+                    named(std::process::id(), sees_every),
+                    Read::Unknown(UnknownHolder::Okapi)
+                ));
+            }
+        }
+
+        #[test]
         fn a_browser_is_vouched_for_through_the_links_of_its_directory() {
+            in_the_systems_pid_namespace();
             let (directory, user_data, file) = user_data();
             // A snap's `current`, which names the revision it runs from.
             let current = directory.path().join("current");
@@ -724,10 +758,7 @@ mod linux {
                 holder(&lock, LockKind::SandboxedLink, &user_data),
                 Holder::Absent
             ));
-            assert!(
-                sees_every_lock(),
-                "these tests need the system's first pid namespace"
-            );
+            in_the_systems_pid_namespace();
             // A number above any the system gives: the sandbox's own.
             let lock = lock_to(&user_data, &format!("{}-{}", this_host(), i32::MAX));
             assert!(
@@ -748,6 +779,7 @@ mod linux {
 
         #[test]
         fn a_running_browser_is_vouched_for_then_closed() {
+            in_the_systems_pid_namespace();
             let (_directory, user_data, file) = user_data();
             let lock = user_data.join(CHROMIUM_LOCK);
             assert!(matches!(
@@ -778,6 +810,7 @@ mod linux {
 
         #[test]
         fn a_holder_okapi_cannot_vouch_for_is_unknown_and_says_why() {
+            in_the_systems_pid_namespace();
             let (_directory, user_data, _) = user_data();
             let elsewhere = tempfile::tempdir().unwrap();
             let file = elsewhere.path().canonicalize().unwrap().join("other");
@@ -824,6 +857,7 @@ mod linux {
 
         #[test]
         fn a_neighbour_directory_is_not_the_browser_s() {
+            in_the_systems_pid_namespace();
             let parent = tempfile::tempdir().unwrap();
             let parent = parent.path().canonicalize().unwrap();
             let user_data = parent.join("google-chrome");

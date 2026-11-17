@@ -2,6 +2,27 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 
+/// Whether the process may write to `path` as the system judges it (its
+/// mode, its ACLs, the search permission of its parents), without opening
+/// it: a daemon its socket starts stays asleep.
+///
+/// # Errors
+///
+/// `path` cannot be judged: [`io::ErrorKind::NotFound`]...
+#[cfg(target_os = "linux")]
+pub fn may_write(path: &Path) -> io::Result<bool> {
+    use rustix::fs::{Access, AtFlags, CWD, accessat};
+    use rustix::io::Errno;
+
+    // For the real user, as `ensure_modifiable` (`directory/linux.rs`)
+    // asks: the process is never set-user-ID.
+    match accessat(CWD, path, Access::WRITE_OK, AtFlags::empty()) {
+        Ok(()) => Ok(true),
+        Err(Errno::ACCESS) => Ok(false),
+        Err(errno) => Err(errno.into()),
+    }
+}
+
 /// The user the process acts as (its effective user), who removes what a
 /// cleaning removes.
 #[cfg(target_os = "linux")]
@@ -260,6 +281,34 @@ mod tests {
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     use super::*;
+
+    /// A socket the user owns, then one its mode closes, then none.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_system_says_whether_a_socket_may_be_written_to() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("docker.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let with_mode = |mode| {
+            std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(mode)).unwrap();
+            may_write(&socket).unwrap()
+        };
+        assert!(with_mode(0o600), "its owner");
+        assert!(with_mode(0o200), "writing is what counts");
+        // A process the modes do not bind (root, or one that overrides
+        // them) writes whatever they say.
+        let probe = directory.path().join("closed");
+        std::fs::write(&probe, b"").unwrap();
+        std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let bound = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&probe)
+            .is_err();
+        assert_eq!(with_mode(0o400), !bound, "readable is not writable");
+        assert_eq!(with_mode(0o000), !bound);
+        let error = may_write(&directory.path().join("none.sock")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
 
     #[test]
     fn the_journal_is_appended_to_and_private() {

@@ -39,6 +39,8 @@ pub use probe::{
     load_average, memory, mounts, names_a_file, processes, read_regular_capped, removable,
     rotational, space, uptime,
 };
+#[cfg(target_os = "linux")]
+pub use session::may_write;
 pub use session::sync_directory;
 pub use session::{
     create_private_directory, effective_user, open_existing_journal, open_for_reading,

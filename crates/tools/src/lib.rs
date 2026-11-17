@@ -4,6 +4,9 @@
 pub mod apps;
 #[cfg(feature = "disk-usage")]
 pub mod disk_usage;
+// Its socket is judged by Linux's access check (`okapi-platform`).
+#[cfg(all(target_os = "linux", feature = "docker"))]
+pub mod docker;
 #[cfg(feature = "duplicates")]
 pub mod duplicates;
 #[cfg(feature = "monitor")]
@@ -14,6 +17,9 @@ mod mounts;
 pub mod packages;
 #[cfg(any(feature = "duplicates", feature = "apps"))]
 mod trashing;
+// Its daemons (snapd, Docker) are asked on Linux.
+#[cfg(all(target_os = "linux", any(feature = "packages", feature = "docker")))]
+mod unix_http;
 // Its sources are Linux's daemons.
 #[cfg(all(feature = "updates", target_os = "linux"))]
 pub mod updates;

@@ -54,6 +54,9 @@ packages = [
     "dep:tracing",
     "dep:zbus",
 ]
+# Docker's engine, asked on its socket and never run: its build cache
+# pruned.
+docker = ["dep:okapi-platform", "dep:serde", "dep:serde_json", "dep:thiserror", "dep:tracing"]
 # What waits for an update, read from those daemons.
 updates = ["packages", "dep:jiff", "dep:okapi-rules"]
 # The applications installed and their space (deb, snap, flatpak).

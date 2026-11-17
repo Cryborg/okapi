@@ -6,13 +6,14 @@
 //! snap's removal and snaps' refresh, polkit asking the user for the rights;
 //! the change they start followed to its end.
 
-use std::io::{self, Read as _, Write as _};
-use std::os::unix::net::UnixStream;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::Value;
+
+use crate::unix_http::{self, Failure, LARGEST_ANSWER, SUCCESS, excerpt};
 
 /// Where snapd listens, for every user (its access checks are its own).
 const SOCKET: &str = "/run/snapd.socket";
@@ -45,19 +46,8 @@ const MESSAGE_APPS_RUNNING: &str = " has running apps ";
 const HTTP_NOT_ALLOWED: [u16; 2] = [401, 403];
 /// What a publisher's `validation` is when the store vouches for it.
 pub const VALIDATION_VOUCHED: [&str; 2] = ["verified", "starred"];
-/// The largest answer read: beyond, snapd is not what answers.
-const LARGEST_ANSWER: usize = 16 * 1024 * 1024;
-/// What is read at a time.
-const READ_SIZE: usize = 64 * 1024;
-/// The end of an answer's head.
-const HEAD_END: &[u8] = b"\r\n\r\n";
-const LINE_END: &[u8] = b"\r\n";
 /// The envelope of an error.
 const ERROR_TYPE: &str = "error";
-/// How much of an answer that cannot be read is traced.
-const TRACED_EXCERPT: usize = 200;
-/// What an HTTP status of success is.
-const SUCCESS: std::ops::Range<u16> = 200..300;
 
 /// Why snapd gave no answer that could be used.
 #[derive(Debug, thiserror::Error)]
@@ -508,27 +498,36 @@ impl Snapd {
     /// snapd's answer to `request`: its envelope, when it is no error.
     fn request(&self, request: &Request<'_>) -> Result<Envelope, SnapdError> {
         let path = request.path;
-        let mut stream = UnixStream::connect(&self.socket).map_err(|source| {
-            if matches!(
-                source.kind(),
-                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
-            ) {
-                SnapdError::Absent {
-                    socket: self.socket.clone(),
-                    source,
-                }
-            } else {
-                SnapdError::Io(source)
+        let interaction = [("X-Allow-Interaction", "true")];
+        let exchanged = unix_http::exchange(
+            &self.socket,
+            &unix_http::Request {
+                method: request.method,
+                path,
+                headers: if request.interactive {
+                    &interaction
+                } else {
+                    &[]
+                },
+                body: request.body.clone(),
+                wait: request.wait,
+            },
+            &|| false,
+        );
+        let (status, body) = exchanged.map_err(|failure| match failure {
+            Failure::Absent(source) => SnapdError::Absent {
+                socket: self.socket.clone(),
+                source,
+            },
+            Failure::NotAllowed(error) | Failure::Unreached(error) | Failure::Io(error) => {
+                SnapdError::Io(error)
             }
+            Failure::Truncated { read } => SnapdError::Truncated { read },
+            Failure::TooLarge => SnapdError::TooLarge,
+            Failure::Malformed(what) => SnapdError::Malformed(what),
+            // Never cancelled: nothing looks at it.
+            Failure::Cancelled => SnapdError::Io(io::ErrorKind::Interrupted.into()),
         })?;
-        stream
-            .set_write_timeout(Some(request.wait))
-            .map_err(SnapdError::Io)?;
-        stream
-            .write_all(&request_bytes(request))
-            .map_err(SnapdError::Io)?;
-        let raw = read_whole(&mut stream, Instant::now() + request.wait)?;
-        let (status, body) = parse_answer(&raw)?;
         let envelope: Envelope = serde_json::from_slice(&body).inspect_err(|error| {
             tracing::warn!(path, status, %error, body = %excerpt(&body), "snapd's answer is no envelope");
         })?;
@@ -557,132 +556,6 @@ impl Snapd {
         }
         Ok(envelope)
     }
-}
-
-/// The start of `bytes`, as text, for a trace.
-fn excerpt(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(&bytes[..bytes.len().min(TRACED_EXCERPT)]).into_owned()
-}
-
-/// The bytes of `request`.
-fn request_bytes(request: &Request<'_>) -> Vec<u8> {
-    let interaction = if request.interactive {
-        "X-Allow-Interaction: true\r\n"
-    } else {
-        ""
-    };
-    let (content, body) = request.body.as_deref().map_or((String::new(), ""), |body| {
-        (
-            format!(
-                "Content-Type: application/json\r\nContent-Length: {}\r\n",
-                body.len()
-            ),
-            body,
-        )
-    });
-    format!(
-        "{} {} HTTP/1.1\r\nHost: localhost\r\nUser-Agent: okapi\r\n{interaction}{content}Connection: close\r\n\r\n{body}",
-        request.method, request.path
-    )
-    .into_bytes()
-}
-
-/// Everything until the connection closes, by `deadline`, within the cap.
-fn read_whole(stream: &mut UnixStream, deadline: Instant) -> Result<Vec<u8>, SnapdError> {
-    let mut raw = Vec::new();
-    let mut chunk = vec![0; READ_SIZE];
-    loop {
-        let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return Err(SnapdError::Io(io::ErrorKind::TimedOut.into()));
-        }
-        stream
-            .set_read_timeout(Some(left))
-            .map_err(SnapdError::Io)?;
-        let read = match stream.read(&mut chunk) {
-            Ok(read) => read,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(SnapdError::Io(error)),
-        };
-        if read == 0 {
-            return Ok(raw);
-        }
-        raw.extend_from_slice(&chunk[..read]);
-        if raw.len() > LARGEST_ANSWER {
-            return Err(SnapdError::TooLarge);
-        }
-    }
-}
-
-/// The status and the body of an answer read whole.
-fn parse_answer(raw: &[u8]) -> Result<(u16, Vec<u8>), SnapdError> {
-    let head_length = find(raw, HEAD_END).ok_or(SnapdError::Truncated { read: raw.len() })?;
-    let head = std::str::from_utf8(&raw[..head_length])
-        .map_err(|_| SnapdError::Malformed("head not in UTF-8"))?;
-    let rest = &raw[head_length + HEAD_END.len()..];
-    let mut lines = head.split("\r\n");
-    let status = lines
-        .next()
-        .and_then(|line| line.strip_prefix("HTTP/1."))
-        .and_then(|line| line.split(' ').nth(1))
-        .and_then(|code| code.parse::<u16>().ok())
-        .ok_or(SnapdError::Malformed("no status line"))?;
-    let mut chunked = false;
-    let mut length = None;
-    for line in lines {
-        let Some((name, value)) = line.split_once(':') else {
-            return Err(SnapdError::Malformed("a header without a colon"));
-        };
-        let value = value.trim();
-        if name.eq_ignore_ascii_case("transfer-encoding") {
-            chunked = value.eq_ignore_ascii_case("chunked");
-        } else if name.eq_ignore_ascii_case("content-length") {
-            length = Some(
-                value
-                    .parse::<usize>()
-                    .map_err(|_| SnapdError::Malformed("a length that is not a number"))?,
-            );
-        }
-    }
-    let body = if chunked {
-        dechunk(rest, raw.len())?
-    } else if let Some(length) = length {
-        rest.get(..length)
-            .ok_or(SnapdError::Truncated { read: raw.len() })?
-            .to_vec()
-    } else {
-        rest.to_vec()
-    };
-    Ok((status, body))
-}
-
-/// The body sent in chunks, put back together.
-fn dechunk(mut rest: &[u8], read: usize) -> Result<Vec<u8>, SnapdError> {
-    let mut body = Vec::new();
-    loop {
-        let line_length = find(rest, LINE_END).ok_or(SnapdError::Truncated { read })?;
-        let size = std::str::from_utf8(&rest[..line_length])
-            .ok()
-            .and_then(|line| line.split(';').next())
-            .and_then(|size| usize::from_str_radix(size.trim(), 16).ok())
-            .ok_or(SnapdError::Malformed("a chunk size that is not a number"))?;
-        rest = &rest[line_length + LINE_END.len()..];
-        if size == 0 {
-            return Ok(body);
-        }
-        let chunk = rest.get(..size).ok_or(SnapdError::Truncated { read })?;
-        body.extend_from_slice(chunk);
-        rest = rest
-            .get(size..)
-            .and_then(|after| after.strip_prefix(LINE_END))
-            .ok_or(SnapdError::Truncated { read })?;
-    }
-}
-
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
 }
 
 #[cfg(test)]

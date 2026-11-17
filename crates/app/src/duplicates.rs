@@ -148,6 +148,10 @@ struct State {
     /// The personal folders holding a copy, offered to the quick selection.
     quick_folders: Vec<usize>,
     lines: Vec<Line>,
+    /// The copies checked when the confirmation opened: what goes when it
+    /// is confirmed, nothing else chosen meanwhile (a screen reader still
+    /// reaches the lines behind it).
+    confirming: Option<Vec<CopyId>>,
     room: usize,
     ended_at: Option<Timestamp>,
     moving: Option<Moving>,
@@ -201,6 +205,7 @@ impl DuplicatesScreen {
             groups: Vec::new(),
             quick_folders: Vec::new(),
             lines: Vec::new(),
+            confirming: None,
             room: DEFAULT_ROOM,
             ended_at: None,
             moving: None,
@@ -675,13 +680,26 @@ impl DuplicatesScreen {
         self.0.borrow().lines.get(index).copied()
     }
 
-    /// Whether the choices may change: never while copies move (what goes
-    /// is already taken).
+    /// Whether the choices may change: never while the confirmation is
+    /// open (what it counts goes) nor while copies move (what goes is
+    /// already taken).
     fn choosing(&self) -> bool {
-        self.0.borrow().moving.is_none()
+        let state = self.0.borrow();
+        let free = state.moving.is_none() && state.confirming.is_none();
+        if !free {
+            tracing::debug!(
+                moving = state.moving.is_some(),
+                confirming = state.confirming.is_some(),
+                "choices frozen"
+            );
+        }
+        free
     }
 
     fn toggle(&self, index: usize) {
+        if !self.choosing() {
+            return;
+        }
         let Some(Line::Copy(group, copy)) = self.line(index) else {
             return;
         };
@@ -694,10 +712,6 @@ impl DuplicatesScreen {
         else {
             return;
         };
-        if !self.choosing() {
-            tracing::debug!(group, copy, "copies moving: no box changes");
-            return;
-        }
         let toggled = self
             .0
             .borrow_mut()
@@ -839,24 +853,55 @@ impl DuplicatesScreen {
         });
     }
 
+    /// Opens the confirmation on the copies checked now, kept in
+    /// `confirming`.
     fn ask_confirmation(&self) {
-        let chosen = self
-            .read_window(|window| window.global::<ui::Duplicates>().get_chosen_files())
-            .unwrap_or(0);
-        if chosen > 0 && self.choosing() {
-            self.with_window(|duplicates| duplicates.set_confirming(true));
+        if !self.choosing() {
+            return;
         }
+        let Some(search) = self.0.borrow().shown() else {
+            tracing::warn!("a confirmation without a result not asked");
+            return;
+        };
+        let Some(report) = search.report() else {
+            tracing::error!("a confirmation without its report not asked");
+            return;
+        };
+        {
+            let mut state = self.0.borrow_mut();
+            let ids: Vec<CopyId> = report
+                .groups()
+                .iter()
+                .zip(&state.groups)
+                .flat_map(|(group, held)| held.checked(group))
+                .collect();
+            if ids.is_empty() {
+                tracing::debug!("nothing checked: no confirmation asked");
+                return;
+            }
+            tracing::info!(copies = ids.len(), "confirmation asked");
+            state.confirming = Some(ids);
+        }
+        self.with_window(|duplicates| duplicates.set_confirming(true));
     }
 
     fn cancel_confirmation(&self) {
+        tracing::info!("confirmation cancelled");
+        self.0.borrow_mut().confirming = None;
         self.with_window(|duplicates| duplicates.set_confirming(false));
     }
 
-    /// Moves the copies checked to the trash on a thread of its own: each
-    /// is read again there, and so is a copy that stays (invariant 7).
+    /// Moves the copies the confirmation counted to the trash on a thread of
+    /// its own: each is read again there, and so is a copy that stays
+    /// (invariant 7).
     fn confirm(&self) {
         self.with_window(|duplicates| duplicates.set_confirming(false));
-        if !self.choosing() {
+        let Some(ids) = self.0.borrow_mut().confirming.take() else {
+            tracing::warn!("a confirmation never asked refused");
+            return;
+        };
+        if self.0.borrow().moving.is_some() {
+            tracing::warn!("a confirmation while copies move refused");
             return;
         }
         let Some(search) = self.0.borrow().shown() else {
@@ -876,27 +921,15 @@ impl DuplicatesScreen {
                 return;
             }
         };
-        let (ids, bytes): (Vec<CopyId>, u64) = {
-            let state = self.0.borrow();
-            let Some(report) = search.report() else {
-                return;
-            };
-            let ids: Vec<CopyId> = report
-                .groups()
-                .iter()
-                .zip(&state.groups)
-                .flat_map(|(group, held)| held.checked(group))
-                .collect();
-            let bytes = ids
-                .iter()
-                .filter_map(|id| report.find(*id))
-                .map(|(group, _)| group.size())
-                .fold(0, u64::saturating_add);
-            (ids, bytes)
-        };
-        if ids.is_empty() {
+        let Some(report) = search.report() else {
+            tracing::error!("a confirmation without its report: nothing moved");
             return;
-        }
+        };
+        let bytes = ids
+            .iter()
+            .filter_map(|id| report.find(*id))
+            .map(|(group, _)| group.size())
+            .fold(0, u64::saturating_add);
         tracing::info!(copies = ids.len(), bytes, "move to the trash confirmed");
         let trash = Arc::clone(&self.0.borrow().seams.search.trash);
         let (sender, receiver) = mpsc::channel();
@@ -1003,6 +1036,7 @@ impl DuplicatesScreen {
         }
         state.groups.clear();
         state.lines.clear();
+        state.confirming = None;
         state.minutes_timer.stop();
         let calls = state.calls.clone();
         drop(state);

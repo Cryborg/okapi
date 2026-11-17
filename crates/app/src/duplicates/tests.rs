@@ -202,6 +202,12 @@ fn searched(window: &ui::AppWindow) {
     assert_eq!(duplicates(window).get_step(), ui::ToolStep::Result);
 }
 
+/// The confirmation asked, then confirmed.
+fn confirmed(window: &ui::AppWindow) {
+    duplicates(window).invoke_trash();
+    duplicates(window).invoke_confirm();
+}
+
 fn rows(window: &ui::AppWindow) -> Vec<ui::DuplicateRow> {
     duplicates(window).get_rows().iter().collect()
 }
@@ -385,7 +391,7 @@ fn while_copies_move_nothing_else_can_be_done() {
         Some(Arc::new(Mutex::new(held))),
     ));
     searched(&window);
-    duplicates(&window).invoke_confirm();
+    confirmed(&window);
     assert!(duplicates(&window).get_trashing());
     duplicates(&window).invoke_again();
     duplicates(&window).invoke_change();
@@ -647,8 +653,10 @@ fn the_confirmation_waits_on_cancel_and_escape_closes_it() {
     assert!(!duplicates(&window).get_confirming());
     assert!(downloaded.exists());
     assert_eq!(duplicates(&window).get_step(), ui::ToolStep::Result);
-    // Nothing chosen: nothing to confirm.
+    // Closed, the choices are free again. Nothing chosen: nothing to
+    // confirm.
     duplicates(&window).invoke_deselect_all();
+    assert_eq!(duplicates(&window).get_chosen_files(), 0);
     duplicates(&window).invoke_trash();
     assert!(!duplicates(&window).get_confirming());
 }
@@ -662,7 +670,7 @@ fn a_receipt_where_nothing_went_says_so() {
     searched(&window);
     std::thread::sleep(Duration::from_millis(30));
     fs::write(&downloaded, content(22)).unwrap();
-    duplicates(&window).invoke_confirm();
+    confirmed(&window);
     read_until(&window, |window| {
         duplicates(window).get_step() == ui::ToolStep::Receipt
     });
@@ -698,7 +706,7 @@ fn closing_waits_a_little_for_a_move_under_way() {
         Some(Arc::new(Mutex::new(held))),
     ));
     searched(&window);
-    duplicates(&window).invoke_confirm();
+    confirmed(&window);
     assert!(duplicates(&window).get_trashing());
     let later = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(100));
@@ -764,11 +772,14 @@ fn a_result_stays_when_the_settings_are_refused_and_a_receipt_goes_back_to_the_s
     assert_eq!(duplicates(&window).get_step(), ui::ToolStep::Result);
     assert_eq!(duplicates(&window).get_refused(), ui::ToolRefusal::Unsaved);
     assert_eq!(duplicates(&window).get_chosen_files(), 1);
-    duplicates(&window).invoke_confirm();
+    // Said again by the confirmation itself.
+    duplicates(&window).set_refused(ui::ToolRefusal::None);
+    confirmed(&window);
     assert!(!duplicates(&window).get_trashing());
+    assert_eq!(duplicates(&window).get_refused(), ui::ToolRefusal::Unsaved);
     assert!(downloaded.exists());
     *exclusions.borrow_mut() = Ok(Vec::new());
-    duplicates(&window).invoke_confirm();
+    confirmed(&window);
     read_until(&window, |window| {
         duplicates(window).get_step() == ui::ToolStep::Receipt
     });
@@ -836,7 +847,7 @@ fn an_exclusion_refused_moves_nothing_to_the_trash() {
     searched(&window);
     let opened_before = opened.load(Ordering::SeqCst);
     *exclusions.borrow_mut() = Ok(refused_exclusion());
-    duplicates(&window).invoke_confirm();
+    confirmed(&window);
     assert!(duplicates(&window).get_trashing());
     assert_eq!(duplicates(&window).get_refused(), ui::ToolRefusal::None);
     read_until(&window, |window| !duplicates(window).get_trashing());
@@ -865,7 +876,7 @@ fn an_exclusion_refused_moves_nothing_to_the_trash() {
     // Corrected, the search and the move go.
     *exclusions.borrow_mut() = Ok(Vec::new());
     searched(&window);
-    duplicates(&window).invoke_confirm();
+    confirmed(&window);
     read_until(&window, |window| {
         duplicates(window).get_step() == ui::ToolStep::Receipt
     });
@@ -891,7 +902,7 @@ fn a_trash_that_does_not_open_is_said_and_moves_nothing() {
     let window = on_duplicates(seams);
     searched(&window);
     opens.store(false, Ordering::SeqCst);
-    duplicates(&window).invoke_confirm();
+    confirmed(&window);
     read_until(&window, |window| !duplicates(window).get_trashing());
     assert_eq!(duplicates(&window).get_step(), ui::ToolStep::Result);
     assert_eq!(duplicates(&window).get_refused(), ui::ToolRefusal::Trash);
@@ -918,7 +929,7 @@ fn a_move_cut_short_says_so_and_shows_nothing_stale() {
     });
     let window = on_duplicates(seams);
     searched(&window);
-    duplicates(&window).invoke_confirm();
+    confirmed(&window);
     read_until(&window, |window| {
         duplicates(window).get_step() == ui::ToolStep::Start
     });
@@ -953,8 +964,10 @@ fn a_second_confirmation_while_copies_move_moves_nothing_more() {
     });
     let window = on_duplicates(seams);
     searched(&window);
-    duplicates(&window).invoke_confirm();
-    duplicates(&window).invoke_confirm();
+    confirmed(&window);
+    // Copies moving: no confirmation asked, and one never asked is refused.
+    confirmed(&window);
+    assert!(!duplicates(&window).get_confirming());
     release.send(()).unwrap();
     read_until(&window, |window| {
         duplicates(window).get_step() == ui::ToolStep::Receipt
@@ -1040,4 +1053,46 @@ fn a_late_refusal_of_the_file_manager_is_never_said_on_another_copy() {
     let answer = held.borrow_mut().take().unwrap();
     answer(false);
     assert!(duplicates(&window).get_open_refused());
+}
+
+#[test]
+fn what_the_confirmation_counts_is_what_goes() {
+    let sandbox = Sandbox::new();
+    let first = sandbox.write("Téléchargements/m1.iso", 31, 1);
+    let first_kept = sandbox.write("Documents/m1.iso", 31, 5);
+    let second = sandbox.write("Téléchargements/m2.iso", 32, 1);
+    let second_kept = sandbox.write("Documents/m2.iso", 32, 5);
+    let window = on_duplicates(seams(&sandbox, &Rc::default(), &no_exclusion(), None));
+    searched(&window);
+    assert_eq!(duplicates(&window).get_chosen_files(), 2);
+    // Never asked: nothing goes.
+    duplicates(&window).invoke_confirm();
+    assert!(!duplicates(&window).get_trashing());
+    // Cancelled: the choices are free again.
+    duplicates(&window).invoke_trash();
+    duplicates(&window).invoke_cancel_confirmation();
+    let (at, _) = copy_row(&window, "Téléchargements/m1.iso");
+    duplicates(&window).invoke_toggle(index(at));
+    assert_eq!(duplicates(&window).get_chosen_files(), 1);
+    duplicates(&window).invoke_toggle(index(at));
+    duplicates(&window).invoke_trash();
+    assert!(duplicates(&window).get_confirming());
+    // Behind the confirmation (a screen reader reaches the lines), nothing
+    // changes what goes: unfrozen, « keep the oldest » keeps Downloads'
+    // copies and Documents' would go instead.
+    duplicates(&window).invoke_toggle(index(at));
+    duplicates(&window).invoke_deselect_all();
+    duplicates(&window).invoke_quick(ui::QuickRule::Oldest, -1);
+    duplicates(&window).invoke_again();
+    duplicates(&window).invoke_change();
+    assert_eq!(duplicates(&window).get_step(), ui::ToolStep::Result);
+    assert_eq!(duplicates(&window).get_chosen_files(), 2);
+    assert!(copy_row(&window, "Téléchargements/m1.iso").1.checked);
+    duplicates(&window).invoke_confirm();
+    read_until(&window, |window| {
+        duplicates(window).get_step() == ui::ToolStep::Receipt
+    });
+    assert_eq!(duplicates(&window).get_trashed_files(), 2);
+    assert!(!first.exists() && !second.exists());
+    assert!(first_kept.exists() && second_kept.exists());
 }

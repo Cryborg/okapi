@@ -905,6 +905,7 @@ impl LargeFilesScreen {
             let mut state = self.0.borrow_mut();
             let ranks = rows::chosen(&state.checked);
             if ranks.is_empty() {
+                tracing::debug!("nothing checked: no confirmation asked");
                 return;
             }
             tracing::info!(files = ranks.len(), "confirmation asked");

@@ -66,6 +66,7 @@ export global Theme {
     out property <length> font-label: 14px;
     out property <length> font-small: 13px;
     out property <length> font-caption: 12px;
+    out property <int> weight-regular: 400;
     out property <int> weight-medium: 500;
     out property <int> weight-semibold: 600;
 
@@ -216,29 +217,50 @@ export global Theme {
     out property <length> disk-size-width: 84px;
     out property <length> disk-volume-bar-height: 12px;
     out property <length> disk-volume-gap: 2px;
+    // The screens that look through the user's files (duplicates, large
+    // files): the details panel; the width a character of a path is taken
+    // to have, generously (the column holds as many characters as fit at
+    // this width, and Rust cuts a path to them by whole folders); a line of
+    // the receipt's files that stayed and the column of why (`whyw` of the
+    // mockup); the bars of the lines to come while a search runs.
+    out property <length> tool-panel-width: 300px;
+    out property <length> tool-panel-width-narrow: 248px;
+    out property <length> path-character: 8px;
+    out property <length> kept-line-height: 52px;
+    out property <length> kept-why-width: 340px;
+    out property <length> kept-why-width-narrow: 260px;
+    out property <length> tool-skeleton-height: 12px;
     // The duplicates screen (okapi.css, `--ok-dup-*`): a group's header, a
     // copy on two lines (its path, then its date and a reason), the copies'
     // indent under the group's name, the column of a copy's fate (it fits
-    // « Gardée : hors Téléchargements » and English 30 % longer), the
-    // details panel, a step's dot while searching. No colour of its own.
+    // « Gardée : hors Téléchargements » and English 30 % longer), a step's
+    // dot while searching, how much of a line each group's skeleton takes.
+    // No colour of its own.
     out property <length> duplicate-head-height: 44px;
     out property <length> duplicate-copy-height: 52px;
     out property <length> duplicate-indent: 50px;
     out property <length> duplicate-fate-width: 224px;
-    out property <length> duplicate-panel-width: 300px;
-    out property <length> duplicate-panel-width-narrow: 248px;
     out property <length> duplicate-step-dot: 24px;
-    // The width a character of a path is taken to have, generously: the
-    // column holds as many characters as fit at this width, and Rust cuts a
-    // path to them by whole folders. The column of why a file stayed, in
-    // the receipt (`whyw` of the mockup). The skeletons of the groups while
-    // the search runs: their bars' height, and how much of the line each
-    // takes.
-    out property <length> duplicate-path-character: 8px;
-    out property <length> duplicate-why-width: 340px;
-    out property <length> duplicate-why-width-narrow: 260px;
-    out property <length> duplicate-skeleton-height: 12px;
     out property <[float]> duplicate-skeleton-widths: [0.38, 0.24, 0.31, 0.19, 0.27, 0.34];
+    // The large files screen (okapi.css, `--ok-big-*`): a file on two
+    // lines (its name, then its folder or why it cannot go), the icon of
+    // its kind, the date column (wider than the mockup's: the months are
+    // said whole, « 12 septembre 2019 »), the bar against the largest file
+    // shown, each filter's list (the sort headers are as tall), a choice of
+    // its menu, how much of a line each skeleton takes. The size column is
+    // the disk usage's. No colour of its own.
+    out property <length> big-row-height: 56px;
+    out property <length> big-kind-icon: 20px;
+    out property <length> big-date-width: 136px;
+    out property <length> big-date-width-narrow: 128px;
+    out property <length> big-bar-width: 96px;
+    out property <length> big-bar-width-narrow: 72px;
+    out property <length> big-filter-width: 200px;
+    out property <length> big-filter-width-narrow: 176px;
+    out property <length> big-filter-height: 36px;
+    out property <length> big-menu-width: 240px;
+    out property <length> big-choice-height: 32px;
+    out property <[float]> big-skeleton-widths: [0.38, 0.24, 0.31, 0.19, 0.27, 0.34, 0.22, 0.29];
     // The settings screen (okapi.css `.tgl`, `.seg`, and Settings.dc.html):
     // a switch, its knob and how far the knob sits from its edge; a
     // segmented choice, its segments and the room around them; a row of

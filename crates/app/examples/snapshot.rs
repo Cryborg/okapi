@@ -1373,6 +1373,380 @@ fn home_customize(window: &ui::AppWindow, moving: bool, language: Language) {
     });
 }
 
+/// What the large files screen shows in a scene.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LargeScene {
+    Start,
+    Searching,
+    Stopped,
+    Result,
+    Blocked,
+    Outside,
+    Filtered,
+    NoMatch,
+    Empty,
+    Confirm,
+    ConfirmFiltered,
+    Receipt,
+}
+
+impl LargeScene {
+    fn named(name: &str) -> Option<Self> {
+        Some(match name {
+            "large-start" => Self::Start,
+            "large-searching" => Self::Searching,
+            "large-stopped" => Self::Stopped,
+            "large-result" => Self::Result,
+            "large-blocked" => Self::Blocked,
+            "large-outside" => Self::Outside,
+            "large-filtered" => Self::Filtered,
+            "large-nomatch" => Self::NoMatch,
+            "large-empty" => Self::Empty,
+            "large-confirm" => Self::Confirm,
+            "large-confirm-filtered" => Self::ConfirmFiltered,
+            "large-receipt" => Self::Receipt,
+            _ => return None,
+        })
+    }
+}
+
+/// A file of the large files screen in `folder`, modified on `day` `month`
+/// `year`, `bar` its part of the largest shown.
+fn large_row(
+    (kind, name, folder): (ui::FileKindShown, &str, &str),
+    (day, month, year): (i32, i32, i32),
+    on_disk: ui::Size,
+    bar: f32,
+) -> ui::LargeFileRow {
+    ui::LargeFileRow {
+        name: name.into(),
+        folder: folder.into(),
+        full_folder: folder.into(),
+        size: on_disk.clone(),
+        file_size: on_disk,
+        differs: false,
+        modified: ui::Moment {
+            day: ui::DayKind::Other,
+            day_of_month: day,
+            month,
+            year,
+            hour: 18,
+            minute: 2,
+        },
+        kind,
+        bar,
+        checked: false,
+        why: ui::LargeWhy::None,
+        outside: false,
+    }
+}
+
+/// What the lines of the large files screen say beyond their files: two
+/// checked (one hidden by the filters), the long folder cut at its start,
+/// the two that cannot go.
+fn mark_large_rows(rows: &mut [ui::LargeFileRow], filtered: bool, long: &str, language: Language) {
+    for row in rows {
+        row.checked =
+            row.name == "Rendu-final-v3.mkv" || (!filtered && row.name.starts_with("ubuntu"));
+        if row.full_folder == long {
+            row.folder = said(
+                language,
+                "…/Anniversaire de Léa/Rushes caméra",
+                "…/Lea's birthday/Camera rushes",
+            )
+            .into();
+        }
+        row.why = match row.name.as_str() {
+            "photos-2023.tar" => ui::LargeWhy::OtherNames,
+            "concert-2018.mov" => ui::LargeWhy::OtherDevice,
+            _ => ui::LargeWhy::None,
+        };
+    }
+}
+
+/// The files the large files screen found, the largest first.
+fn large_rows(scene: LargeScene, language: Language) -> Vec<ui::LargeFileRow> {
+    use ui::FileKindShown::{Archive, DiskImage, Document, Image, Music, Video};
+    use ui::SizeUnit::{Gigabyte, Megabyte};
+    let videos = said(language, "~/Vidéos", "~/Videos");
+    let downloads = said(language, "~/Téléchargements", "~/Downloads");
+    let editing = said(language, "~/Vidéos/Montage", "~/Videos/Editing");
+    let long = said(
+        language,
+        "~/Vidéos/Famille/2025/Anniversaire de Léa/Rushes caméra",
+        "~/Videos/Family/2025/Lea's birthday/Camera rushes",
+    );
+    let concerts = "/mnt/donnees/Musique/Concerts";
+    let machines = if scene == LargeScene::Outside {
+        "~/VirtualBox VMs/Windows 11"
+    } else {
+        said(
+            language,
+            "~/Documents/Machines virtuelles",
+            "~/Documents/Virtual machines",
+        )
+    };
+    let render = (Video, "Rendu-final-v3.mkv", editing);
+    let wedding = (Video, "Mariage-2019.mp4", videos);
+    let concert = (Video, "concert-2018.mov", concerts);
+    let rushes = (Video, "anniversaire-lea-brut.mp4", long);
+    let filtered = matches!(scene, LargeScene::Filtered | LargeScene::ConfirmFiltered);
+    let mut rows = if filtered {
+        vec![
+            large_row(render, (3, 6, 2024), size(14, 2, Gigabyte), 1.0),
+            large_row(wedding, (12, 9, 2019), size(9, 4, Gigabyte), 0.66),
+            large_row(concert, (8, 6, 2018), size(4, 9, Gigabyte), 0.35),
+            large_row(rushes, (30, 5, 2025), size(1, 9, Gigabyte), 0.13),
+        ]
+    } else {
+        let ubuntu = (DiskImage, "ubuntu-24.04.2-desktop-amd64.iso", downloads);
+        let records = said(language, "~/Musique/Enregistrements", "~/Music/Recordings");
+        let work = said(language, "~/Documents/Travail", "~/Documents/Work");
+        let pictures = said(language, "~/Images/2026", "~/Pictures/2026");
+        vec![
+            large_row(
+                (DiskImage, "Windows 11.vdi", machines),
+                (3, 3, 2026),
+                size(38, 0, Gigabyte),
+                1.0,
+            ),
+            large_row(render, (3, 6, 2024), size(14, 2, Gigabyte), 0.37),
+            large_row(wedding, (12, 9, 2019), size(9, 4, Gigabyte), 0.25),
+            large_row(ubuntu, (20, 2, 2025), size(6, 1, Gigabyte), 0.16),
+            large_row(
+                (Archive, "photos-2023.tar", "~/Images/Archives"),
+                (2, 1, 2024),
+                size(5, 8, Gigabyte),
+                0.15,
+            ),
+            large_row(concert, (8, 6, 2018), size(4, 9, Gigabyte), 0.13),
+            large_row(
+                (Archive, "Formation-Rust.zip", downloads),
+                (14, 7, 2026),
+                size(2, 3, Gigabyte),
+                0.06,
+            ),
+            large_row(rushes, (30, 5, 2025), size(1, 9, Gigabyte), 0.05),
+            large_row(
+                (Music, "podcast-episode-42.wav", records),
+                (9, 10, 2026),
+                size(1, 2, Gigabyte),
+                0.03,
+            ),
+            large_row(
+                (Document, "Rapport-annuel-scans.pdf", work),
+                (28, 2, 2025),
+                size(640, 0, Megabyte),
+                0.02,
+            ),
+            large_row(
+                (Image, "panorama-alpes.tif", pictures),
+                (17, 8, 2026),
+                size(412, 0, Megabyte),
+                0.01,
+            ),
+        ]
+    };
+    mark_large_rows(&mut rows, filtered, long, language);
+    if scene == LargeScene::Outside {
+        rows[0].outside = true;
+        rows[0].differs = true;
+        rows[0].file_size = size(64, 0, Gigabyte);
+    }
+    rows
+}
+
+/// The large files screen's receipt: three files in the trash, six to look
+/// at again (one of them gone unchecked, in the trash too).
+fn large_receipt(large: &ui::LargeFiles<'_>, language: Language) {
+    use ui::ReceiptWhy::{Changed, Excluded, Gone, OtherDevice, Refused, Unchecked};
+    use ui::SizeUnit::{Gigabyte, Megabyte};
+    large.set_step(ui::ToolStep::Receipt);
+    large.set_trashed_files(3);
+    large.set_moved_files(4);
+    large.set_moved(size(21, 6, Gigabyte));
+    large.set_trashed_at(ui::Moment {
+        day: ui::DayKind::Today,
+        hour: 21,
+        minute: 14,
+        ..ui::Moment::default()
+    });
+    let downloads = said(language, "~/Téléchargements", "~/Downloads");
+    let kept = |name: &str, folder: &str, why, size| ui::KeptShown {
+        name: name.into(),
+        folder: folder.into(),
+        size,
+        why,
+    };
+    large.set_kept(ModelRc::new(VecModel::from(vec![
+        kept(
+            "podcast-episode-42.wav",
+            said(language, "~/Musique/Enregistrements", "~/Music/Recordings"),
+            Changed,
+            size(1, 2, Gigabyte),
+        ),
+        kept("Formation-Rust.zip", downloads, Gone, size(2, 3, Gigabyte)),
+        kept(
+            "Rapport-annuel-scans.pdf",
+            said(language, "~/Documents/Travail", "~/Documents/Work"),
+            Excluded,
+            size(640, 0, Megabyte),
+        ),
+        kept(
+            "concert-2018.mov",
+            "/mnt/donnees/Musique/Concerts",
+            OtherDevice,
+            size(4, 9, Gigabyte),
+        ),
+        kept(
+            "panorama-alpes.tif",
+            said(language, "~/Images/2026", "~/Pictures/2026"),
+            Refused,
+            size(412, 0, Megabyte),
+        ),
+        kept(
+            "tuto-soudure.webm",
+            downloads,
+            Unchecked,
+            size(880, 0, Megabyte),
+        ),
+    ])));
+}
+
+/// The large files screen's result at `scene`: its files, filtered or not,
+/// none, or the confirmation open.
+fn large_result(large: &ui::LargeFiles<'_>, scene: LargeScene, language: Language) {
+    use ui::FileKindShown::{Archive, DiskImage, Document, Image, Music, Other, Video};
+    use ui::SizeUnit::Gigabyte;
+    let empty = scene == LargeScene::Empty;
+    let filtered = matches!(
+        scene,
+        LargeScene::Filtered | LargeScene::NoMatch | LargeScene::ConfirmFiltered
+    );
+    // Every file shown but under a filter.
+    large.set_files(match (empty, filtered) {
+        (true, _) => 0,
+        (false, true) => 37,
+        (false, false) => 11,
+    });
+    large.set_total(size(96, 0, Gigabyte));
+    large.set_walked(said(language, "18\u{202F}400", "18,400").into());
+    large.set_walked_count(18_400);
+    large.set_minutes(3);
+    let kinds = [
+        (Video, 12),
+        (Image, 4),
+        (Music, 3),
+        (Document, 2),
+        (Archive, 9),
+        (DiskImage, 4),
+        (Other, 3),
+    ]
+    .map(|(kind, count)| ui::KindCount { kind, count });
+    large.set_kinds(ModelRc::new(VecModel::from(kinds.to_vec())));
+    large.set_all_kinds(37);
+    if filtered {
+        large.set_kind(0);
+        large.set_age(2);
+    }
+    let rows = if empty || scene == LargeScene::NoMatch {
+        Vec::new()
+    } else {
+        large_rows(scene, language)
+    };
+    large.set_rows(ModelRc::new(VecModel::from(rows)));
+    large.set_current(match scene {
+        LargeScene::Blocked => 5,
+        LargeScene::Outside => 0,
+        _ => 1,
+    });
+    large.set_chosen_size(size(20, 3, Gigabyte));
+    large.set_chosen_files(2);
+    large.set_chosen_hidden(i32::from(filtered));
+    large.set_step(ui::ToolStep::Result);
+    if matches!(scene, LargeScene::Confirm | LargeScene::ConfirmFiltered) {
+        let chosen = |name: &str, folder: &str, size, hidden| ui::ChosenFile {
+            name: name.into(),
+            folder: folder.into(),
+            size,
+            hidden,
+        };
+        large.set_confirmed(ModelRc::new(VecModel::from(vec![
+            chosen(
+                "Rendu-final-v3.mkv",
+                said(language, "~/Vidéos/Montage", "~/Videos/Editing"),
+                size(14, 2, Gigabyte),
+                false,
+            ),
+            chosen(
+                "ubuntu-24.04.2-desktop-amd64.iso",
+                said(language, "~/Téléchargements", "~/Downloads"),
+                size(6, 1, Gigabyte),
+                scene == LargeScene::ConfirmFiltered,
+            ),
+        ])));
+        large.set_confirming(true);
+    }
+}
+
+/// The large files screen at `scene`.
+fn large_files(window: &ui::AppWindow, scene: LargeScene, language: Language) {
+    use ui::SizeUnit::{Gigabyte, Megabyte};
+    window.set_page(ui::Page::LargeFiles);
+    let large = window.global::<ui::LargeFiles>();
+    let names = said(
+        language,
+        "Documents, Images, Musique, Vidéos, Téléchargements, Bureau",
+        "Documents, Pictures, Music, Videos, Downloads, Desktop",
+    );
+    let folders: Vec<ui::PersonalShown> = names
+        .split(", ")
+        .map(|name| ui::PersonalShown {
+            name: name.into(),
+            path: format!("~/{name}").into(),
+            checked: true,
+        })
+        .collect();
+    large.set_folders_state(ui::FoldersState::Read);
+    large.set_folders(ModelRc::new(VecModel::from(folders)));
+    large.set_chosen_folders(6);
+    large.set_home_path("/home/franck".into());
+    large.set_min_size(size(50, 0, Megabyte));
+    large.set_searched_home(scene == LargeScene::Outside);
+    large.set_searched_names(names.into());
+    let floors = vec![
+        size(100, 0, Megabyte),
+        size(500, 0, Megabyte),
+        size(1, 0, Gigabyte),
+        size(5, 0, Gigabyte),
+    ];
+    large.set_floors(ModelRc::new(VecModel::from(floors)));
+    let ages = [(3, false), (6, false), (1, true), (2, true)]
+        .map(|(count, years)| ui::AgeShown { count, years });
+    large.set_ages(ModelRc::new(VecModel::from(ages.to_vec())));
+    match scene {
+        LargeScene::Start => large.set_step(ui::ToolStep::Start),
+        LargeScene::Searching | LargeScene::Stopped => {
+            large.set_step(ui::ToolStep::Searching);
+            large.set_phase(if scene == LargeScene::Stopped {
+                ui::SearchPhase::Stopped
+            } else {
+                ui::SearchPhase::Running
+            });
+            large.set_files_listed(said(language, "18\u{202F}400", "18,400").into());
+            large.set_files_count(18_400);
+            large.set_found("31".into());
+            large.set_found_count(31);
+        }
+        LargeScene::Receipt => large_receipt(&large, language),
+        _ => large_result(&large, scene, language),
+    }
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per screen drawn: a table, read as one"
+)]
 fn main() {
     let mut arguments = std::env::args().skip(1);
     let asked = arguments.next().unwrap_or_else(|| String::from("results"));
@@ -1448,8 +1822,11 @@ fn main() {
         "settings" => settings(&app),
         "history" | "history-small" => history(&app, false, language),
         "history-empty" => history(&app, true, language),
+        other if let Some(scene) = LargeScene::named(other.trim_end_matches("-small")) => {
+            large_files(&app, scene, language);
+        }
         other => panic!(
-            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings, history, history-small, history-empty"
+            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings, history, history-small, history-empty, large-start, large-searching, large-stopped, large-result, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt (each also -small)"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

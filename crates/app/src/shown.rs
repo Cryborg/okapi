@@ -63,6 +63,18 @@ pub(crate) fn from_home(path: &std::path::Path, home: Option<&std::path::Path>) 
     }
 }
 
+/// The part `done` is of `total`, from 0 to 1: a bar's.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "a ratio for a bar: precision beyond f32 is never shown"
+)]
+pub(crate) fn part(done: u64, total: u64) -> f32 {
+    if total == 0 {
+        return 0.0;
+    }
+    done.min(total) as f32 / total as f32
+}
+
 /// The characters a path takes before its page says how many it may.
 pub(crate) const DEFAULT_ROOM: usize = 60;
 /// What stands for the folders left out at the start of a path.
@@ -159,6 +171,13 @@ mod tests {
         assert_eq!(grouped(1_234_567, Language::English), "1,234,567");
         assert_eq!(grouped(999, Language::French), "999");
         assert_eq!(grouped(0, Language::English), "0");
+    }
+
+    #[test]
+    fn a_part_of_a_bar_stays_within_it() {
+        assert!(part(0, 0).abs() < f32::EPSILON);
+        assert!((part(5, 10) - 0.5).abs() < f32::EPSILON);
+        assert!((part(15, 10) - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]

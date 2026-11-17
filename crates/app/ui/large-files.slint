@@ -1,0 +1,1615 @@
+// The large files screen (docs/design/gros-fichiers/project/LargeFiles*.dc.html):
+// where to search, the search, the files found with their filters and which
+// go to the trash, the confirmation, the receipt.
+import { ListView } from "std-widgets.slint";
+import { Theme, Screen } from "theme.slint";
+import { Size, Words } from "cleaner-model.slint";
+import { DashboardWords } from "dashboard-widgets.slint";
+import { DayKind, Moment } from "dashboard-model.slint";
+import {
+    ActionButton, Badge, Banner, ButtonKind, Card, CheckMark, Detail, Footer, FocusRing, Icon,
+    ModalFrame, ProgressBar, Title,
+} from "widgets.slint";
+import { AgeShown, ChosenFile, FileKindShown, LargeFileRow, LargeFiles, LargeSort, LargeWhy } from "large-files-model.slint";
+import { SearchPhase, ToolRefusal, ToolStep } from "user-files-model.slint";
+import { FolderPicker, KeptCard, RefusalBanner } from "user-files.slint";
+
+// What the screen says, the same for the eye and the ear.
+global BigWords {
+    // What a file is, on its line and in the panel.
+    pure public function kind(kind: FileKindShown) -> string {
+        if kind == FileKindShown.video {
+            return @tr("Vidéo");
+        }
+        if kind == FileKindShown.image {
+            return @tr("Image");
+        }
+        if kind == FileKindShown.music {
+            return @tr("Musique");
+        }
+        if kind == FileKindShown.document {
+            return @tr("Document");
+        }
+        if kind == FileKindShown.archive {
+            return @tr("Archive");
+        }
+        if kind == FileKindShown.disk-image {
+            return @tr("Image disque");
+        }
+        return @tr("Autre");
+    }
+
+    // The files of a kind, in the filter.
+    pure public function kinds(kind: FileKindShown) -> string {
+        if kind == FileKindShown.video {
+            return @tr("Vidéos");
+        }
+        if kind == FileKindShown.image {
+            return @tr("Images");
+        }
+        if kind == FileKindShown.music {
+            return @tr("Musique");
+        }
+        if kind == FileKindShown.document {
+            return @tr("Documents");
+        }
+        if kind == FileKindShown.archive {
+            return @tr("Archives");
+        }
+        if kind == FileKindShown.disk-image {
+            return @tr("Images disque");
+        }
+        return @tr("Autres");
+    }
+
+    pure public function icon(kind: FileKindShown) -> image {
+        if kind == FileKindShown.video {
+            return @image-url("../assets/icons/film.svg");
+        }
+        if kind == FileKindShown.image {
+            return @image-url("../assets/icons/image.svg");
+        }
+        if kind == FileKindShown.music {
+            return @image-url("../assets/icons/music.svg");
+        }
+        if kind == FileKindShown.document {
+            return @image-url("../assets/icons/file-text.svg");
+        }
+        if kind == FileKindShown.archive {
+            return @image-url("../assets/icons/file-archive.svg");
+        }
+        if kind == FileKindShown.disk-image {
+            return @image-url("../assets/icons/disc.svg");
+        }
+        return @image-url("../assets/icons/file.svg");
+    }
+
+    // "Plus de 100 Mo".
+    pure public function floor-of(size: Size) -> string {
+        return @tr("Plus de {}", Words.size(size));
+    }
+
+    // "Modifiés il y a plus de 3 mois", "... de 2 ans".
+    pure public function age(age: AgeShown) -> string {
+        if age.years {
+            return @tr("Modifiés il y a plus de {n} an" | "Modifiés il y a plus de {n} ans" % age.count);
+        }
+        return @tr("Modifiés il y a plus de {n} mois" | "Modifiés il y a plus de {n} mois" % age.count);
+    }
+
+    // The filters as their lists say them.
+    pure public function size-label() -> string {
+        return floor-of(LargeFiles.floor < 0 ? LargeFiles.min-size : LargeFiles.floors[LargeFiles.floor]);
+    }
+
+    pure public function kind-label() -> string {
+        return LargeFiles.kind < 0 ? @tr("Tous les types") : kinds(LargeFiles.kinds[LargeFiles.kind].kind);
+    }
+
+    pure public function age-label() -> string {
+        return LargeFiles.age < 0 ? @tr("Modifiés n'importe quand") : age(LargeFiles.ages[LargeFiles.age]);
+    }
+
+    // The day a file was modified, on its line: "Aujourd'hui", "3 juin 2024".
+    pure public function day(at: Moment) -> string {
+        if at.day == DayKind.today {
+            return @tr("Aujourd'hui");
+        }
+        if at.day == DayKind.yesterday {
+            return @tr("Hier");
+        }
+        return DashboardWords.date(at);
+    }
+
+    // Why a file cannot go, if it cannot.
+    pure public function locked(row: LargeFileRow) -> string {
+        if row.why == LargeWhy.other-names {
+            return @tr("A d'autres noms : le retirer ne libérerait rien");
+        }
+        if row.why == LargeWhy.other-device {
+            return @tr("Pas de corbeille sur ce disque");
+        }
+        return "";
+    }
+
+    // What a line is, as a screen reader says it.
+    pure public function spoken(row: LargeFileRow) -> string {
+        let fate = row.checked ? @tr("coché, vers la corbeille") : @tr("non coché");
+        if locked(row) != "" {
+            return @tr("{}, {}, modifié {}, {}, {}, {}, case désactivée : {}", row.name, row.full-folder, DashboardWords.moment(row.modified), Words.size(row.size), kind(row.kind), fate, locked(row));
+        }
+        return @tr("{}, {}, modifié {}, {}, {}, {}", row.name, row.full-folder, DashboardWords.moment(row.modified), Words.size(row.size), kind(row.kind), fate);
+    }
+
+    // What the panel notes of the file with the focus.
+    pure public function note(row: LargeFileRow) -> string {
+        if row.why == LargeWhy.other-names {
+            return @tr("Ce fichier a d'autres noms : le retirer ne libérerait rien, son contenu reste sous ses autres noms.");
+        }
+        if row.why == LargeWhy.other-device {
+            return @tr("Ce fichier est sur un autre disque que votre corbeille. Okapi ne supprime jamais sans corbeille : pour le retirer, montrez-le dans son dossier.");
+        }
+        if row.outside {
+            return @tr("Hors de vos dossiers personnels : ce fichier appartient peut-être à une application.");
+        }
+        if row.checked {
+            return @tr("Coché : il ira à la corbeille. Vous pourrez l'y reprendre tant que la corbeille n'est pas vidée.");
+        }
+        return @tr("Rien n'est coché d'avance : cochez seulement ce que vous voulez mettre à la corbeille.");
+    }
+
+    // Where the search looks.
+    pure public function searched() -> string {
+        return LargeFiles.searched-home ? @tr("Dans tout le dossier personnel") : @tr("Dans {}", LargeFiles.searched-names);
+    }
+
+    // What the result found, where, how long ago.
+    pure public function summary() -> string {
+        let found = @tr("{n} fichier de plus de {}, {}" | "{n} fichiers de plus de {}, {}" % LargeFiles.files, Words.size(LargeFiles.min-size), Words.size(LargeFiles.total));
+        if LargeFiles.minutes == 0 {
+            return @tr("{}. {}, à l'instant.", found, searched());
+        }
+        return @tr("{}. {}, il y a {} min.", found, searched(), LargeFiles.minutes);
+    }
+
+    // What the search is at.
+    pure public function listing() -> string {
+        return @tr("Liste des fichiers… {}, {}", @tr("{} fichier parcouru" | "{} fichiers parcourus" % LargeFiles.files-count, LargeFiles.files-listed), @tr("{} gros fichier" | "{} gros fichiers" % LargeFiles.found-count, LargeFiles.found));
+    }
+
+    // A move to the trash cut short.
+    pure public function interrupted() -> string {
+        return @tr("La mise à la corbeille s'est interrompue : certains fichiers y sont peut-être déjà. Recherchez à nouveau pour voir où en sont les gros fichiers.");
+    }
+
+    // What a refusal of Okapi means at the receipt.
+    pure public function okapi-refused() -> string {
+        return @tr("Okapi ne demande jamais à mettre ce fichier à la corbeille : il reste à sa place, par sûreté.");
+    }
+
+    // The focus moved by the user onto line `index`: a refusal of the file
+    // manager spoke of the file it leaves.
+    public function focus-on(index: int) {
+        if LargeFiles.current != index {
+            LargeFiles.current = index;
+            LargeFiles.open-refused = false;
+        }
+    }
+
+    // Whether a filter is set.
+    pure public function filtered() -> bool {
+        return LargeFiles.floor >= 0 || LargeFiles.kind >= 0 || LargeFiles.age >= 0;
+    }
+}
+
+// Where to search: the personal folders, or the whole home folder.
+component BigStart inherits VerticalLayout {
+    padding: Screen.page-margin;
+    spacing: Theme.spacing-xl;
+    VerticalLayout {
+        spacing: Theme.spacing-xs;
+        Title {
+            text: @tr("Gros fichiers");
+        }
+        Detail {
+            text: @tr("Trouvez les plus gros fichiers de vos dossiers, où qu'ils soient rangés, et choisissez vous-même ceux qui peuvent partir. Rien n'est coché d'avance, et tout passe par la corbeille.");
+            wrap: word-wrap;
+        }
+    }
+    if LargeFiles.refused != ToolRefusal.none: RefusalBanner {
+        refused: LargeFiles.refused;
+        interrupted: BigWords.interrupted();
+    }
+    picker := FolderPicker {
+        folders-state: LargeFiles.folders-state;
+        chosen: LargeFiles.chosen-folders;
+        folders: LargeFiles.folders;
+        whole-home: LargeFiles.whole-home;
+        home-path: LargeFiles.home-path;
+        toggle-folder(index) => {
+            LargeFiles.toggle-folder(index);
+        }
+        toggle-home => {
+            LargeFiles.whole-home = !LargeFiles.whole-home;
+        }
+    }
+    HorizontalLayout {
+        spacing: Theme.spacing-s;
+        Icon {
+            source: @image-url("../assets/icons/info.svg");
+            colorize: Theme.info;
+            width: Theme.icon-small;
+            height: Theme.icon-small;
+        }
+        Detail {
+            horizontal-stretch: 1;
+            text: @tr("Seuls les fichiers de plus de {} sont listés. Les dossiers cachés (réglages et données des applications), les dossiers de projet, ~/snap et vos exclusions ne sont jamais parcourus : pour voir la place qu'ils prennent, passez par Espace disque.", Words.size(LargeFiles.min-size));
+            wrap: word-wrap;
+        }
+    }
+    Rectangle {
+        vertical-stretch: 1;
+    }
+    HorizontalLayout {
+        spacing: Theme.spacing-m;
+        alignment: start;
+        ActionButton {
+            text: @tr("Rechercher");
+            icon: @image-url("../assets/icons/search.svg");
+            kind: ButtonKind.primary;
+            large: true;
+            enabled: picker.searchable;
+            clicked => {
+                LargeFiles.search();
+            }
+        }
+        Detail {
+            vertical-alignment: center;
+            text: LargeFiles.whole-home ? @tr("Tout le dossier personnel") : @tr("{n} dossier choisi" | "{n} dossiers choisis" % LargeFiles.chosen-folders);
+        }
+    }
+}
+
+// The shape of a line to come: never read.
+component BigSkeleton inherits HorizontalLayout {
+    in property <float> share;
+    height: Theme.big-row-height;
+    padding-left: Theme.spacing-l;
+    padding-right: Theme.spacing-l;
+    spacing: Theme.spacing-m;
+    Rectangle {
+        width: Theme.big-kind-icon;
+        height: Theme.big-kind-icon;
+        cross-axis-self-alignment: center;
+        border-radius: Theme.radius-small;
+        background: Theme.surface-2;
+    }
+    // Out of the layout: its width follows the line's.
+    Rectangle {
+        horizontal-stretch: 1;
+        Rectangle {
+            x: 0;
+            width: root.share * parent.width;
+            height: Theme.tool-skeleton-height;
+            y: (parent.height - self.height) / 2;
+            border-radius: Theme.radius-small;
+            background: Theme.surface-2;
+        }
+    }
+}
+
+// The search running, or how it ended without a result.
+component BigSearching inherits FocusScope {
+    property <bool> running: LargeFiles.phase == SearchPhase.opening || LargeFiles.phase == SearchPhase.running;
+    key-pressed(event) => {
+        if event.text == Key.Escape && root.running {
+            LargeFiles.stop();
+            return accept;
+        }
+        reject
+    }
+    VerticalLayout {
+        padding: Screen.page-margin;
+        spacing: Theme.spacing-l;
+        HorizontalLayout {
+            spacing: Theme.spacing-m;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Theme.spacing-xs;
+                Title {
+                    text: @tr("Gros fichiers");
+                }
+                Detail {
+                    text: BigWords.searched();
+                    overflow: elide;
+                }
+            }
+            // The focus on it, for Escape to reach the page.
+            if root.running: ActionButton {
+                init => {
+                    self.focus();
+                }
+                text: @tr("Arrêter");
+                clicked => {
+                    LargeFiles.stop();
+                }
+            }
+            ActionButton {
+                text: @tr("Changer les dossiers");
+                kind: ButtonKind.ghost;
+                clicked => {
+                    LargeFiles.change();
+                }
+            }
+        }
+        if root.running: Card {
+            VerticalLayout {
+                padding: Theme.spacing-l;
+                spacing: Theme.spacing-m;
+                Text {
+                    text: LargeFiles.phase == SearchPhase.opening ? @tr("Ouverture des dossiers…") : BigWords.listing();
+                    color: Theme.text;
+                    font-weight: Theme.weight-medium;
+                }
+                ProgressBar {
+                    indeterminate: true;
+                    label: @tr("Liste des fichiers");
+                }
+            }
+        }
+        if root.running: Detail {
+            text: @tr("La liste s'affiche à la fin de la recherche. Rien n'est mis à la corbeille pendant la recherche. Échap arrête la recherche.");
+            wrap: word-wrap;
+        }
+        if root.running: Card {
+            vertical-stretch: 1;
+            clip: true;
+            accessible-role: none;
+            VerticalLayout {
+                alignment: start;
+                for share in Theme.big-skeleton-widths: BigSkeleton {
+                    share: share;
+                }
+            }
+        }
+        if LargeFiles.phase == SearchPhase.stopped: Banner {
+            text: @tr("Recherche arrêtée. Rien n'a été gardé : une liste à moitié faite ne dirait pas quels sont les plus gros.");
+            ActionButton {
+                text: @tr("Rechercher à nouveau");
+                icon: @image-url("../assets/icons/rotate-ccw.svg");
+                cross-axis-self-alignment: center;
+                clicked => {
+                    LargeFiles.again();
+                }
+            }
+        }
+        if LargeFiles.phase == SearchPhase.failed: Banner {
+            text: @tr("La recherche a échoué : rien n'a été gardé. Le détail est dans le journal.");
+            warning: true;
+            ActionButton {
+                text: @tr("Rechercher à nouveau");
+                icon: @image-url("../assets/icons/rotate-ccw.svg");
+                cross-axis-self-alignment: center;
+                clicked => {
+                    LargeFiles.again();
+                }
+            }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+}
+
+// A list a filter opens: its text, set or not; it opens its menu.
+component BigFilter inherits Rectangle {
+    in property <string> text;
+    in property <string> label;
+    in property <bool> set;
+    in property <bool> enabled: true;
+    in property <bool> expanded;
+    callback opened;
+
+    width: Screen.narrow ? Theme.big-filter-width-narrow : Theme.big-filter-width;
+    height: Theme.big-filter-height;
+    border-radius: Theme.radius-medium;
+    border-width: Theme.border-width;
+    border-color: root.set ? Theme.accent : Theme.border-strong;
+    background: root.set ? Theme.accent-soft : touch.has-hover && root.enabled ? Theme.surface-hover : Theme.surface;
+    opacity: root.enabled ? 1 : Theme.disabled-opacity;
+    accessible-role: combobox;
+    accessible-label: root.label;
+    accessible-value: root.text;
+    accessible-enabled: root.enabled;
+    accessible-expandable: true;
+    accessible-expanded: root.expanded;
+    accessible-action-default => {
+        if root.enabled {
+            root.opened();
+        }
+    }
+    forward-focus: keys;
+    // Never disabled itself: a scope disabled under the focus keeps its
+    // ring (as `ActionButton`).
+    keys := FocusScope {
+        focus-on-tab-navigation: root.enabled;
+        key-pressed(event) => {
+            if root.enabled && !event.repeat && (event.text == Key.Space || event.text == Key.Return || event.text == Key.DownArrow) {
+                root.opened();
+                return accept;
+            }
+            reject
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.opened();
+        }
+    }
+    FocusRing {
+        shown: keys.has-focus;
+        border-radius: Theme.radius-medium;
+    }
+    HorizontalLayout {
+        padding-left: Theme.spacing-m;
+        padding-right: Theme.spacing-s;
+        spacing: Theme.spacing-m;
+        Text {
+            horizontal-stretch: 1;
+            text: root.text;
+            accessible-role: none;
+            color: Theme.text;
+            font-weight: root.set ? Theme.weight-semibold : Theme.weight-regular;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Icon {
+            source: @image-url("../assets/icons/chevron-down.svg");
+            colorize: Theme.text-2;
+            width: Theme.icon-small;
+            height: Theme.icon-small;
+            cross-axis-self-alignment: center;
+        }
+    }
+}
+
+// One choice of a filter's menu: its text, its count, chosen or not, the
+// keyboard on it or not.
+component BigChoice inherits Rectangle {
+    in property <string> text;
+    in property <string> count;
+    in property <bool> selected;
+    in property <bool> active;
+    // The keyboard moved in the menu: the ring shows for it alone.
+    in property <bool> keyed;
+    callback chosen;
+
+    height: Theme.big-choice-height;
+    border-radius: Theme.radius-small;
+    background: root.selected ? Theme.accent-soft : touch.has-hover || root.active ? Theme.surface-hover : transparent;
+    accessible-role: list-item;
+    accessible-label: root.count != "" ? @tr("{}, {}", root.text, root.count) : root.text;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.selected;
+    accessible-action-default => {
+        root.chosen();
+    }
+    touch := TouchArea {
+        clicked => {
+            root.chosen();
+        }
+    }
+    FocusRing {
+        shown: root.active && root.keyed;
+        border-radius: Theme.radius-small;
+    }
+    HorizontalLayout {
+        padding-left: Theme.spacing-s;
+        padding-right: Theme.spacing-s;
+        spacing: Theme.spacing-s;
+        Text {
+            horizontal-stretch: 1;
+            text: root.text;
+            accessible-role: none;
+            color: Theme.text;
+            font-weight: root.selected ? Theme.weight-semibold : Theme.weight-regular;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if root.count != "": Detail {
+            text: root.count;
+            accessible-role: none;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// The frame of a filter's menu, a list: the arrows move, Enter or Space
+// chooses; closed by a choice, Escape or a click outside (a menu, not a
+// modal). The choice the keyboard is on: -1 the first, then each of the
+// others.
+component BigMenu inherits PopupWindow {
+    in property <string> label;
+    in property <int> choices;
+    in-out property <int> active;
+    in-out property <bool> keyed;
+    callback choose(int);
+
+    width: Theme.big-menu-width;
+    close-policy: close-on-click-outside;
+    protected function chosen(choice: int) {
+        root.choose(choice);
+        root.close();
+    }
+    keys := FocusScope {
+        // Its choices are its only accessible children, in order: the one
+        // the keyboard is on has the reader's focus.
+        accessible-role: list;
+        accessible-label: root.label;
+        accessible-delegate-focus: root.active + 1;
+        init => {
+            self.focus();
+        }
+        key-pressed(event) => {
+            root.keyed = true;
+            if event.text == Key.DownArrow {
+                root.active = min(root.active + 1, root.choices - 1);
+                return accept;
+            }
+            if event.text == Key.UpArrow {
+                root.active = max(root.active - 1, -1);
+                return accept;
+            }
+            if event.text == Key.Home {
+                root.active = -1;
+                return accept;
+            }
+            if event.text == Key.End {
+                root.active = root.choices - 1;
+                return accept;
+            }
+            if !event.repeat && (event.text == Key.Space || event.text == Key.Return) {
+                root.chosen(root.active);
+                return accept;
+            }
+            reject
+        }
+        Rectangle {
+            background: Theme.surface;
+            border-radius: Theme.radius-medium;
+            border-color: Theme.border;
+            border-width: Theme.border-width;
+            drop-shadow-color: Theme.shadow-1;
+            drop-shadow-blur: Theme.shadow-1-blur;
+            drop-shadow-offset-y: Theme.shadow-1-offset;
+            VerticalLayout {
+                padding: Theme.spacing-xs;
+                @children
+            }
+        }
+    }
+}
+
+// The floors: the smallest file listed, and those above it.
+component BigSizeMenu inherits BigMenu {
+    label: @tr("Taille minimale");
+    choices: LargeFiles.floors.length;
+    active: LargeFiles.floor;
+    choose(choice) => {
+        LargeFiles.filter-size(choice);
+    }
+    BigChoice {
+        text: BigWords.floor-of(LargeFiles.min-size);
+        selected: LargeFiles.floor < 0;
+        active: root.active < 0;
+        keyed: root.keyed;
+        chosen => {
+            root.chosen(-1);
+        }
+    }
+    for size[index] in LargeFiles.floors: BigChoice {
+        text: BigWords.floor-of(size);
+        selected: LargeFiles.floor == index;
+        active: root.active == index;
+        keyed: root.keyed;
+        chosen => {
+            root.chosen(index);
+        }
+    }
+}
+
+// The kinds, each with the files the size and the age leave of it.
+component BigKindMenu inherits BigMenu {
+    label: @tr("Type");
+    choices: LargeFiles.kinds.length;
+    active: LargeFiles.kind;
+    choose(choice) => {
+        LargeFiles.filter-kind(choice);
+    }
+    BigChoice {
+        text: @tr("Tous les types");
+        count: LargeFiles.all-kinds;
+        selected: LargeFiles.kind < 0;
+        active: root.active < 0;
+        keyed: root.keyed;
+        chosen => {
+            root.chosen(-1);
+        }
+    }
+    for counted[index] in LargeFiles.kinds: BigChoice {
+        text: BigWords.kinds(counted.kind);
+        count: counted.count;
+        selected: LargeFiles.kind == index;
+        active: root.active == index;
+        keyed: root.keyed;
+        chosen => {
+            root.chosen(index);
+        }
+    }
+}
+
+// The ages.
+component BigAgeMenu inherits BigMenu {
+    label: @tr("Date de modification");
+    choices: LargeFiles.ages.length;
+    active: LargeFiles.age;
+    choose(choice) => {
+        LargeFiles.filter-age(choice);
+    }
+    BigChoice {
+        text: @tr("Modifiés n'importe quand");
+        selected: LargeFiles.age < 0;
+        active: root.active < 0;
+        keyed: root.keyed;
+        chosen => {
+            root.chosen(-1);
+        }
+    }
+    for age[index] in LargeFiles.ages: BigChoice {
+        text: BigWords.age(age);
+        selected: LargeFiles.age == index;
+        active: root.active == index;
+        keyed: root.keyed;
+        chosen => {
+            root.chosen(index);
+        }
+    }
+}
+
+// A column's header that orders the list: an arrow on the order applied.
+component BigSortButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> applied;
+    in property <image> arrow;
+    in property <string> label;
+    callback sorted;
+
+    height: Theme.big-filter-height;
+    accessible-role: button;
+    accessible-label: root.applied ? @tr("{}, appliqué", root.label) : root.label;
+    accessible-enabled: !LargeFiles.trashing;
+    accessible-action-default => {
+        if !LargeFiles.trashing {
+            root.sorted();
+        }
+    }
+    forward-focus: keys;
+    keys := FocusScope {
+        focus-on-tab-navigation: !LargeFiles.trashing;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                if !LargeFiles.trashing && !event.repeat {
+                    root.sorted();
+                }
+                return accept;
+            }
+            // The list's keys move its lines from the list alone.
+            if event.text == Key.UpArrow || event.text == Key.DownArrow || event.text == Key.Home || event.text == Key.End {
+                return accept;
+            }
+            reject
+        }
+    }
+    touch := TouchArea {
+        enabled: !LargeFiles.trashing;
+        clicked => {
+            root.sorted();
+        }
+    }
+    FocusRing {
+        shown: keys.has-focus;
+        border-radius: Theme.radius-small;
+    }
+    HorizontalLayout {
+        spacing: Theme.spacing-xs;
+        alignment: start;
+        Text {
+            text: root.text;
+            accessible-role: none;
+            color: root.applied || touch.has-hover ? Theme.text : Theme.text-2;
+            font-size: Theme.font-caption;
+            font-weight: root.applied ? Theme.weight-semibold : Theme.weight-medium;
+            vertical-alignment: center;
+        }
+        if root.applied: Icon {
+            source: root.arrow;
+            colorize: Theme.text;
+            width: Theme.icon-small;
+            height: Theme.icon-small;
+            cross-axis-self-alignment: center;
+        }
+    }
+}
+
+// One line of the list: a file.
+component BigLine inherits Rectangle {
+    in property <LargeFileRow> line;
+    in property <int> index;
+    in property <bool> focused;
+    // Chosen with the pointer: the list takes the keyboard's focus.
+    callback chosen;
+
+    height: Theme.big-row-height;
+    background: LargeFiles.current == root.index ? Theme.accent-soft
+        : touch.has-hover ? Theme.surface-hover : transparent;
+    accessible-role: checkbox;
+    accessible-label: BigWords.spoken(root.line);
+    accessible-checkable: true;
+    accessible-checked: root.line.checked;
+    accessible-enabled: (root.line.checked || root.line.why == LargeWhy.none) && !LargeFiles.trashing;
+    accessible-item-selectable: true;
+    accessible-item-selected: LargeFiles.current == root.index;
+    accessible-action-default => {
+        BigWords.focus-on(root.index);
+        LargeFiles.toggle(root.index);
+    }
+
+    touch := TouchArea {
+        clicked => {
+            BigWords.focus-on(root.index);
+            root.chosen();
+        }
+    }
+    Rectangle {
+        y: parent.height - self.height;
+        height: Theme.border-width;
+        background: Theme.border;
+    }
+    FocusRing {
+        shown: root.focused;
+        border-radius: Theme.radius-small;
+    }
+    HorizontalLayout {
+        padding-left: Theme.spacing-l;
+        padding-right: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        Rectangle {
+            width: Theme.icon-box;
+            CheckMark {
+                checked: root.line.checked;
+                enabled: (root.line.checked || root.line.why == LargeWhy.none) && !LargeFiles.trashing;
+            }
+            check-touch := TouchArea {
+                clicked => {
+                    BigWords.focus-on(root.index);
+                    root.chosen();
+                    LargeFiles.toggle(root.index);
+                }
+            }
+            if BigWords.locked(root.line) != "" && check-touch.has-hover: Tooltip {
+                text: @markdown("\{BigWords.locked(root.line)}");
+            }
+        }
+        Icon {
+            source: BigWords.icon(root.line.kind);
+            colorize: Theme.text-2;
+            width: Theme.big-kind-icon;
+            height: Theme.big-kind-icon;
+            cross-axis-self-alignment: center;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: Theme.spacing-xxs;
+            Text {
+                text: root.line.name;
+                accessible-role: none;
+                color: Theme.text;
+                font-weight: Theme.weight-medium;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                spacing: Theme.spacing-s;
+                if root.line.why == LargeWhy.other-names: Icon {
+                    source: @image-url("../assets/icons/link.svg");
+                    colorize: Theme.text-2;
+                    width: Theme.icon-small;
+                    height: Theme.icon-small;
+                }
+                if root.line.why == LargeWhy.other-device: Icon {
+                    source: @image-url("../assets/icons/hard-drive.svg");
+                    colorize: Theme.text-2;
+                    width: Theme.icon-small;
+                    height: Theme.icon-small;
+                }
+                Detail {
+                    horizontal-stretch: 1;
+                    text: root.line.why == LargeWhy.none ? root.line.folder : BigWords.locked(root.line);
+                    accessible-role: none;
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+            }
+        }
+        Detail {
+            width: Screen.narrow ? Theme.big-date-width-narrow : Theme.big-date-width;
+            text: BigWords.day(root.line.modified);
+            accessible-role: none;
+            vertical-alignment: center;
+            wrap: no-wrap;
+            overflow: elide;
+        }
+        Rectangle {
+            width: Screen.narrow ? Theme.big-bar-width-narrow : Theme.big-bar-width;
+            Rectangle {
+                y: (parent.height - self.height) / 2;
+                height: Theme.disk-bar-height;
+                border-radius: Theme.radius-pill;
+                background: Theme.track;
+                Rectangle {
+                    x: 0;
+                    width: root.line.bar * parent.width;
+                    border-radius: Theme.radius-pill;
+                    background: Theme.size-bar;
+                }
+            }
+        }
+        Text {
+            width: Theme.disk-size-width;
+            text: Words.size(root.line.size);
+            accessible-role: none;
+            color: Theme.text;
+            font-weight: Theme.weight-semibold;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+    if root.line.folder != root.line.full-folder && touch.has-hover: Tooltip {
+        text: @markdown("\{root.line.full-folder}");
+    }
+}
+
+// The files, by the keyboard too: the arrows move, Space checks a file,
+// Enter shows it in its folder.
+component BigList inherits FocusScope {
+    accessible-role: list;
+    accessible-label: LargeFiles.sort == LargeSort.size ? @tr("Gros fichiers, triés par taille") : @tr("Gros fichiers, les plus anciens d'abord");
+    // The characters a folder may take, as the list is wide: its box, icon,
+    // date, bar, size and their gaps aside.
+    property <int> room: max(1, floor((self.width - Theme.icon-box - Theme.big-kind-icon - (Screen.narrow ? Theme.big-date-width-narrow : Theme.big-date-width)
+        - (Screen.narrow ? Theme.big-bar-width-narrow : Theme.big-bar-width) - Theme.disk-size-width - 2 * Theme.spacing-l - 5 * Theme.spacing-m) / Theme.path-character));
+    // Said once the list has its width: none before.
+    init => {
+        if self.width > 0 {
+            LargeFiles.path-room(self.room);
+        }
+    }
+    changed room => {
+        if self.width > 0 {
+            LargeFiles.path-room(self.room);
+        }
+    }
+
+    function move(index: int) {
+        if LargeFiles.rows.length == 0 {
+            return;
+        }
+        BigWords.focus-on(clamp(index, 0, LargeFiles.rows.length - 1));
+    }
+
+    // Line `current` brought into view: moved by the keyboard, or followed
+    // by Rust when filters or the order move its file.
+    function reveal() {
+        let place = LargeFiles.current * Theme.big-row-height;
+        let height = Theme.big-row-height;
+        if place < -view.content-y {
+            view.content-y = -place;
+        } else if place + height > -view.content-y + view.visible-height {
+            view.content-y = max(-place, view.visible-height - place - height);
+        }
+    }
+    property <int> current: LargeFiles.current;
+    changed current => {
+        root.reveal();
+    }
+
+    key-pressed(event) => {
+        if LargeFiles.rows.length == 0 {
+            return reject;
+        }
+        if event.text == Key.DownArrow {
+            root.move(LargeFiles.current + 1);
+            return accept;
+        }
+        if event.text == Key.UpArrow {
+            root.move(LargeFiles.current - 1);
+            return accept;
+        }
+        if event.text == Key.Home {
+            root.move(0);
+            return accept;
+        }
+        if event.text == Key.End {
+            root.move(LargeFiles.rows.length - 1);
+            return accept;
+        }
+        if event.text == Key.Space && !event.repeat && !LargeFiles.trashing {
+            LargeFiles.toggle(LargeFiles.current);
+            return accept;
+        }
+        if event.text == Key.Return && !event.repeat && !LargeFiles.opening {
+            LargeFiles.open(LargeFiles.current);
+            return accept;
+        }
+        reject
+    }
+
+    VerticalLayout {
+        HorizontalLayout {
+            padding-left: Theme.spacing-l;
+            padding-right: Theme.spacing-l;
+            spacing: Theme.spacing-m;
+            Rectangle {
+                width: Theme.icon-box + Theme.spacing-m + Theme.big-kind-icon;
+            }
+            Detail {
+                horizontal-stretch: 1;
+                text: LargeFiles.rows.length < LargeFiles.files ? @tr("{n} fichier sur {}" | "{n} fichiers sur {}" % LargeFiles.rows.length, LargeFiles.files)
+                    : @tr("{n} fichier" | "{n} fichiers" % LargeFiles.files);
+                vertical-alignment: center;
+            }
+            BigSortButton {
+                width: Screen.narrow ? Theme.big-date-width-narrow : Theme.big-date-width;
+                text: @tr("Modifié");
+                label: @tr("Trier par date de modification, les plus anciens d'abord");
+                applied: LargeFiles.sort == LargeSort.oldest;
+                arrow: @image-url("../assets/icons/arrow-up.svg");
+                sorted => {
+                    LargeFiles.sort-by(LargeSort.oldest);
+                }
+            }
+            Rectangle {
+                width: Screen.narrow ? Theme.big-bar-width-narrow : Theme.big-bar-width;
+            }
+            BigSortButton {
+                width: Theme.disk-size-width;
+                text: @tr("Taille");
+                label: @tr("Trier par taille, les plus gros d'abord");
+                applied: LargeFiles.sort == LargeSort.size;
+                arrow: @image-url("../assets/icons/arrow-down.svg");
+                sorted => {
+                    LargeFiles.sort-by(LargeSort.size);
+                }
+            }
+        }
+        Rectangle {
+            height: Theme.border-width;
+            background: Theme.border;
+        }
+        view := ListView {
+            vertical-stretch: 1;
+            for row[index] in LargeFiles.rows: BigLine {
+                line: row;
+                index: index;
+                focused: root.has-focus && LargeFiles.current == index;
+                chosen => {
+                    root.focus();
+                }
+            }
+        }
+        Rectangle {
+            height: Theme.border-width;
+            background: Theme.border;
+        }
+        HorizontalLayout {
+            padding: Theme.spacing-s;
+            padding-left: Theme.spacing-l;
+            Detail {
+                text: @tr("↑ ↓ se déplacer. Espace : cocher. Entrée : montrer dans le dossier.");
+                overflow: elide;
+            }
+        }
+    }
+}
+
+// What the panel says of the file with the focus.
+component BigPanel inherits Card {
+    // The line shown: the one with the focus, within the lines.
+    property <int> at: clamp(LargeFiles.current, 0, max(0, LargeFiles.rows.length - 1));
+    property <LargeFileRow> line: LargeFiles.rows[root.at];
+    width: Screen.narrow ? Theme.tool-panel-width-narrow : Theme.tool-panel-width;
+    accessible-role: groupbox;
+    accessible-label: @tr("Détails du fichier qui a le focus");
+    VerticalLayout {
+        padding: Theme.spacing-l;
+        spacing: Theme.spacing-m;
+        HorizontalLayout {
+            spacing: Theme.spacing-s;
+            Icon {
+                source: BigWords.icon(root.line.kind);
+                colorize: Theme.text-2;
+                cross-axis-self-alignment: center;
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: root.line.name;
+                color: Theme.text;
+                font-size: Theme.font-heading;
+                font-weight: Theme.weight-semibold;
+                wrap: word-wrap;
+            }
+        }
+        if root.line.checked: HorizontalLayout {
+            alignment: start;
+            Badge {
+                text: @tr("Vers la corbeille");
+                icon: @image-url("../assets/icons/trash-2.svg");
+                tone: Theme.info;
+                tone-soft: Theme.info-soft;
+            }
+        }
+        VerticalLayout {
+            spacing: Theme.spacing-s;
+            Detail {
+                text: @tr("Dossier : {}", root.line.full-folder);
+                wrap: word-wrap;
+            }
+            Detail {
+                text: @tr("Taille : {}", Words.size(root.line.size));
+            }
+            if root.line.differs: Detail {
+                text: @tr("Taille du fichier : {}", Words.size(root.line.file-size));
+            }
+            Detail {
+                text: @tr("Type : {}", BigWords.kind(root.line.kind));
+            }
+            Detail {
+                text: @tr("Modifié : {}", DashboardWords.moment-first(root.line.modified));
+                wrap: word-wrap;
+            }
+        }
+        Rectangle {
+            background: Theme.surface-2;
+            border-radius: Theme.radius-medium;
+            HorizontalLayout {
+                padding: Theme.spacing-s;
+                padding-left: Theme.spacing-m;
+                spacing: Theme.spacing-s;
+                Icon {
+                    source: @image-url("../assets/icons/info.svg");
+                    colorize: Theme.info;
+                    width: Theme.icon-small;
+                    height: Theme.icon-small;
+                }
+                Detail {
+                    horizontal-stretch: 1;
+                    text: BigWords.note(root.line);
+                    color: Theme.text;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+        }
+        ActionButton {
+            text: @tr("Montrer dans le dossier");
+            icon: @image-url("../assets/icons/folder-open.svg");
+            wrapped: true;
+            enabled: !LargeFiles.opening;
+            clicked => {
+                LargeFiles.open(root.at);
+            }
+        }
+        if LargeFiles.open-refused: Detail {
+            text: @tr("Le gestionnaire de fichiers n'a pas pu montrer ce fichier : il a peut-être changé depuis la recherche.");
+            color: Theme.warning;
+            wrap: word-wrap;
+        }
+    }
+}
+
+// A file the confirmation names.
+component BigChosenLine inherits Rectangle {
+    in property <ChosenFile> file;
+    accessible-role: list-item;
+    accessible-label: root.file.hidden ? @tr("{}, {}, {}, hors des filtres", root.file.name, root.file.folder, Words.size(root.file.size))
+        : @tr("{}, {}, {}", root.file.name, root.file.folder, Words.size(root.file.size));
+    HorizontalLayout {
+        spacing: Theme.spacing-m;
+        padding-left: Theme.spacing-m;
+        padding-right: Theme.spacing-m;
+        padding-top: Theme.spacing-xs;
+        padding-bottom: Theme.spacing-xs;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            Text {
+                text: root.file.name;
+                accessible-role: none;
+                color: Theme.text;
+                font-weight: Theme.weight-medium;
+                overflow: elide;
+            }
+            Detail {
+                text: root.file.folder;
+                accessible-role: none;
+                overflow: elide;
+            }
+    }
+    if root.file.hidden: Badge {
+        text: @tr("Hors des filtres");
+        cross-axis-self-alignment: center;
+        tone: Theme.text-2;
+        tone-soft: Theme.surface;
+    }
+    Text {
+        text: Words.size(root.file.size);
+        accessible-role: none;
+        color: Theme.text;
+        font-weight: Theme.weight-semibold;
+        vertical-alignment: center;
+    }
+    }
+}
+
+// The confirmation: what goes, named, and that each file is checked again.
+// The focus on « Annuler »: two Enter in a row never move what was not
+// meant to. Closed by its buttons or Escape, never by a click outside.
+component BigConfirmation inherits ModalFrame {
+    label: title.text;
+    init => {
+        back.focus();
+    }
+    escaped => {
+        LargeFiles.cancel-confirmation();
+    }
+    HorizontalLayout {
+        alignment: start;
+        Rectangle {
+            width: Theme.icon-box;
+            height: Theme.icon-box;
+            border-radius: Theme.radius-medium;
+            background: Theme.info-soft;
+            Icon {
+                source: @image-url("../assets/icons/trash-2.svg");
+                colorize: Theme.info;
+            }
+        }
+    }
+    title := Text {
+        text: @tr("Mettre {n} fichier à la corbeille ?" | "Mettre {n} fichiers à la corbeille ?" % LargeFiles.chosen-files);
+        accessible-role: none;
+        color: Theme.text;
+        font-size: Theme.font-title;
+        font-weight: Theme.weight-semibold;
+    }
+    Detail {
+        text: @tr("{}. La place ne sera libérée qu'en vidant la corbeille.", Words.size(LargeFiles.chosen-size));
+        color: Theme.text;
+    }
+    Rectangle {
+        background: Theme.surface-2;
+        border-radius: Theme.radius-medium;
+        VerticalLayout {
+            padding-top: Theme.spacing-xs;
+            padding-bottom: Theme.spacing-xs;
+            for file in LargeFiles.confirmed: BigChosenLine {
+                file: file;
+            }
+            if LargeFiles.confirmed-more > 0: HorizontalLayout {
+                padding-left: Theme.spacing-m;
+                padding-right: Theme.spacing-m;
+                Detail {
+                    text: LargeFiles.confirmed-more-hidden > 0 ? @tr("et {n} autre, hors des filtres" | "et {n} autres, dont {} hors des filtres" % LargeFiles.confirmed-more, LargeFiles.confirmed-more-hidden)
+                        : @tr("et {n} autre" | "et {n} autres" % LargeFiles.confirmed-more);
+                }
+            }
+        }
+    }
+    Detail {
+        text: @tr("Juste avant, Okapi vérifie que chaque fichier n'a pas changé depuis la recherche. Un fichier qui a changé reste à sa place.");
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        alignment: end;
+        spacing: Theme.spacing-s;
+        back := ActionButton {
+            text: @tr("Annuler");
+            kind: ButtonKind.secondary;
+            clicked => {
+                LargeFiles.cancel-confirmation();
+            }
+        }
+        ActionButton {
+            text: @tr("Mettre à la corbeille");
+            icon: @image-url("../assets/icons/trash-2.svg");
+            kind: ButtonKind.primary;
+            clicked => {
+                LargeFiles.confirm();
+            }
+        }
+    }
+}
+
+// A state of the result without a list: nothing found, or nothing the
+// filters let through.
+component BigState inherits Card {
+    in property <image> icon;
+    in property <bool> found;
+    in property <string> title;
+    in property <string> text;
+    in property <string> action;
+    in property <image> action-icon;
+    in property <bool> enabled: true;
+    callback acted;
+    vertical-stretch: 1;
+    VerticalLayout {
+        alignment: center;
+        padding: Theme.spacing-xxl;
+        spacing: Theme.spacing-m;
+        HorizontalLayout {
+            alignment: center;
+            Icon {
+                source: root.icon;
+                colorize: root.found ? Theme.success : Theme.text-2;
+                width: Theme.icon-large;
+                height: Theme.icon-large;
+            }
+        }
+        Text {
+            text: root.title;
+            color: Theme.text;
+            font-size: Theme.font-title;
+            font-weight: Theme.weight-semibold;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        Detail {
+            text: root.text;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: center;
+            ActionButton {
+                text: root.action;
+                icon: root.action-icon;
+                enabled: root.enabled;
+                clicked => {
+                    root.acted();
+                }
+            }
+        }
+    }
+}
+
+// What the search found, and which files go to the trash.
+component BigResult inherits VerticalLayout {
+    // Opened and closed by Rust; a page built again shows it still open.
+    property <bool> confirming: LargeFiles.confirming;
+    init => {
+        if self.confirming {
+            confirmation.show();
+        }
+    }
+    changed confirming => {
+        if self.confirming {
+            confirmation.show();
+        } else {
+            confirmation.close();
+        }
+    }
+    confirmation := BigConfirmation {
+        x: (root.width - Theme.modal-width) / 2;
+        y: root.height / 4;
+        width: Theme.modal-width;
+    }
+    // Under the filter pressed.
+    property <length> menu-x;
+    property <length> menu-y;
+    size-menu := BigSizeMenu {
+        x: root.menu-x;
+        y: root.menu-y;
+    }
+    kind-menu := BigKindMenu {
+        x: root.menu-x;
+        y: root.menu-y;
+    }
+    age-menu := BigAgeMenu {
+        x: root.menu-x;
+        y: root.menu-y;
+    }
+    function place-menu(under: length, x: length, height: length) {
+        root.menu-x = x - root.absolute-position.x;
+        root.menu-y = under - root.absolute-position.y + height + Theme.spacing-xs;
+    }
+
+    VerticalLayout {
+        vertical-stretch: 1;
+        padding: Screen.page-margin;
+        padding-bottom: Theme.spacing-l;
+        spacing: Theme.spacing-l;
+        HorizontalLayout {
+            spacing: Theme.spacing-s;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Theme.spacing-xs;
+                Title {
+                    text: @tr("Gros fichiers");
+                }
+                Detail {
+                    text: LargeFiles.files == 0 ? BigWords.searched() : BigWords.summary();
+                    overflow: elide;
+                }
+            }
+            ActionButton {
+                text: @tr("Changer les dossiers");
+                icon: @image-url("../assets/icons/folder.svg");
+                kind: ButtonKind.ghost;
+                enabled: !LargeFiles.trashing;
+                cross-axis-self-alignment: center;
+                clicked => {
+                    LargeFiles.change();
+                }
+            }
+            ActionButton {
+                text: @tr("Rechercher à nouveau");
+                icon: @image-url("../assets/icons/rotate-ccw.svg");
+                enabled: !LargeFiles.trashing;
+                cross-axis-self-alignment: center;
+                clicked => {
+                    LargeFiles.again();
+                }
+            }
+        }
+        if LargeFiles.refused != ToolRefusal.none: RefusalBanner {
+            refused: LargeFiles.refused;
+            interrupted: BigWords.interrupted();
+        }
+        if LargeFiles.files > 0: HorizontalLayout {
+            spacing: Theme.spacing-s;
+            accessible-role: groupbox;
+            accessible-label: @tr("Filtres");
+            size-filter := BigFilter {
+                text: BigWords.size-label();
+                expanded: size-menu.is-open;
+                label: @tr("Taille minimale");
+                set: LargeFiles.floor >= 0;
+                enabled: !LargeFiles.trashing;
+                opened => {
+                    root.place-menu(self.absolute-position.y, self.absolute-position.x, self.height);
+                    size-menu.show();
+                }
+            }
+            BigFilter {
+                text: BigWords.kind-label();
+                expanded: kind-menu.is-open;
+                label: @tr("Type");
+                set: LargeFiles.kind >= 0;
+                enabled: !LargeFiles.trashing;
+                opened => {
+                    root.place-menu(self.absolute-position.y, self.absolute-position.x, self.height);
+                    kind-menu.show();
+                }
+            }
+            BigFilter {
+                text: BigWords.age-label();
+                expanded: age-menu.is-open;
+                label: @tr("Date de modification");
+                set: LargeFiles.age >= 0;
+                enabled: !LargeFiles.trashing;
+                opened => {
+                    root.place-menu(self.absolute-position.y, self.absolute-position.x, self.height);
+                    age-menu.show();
+                }
+            }
+            if BigWords.filtered(): ActionButton {
+                text: @tr("Effacer les filtres");
+                icon: @image-url("../assets/icons/x.svg");
+                kind: ButtonKind.ghost;
+                compact: true;
+                enabled: !LargeFiles.trashing;
+                cross-axis-self-alignment: center;
+                clicked => {
+                    // It goes with the filters: the keyboard's focus, on it,
+                    // goes to the first filter, or to the list when it shows
+                    // again (a click never moves it).
+                    if self.focused {
+                        size-filter.focus();
+                    }
+                    LargeFiles.clear-filters();
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            ActionButton {
+                text: @tr("Tout désélectionner");
+                kind: ButtonKind.ghost;
+                enabled: LargeFiles.chosen-files > 0 && !LargeFiles.trashing;
+                cross-axis-self-alignment: center;
+                clicked => {
+                    LargeFiles.deselect-all();
+                }
+            }
+        }
+        if LargeFiles.rows.length > 0: HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: Theme.spacing-l;
+            Card {
+                horizontal-stretch: 1;
+                BigList {
+                    init => {
+                        self.focus();
+                    }
+                }
+            }
+            BigPanel { }
+        }
+        if LargeFiles.files > 0 && LargeFiles.rows.length == 0: BigState {
+            icon: @image-url("../assets/icons/funnel.svg");
+            title: @tr("Aucun fichier ne correspond à ces filtres");
+            text: @tr("Le gros fichier trouvé est toujours là : changez la taille, le type ou la date pour le revoir." | "Les {n} gros fichiers trouvés sont toujours là : changez la taille, le type ou la date pour les revoir." % LargeFiles.files);
+            action: @tr("Effacer les filtres");
+            action-icon: @image-url("../assets/icons/x.svg");
+            enabled: !LargeFiles.trashing;
+            acted => {
+                LargeFiles.clear-filters();
+            }
+        }
+        if LargeFiles.files == 0: BigState {
+            icon: @image-url("../assets/icons/circle-check.svg");
+            found: true;
+            title: LargeFiles.all-small ? @tr("Aucun fichier de plus de {} dans ces dossiers", Words.size(LargeFiles.min-size))
+                : @tr("Aucun gros fichier à proposer dans ces dossiers");
+            text: LargeFiles.walked-count == 0 ? @tr("Aucun fichier n'a été parcouru dans ces dossiers (dossiers cachés, de projet, autres disques et exclusions mis à part) : il n'y a rien à faire ici.")
+                : LargeFiles.all-small ? @tr("Le seul fichier parcouru est petit : il n'y a rien à faire ici." | "Les {} fichiers parcourus sont tous petits : il n'y a rien à faire ici." % LargeFiles.walked-count, LargeFiles.walked)
+                : @tr("Le seul fichier parcouru est petit, exclu ou à un autre compte : il n'y a rien à faire ici." | "Les {} fichiers parcourus sont petits, exclus ou à d'autres comptes : il n'y a rien à faire ici." % LargeFiles.walked-count, LargeFiles.walked);
+            action: @tr("Chercher dans d'autres dossiers");
+            action-icon: @image-url("../assets/icons/folder.svg");
+            acted => {
+                LargeFiles.change();
+            }
+        }
+    }
+    if LargeFiles.files > 0: Footer {
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            spacing: Theme.spacing-s;
+            alignment: start;
+            VerticalLayout {
+                alignment: center;
+                spacing: Theme.spacing-xxs;
+                HorizontalLayout {
+                    spacing: Theme.spacing-s;
+                    Detail {
+                        text: @tr("Choisi");
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: Words.size(LargeFiles.chosen-size);
+                        color: Theme.text;
+                        font-size: Theme.font-title;
+                        font-weight: Theme.weight-semibold;
+                        vertical-alignment: center;
+                    }
+                    Detail {
+                        text: LargeFiles.chosen-hidden > 0 ? @tr("{n} fichier, dont {} hors des filtres" | "{n} fichiers, dont {} hors des filtres" % LargeFiles.chosen-files, LargeFiles.chosen-hidden)
+                            : @tr("{n} fichier" | "{n} fichiers" % LargeFiles.chosen-files);
+                        vertical-alignment: center;
+                    }
+                }
+                Detail {
+                    text: LargeFiles.trashing ? @tr("Mise à la corbeille…")
+                        : @tr("Tout va à la corbeille. La place n'est libérée qu'en vidant la corbeille.");
+                    accessible-live-region: polite;
+                    overflow: elide;
+                }
+            }
+        }
+        ActionButton {
+            text: @tr("Mettre à la corbeille");
+            icon: @image-url("../assets/icons/trash-2.svg");
+            kind: ButtonKind.primary;
+            large: true;
+            enabled: LargeFiles.chosen-files > 0 && !LargeFiles.trashing;
+            cross-axis-self-alignment: center;
+            clicked => {
+                LargeFiles.trash();
+            }
+        }
+    }
+}
+
+// What the trash took, and what stayed.
+component BigReceipt inherits VerticalLayout {
+    VerticalLayout {
+        vertical-stretch: 1;
+        padding: Screen.page-margin;
+        padding-bottom: Theme.spacing-l;
+        spacing: Theme.spacing-l;
+        HorizontalLayout {
+            spacing: Theme.spacing-l;
+            Rectangle {
+                width: Theme.icon-box;
+                height: Theme.icon-box;
+                cross-axis-self-alignment: center;
+                border-radius: Theme.radius-medium;
+                background: LargeFiles.moved-files > 0 ? Theme.success-soft : Theme.surface-2;
+                Icon {
+                    source: LargeFiles.moved-files > 0 ? @image-url("../assets/icons/circle-check.svg") : @image-url("../assets/icons/info.svg");
+                    colorize: LargeFiles.moved-files > 0 ? Theme.success : Theme.text-2;
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Theme.spacing-xs;
+                // A file moved unchecked is in the trash too.
+                Title {
+                    text: LargeFiles.moved-files == 0 ? @tr("Rien n'a été mis à la corbeille")
+                        : LargeFiles.trashed-files == 0 ? @tr("Mis à la corbeille sans vérification : voyez ci-dessous")
+                        : @tr("{n} fichier mis à la corbeille, {}" | "{n} fichiers mis à la corbeille, {}" % LargeFiles.moved-files, Words.size(LargeFiles.moved));
+                    accessible-live-region: polite;
+                }
+                Detail {
+                    text: DashboardWords.moment-first(LargeFiles.trashed-at);
+                }
+            }
+        }
+        if LargeFiles.moved-files > 0: Banner {
+            text: @tr("La place sera libérée quand vous viderez la corbeille. D'ici là, vous pouvez y reprendre n'importe quel fichier.");
+        }
+        if LargeFiles.kept.length > 0: KeptCard {
+            kept: LargeFiles.kept;
+            okapi-refused: BigWords.okapi-refused();
+        }
+        if LargeFiles.kept.length == 0: Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+    Footer {
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+        ActionButton {
+            init => {
+                self.focus();
+            }
+            text: @tr("Rechercher à nouveau");
+            icon: @image-url("../assets/icons/rotate-ccw.svg");
+            kind: ButtonKind.primary;
+            large: true;
+            cross-axis-self-alignment: center;
+            clicked => {
+                LargeFiles.again();
+            }
+        }
+    }
+}
+
+export component LargeFilesPage inherits VerticalLayout {
+    if LargeFiles.step == ToolStep.start: BigStart {
+        vertical-stretch: 1;
+    }
+    if LargeFiles.step == ToolStep.searching: BigSearching {
+        vertical-stretch: 1;
+    }
+    if LargeFiles.step == ToolStep.result: BigResult {
+        vertical-stretch: 1;
+    }
+    if LargeFiles.step == ToolStep.receipt: BigReceipt {
+        vertical-stretch: 1;
+    }
+}

@@ -26,7 +26,7 @@ use crate::ui;
 const SNAP_FOLDER: &str = okapi_tools::apps::snap::SNAP_DATA;
 /// How long the window's closing waits for a move to the trash to end:
 /// hundreds of renames take less than a second.
-pub(crate) const TRASH_WAIT: Duration = Duration::from_secs(5);
+const TRASH_WAIT: Duration = Duration::from_secs(5);
 
 /// Reads the exclusions of the settings, once the writes under way are
 /// done (the cleaner's own reading).
@@ -480,19 +480,29 @@ mod tests {
             kind,
             path: PathBuf::from(path),
         };
-        let folders = [
+        // In either order: the deeper is neither the first nor the last that
+        // holds the file.
+        let mut folders = vec![
             folder(PersonalKind::Documents, "/home/ana/Documents"),
             folder(PersonalKind::Pictures, "/home/ana/Images"),
             folder(PersonalKind::Music, "/home/ana/Documents/Musique"),
         ];
-        assert_eq!(
-            folder_of(Path::new("/home/ana/Documents/Musique/a"), &folders),
-            Some(2)
-        );
-        assert_eq!(
-            folder_of(Path::new("/home/ana/Documents/a"), &folders),
-            Some(0)
-        );
+        for _ in 0..2 {
+            let rank = |path| {
+                folders
+                    .iter()
+                    .position(|folder| folder.path == Path::new(path))
+            };
+            assert_eq!(
+                folder_of(Path::new("/home/ana/Documents/Musique/a"), &folders),
+                rank("/home/ana/Documents/Musique")
+            );
+            assert_eq!(
+                folder_of(Path::new("/home/ana/Documents/a"), &folders),
+                rank("/home/ana/Documents")
+            );
+            folders.reverse();
+        }
         assert_eq!(
             folder_of(Path::new("/home/ana/Documentsx/a"), &folders),
             None
@@ -544,6 +554,15 @@ mod tests {
             ]
         );
         assert_eq!(known.trash_device, None);
+        // A trash that opens says its disk.
+        let data = root.join("data");
+        std::fs::create_dir(&data).unwrap();
+        let trash: OpenTrash = Arc::new(move || Trash::in_folder(&data));
+        let known = read_known(Some(&root), &folders, &trash);
+        let device = okapi_platform::file_identity(&std::fs::metadata(&root).unwrap())
+            .map(okapi_platform::FileIdentity::device);
+        assert_eq!(known.trash_device, device);
+        assert!(known.trash_device.is_some());
     }
 
     #[test]

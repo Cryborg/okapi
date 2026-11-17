@@ -3181,14 +3181,6 @@ msgid "La place sera libérée quand vous viderez la corbeille. D'ici là, vous 
 msgstr "The space will be freed when you empty the trash. Until then, you can take back any file from it."
 
 msgctxt "DuplicateReceipt"
-msgid "Fichiers à revoir : {}"
-msgstr "Files to review: {}"
-
-msgctxt "DuplicateReceipt"
-msgid "Chacun dit ce qu'il est devenu, et pourquoi."
-msgstr "Each says what became of it, and why."
-
-msgctxt "DuplicateReceipt"
 msgid "Rechercher à nouveau"
 msgstr "Search again"
 
@@ -4238,3 +4230,521 @@ msgstr "The whole home folder"
 msgctxt "FolderPicker"
 msgid "Remplace les dossiers ci-dessus"
 msgstr "Replaces the folders above"
+
+msgctxt "BigWords"
+msgid "Vidéo"
+msgstr "Video"
+
+msgctxt "BigWords"
+msgid "Image"
+msgstr "Image"
+
+msgctxt "BigWords"
+msgid "Musique"
+msgstr "Music"
+
+msgctxt "BigWords"
+msgid "Document"
+msgstr "Document"
+
+msgctxt "BigWords"
+msgid "Archive"
+msgstr "Archive"
+
+msgctxt "BigWords"
+msgid "Image disque"
+msgstr "Disk image"
+
+msgctxt "BigWords"
+msgid "Autre"
+msgstr "Other"
+
+msgctxt "BigWords"
+msgid "Vidéos"
+msgstr "Videos"
+
+msgctxt "BigWords"
+msgid "Images"
+msgstr "Images"
+
+msgctxt "BigWords"
+msgid "Documents"
+msgstr "Documents"
+
+msgctxt "BigWords"
+msgid "Archives"
+msgstr "Archives"
+
+msgctxt "BigWords"
+msgid "Images disque"
+msgstr "Disk images"
+
+msgctxt "BigWords"
+msgid "Autres"
+msgstr "Others"
+
+msgctxt "BigWords"
+msgid "Plus de {}"
+msgstr "Over {}"
+
+msgctxt "BigWords"
+msgid "Modifiés il y a plus de {n} an"
+msgid_plural "Modifiés il y a plus de {n} ans"
+msgstr[0] "Modified over {n} year ago"
+msgstr[1] "Modified over {n} years ago"
+
+msgctxt "BigWords"
+msgid "Tous les types"
+msgstr "All types"
+
+msgctxt "BigWords"
+msgid "Modifiés n'importe quand"
+msgstr "Modified any time"
+
+msgctxt "BigWords"
+msgid "Aujourd'hui"
+msgstr "Today"
+
+msgctxt "BigWords"
+msgid "Hier"
+msgstr "Yesterday"
+
+msgctxt "BigWords"
+msgid "A d'autres noms : le retirer ne libérerait rien"
+msgstr "Has other names: removing it would free nothing"
+
+msgctxt "BigWords"
+msgid "Pas de corbeille sur ce disque"
+msgstr "No trash on this disk"
+
+msgctxt "BigWords"
+msgid "coché, vers la corbeille"
+msgstr "checked, to the trash"
+
+msgctxt "BigWords"
+msgid "non coché"
+msgstr "not checked"
+
+msgctxt "BigWords"
+msgid "{}, {}, modifié {}, {}, {}, {}, case désactivée : {}"
+msgstr "{}, {}, modified {}, {}, {}, {}, box disabled: {}"
+
+msgctxt "BigWords"
+msgid "{}, {}, modifié {}, {}, {}, {}"
+msgstr "{}, {}, modified {}, {}, {}, {}"
+
+msgctxt "BigWords"
+msgid "Ce fichier a d'autres noms : le retirer ne libérerait rien, son contenu reste sous ses autres noms."
+msgstr "This file has other names: removing it would free nothing, its content stays under its other names."
+
+msgctxt "BigWords"
+msgid "Ce fichier est sur un autre disque que votre corbeille. Okapi ne supprime jamais sans corbeille : pour le retirer, montrez-le dans son dossier."
+msgstr "This file is on another disk than your trash. Okapi never deletes without a trash: to remove it, show it in its folder."
+
+msgctxt "BigWords"
+msgid "Hors de vos dossiers personnels : ce fichier appartient peut-être à une application."
+msgstr "Outside your personal folders: this file may belong to an application."
+
+msgctxt "BigWords"
+msgid "Coché : il ira à la corbeille. Vous pourrez l'y reprendre tant que la corbeille n'est pas vidée."
+msgstr "Checked: it will go to the trash. You can take it back from there until the trash is emptied."
+
+msgctxt "BigWords"
+msgid "Rien n'est coché d'avance : cochez seulement ce que vous voulez mettre à la corbeille."
+msgstr "Nothing is checked beforehand: check only what you want to move to the trash."
+
+msgctxt "BigWords"
+msgid "Dans tout le dossier personnel"
+msgstr "In the whole home folder"
+
+msgctxt "BigWords"
+msgid "Dans {}"
+msgstr "In {}"
+
+msgctxt "BigWords"
+msgid "{n} fichier de plus de {}, {}"
+msgid_plural "{n} fichiers de plus de {}, {}"
+msgstr[0] "{n} file over {}, {}"
+msgstr[1] "{n} files over {}, {}"
+
+msgctxt "BigWords"
+msgid "{}. {}, à l'instant."
+msgstr "{}. {}, just now."
+
+msgctxt "BigWords"
+msgid "{}. {}, il y a {} min."
+msgstr "{}. {}, {} min ago."
+
+msgctxt "BigWords"
+msgid "Liste des fichiers… {}, {}"
+msgstr "Listing the files… {}, {}"
+
+msgctxt "BigWords"
+msgid "{} fichier parcouru"
+msgid_plural "{} fichiers parcourus"
+msgstr[0] "{} file looked through"
+msgstr[1] "{} files looked through"
+
+msgctxt "BigWords"
+msgid "{} gros fichier"
+msgid_plural "{} gros fichiers"
+msgstr[0] "{} large file"
+msgstr[1] "{} large files"
+
+msgctxt "BigWords"
+msgid "La mise à la corbeille s'est interrompue : certains fichiers y sont peut-être déjà. Recherchez à nouveau pour voir où en sont les gros fichiers."
+msgstr "Moving to the trash was cut short: some files may be there already. Search again to see where the large files stand."
+
+msgctxt "BigWords"
+msgid "Okapi ne demande jamais à mettre ce fichier à la corbeille : il reste à sa place, par sûreté."
+msgstr "Okapi never asks to move this file to the trash: it stays where it is, to be safe."
+
+msgctxt "BigStart"
+msgid "Gros fichiers"
+msgstr "Large files"
+
+msgctxt "BigStart"
+msgid "Trouvez les plus gros fichiers de vos dossiers, où qu'ils soient rangés, et choisissez vous-même ceux qui peuvent partir. Rien n'est coché d'avance, et tout passe par la corbeille."
+msgstr "Find the largest files of your folders, wherever they are kept, and choose yourself which can go. Nothing is checked beforehand, and everything goes through the trash."
+
+msgctxt "BigStart"
+msgid "Seuls les fichiers de plus de {} sont listés. Les dossiers cachés (réglages et données des applications), les dossiers de projet, ~/snap et vos exclusions ne sont jamais parcourus : pour voir la place qu'ils prennent, passez par Espace disque."
+msgstr "Only files over {} are listed. Hidden folders (application settings and data), project folders, ~/snap and your exclusions are never searched: to see the space they take, go through Disk space."
+
+msgctxt "BigStart"
+msgid "Rechercher"
+msgstr "Search"
+
+msgctxt "BigStart"
+msgid "Tout le dossier personnel"
+msgstr "The whole home folder"
+
+msgctxt "BigStart"
+msgid "{n} dossier choisi"
+msgid_plural "{n} dossiers choisis"
+msgstr[0] "{n} folder chosen"
+msgstr[1] "{n} folders chosen"
+
+msgctxt "BigSearching"
+msgid "Gros fichiers"
+msgstr "Large files"
+
+msgctxt "BigSearching"
+msgid "Arrêter"
+msgstr "Stop"
+
+msgctxt "BigSearching"
+msgid "Changer les dossiers"
+msgstr "Change the folders"
+
+msgctxt "BigSearching"
+msgid "Ouverture des dossiers…"
+msgstr "Opening the folders…"
+
+msgctxt "BigSearching"
+msgid "Liste des fichiers"
+msgstr "Listing the files"
+
+msgctxt "BigSearching"
+msgid "La liste s'affiche à la fin de la recherche. Rien n'est mis à la corbeille pendant la recherche. Échap arrête la recherche."
+msgstr "The list shows when the search ends. Nothing is moved to the trash during the search. Escape stops the search."
+
+msgctxt "BigSearching"
+msgid "Recherche arrêtée. Rien n'a été gardé : une liste à moitié faite ne dirait pas quels sont les plus gros."
+msgstr "Search stopped. Nothing was kept: a list half made would not tell which are the largest."
+
+msgctxt "BigSearching"
+msgid "Rechercher à nouveau"
+msgstr "Search again"
+
+msgctxt "BigSearching"
+msgid "La recherche a échoué : rien n'a été gardé. Le détail est dans le journal."
+msgstr "The search failed: nothing was kept. The details are in the log."
+
+msgctxt "BigChoice"
+msgid "{}, {}"
+msgstr "{}, {}"
+
+msgctxt "BigKindMenu"
+msgid "Tous les types"
+msgstr "All types"
+
+msgctxt "BigAgeMenu"
+msgid "Modifiés n'importe quand"
+msgstr "Modified any time"
+
+msgctxt "BigSortButton"
+msgid "{}, appliqué"
+msgstr "{}, applied"
+
+msgctxt "BigList"
+msgid "Gros fichiers, triés par taille"
+msgstr "Large files, by size"
+
+msgctxt "BigList"
+msgid "Gros fichiers, les plus anciens d'abord"
+msgstr "Large files, oldest first"
+
+msgctxt "BigList"
+msgid "{n} fichier sur {}"
+msgid_plural "{n} fichiers sur {}"
+msgstr[0] "{n} file of {}"
+msgstr[1] "{n} files of {}"
+
+msgctxt "BigList"
+msgid "{n} fichier"
+msgid_plural "{n} fichiers"
+msgstr[0] "{n} file"
+msgstr[1] "{n} files"
+
+msgctxt "BigList"
+msgid "Modifié"
+msgstr "Modified"
+
+msgctxt "BigList"
+msgid "Trier par date de modification, les plus anciens d'abord"
+msgstr "Sort by date modified, oldest first"
+
+msgctxt "BigList"
+msgid "Taille"
+msgstr "Size"
+
+msgctxt "BigList"
+msgid "Trier par taille, les plus gros d'abord"
+msgstr "Sort by size, largest first"
+
+msgctxt "BigList"
+msgid "↑ ↓ se déplacer. Espace : cocher. Entrée : montrer dans le dossier."
+msgstr "↑ ↓ move. Space: check. Enter: show in its folder."
+
+msgctxt "BigPanel"
+msgid "Détails du fichier qui a le focus"
+msgstr "Details of the file with the focus"
+
+msgctxt "BigPanel"
+msgid "Vers la corbeille"
+msgstr "To the trash"
+
+msgctxt "BigPanel"
+msgid "Dossier : {}"
+msgstr "Folder: {}"
+
+msgctxt "BigPanel"
+msgid "Taille : {}"
+msgstr "Size: {}"
+
+msgctxt "BigPanel"
+msgid "Taille du fichier : {}"
+msgstr "File size: {}"
+
+msgctxt "BigPanel"
+msgid "Type : {}"
+msgstr "Type: {}"
+
+msgctxt "BigPanel"
+msgid "Modifié : {}"
+msgstr "Modified: {}"
+
+msgctxt "BigPanel"
+msgid "Montrer dans le dossier"
+msgstr "Show in its folder"
+
+msgctxt "BigPanel"
+msgid "Le gestionnaire de fichiers n'a pas pu montrer ce fichier : il a peut-être changé depuis la recherche."
+msgstr "The file manager could not show this file: it may have changed since the search."
+
+msgctxt "BigChosenLine"
+msgid "{}, {}, {}, hors des filtres"
+msgstr "{}, {}, {}, outside the filters"
+
+msgctxt "BigChosenLine"
+msgid "{}, {}, {}"
+msgstr "{}, {}, {}"
+
+msgctxt "BigChosenLine"
+msgid "Hors des filtres"
+msgstr "Outside the filters"
+
+msgctxt "BigConfirmation"
+msgid "Mettre {n} fichier à la corbeille ?"
+msgid_plural "Mettre {n} fichiers à la corbeille ?"
+msgstr[0] "Move {n} file to the trash?"
+msgstr[1] "Move {n} files to the trash?"
+
+msgctxt "BigConfirmation"
+msgid "{}. La place ne sera libérée qu'en vidant la corbeille."
+msgstr "{}. The space will be freed only when the trash is emptied."
+
+msgctxt "BigConfirmation"
+msgid "et {n} autre"
+msgid_plural "et {n} autres"
+msgstr[0] "and {n} other"
+msgstr[1] "and {n} others"
+
+msgctxt "BigConfirmation"
+msgid "Juste avant, Okapi vérifie que chaque fichier n'a pas changé depuis la recherche. Un fichier qui a changé reste à sa place."
+msgstr "Just before, Okapi checks that each file has not changed since the search. A file that changed stays where it is."
+
+msgctxt "BigConfirmation"
+msgid "Annuler"
+msgstr "Cancel"
+
+msgctxt "BigConfirmation"
+msgid "Mettre à la corbeille"
+msgstr "Move to the trash"
+
+msgctxt "BigResult"
+msgid "Gros fichiers"
+msgstr "Large files"
+
+msgctxt "BigResult"
+msgid "Changer les dossiers"
+msgstr "Change the folders"
+
+msgctxt "BigResult"
+msgid "Rechercher à nouveau"
+msgstr "Search again"
+
+msgctxt "BigResult"
+msgid "Filtres"
+msgstr "Filters"
+
+msgctxt "BigResult"
+msgid "Taille minimale"
+msgstr "Smallest size"
+
+msgctxt "BigResult"
+msgid "Type"
+msgstr "Type"
+
+msgctxt "BigResult"
+msgid "Date de modification"
+msgstr "Date modified"
+
+msgctxt "BigResult"
+msgid "Effacer les filtres"
+msgstr "Clear the filters"
+
+msgctxt "BigResult"
+msgid "Tout désélectionner"
+msgstr "Deselect all"
+
+msgctxt "BigResult"
+msgid "Aucun fichier ne correspond à ces filtres"
+msgstr "No file matches these filters"
+
+msgctxt "BigResult"
+msgid "Aucun fichier de plus de {} dans ces dossiers"
+msgstr "No file over {} in these folders"
+
+msgctxt "BigResult"
+msgid "Chercher dans d'autres dossiers"
+msgstr "Search other folders"
+
+msgctxt "BigResult"
+msgid "Choisi"
+msgstr "Chosen"
+
+msgctxt "BigResult"
+msgid "{n} fichier, dont {} hors des filtres"
+msgid_plural "{n} fichiers, dont {} hors des filtres"
+msgstr[0] "{n} file, {} hidden by the filters"
+msgstr[1] "{n} files, {} hidden by the filters"
+
+msgctxt "BigResult"
+msgid "{n} fichier"
+msgid_plural "{n} fichiers"
+msgstr[0] "{n} file"
+msgstr[1] "{n} files"
+
+msgctxt "BigResult"
+msgid "Mise à la corbeille…"
+msgstr "Moving to the trash…"
+
+msgctxt "BigResult"
+msgid "Tout va à la corbeille. La place n'est libérée qu'en vidant la corbeille."
+msgstr "Everything goes to the trash. The space is freed only when the trash is emptied."
+
+msgctxt "BigResult"
+msgid "Mettre à la corbeille"
+msgstr "Move to the trash"
+
+msgctxt "BigReceipt"
+msgid "Rien n'a été mis à la corbeille"
+msgstr "Nothing was moved to the trash"
+
+msgctxt "BigReceipt"
+msgid "Mis à la corbeille sans vérification : voyez ci-dessous"
+msgstr "Moved to the trash unverified: see below"
+
+msgctxt "BigReceipt"
+msgid "{n} fichier mis à la corbeille, {}"
+msgid_plural "{n} fichiers mis à la corbeille, {}"
+msgstr[0] "{n} file moved to the trash, {}"
+msgstr[1] "{n} files moved to the trash, {}"
+
+msgctxt "BigReceipt"
+msgid "La place sera libérée quand vous viderez la corbeille. D'ici là, vous pouvez y reprendre n'importe quel fichier."
+msgstr "The space will be freed when you empty the trash. Until then, you can take any file back from it."
+
+msgctxt "BigReceipt"
+msgid "Rechercher à nouveau"
+msgstr "Search again"
+
+msgctxt "BigSizeMenu"
+msgid "Taille minimale"
+msgstr "Smallest size"
+
+msgctxt "BigKindMenu"
+msgid "Type"
+msgstr "Type"
+
+msgctxt "BigAgeMenu"
+msgid "Date de modification"
+msgstr "Date modified"
+
+msgctxt "KeptCard"
+msgid "Fichiers à revoir : {}"
+msgstr "Files to review: {}"
+
+msgctxt "KeptCard"
+msgid "Chacun dit ce qu'il est devenu, et pourquoi."
+msgstr "Each says what became of it, and why."
+
+msgctxt "BigWords"
+msgid "Modifiés il y a plus de {n} mois"
+msgid_plural "Modifiés il y a plus de {n} mois"
+msgstr[0] "Modified over {n} month ago"
+msgstr[1] "Modified over {n} months ago"
+
+msgctxt "BigResult"
+msgid "Le gros fichier trouvé est toujours là : changez la taille, le type ou la date pour le revoir."
+msgid_plural "Les {n} gros fichiers trouvés sont toujours là : changez la taille, le type ou la date pour les revoir."
+msgstr[0] "The large file found is still there: change the size, the type or the date to see it again."
+msgstr[1] "The {n} large files found are still there: change the size, the type or the date to see them again."
+
+msgctxt "BigResult"
+msgid "Aucun fichier n'a été parcouru dans ces dossiers (dossiers cachés, de projet, autres disques et exclusions mis à part) : il n'y a rien à faire ici."
+msgstr "No file was looked through in these folders (hidden, project and excluded folders and other disks aside): there is nothing to do here."
+
+msgctxt "BigResult"
+msgid "Le seul fichier parcouru est petit : il n'y a rien à faire ici."
+msgid_plural "Les {} fichiers parcourus sont tous petits : il n'y a rien à faire ici."
+msgstr[0] "The only file looked through is small: there is nothing to do here."
+msgstr[1] "The {} files looked through are all small: there is nothing to do here."
+
+msgctxt "BigConfirmation"
+msgid "et {n} autre, hors des filtres"
+msgid_plural "et {n} autres, dont {} hors des filtres"
+msgstr[0] "and {n} other, hidden by the filters"
+msgstr[1] "and {n} others, {} hidden by the filters"
+
+msgctxt "BigResult"
+msgid "Aucun gros fichier à proposer dans ces dossiers"
+msgstr "No large file to offer in these folders"
+
+msgctxt "BigResult"
+msgid "Le seul fichier parcouru est petit, exclu ou à un autre compte : il n'y a rien à faire ici."
+msgid_plural "Les {} fichiers parcourus sont petits, exclus ou à d'autres comptes : il n'y a rien à faire ici."
+msgstr[0] "The only file looked through is small, excluded or another account's: there is nothing to do here."
+msgstr[1] "The {} files looked through are small, excluded or other accounts': there is nothing to do here."

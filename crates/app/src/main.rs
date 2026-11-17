@@ -21,6 +21,7 @@ mod elevation;
 mod file_manager;
 mod history;
 mod kept_selections;
+mod large_files;
 #[cfg(target_os = "linux")]
 mod portal;
 mod receipt;
@@ -38,6 +39,7 @@ use dashboard::{DashboardScreen, DashboardSeams};
 use disk_usage::DiskUsageScreen;
 use duplicates::DuplicatesScreen;
 use history::HistoryScreen;
+use large_files::LargeFilesScreen;
 use settings::SettingsScreen;
 use updates::UpdatesScreen;
 
@@ -99,6 +101,7 @@ struct Screens {
     settings: SettingsScreen,
     apps: AppsScreen,
     duplicates: DuplicatesScreen,
+    large_files: LargeFilesScreen,
 }
 
 /// The window in `language`, filled with what it shows of Okapi itself, its
@@ -160,12 +163,16 @@ fn window(
     // The settings as the cleaner reads them, its writes waited for: an
     // exclusion just added is never missed by a search nor a move.
     let settled_read = Rc::clone(&seams.read);
+    let exclusions: user_files::ReadExclusions =
+        Rc::new(move || settled_read().map(|inputs| inputs.exclusions));
     let duplicates = DuplicatesScreen::attach(
         &window,
         seams.duplicates.clone(),
-        Rc::new(move || settled_read().map(|inputs| inputs.exclusions)),
+        Rc::clone(&exclusions),
         language,
     );
+    let large_files =
+        LargeFilesScreen::attach(&window, seams.large_files.clone(), exclusions, language);
     let updates = UpdatesScreen::attach(&window, seams.updates.clone());
     let history = HistoryScreen::attach(&window, seams.history.clone());
     // The same settings: never a leftover where the user excluded. Read in
@@ -207,6 +214,7 @@ fn window(
     let followers = Followers {
         disk,
         duplicates: duplicates.clone(),
+        large_files: large_files.clone(),
         updates,
         apps: apps.clone(),
         history,
@@ -219,6 +227,7 @@ fn window(
         settings,
         apps,
         duplicates,
+        large_files,
     })
 }
 
@@ -226,6 +235,7 @@ fn window(
 struct Followers {
     disk: DiskUsageScreen,
     duplicates: DuplicatesScreen,
+    large_files: LargeFilesScreen,
     updates: UpdatesScreen,
     apps: AppsScreen,
     history: HistoryScreen,
@@ -246,6 +256,7 @@ fn attach_home(
     let Followers {
         disk,
         duplicates,
+        large_files,
         updates,
         apps,
         history,
@@ -264,6 +275,7 @@ fn attach_home(
         shown_home.page_shown(page);
         disk.page_shown(page);
         duplicates.page_shown(page);
+        large_files.page_shown(page);
         updates.page_shown(page);
         apps.page_shown(page);
         history.page_shown(page);
@@ -355,6 +367,7 @@ fn main() -> ExitCode {
         settings,
         apps,
         duplicates,
+        large_files,
     } = match window(Seams::system(), home_seams(language), language) {
         Ok(window) => window,
         Err(error) => {
@@ -371,6 +384,7 @@ fn main() -> ExitCode {
     let ran = window.run();
     screen.shut_down();
     duplicates.shut_down();
+    large_files.shut_down();
     apps.shut_down();
     home.shut_down();
     fold.shut_down();
@@ -884,7 +898,14 @@ mod tests {
     }
 
     /// Texts the same in both languages.
-    const SAME_IN_ENGLISH: [&str; 22] = [
+    const SAME_IN_ENGLISH: [&str; 29] = [
+        "Image",
+        "Images",
+        "Document",
+        "Documents",
+        "Archive",
+        "Archives",
+        "Type",
         "{}, {}",
         "{}, {}, {}",
         "Version {}",
@@ -1005,6 +1026,21 @@ mod tests {
         "DuplicateReceipt",
         "ReceiptWords",
         "FolderPicker",
+        "KeptCard",
+        "BigSizeMenu",
+        "BigWords",
+        "BigStart",
+        "BigSearching",
+        "BigChoice",
+        "BigKindMenu",
+        "BigAgeMenu",
+        "BigSortButton",
+        "BigList",
+        "BigPanel",
+        "BigChosenLine",
+        "BigConfirmation",
+        "BigResult",
+        "BigReceipt",
         "HistoryWords",
         "OperationRow",
         "Operations",

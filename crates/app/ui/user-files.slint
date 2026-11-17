@@ -3,12 +3,12 @@
 // moved, and the files of a receipt that stayed.
 import { Theme, Screen } from "theme.slint";
 import { Words } from "cleaner-model.slint";
-import { Banner, Card, CheckMark, Detail, FocusRing, Icon } from "widgets.slint";
+import { Banner, Card, CheckMark, Detail, FocusRing, Icon, ScrolledList } from "widgets.slint";
 import { FoldersState, KeptShown, PersonalShown, ReceiptWhy, ToolRefusal } from "user-files-model.slint";
 
 // What a receipt says of a file that stayed, the same for the eye and the
 // ear.
-export global ReceiptWords {
+global ReceiptWords {
     // Why a file asked for stayed, and what that means.
     pure public function why(kept: KeptShown) -> string {
         if kept.why == ReceiptWhy.changed {
@@ -101,7 +101,6 @@ component PickLine inherits Rectangle {
     in property <image> icon;
     callback toggled;
 
-    min-height: Theme.results-row-height;
     background: touch.has-hover && root.enabled ? Theme.surface-hover : transparent;
     accessible-role: checkbox;
     accessible-checkable: true;
@@ -141,6 +140,7 @@ component PickLine inherits Rectangle {
         background: Theme.border;
     }
     HorizontalLayout {
+        min-height: Theme.results-row-height;
         padding-left: Theme.spacing-l;
         padding-right: Theme.spacing-l;
         padding-top: Theme.spacing-s;
@@ -187,6 +187,10 @@ export component FolderPicker inherits VerticalLayout {
     in property <[PersonalShown]> folders;
     in property <bool> whole-home;
     in property <string> home-path;
+    in property <int> chosen;
+    // Whether a search may start: the whole home folder (known), or a
+    // folder chosen.
+    out property <bool> searchable: (root.whole-home && root.folders-state != FoldersState.homeless) || root.chosen > 0;
     callback toggle-folder(int);
     callback toggle-home;
 
@@ -238,11 +242,11 @@ export component FolderPicker inherits VerticalLayout {
 }
 
 // One file that stayed, and why: `why` and `more` as the receipt says them.
-export component KeptLine inherits Rectangle {
+component KeptLine inherits Rectangle {
     in property <KeptShown> kept;
     in property <string> why;
     in property <string> more;
-    min-height: Theme.duplicate-copy-height;
+    min-height: Theme.kept-line-height;
     accessible-role: list-item;
     accessible-label: @tr("{}, {}, {}", root.kept.name, root.why, root.more);
     Rectangle {
@@ -284,7 +288,7 @@ export component KeptLine inherits Rectangle {
             }
         }
         VerticalLayout {
-            width: Screen.narrow ? Theme.duplicate-why-width-narrow : Theme.duplicate-why-width;
+            width: Screen.narrow ? Theme.kept-why-width-narrow : Theme.kept-why-width;
             alignment: center;
             spacing: Theme.spacing-xxs;
             Text {
@@ -307,6 +311,57 @@ export component KeptLine inherits Rectangle {
             color: Theme.text;
             horizontal-alignment: right;
             vertical-alignment: center;
+        }
+    }
+}
+
+// The files of a receipt that stayed, or went unchecked: each says what
+// became of it and why, a refusal of Okapi in the tool's own words.
+export component KeptCard inherits Card {
+    in property <[KeptShown]> kept;
+    in property <string> okapi-refused;
+    vertical-stretch: 1;
+    VerticalLayout {
+        HorizontalLayout {
+            padding: Theme.spacing-l;
+            spacing: Theme.spacing-m;
+            Icon {
+                source: @image-url("../assets/icons/shield.svg");
+                colorize: Theme.text-2;
+                cross-axis-self-alignment: center;
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: @tr("Fichiers à revoir : {}", root.kept.length);
+                accessible-role: none;
+                color: Theme.text;
+                font-size: Theme.font-heading;
+                font-weight: Theme.weight-semibold;
+                vertical-alignment: center;
+            }
+            Detail {
+                text: @tr("Chacun dit ce qu'il est devenu, et pourquoi.");
+                accessible-role: none;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle {
+            height: Theme.border-width;
+            background: Theme.border;
+        }
+        // Each line at its own height, scrolled by the keyboard too.
+        ScrolledList {
+            vertical-stretch: 1;
+            label: @tr("Fichiers à revoir : {}", root.kept.length);
+            content-height: kept-lines.preferred-height;
+            kept-lines := VerticalLayout {
+                alignment: start;
+                for kept in root.kept: KeptLine {
+                    kept: kept;
+                    why: ReceiptWords.why(kept);
+                    more: ReceiptWords.why-more(kept, root.okapi-refused);
+                }
+            }
         }
     }
 }

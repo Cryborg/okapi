@@ -1,0 +1,146 @@
+import { Size } from "cleaner-model.slint";
+import { Moment } from "dashboard-model.slint";
+import { FoldersState, KeptShown, PersonalShown, SearchPhase, ToolRefusal, ToolStep } from "user-files-model.slint";
+
+// What a large file is, guessed from its extension.
+export enum FileKindShown { video, image, music, document, archive, disk-image, other }
+
+// Why a file cannot go to the trash: it has other names, or it lies on
+// another disk than the trash.
+export enum LargeWhy { none, other-names, other-device }
+
+// How the list is ordered: the largest first, or the oldest modified first.
+export enum LargeSort { size, oldest }
+
+// One line of the list: a file, all of one height.
+export struct LargeFileRow {
+    name: string,
+    // Its folder as shown, cut at its start, and whole.
+    folder: string,
+    full-folder: string,
+    // What it takes on disk; its size, when it says otherwise.
+    size: Size,
+    file-size: Size,
+    differs: bool,
+    modified: Moment,
+    kind: FileKindShown,
+    // Its size against the largest file shown, from 0 to 1.
+    bar: float,
+    checked: bool,
+    why: LargeWhy,
+    // Found outside the personal folders.
+    outside: bool,
+}
+
+// A kind of the filter, and how many files the size and the age leave of
+// it.
+export struct KindCount {
+    kind: FileKindShown,
+    count: int,
+}
+
+// An age of the filter: a count of months, or of years.
+export struct AgeShown {
+    count: int,
+    years: bool,
+}
+
+// A file the confirmation names, and whether the filters hide it.
+export struct ChosenFile {
+    name: string,
+    folder: string,
+    size: Size,
+    hidden: bool,
+}
+
+// The large files screen: Rust fills it, the page shows it and calls back.
+// What goes to the trash is named by the boxes checked, never by a path.
+export global LargeFiles {
+    in property <ToolStep> step;
+    in property <ToolRefusal> refused: ToolRefusal.none;
+
+    // The start: the personal folders, being read or read; the whole home
+    // folder instead. The smallest file listed.
+    in property <FoldersState> folders-state;
+    in property <[PersonalShown]> folders;
+    in-out property <bool> whole-home;
+    in property <string> home-path;
+    in property <Size> min-size;
+    in property <int> chosen-folders;
+
+    // The search: what it looks in, where it stands (the counts as shown,
+    // and as numbers for their plural).
+    in property <bool> searched-home;
+    in property <string> searched-names;
+    in property <SearchPhase> phase;
+    in property <string> files-listed;
+    in property <int> files-count;
+    in property <string> found;
+    in property <int> found-count;
+
+    // The result: its files, what they take, how long ago.
+    in property <int> files;
+    in property <Size> total;
+    in property <string> walked;
+    in property <int> walked-count;
+    // Every file looked through was below the floor: none was set aside
+    // (excluded, another account's).
+    in property <bool> all-small;
+    in property <int> minutes;
+    // The filters: the floors above the smallest file (`floor` their rank,
+    // -1 none), the kinds and their counts (`kind` its rank, -1 all), the
+    // ages in months (`age` their rank, -1 none).
+    in property <[Size]> floors;
+    in property <int> floor: -1;
+    in property <[KindCount]> kinds;
+    in property <int> all-kinds;
+    in property <int> kind: -1;
+    in property <[AgeShown]> ages;
+    in property <int> age: -1;
+    in property <LargeSort> sort;
+    in property <[LargeFileRow]> rows;
+    in-out property <int> current: 0;
+    in property <Size> chosen-size;
+    in property <int> chosen-files;
+    in property <int> chosen-hidden;
+    // Opened and closed by Rust, which keeps what it confirms.
+    in property <bool> confirming;
+    in property <[ChosenFile]> confirmed;
+    in property <int> confirmed-more;
+    // Of the files counted, not named, those the filters hide.
+    in property <int> confirmed-more-hidden;
+    in property <bool> trashing;
+    in property <bool> opening;
+    // Of the file with the focus, asked for: another line chosen, it is no
+    // more.
+    in-out property <bool> open-refused;
+
+    // The receipt.
+    in property <int> trashed-files;
+    in property <int> moved-files;
+    in property <Size> moved;
+    in property <Moment> trashed-at;
+    in property <[KeptShown]> kept;
+
+    callback toggle-folder(int);
+    callback search();
+    callback stop();
+    callback change();
+    callback again();
+    // The line at an index: checked or unchecked, shown in the file
+    // manager.
+    callback toggle(int);
+    callback open(int);
+    callback deselect-all();
+    // A filter's rank, -1 for none.
+    callback filter-size(int);
+    callback filter-kind(int);
+    callback filter-age(int);
+    callback clear-filters();
+    callback sort-by(LargeSort);
+    callback trash();
+    callback cancel-confirmation();
+    callback confirm();
+    // How many characters a folder may take, as the list is wide.
+    callback path-room(int);
+}

@@ -131,6 +131,8 @@ pub struct Seams {
     pub disk: crate::disk_usage::DiskSeams,
     /// What the duplicates screen reads and asks of the machine.
     pub duplicates: crate::duplicates::DuplicateSeams,
+    /// What the large files screen reads and asks of the machine.
+    pub large_files: crate::large_files::LargeFileSeams,
     /// What the settings screen reads and asks of the machine.
     pub settings: crate::settings::SettingsSeams,
     /// Where the updates screen reads what waits.
@@ -182,6 +184,7 @@ impl Seams {
             },
             settings: crate::settings::SettingsSeams::system(disk.home.clone()),
             duplicates: crate::duplicates::DuplicateSeams::system(disk.home.clone()),
+            large_files: crate::large_files::LargeFileSeams::system(disk.home.clone()),
             apps: crate::apps::AppsSeams::system(disk.home.clone()),
             disk,
             updates: crate::updates::UpdatesSeams::system(),
@@ -2235,6 +2238,7 @@ pub mod tests {
             settings: crate::settings::tests::nowhere(),
             // No folder read, no trash opened.
             duplicates: crate::duplicates::inert(),
+            large_files: crate::large_files::inert(),
             // No daemon asked: nothing on this system.
             updates: crate::updates::tests::nothing(),
             // Nothing read, nothing uninstalled.

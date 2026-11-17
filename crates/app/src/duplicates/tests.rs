@@ -712,13 +712,6 @@ fn closing_waits_a_little_for_a_move_under_way() {
 }
 
 #[test]
-fn a_part_of_a_bar_stays_within_it() {
-    assert!(part(0, 0).abs() < f32::EPSILON);
-    assert!((part(5, 10) - 0.5).abs() < f32::EPSILON);
-    assert!((part(15, 10) - 1.0).abs() < f32::EPSILON);
-}
-
-#[test]
 fn the_whole_home_without_a_home_folder_searches_nothing_and_says_why() {
     let sandbox = Sandbox::new();
     let mut seams = seams(&sandbox, &Rc::default(), &no_exclusion(), None);

@@ -7,11 +7,11 @@ import { Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
 import {
     ActionButton, Badge, Banner, ButtonKind, Card, CheckMark, Detail, Footer, FocusRing, Icon,
-    ModalFrame, ProgressBar, ScrolledList, Title,
+    ModalFrame, ProgressBar, Title,
 } from "widgets.slint";
 import { DuplicateRow, Duplicates, KeptWhy, QuickRule, SearchStage } from "duplicates-model.slint";
-import { FoldersState, SearchPhase, ToolRefusal, ToolStep } from "user-files-model.slint";
-import { FolderPicker, KeptLine, ReceiptWords, RefusalBanner } from "user-files.slint";
+import { SearchPhase, ToolRefusal, ToolStep } from "user-files-model.slint";
+import { FolderPicker, KeptCard, RefusalBanner } from "user-files.slint";
 
 // What the screen says, the same for the eye and the ear.
 global DuplicateWords {
@@ -156,8 +156,9 @@ component DuplicateStart inherits VerticalLayout {
         refused: Duplicates.refused;
         interrupted: DuplicateWords.interrupted();
     }
-    FolderPicker {
+    picker := FolderPicker {
         folders-state: Duplicates.folders-state;
+        chosen: Duplicates.chosen-folders;
         folders: Duplicates.folders;
         whole-home: Duplicates.whole-home;
         home-path: Duplicates.home-path;
@@ -193,7 +194,7 @@ component DuplicateStart inherits VerticalLayout {
             icon: @image-url("../assets/icons/search.svg");
             kind: ButtonKind.primary;
             large: true;
-            enabled: (Duplicates.whole-home && Duplicates.folders-state != FoldersState.homeless) || Duplicates.chosen-folders > 0;
+            enabled: picker.searchable;
             clicked => {
                 Duplicates.search();
             }
@@ -301,7 +302,7 @@ component DuplicateSearching inherits FocusScope {
                         Rectangle {
                             x: 0;
                             width: share * parent.width;
-                            height: Theme.duplicate-skeleton-height;
+                            height: Theme.tool-skeleton-height;
                             y: (parent.height - self.height) / 2;
                             border-radius: Theme.radius-small;
                             background: Theme.surface-2;
@@ -517,7 +518,7 @@ component Tree inherits FocusScope {
     // The characters a copy's path may take, as the list is wide: its
     // indent, box, fate and their gaps aside.
     property <int> room: max(1, floor((self.width - Theme.duplicate-indent - Theme.icon-box - Theme.duplicate-fate-width
-        - Theme.spacing-l - 2 * Theme.spacing-m) / Theme.duplicate-path-character));
+        - Theme.spacing-l - 2 * Theme.spacing-m) / Theme.path-character));
     // Said once the list has its width: none before.
     init => {
         if self.width > 0 {
@@ -627,7 +628,7 @@ component DuplicatePanel inherits Card {
     changed at => {
         Duplicates.open-refused = false;
     }
-    width: Screen.narrow ? Theme.duplicate-panel-width-narrow : Theme.duplicate-panel-width;
+    width: Screen.narrow ? Theme.tool-panel-width-narrow : Theme.tool-panel-width;
     accessible-role: groupbox;
     accessible-label: @tr("Détails de la ligne qui a le focus");
     VerticalLayout {
@@ -1077,51 +1078,9 @@ component DuplicateReceipt inherits VerticalLayout {
         if Duplicates.moved-files > 0: Banner {
             text: @tr("La place sera libérée quand vous viderez la corbeille. D'ici là, vous pouvez y reprendre n'importe quel fichier.");
         }
-        if Duplicates.kept.length > 0: Card {
-            vertical-stretch: 1;
-            VerticalLayout {
-                HorizontalLayout {
-                    padding: Theme.spacing-l;
-                    spacing: Theme.spacing-m;
-                    Icon {
-                        source: @image-url("../assets/icons/shield.svg");
-                        colorize: Theme.text-2;
-                        cross-axis-self-alignment: center;
-                    }
-                    Text {
-                        horizontal-stretch: 1;
-                        text: @tr("Fichiers à revoir : {}", Duplicates.kept.length);
-                        accessible-role: none;
-                        color: Theme.text;
-                        font-size: Theme.font-heading;
-                        font-weight: Theme.weight-semibold;
-                        vertical-alignment: center;
-                    }
-                    Detail {
-                        text: @tr("Chacun dit ce qu'il est devenu, et pourquoi.");
-                        accessible-role: none;
-                        vertical-alignment: center;
-                    }
-                }
-                Rectangle {
-                    height: Theme.border-width;
-                    background: Theme.border;
-                }
-                // Each line at its own height, scrolled by the keyboard too.
-                ScrolledList {
-                    vertical-stretch: 1;
-                    label: @tr("Fichiers à revoir : {}", Duplicates.kept.length);
-                    content-height: kept-lines.preferred-height;
-                    kept-lines := VerticalLayout {
-                        alignment: start;
-                        for kept in Duplicates.kept: KeptLine {
-                            kept: kept;
-                            why: ReceiptWords.why(kept);
-                            more: ReceiptWords.why-more(kept, DuplicateWords.okapi-refused());
-                        }
-                    }
-                }
-            }
+        if Duplicates.kept.length > 0: KeptCard {
+            kept: Duplicates.kept;
+            okapi-refused: DuplicateWords.okapi-refused();
         }
         if Duplicates.kept.length == 0: Rectangle {
             vertical-stretch: 1;

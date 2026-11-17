@@ -11,6 +11,8 @@ import { AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, Ap
 import { DuplicatesPage } from "duplicates.slint";
 import { DuplicateRow, Duplicates, KeptWhy, QuickRule, SearchStage } from "duplicates-model.slint";
 import { FoldersState, KeptShown, PersonalShown, ReceiptWhy, SearchPhase, ToolRefusal, ToolStep } from "user-files-model.slint";
+import { LargeFilesPage } from "large-files.slint";
+import { AgeShown, ChosenFile, FileKindShown, KindCount, LargeFileRow, LargeFiles, LargeSort, LargeWhy } from "large-files-model.slint";
 import {
     DiskDetail, DiskFiles, DiskLine, DiskLineKind, DiskLineState, DiskPhase, DiskRefusal, DiskStep, DiskUnreadable, DiskUsage, DiskVolumes,
 } from "disk-usage-model.slint";
@@ -38,6 +40,7 @@ export {
     DiskVolumes,
     DuplicateRow, Duplicates, KeptWhy, QuickRule, SearchStage,
     FoldersState, KeptShown, PersonalShown, ReceiptWhy, SearchPhase, ToolRefusal, ToolStep,
+    AgeShown, ChosenFile, FileKindShown, KindCount, LargeFileRow, LargeFiles, LargeSort, LargeWhy,
     EntryError, LanguageChoice, PathKind, PathList, PathRow, Preferences, SaveRefusal, SettingsState, ThemeChoice,
     // Read by the tests, to see the theme applied.
     Theme,
@@ -127,6 +130,9 @@ export component AppWindow inherits Window {
                 vertical-stretch: 1;
             }
             if root.page == Page.duplicates: DuplicatesPage {
+                vertical-stretch: 1;
+            }
+            if root.page == Page.large-files: LargeFilesPage {
                 vertical-stretch: 1;
             }
             if root.page == Page.apps: AppsPage {

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use okapi_engine::report_nonce;
-use okapi_platform::Trash;
+use okapi_platform::{FileIdentity, Trash};
 
 use super::kind::FileKind;
 use crate::listing::{Found, Root, SearchStats, Seen};
@@ -39,6 +39,13 @@ impl LargeFile {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// What it was when the search read it: its disk, and what showing it
+    /// in its folder checks it still is.
+    #[must_use]
+    pub const fn identity(&self) -> FileIdentity {
+        self.status.identity
     }
 
     /// Its size in bytes.

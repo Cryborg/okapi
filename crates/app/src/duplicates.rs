@@ -11,7 +11,7 @@ mod rows;
 
 use std::cell::RefCell;
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -28,7 +28,7 @@ use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 use crate::dates::MINUTES_EVERY;
 use crate::disk_usage::READ_EVERY;
 use crate::file_manager::{Calls, OpenRequest};
-use crate::shown::{DEFAULT_ROOM, grouped, name_of, shown, size};
+use crate::shown::{DEFAULT_ROOM, grouped, name_of, part, shown, size};
 use crate::ui;
 use crate::user_files::{
     Asked, Folders, Known, OpenTrash, ReadExclusions, SearchSeams, exclusion_paths, resolve,
@@ -369,10 +369,7 @@ impl DuplicatesScreen {
 
     /// The exclusions of the settings read now, `~/snap` with them; why
     /// none can be had.
-    fn exclusion_paths(
-        &self,
-        home: Option<&std::path::Path>,
-    ) -> Result<Vec<PathBuf>, ui::ToolRefusal> {
+    fn exclusion_paths(&self, home: Option<&Path>) -> Result<Vec<PathBuf>, ui::ToolRefusal> {
         let read = Rc::clone(&self.0.borrow().exclusions);
         exclusion_paths(&read, home)
     }
@@ -909,8 +906,8 @@ impl DuplicatesScreen {
             .spawn(move || {
                 let receipt = tracing::info_span!("duplicate_trash")
                     .in_scope(|| move_to_trash(&moved, &ids, exclusions, &trash));
-                // The screen gone: the move ended all the same, and traced
-                // its receipt.
+                // The screen gone: the move ended all the same, each copy
+                // traced where it was moved or kept.
                 let _ = sender.send(receipt);
             });
         match spawned {
@@ -1077,18 +1074,6 @@ impl DuplicatesScreen {
             crate::user_files::wait_at_closing(&moving.receiver, "duplicates");
         }
     }
-}
-
-/// The part `done` is of `total`, from 0 to 1.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "a ratio for a progress bar: precision beyond f32 is never shown"
-)]
-fn part(done: u64, total: u64) -> f32 {
-    if total == 0 {
-        return 0.0;
-    }
-    done.min(total) as f32 / total as f32
 }
 
 /// Seams reading no folder and opening no trash, for the other screens'

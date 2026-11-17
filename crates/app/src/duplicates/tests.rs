@@ -1096,3 +1096,25 @@ fn what_the_confirmation_counts_is_what_goes() {
     assert!(!first.exists() && !second.exists());
     assert!(first_kept.exists() && second_kept.exists());
 }
+
+#[test]
+fn a_refusal_of_the_file_manager_goes_as_soon_as_the_focus_moves() {
+    use slint::platform::Key;
+
+    let sandbox = Sandbox::new();
+    sandbox.write("Documents/o1", 33, 1);
+    sandbox.write("Images/o1", 33, 2);
+    let mut seams = seams(&sandbox, &Rc::default(), &no_exclusion(), None);
+    seams.duplicates.search.open = Rc::new(|_, done| done(false));
+    let window = on_duplicates(seams);
+    searched(&window);
+    // The tree has the focus at the result.
+    press(&window, Key::DownArrow);
+    duplicates(&window).invoke_open(1);
+    assert!(duplicates(&window).get_open_refused());
+    // Gone with the key, before the page is drawn again: never said under
+    // the other copy.
+    press(&window, Key::DownArrow);
+    assert_eq!(duplicates(&window).get_current(), 2);
+    assert!(!duplicates(&window).get_open_refused());
+}

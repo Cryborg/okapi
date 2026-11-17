@@ -9,6 +9,10 @@ msgid "Accueil"
 msgstr "Home"
 
 msgctxt "Sidebar"
+msgid "Gros fichiers"
+msgstr "Large files"
+
+msgctxt "Sidebar"
 msgid "À propos"
 msgstr "About"
 

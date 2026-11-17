@@ -3676,7 +3676,7 @@ pub mod tests {
     }
 
     /// The entries of the sidebar, each a stop of Tab.
-    pub const SIDEBAR_ENTRIES: usize = 9;
+    pub const SIDEBAR_ENTRIES: usize = 10;
     /// The stops of Tab in the sidebar of a wide window: its fold button,
     /// then its entries.
     pub const SIDEBAR_STOPS: usize = SIDEBAR_ENTRIES + 1;

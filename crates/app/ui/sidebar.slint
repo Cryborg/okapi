@@ -187,6 +187,16 @@ export component Sidebar inherits Rectangle {
         }
 
         NavItem {
+            icon: @image-url("../assets/icons/arrow-down-wide-narrow.svg");
+            label: @tr("Gros fichiers");
+            folded: root.folded;
+            active: root.page == Page.large-files;
+            clicked => {
+                root.navigate(Page.large-files);
+            }
+        }
+
+        NavItem {
             icon: @image-url("../assets/icons/layout-grid.svg");
             label: @tr("Applications");
             folded: root.folded;

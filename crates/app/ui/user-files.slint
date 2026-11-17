@@ -1,9 +1,9 @@
 // What the screens that look through the user's files and move some to the
 // trash show the same way: the start's folders, why nothing started or
-// moved, and the files of a receipt that stayed.
+// moved, a result without a list, and the files of a receipt that stayed.
 import { Theme, Screen } from "theme.slint";
 import { Words } from "cleaner-model.slint";
-import { Banner, Card, CheckMark, Detail, FocusRing, Icon, ScrolledList } from "widgets.slint";
+import { ActionButton, Banner, Card, CheckMark, Detail, FocusRing, Icon, ScrolledList } from "widgets.slint";
 import { FoldersState, KeptShown, PersonalShown, ReceiptWhy, ToolRefusal } from "user-files-model.slint";
 
 // What a receipt says of a file that stayed, the same for the eye and the
@@ -311,6 +311,59 @@ component KeptLine inherits Rectangle {
             color: Theme.text;
             horizontal-alignment: right;
             vertical-alignment: center;
+        }
+    }
+}
+
+// A state of a result without a list (nothing found, nothing the filters
+// let through): what it is, and what to do instead.
+export component ResultState inherits Card {
+    in property <image> icon;
+    // The icon in the tone of success (nothing to do), else neutral.
+    in property <bool> success;
+    in property <string> title;
+    in property <string> text;
+    in property <string> action;
+    in property <image> action-icon;
+    in property <bool> enabled: true;
+    callback acted;
+    vertical-stretch: 1;
+    VerticalLayout {
+        alignment: center;
+        padding: Theme.spacing-xxl;
+        spacing: Theme.spacing-m;
+        HorizontalLayout {
+            alignment: center;
+            Icon {
+                source: root.icon;
+                colorize: root.success ? Theme.success : Theme.text-2;
+                width: Theme.icon-large;
+                height: Theme.icon-large;
+            }
+        }
+        Text {
+            text: root.title;
+            color: Theme.text;
+            font-size: Theme.font-title;
+            font-weight: Theme.weight-semibold;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        Detail {
+            text: root.text;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: center;
+            ActionButton {
+                text: root.action;
+                icon: root.action-icon;
+                enabled: root.enabled;
+                clicked => {
+                    root.acted();
+                }
+            }
         }
     }
 }

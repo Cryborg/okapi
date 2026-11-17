@@ -12,7 +12,7 @@ import {
 } from "widgets.slint";
 import { AgeShown, ChosenFile, FileKindShown, LargeFileRow, LargeFiles, LargeSort, LargeWhy } from "large-files-model.slint";
 import { SearchPhase, ToolRefusal, ToolStep } from "user-files-model.slint";
-import { FolderPicker, KeptCard, RefusalBanner } from "user-files.slint";
+import { FolderPicker, KeptCard, RefusalBanner, ResultState } from "user-files.slint";
 
 // What the screen says, the same for the eye and the ear.
 global BigWords {
@@ -1243,58 +1243,6 @@ component BigConfirmation inherits ModalFrame {
     }
 }
 
-// A state of the result without a list: nothing found, or nothing the
-// filters let through.
-component BigState inherits Card {
-    in property <image> icon;
-    in property <bool> found;
-    in property <string> title;
-    in property <string> text;
-    in property <string> action;
-    in property <image> action-icon;
-    in property <bool> enabled: true;
-    callback acted;
-    vertical-stretch: 1;
-    VerticalLayout {
-        alignment: center;
-        padding: Theme.spacing-xxl;
-        spacing: Theme.spacing-m;
-        HorizontalLayout {
-            alignment: center;
-            Icon {
-                source: root.icon;
-                colorize: root.found ? Theme.success : Theme.text-2;
-                width: Theme.icon-large;
-                height: Theme.icon-large;
-            }
-        }
-        Text {
-            text: root.title;
-            color: Theme.text;
-            font-size: Theme.font-title;
-            font-weight: Theme.weight-semibold;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-        }
-        Detail {
-            text: root.text;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-        }
-        HorizontalLayout {
-            alignment: center;
-            ActionButton {
-                text: root.action;
-                icon: root.action-icon;
-                enabled: root.enabled;
-                clicked => {
-                    root.acted();
-                }
-            }
-        }
-    }
-}
-
 // What the search found, and which files go to the trash.
 component BigResult inherits VerticalLayout {
     // Opened and closed by Rust; a page built again shows it still open.
@@ -1458,7 +1406,7 @@ component BigResult inherits VerticalLayout {
             }
             BigPanel { }
         }
-        if LargeFiles.files > 0 && LargeFiles.rows.length == 0: BigState {
+        if LargeFiles.files > 0 && LargeFiles.rows.length == 0: ResultState {
             icon: @image-url("../assets/icons/funnel.svg");
             title: @tr("Aucun fichier ne correspond à ces filtres");
             text: @tr("Le gros fichier trouvé est toujours là : changez la taille, le type ou la date pour le revoir." | "Les {n} gros fichiers trouvés sont toujours là : changez la taille, le type ou la date pour les revoir." % LargeFiles.files);
@@ -1469,9 +1417,9 @@ component BigResult inherits VerticalLayout {
                 LargeFiles.clear-filters();
             }
         }
-        if LargeFiles.files == 0: BigState {
+        if LargeFiles.files == 0: ResultState {
             icon: @image-url("../assets/icons/circle-check.svg");
-            found: true;
+            success: true;
             title: LargeFiles.all-small ? @tr("Aucun fichier de plus de {} dans ces dossiers", Words.size(LargeFiles.min-size))
                 : @tr("Aucun gros fichier à proposer dans ces dossiers");
             text: LargeFiles.walked-count == 0 ? @tr("Aucun fichier n'a été parcouru dans ces dossiers (dossiers cachés, de projet, autres disques et exclusions mis à part) : il n'y a rien à faire ici.")

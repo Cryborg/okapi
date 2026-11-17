@@ -1118,3 +1118,45 @@ fn a_refusal_of_the_file_manager_goes_as_soon_as_the_focus_moves() {
     assert_eq!(duplicates(&window).get_current(), 2);
     assert!(!duplicates(&window).get_open_refused());
 }
+
+#[test]
+fn no_duplicate_keeps_the_page_wide_and_its_icon_centred() {
+    let sandbox = Sandbox::new();
+    sandbox.write("Documents/n.bin", 35, 1);
+    sandbox.write("Images/n.bin", 36, 1);
+    let window = on_duplicates(seams(&sandbox, &Rc::default(), &no_exclusion(), None));
+    searched(&window);
+    assert_eq!(duplicates(&window).get_groups(), 0);
+    slint::platform::update_timers_and_animations();
+    // The page's buttons at its right margin (a wide window's), not drawn in
+    // to its content.
+    let theme = window.global::<ui::Theme>();
+    let again = button(&window, "Rechercher à nouveau");
+    let right = again.absolute_position().x + again.size().width;
+    let width = f32::from(u16::try_from(window.window().size().width).unwrap());
+    assert!(
+        (width - theme.get_spacing_xxl() - right).abs() < 1.0,
+        "{right} of {width}"
+    );
+    let centre = |element: &i_slint_backend_testing::ElementHandle| {
+        element.absolute_position().x + element.size().width / 2.0
+    };
+    let elsewhere = button(&window, "Chercher dans d'autres dossiers");
+    let title = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+        &window,
+        "Aucun doublon dans ces dossiers",
+    )
+    .next()
+    .unwrap();
+    let icon = i_slint_backend_testing::ElementHandle::find_by_element_type_name(&window, "Icon")
+        .find(|icon| {
+            icon.absolute_position().y < title.absolute_position().y
+                && (icon.size().width - theme.get_icon_large()).abs() < 1.0
+        })
+        .unwrap();
+    assert!((centre(&icon) - centre(&title)).abs() < 1.0);
+    assert!((centre(&elsewhere) - centre(&title)).abs() < 1.0);
+    // Back to the folders, no search started.
+    elsewhere.invoke_accessible_default_action();
+    assert_eq!(duplicates(&window).get_step(), ui::ToolStep::Start);
+}

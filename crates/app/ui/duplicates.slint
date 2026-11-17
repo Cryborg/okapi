@@ -11,7 +11,7 @@ import {
 } from "widgets.slint";
 import { DuplicateRow, Duplicates, KeptWhy, QuickRule, SearchStage } from "duplicates-model.slint";
 import { SearchPhase, ToolRefusal, ToolStep } from "user-files-model.slint";
-import { FolderPicker, KeptCard, RefusalBanner } from "user-files.slint";
+import { FolderPicker, KeptCard, RefusalBanner, ResultState } from "user-files.slint";
 
 // What the screen says, the same for the eye and the ear.
 global DuplicateWords {
@@ -954,41 +954,15 @@ component DuplicateResult inherits VerticalLayout {
             }
             DuplicatePanel { }
         }
-        if Duplicates.groups == 0: Card {
-            vertical-stretch: 1;
-            VerticalLayout {
-                alignment: center;
-                padding: Theme.spacing-xxl;
-                spacing: Theme.spacing-m;
-                Icon {
-                    source: @image-url("../assets/icons/circle-check.svg");
-                    colorize: Theme.success;
-                    width: Theme.icon-large;
-                    height: Theme.icon-large;
-                    x: (parent.width - self.width) / 2;
-                }
-                Text {
-                    text: @tr("Aucun doublon dans ces dossiers");
-                    color: Theme.text;
-                    font-size: Theme.font-title;
-                    font-weight: Theme.weight-semibold;
-                    horizontal-alignment: center;
-                }
-                Detail {
-                    text: @tr("Fichiers d'au moins {} examinés : {}. Chacun n'existe qu'une fois : il n'y a rien à faire ici.", Words.size(Duplicates.min-size), Duplicates.compared);
-                    horizontal-alignment: center;
-                    wrap: word-wrap;
-                }
-                HorizontalLayout {
-                    alignment: center;
-                    ActionButton {
-                        text: @tr("Chercher dans d'autres dossiers");
-                        icon: @image-url("../assets/icons/folder.svg");
-                        clicked => {
-                            Duplicates.change();
-                        }
-                    }
-                }
+        if Duplicates.groups == 0: ResultState {
+            icon: @image-url("../assets/icons/circle-check.svg");
+            success: true;
+            title: @tr("Aucun doublon dans ces dossiers");
+            text: @tr("Fichiers d'au moins {} examinés : {}. Chacun n'existe qu'une fois : il n'y a rien à faire ici.", Words.size(Duplicates.min-size), Duplicates.compared);
+            action: @tr("Chercher dans d'autres dossiers");
+            action-icon: @image-url("../assets/icons/folder.svg");
+            acted => {
+                Duplicates.change();
             }
         }
     }

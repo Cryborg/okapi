@@ -527,7 +527,8 @@ fn update_row(line: &UpdateEntry) -> ui::HistoryRow {
 }
 
 /// The reason a line keeps by `key`; one this version does not know is
-/// taken for not knowing (traced once per line by [`update_row`]).
+/// taken for not knowing (traced once per line at each reading, by
+/// [`update_row`]).
 fn reason_read(key: Option<&str>) -> Option<Reason> {
     key.map(|key| Reason::of_key(key).unwrap_or(Reason::Unknown))
 }

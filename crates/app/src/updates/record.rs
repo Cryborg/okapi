@@ -109,8 +109,9 @@ const fn reason_place(reason: Reason) -> usize {
 /// not; `None`: not known. The system's all together, as PackageKit
 /// installs them all or none until dpkg runs; once dpkg ran and stopped, or
 /// the daemon fell silent, what went is not known. Snaps one by one by the
-/// list read again, as the outcome counts them; not read again, they are
-/// known only done.
+/// list read again, as the outcome counts them, one still listed after
+/// snapd fell silent not known (it may finish it yet); not read again, they
+/// are known only done.
 fn went(target: &Target, told: &Outcome, snaps_read: Option<&[SnapUpdate]>) -> Vec<Option<bool>> {
     let silent = told.why == Some(Why::Unanswered);
     let all = match told.end {
@@ -124,6 +125,8 @@ fn went(target: &Target, told: &Outcome, snaps_read: Option<&[SnapUpdate]>) -> V
         Target::Snaps(asked) => asked
             .iter()
             .map(|snap| match snaps_read {
+                // Waiting still after snapd fell silent: it may finish them yet.
+                Some(read) if waits(snap, read) && silent => None,
                 Some(read) => Some(!waits(snap, read)),
                 None => all.filter(|went| *went),
             })
@@ -298,7 +301,11 @@ mod tests {
         };
         // One waits anew, in a newer version come since: it went all the
         // same.
-        let read = [system_update("bash")];
+        let read = [SystemUpdate {
+            id: "bash;2.1;amd64;resolute-updates".to_owned(),
+            version: "2.1".to_owned(),
+            ..system_update("bash")
+        }];
         let written = line_of(&system(), &ended, Some(&read), None);
         assert_eq!(written.source, PackageSource::Deb);
         assert_eq!(written.time, TIME);
@@ -437,6 +444,26 @@ mod tests {
         );
         assert_eq!(line(&written), (false, Some("broken")));
         assert_eq!(each(&written), [(false, Some("unknown")); 3]);
+    }
+
+    #[test]
+    fn snaps_snapd_fell_silent_on_and_still_waiting_are_unknown() {
+        // Read again while snapd may still finish them: never not installed.
+        let read = [snap("firefox")];
+        let written = line_of(
+            &snaps(),
+            &Ended::before(End::Failed(Why::Unanswered)),
+            None,
+            Some(&read),
+        );
+        assert_eq!(
+            packages(&written),
+            [
+                ("spotify", true, None),
+                ("firefox", false, Some("unknown")),
+                ("obs-studio", true, None),
+            ]
+        );
     }
 
     #[test]

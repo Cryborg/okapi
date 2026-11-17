@@ -406,7 +406,11 @@ impl UpdatesScreen {
         self.0.borrow_mut().retry = Some(target.clone());
         // The answer of the last line written, if still awaited, belongs
         // to an outcome this one closes: no longer said.
-        self.0.borrow_mut().recording = None;
+        if self.0.borrow_mut().recording.take().is_some() {
+            tracing::warn!(
+                "the answer of the last history line no longer awaited: its failure, if any, is in the store's traces alone"
+            );
+        }
         self.0.borrow().record_timer.stop();
         if !started {
             self.verify(target, Ended::before(End::Failed(Why::Broken)), None);

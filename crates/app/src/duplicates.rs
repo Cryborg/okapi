@@ -701,15 +701,18 @@ impl DuplicatesScreen {
             return;
         }
         let Some(Line::Copy(group, copy)) = self.line(index) else {
+            tracing::warn!(index, "no copy on this line: no box changes");
             return;
         };
         let Some(search) = self.0.borrow().shown() else {
+            tracing::warn!(index, "no result: no box changes");
             return;
         };
         let Some(report_group) = search
             .report()
             .and_then(|report| report.groups().get(group))
         else {
+            tracing::warn!(group, "a group beyond the report: no box changes");
             return;
         };
         let toggled = self
@@ -731,9 +734,15 @@ impl DuplicatesScreen {
 
     fn fold(&self, index: usize, open: bool) {
         let Some(Line::Head(group)) = self.line(index) else {
+            tracing::warn!(index, "no group on this line: nothing folds");
             return;
         };
-        if let Some(held) = self.0.borrow_mut().groups.get_mut(group) {
+        {
+            let mut state = self.0.borrow_mut();
+            let Some(held) = state.groups.get_mut(group) else {
+                tracing::warn!(group, "a group beyond the result: nothing folds");
+                return;
+            };
             held.fold(open);
         }
         self.show_rows();
@@ -801,9 +810,11 @@ impl DuplicatesScreen {
     /// file the search read.
     fn open(&self, index: usize) {
         let Some(Line::Copy(group, copy)) = self.line(index) else {
+            tracing::warn!(index, "no copy on this line: none shown in its folder");
             return;
         };
         let Some(search) = self.0.borrow().shown() else {
+            tracing::warn!(index, "no result: no copy shown in its folder");
             return;
         };
         let Some(found) = search
@@ -811,6 +822,11 @@ impl DuplicatesScreen {
             .and_then(|report| report.groups().get(group))
             .and_then(|group| group.copies().get(copy))
         else {
+            tracing::warn!(
+                group,
+                copy,
+                "a copy beyond the report: none shown in its folder"
+            );
             return;
         };
         let request = OpenRequest {

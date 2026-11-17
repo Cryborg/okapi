@@ -1,5 +1,5 @@
 // What the History screen shows, set by Rust (`src/history.rs`).
-import { ReceiptLineShown, RightsProblem, Size } from "cleaner-model.slint";
+import { OperationShown, ReceiptLineShown, RightsProblem, Size } from "cleaner-model.slint";
 import { Moment } from "dashboard-model.slint";
 import { AppSource } from "apps-model.slint";
 
@@ -41,6 +41,10 @@ export struct HistoryRow {
     // Why it did not finish, when it did not.
     admin-problem: RightsProblem,
     deletion-log: DeletionLog,
+    // What became of the operations daemons ran for it (Docker's prune).
+    operations: [OperationShown],
+    // One of them may have removed something (done, or ended unknown).
+    touched-by-operations: bool,
     // Entries of its deletion log that could not be read back.
     unreadable-entries: int,
     // An uninstallation.

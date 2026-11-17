@@ -4,7 +4,7 @@
 import { ListView, ScrollView } from "std-widgets.slint";
 import { Theme, Screen } from "theme.slint";
 import { Badge, Banner, Card, Detail, FocusRing, Icon, Line, Title } from "widgets.slint";
-import { Words } from "cleaner-model.slint";
+import { OperationEnd, Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
 import { DayKind, Moment } from "dashboard-model.slint";
 import { AppWords } from "apps.slint";
@@ -47,8 +47,9 @@ global HistoryWords {
         if operation.kind == HistoryKind.uninstall {
             return operation.freed-known ? @tr("{} · {}", operation.name, freed(operation)) : operation.name;
         }
-        // Root's part may have removed entries before the user's stopped.
-        if operation.stops.length > 0 && operation.removed + operation.partial == 0 && operation.admin == HistoryAdmin.none {
+        // Root's part, or Docker, may have removed entries before the
+        // user's stopped.
+        if operation.stops.length > 0 && operation.removed + operation.partial == 0 && operation.admin == HistoryAdmin.none && !operation.touched-by-operations {
             return @tr("Rien n'a été touché");
         }
         return @tr("{} · gardées : {}", freed(operation), operation.kept);
@@ -290,6 +291,11 @@ component CleaningDetail inherits VerticalLayout {
             text: operation.admin == HistoryAdmin.done ? @tr("La partie administrateur s'est terminée.")
                 : @tr("La partie administrateur ne s'est pas terminée. {}", Words.rights(operation.admin-problem));
             color: operation.admin == HistoryAdmin.done ? Theme.text : Theme.warning;
+        }
+        for shown in operation.operations: Line {
+            text: Words.operation(shown);
+            color: shown.end == OperationEnd.done || shown.end == OperationEnd.nothing
+                ? Theme.text : Theme.warning;
         }
         if operation.deletion-log == DeletionLog.not-kept: Detail {
             text: @tr("Le détail par élément n'est gardé que si le journal des suppressions est activé dans Réglages.");

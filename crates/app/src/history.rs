@@ -392,6 +392,16 @@ fn cleaning_row(
         admin_problem,
         deletion_log,
         unreadable_entries: shown(unreadable),
+        touched_by_operations: line
+            .operations
+            .iter()
+            .any(|operation| operation.end.may_have_removed()),
+        operations: model(
+            line.operations
+                .iter()
+                .filter_map(crate::cleaner::docker::operation_shown)
+                .collect(),
+        ),
         ..ui::HistoryRow::default()
     };
     (row, log)

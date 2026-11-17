@@ -163,7 +163,9 @@ pub struct ReceiptLine {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Receipt {
     pub ending: Ending,
-    pub freed: u64,
+    /// What it freed; unknown when Docker's prune ended without saying
+    /// what went.
+    pub freed: Option<u64>,
     pub removed: usize,
     pub partial: usize,
     pub gone: usize,
@@ -265,7 +267,7 @@ impl Receipt {
             } else {
                 Ending::Done
             },
-            freed,
+            freed: Some(freed),
             removed: count(|kind| *kind == LineKind::Removed),
             partial: count(|kind| *kind == LineKind::Partial),
             gone: count(|kind| *kind == LineKind::Gone),
@@ -354,7 +356,7 @@ mod tests {
             ],
         );
         assert_eq!(receipt.ending, Ending::Done);
-        assert_eq!(receipt.freed, 12, "removed whole and in part");
+        assert_eq!(receipt.freed, Some(12), "removed whole and in part");
         assert_eq!(
             (receipt.removed, receipt.partial, receipt.gone, receipt.kept),
             (2, 1, 1, 2)

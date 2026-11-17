@@ -20,13 +20,16 @@ use okapi_engine::{
 };
 use okapi_rules::{CleanupAction, Language, Os, RuleSet, TemplateVariables};
 use okapi_store::{LastAnalysis, Settings};
+use okapi_tools::docker::Access;
 use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 
 use okapi_helper::{Operation, Reply};
 
 use crate::elevation::{ElevationFailure, ElevationStep, Launcher};
 use crate::kept_selections::{KeptSelections, Unkept};
-use crate::results::{AdminState, CheckState, GroupFacts, Line, Preselection, Results, Seen};
+use crate::results::{
+    AdminState, CheckState, DaemonOperation, GroupFacts, Line, Preselection, Results, Seen,
+};
 use crate::shown::{show, shown, size};
 use crate::ui;
 use cleaning::CleanJob;
@@ -89,6 +92,7 @@ pub enum Problem {
 
 mod browsers;
 mod cleaning;
+pub mod docker;
 mod rights;
 
 pub(crate) use cleaning::line_shown;
@@ -135,6 +139,8 @@ pub struct Seams {
     pub apps: crate::apps::AppsSeams,
     /// Where the History screen reads the history.
     pub history: crate::history::HistorySeams,
+    /// Docker's daemon, for the prune of its build cache.
+    pub docker: docker::DockerSeam,
 }
 
 impl std::fmt::Debug for Seams {
@@ -180,6 +186,7 @@ impl Seams {
             disk,
             updates: crate::updates::UpdatesSeams::system(),
             history: crate::history::HistorySeams::system(),
+            docker: docker::DockerSeam::system(),
         }
     }
 }
@@ -629,7 +636,8 @@ pub enum CleanerEvent {
     /// an end the window shows: its summary (kept when it could be).
     AnalysisDone(LastAnalysis),
     /// A cleaning ended, `freed` bytes when its receipt says so (none when
-    /// its thread died), at `at` seconds since the clock's origin.
+    /// its thread died, or Docker's prune ended unknown), at `at` seconds
+    /// since the clock's origin.
     CleaningDone { freed: Option<u64>, at: i64 },
 }
 
@@ -785,9 +793,10 @@ fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
 }
 
 /// The badge of a group: "Administrator" while locked; unlocked, an
-/// administrator's group is to choose, never preselected (invariant 5).
+/// administrator's group is to choose, never preselected (invariant 5), as
+/// is an operation of a daemon, whatever the daemon says of the user.
 fn badge_of(group: &GroupFacts) -> ui::ResultBadge {
-    if !group.is_checkable() {
+    if group.daemon.is_none() && !group.is_checkable() {
         ui::ResultBadge::Admin
     } else if !group.checked_by_default {
         ui::ResultBadge::ToChoose
@@ -799,6 +808,12 @@ fn badge_of(group: &GroupFacts) -> ui::ResultBadge {
 /// What the note under a group says: why it is left to the user, or where
 /// it stands while out of reach; nothing for a group preselected.
 fn note_of(group: &GroupFacts) -> ui::RowNote {
+    if let Some(daemon) = &group.daemon {
+        return match daemon.access {
+            Access::Allowed => ui::RowNote::Daemon,
+            Access::NotAllowed => ui::RowNote::DaemonRefused,
+        };
+    }
     match badge_of(group) {
         ui::ResultBadge::Preselected => ui::RowNote::None,
         // Its own folder, whatever a rule it joins says.
@@ -1628,7 +1643,8 @@ impl CleanerScreen {
     }
 
     /// The lines of the maintenances `report` found that root runs
-    /// ([`GroupFacts::maintenance`]).
+    /// ([`GroupFacts::maintenance`]), or Docker for the session, when its
+    /// socket is there ([`GroupFacts::daemon_operation`]).
     /// Never one whose operation would refuse whatever the rights: its line
     /// would wait for them for ever.
     fn maintenances_of(&self, report: &ScanReport) -> Vec<GroupFacts> {
@@ -1646,6 +1662,18 @@ impl CleanerScreen {
                 unfit.is_none()
             })
             .filter_map(|found| {
+                if found.action() == CleanupAction::DockerBuildPrune {
+                    // No socket: no Docker for this session, no line.
+                    let (socket, access) = (state.seams.docker.find)()?;
+                    return Some(GroupFacts::daemon_operation(
+                        found,
+                        state.language,
+                        DaemonOperation {
+                            socket,
+                            access,
+                        },
+                    ));
+                }
                 GroupFacts::maintenance(found, state.language, &state.helper_targets)
             })
             .collect()
@@ -1827,6 +1855,7 @@ impl CleanerScreen {
             let (entries, bytes) = results.selected();
             let cleaner = window.global::<ui::Cleaner>();
             cleaner.set_selected_entries(shown(entries));
+            cleaner.set_selected_operations(shown(usize::from(results.docker_checked().is_some())));
             cleaner.set_selected_size(size(bytes));
             cleaner.set_result_entries(shown(results.entries()));
             // From the results held, as shown (root's numbers once its scan
@@ -1996,6 +2025,7 @@ pub mod tests {
                 entries: 1,
                 bytes: 1,
             },
+            daemon: None,
         }
     }
 
@@ -2144,6 +2174,8 @@ pub mod tests {
             apps: crate::apps::tests::inert(),
             // No history read.
             history: crate::history::tests::nowhere(),
+            // No Docker asked.
+            docker: docker::tests::none(),
             ..Seams::system()
         }
     }

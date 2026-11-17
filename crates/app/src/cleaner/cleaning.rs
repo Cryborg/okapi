@@ -3,20 +3,23 @@
 //! it reports, and the receipt.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use okapi_engine::{
-    BrowserLock, CleanPass, CleanReceipt, CleanResult, ItemId, KeepReason, Progress, ScanItem,
-    ScanOptions, ScanReport, Stop,
+    BrowserLock, Cancel, CleanPass, CleanReceipt, CleanResult, ItemId, KeepReason, Progress,
+    ScanItem, ScanOptions, ScanReport, Stop,
 };
 use okapi_helper::{Operation, OutcomeAnswer, Reply, ReplyError};
 use okapi_rules::{RuleSet, TemplateVariables};
-use okapi_store::{AdminRecord, History, HistoryEntry, HistoryOutcome, Opened, seconds};
+use okapi_store::{
+    AdminRecord, History, HistoryEntry, HistoryOutcome, Opened, OperationEnd, seconds,
+};
 use slint::ComponentHandle as _;
 
+use super::docker::{self, Pruning, operation_shown};
 use super::{
     CleanerEvent, CleanerScreen, Inputs, Problem, Running, Task, options, problem, rights,
     settings_problem, stop_shown,
@@ -52,11 +55,12 @@ pub enum HistoryWrite {
     Unavailable,
 }
 
-/// A cleaning's receipt, root's part, and its history line.
+/// A cleaning's receipt, root's part, Docker's prune, and its history line.
 #[derive(Debug)]
 pub struct Cleaned {
     receipt: CleanReceipt,
     admin: Option<AdminDone>,
+    docker: Option<Pruning>,
     history: HistoryWrite,
 }
 
@@ -67,6 +71,10 @@ struct CleanView {
     rights: Option<ElevationStep>,
     /// Root's part over: whether it was done to its end.
     admin_done: Option<bool>,
+    /// The cleaning asks Docker to prune, once the user's part is over.
+    had_docker: bool,
+    /// Docker was asked to prune.
+    docker_asked: bool,
     /// How far each pass of the user's part went: entries done, of all.
     check: Option<(usize, usize)>,
     remove: Option<(usize, usize)>,
@@ -77,13 +85,23 @@ struct CleanView {
 }
 
 impl CleanView {
+    /// The view of a cleaning yet to start, which asks Docker to prune
+    /// when `had_docker`.
+    fn new(had_docker: bool) -> Self {
+        Self {
+            had_docker,
+            ..Self::default()
+        }
+    }
+
     /// Every entry went through the check.
     fn check_over(&self) -> bool {
         self.remove.is_some() || matches!(self.check, Some((done, total)) if done == total)
     }
 
     /// The steps as they stand: root's part if the cleaning has one, the
-    /// two passes over the user's `entries` if any, then the history line.
+    /// two passes over the user's `entries` if any, Docker's prune if asked
+    /// for, then the history line.
     fn steps(&self, had_admin: bool, entries: usize) -> Vec<ui::CleanStep> {
         let pass = |kind, reached: Option<(usize, usize)>, over: bool| {
             let (done, total) = reached.unwrap_or((0, entries));
@@ -110,6 +128,14 @@ impl CleanView {
                 self.check_over(),
             ));
             steps.push(pass(ui::CleanStepKind::Remove, self.remove, false));
+        }
+        if self.had_docker {
+            let state = if self.docker_asked {
+                ui::RowState::Running
+            } else {
+                ui::RowState::Waiting
+            };
+            steps.push(clean_step(ui::CleanStepKind::Docker, state, 0, 0));
         }
         steps.push(clean_step(
             ui::CleanStepKind::History,
@@ -141,6 +167,7 @@ impl CleanView {
         let Ended {
             admin_done,
             user,
+            docker_done,
             recorded,
         } = ended;
         for step in &mut steps {
@@ -152,6 +179,7 @@ impl CleanView {
                     UserEnd::Stopped => false,
                 },
                 ui::CleanStepKind::Remove => user == UserEnd::Whole,
+                ui::CleanStepKind::Docker => docker_done,
                 ui::CleanStepKind::History => recorded,
             };
             if done {
@@ -175,6 +203,8 @@ struct Ended {
     /// Root's part was done to its end.
     admin_done: bool,
     user: UserEnd,
+    /// Docker's prune ran to its end.
+    docker_done: bool,
     /// The history line is written.
     recorded: bool,
 }
@@ -207,6 +237,7 @@ impl Ended {
         Self {
             admin_done: cleaned.admin.as_ref().is_some_and(admin_done),
             user,
+            docker_done: cleaned.docker.as_ref().is_some_and(Pruning::is_done),
             recorded: cleaned.history == HistoryWrite::Recorded,
         }
     }
@@ -234,6 +265,8 @@ pub(super) struct Cleaning {
     steps: Receiver<ElevationStep>,
     /// Root's part over: whether it was done to its end.
     admin_ended: Receiver<bool>,
+    /// Docker was asked to prune.
+    docker_asked: Receiver<()>,
     view: CleanView,
     report: Arc<ScanReport>,
     /// It had a part of root's.
@@ -257,6 +290,9 @@ impl Cleaning {
             && view.admin_done.is_none()
         {
             view.rights = Some(step);
+        }
+        if self.docker_asked.try_iter().last().is_some() {
+            view.docker_asked = true;
         }
         if let Some(done) = self.admin_ended.try_iter().last() {
             view.admin_done = Some(done);
@@ -312,6 +348,8 @@ pub(super) struct Confirming {
     admin: BTreeSet<usize>,
     admin_targets: BTreeSet<String>,
     admin_entries: usize,
+    /// Docker's socket, when its prune is confirmed.
+    docker: Option<PathBuf>,
 }
 
 impl Confirming {
@@ -329,7 +367,16 @@ impl Confirming {
         let groups = self.report.groups();
         self.groups
             .iter()
-            .filter_map(|index| groups.get(*index))
+            .filter_map(|index| {
+                let group = groups.get(*index);
+                if group.is_none() {
+                    // A line of the results that is no group of the report
+                    // (a daemon's operation) never reaches the engine
+                    // (invariant 1).
+                    tracing::error!(index, "a group confirmed outside the report: left out");
+                }
+                group
+            })
             .flat_map(|group| group.items().iter().map(ScanItem::id))
             .collect()
     }
@@ -346,7 +393,8 @@ impl Confirming {
 
     /// Leaves out of this cleaning the groups that empty a cache of the
     /// browser of `lock`: what is confirmed is then what is left. The entries
-    /// left, root's part included (a browser's cache is never one of its).
+    /// left, root's part included, Docker's prune counted as one (a browser's
+    /// cache is never one of theirs).
     pub(super) fn leave_out(&mut self, lock: &BrowserLock) -> usize {
         let groups = self.report.groups();
         self.groups.retain(|index| {
@@ -360,7 +408,7 @@ impl Confirming {
             .filter_map(|index| groups.get(*index))
             .map(|group| group.items().len())
             .sum();
-        self.entries + self.admin_entries
+        self.entries + self.admin_entries + usize::from(self.docker.is_some())
     }
 }
 
@@ -438,6 +486,38 @@ struct Prepared {
     /// Read from the settings before they go into `job`, whose `build`
     /// consumes them: the thread still needs it for the history.
     deletion_log: bool,
+    /// Docker's socket, when its prune is confirmed.
+    docker: Option<PathBuf>,
+}
+
+/// Asks Docker on `socket` to prune its build cache, never under
+/// `min_age`, once the user's part of the cleaning is over: never once it
+/// is cancelled; `asked` told when Docker is.
+fn prune_last(
+    socket: &Path,
+    prune: &docker::Prune,
+    min_age: Duration,
+    cancel: &Cancel,
+    asked: &mpsc::Sender<()>,
+) -> Pruning {
+    if cancel.is_cancelled() {
+        tracing::info!("cleaning cancelled before Docker's prune: not asked");
+        return Pruning::NotAsked;
+    }
+    // The history line, and the deletion log asked for, wait for Docker's
+    // answer: said, in case the process dies meanwhile.
+    tracing::info!(
+        ?socket,
+        ?min_age,
+        "Docker asked to prune: the history line waits for it"
+    );
+    if asked.send(()).is_err() {
+        tracing::debug!("Docker's prune not shown: the screen is gone");
+    }
+    match prune(socket, min_age, &|| cancel.is_cancelled()) {
+        Ok(pruned) => Pruning::Pruned(pruned),
+        Err(error) => Pruning::Failed(error),
+    }
 }
 
 /// What root's part gave the cleaning: what became of each of its entries,
@@ -480,13 +560,38 @@ fn admin_done(admin: &AdminDone) -> bool {
     admin_part(admin).1 == ui::RightsProblem::None
 }
 
+/// What a cleaning gave, its line added to `history` first
+/// ([`write_history`]).
+fn recorded(
+    history: Option<History>,
+    receipt: CleanReceipt,
+    admin: Option<AdminDone>,
+    docker: Option<Pruning>,
+    deletion_log: bool,
+) -> Cleaned {
+    let history = write_history(
+        history,
+        &receipt,
+        admin.as_ref(),
+        docker.as_ref(),
+        deletion_log,
+    );
+    Cleaned {
+        receipt,
+        admin,
+        docker,
+        history,
+    }
+}
+
 /// Adds the line of the cleaning to `history`, from the cleaning's thread:
 /// the line is written before the screen stops waiting for it, unless the
 /// user insists on closing. One line for both parts: root's entries first.
-fn record(
+fn write_history(
     history: Option<History>,
     receipt: &CleanReceipt,
     admin: Option<&AdminDone>,
+    docker: Option<&Pruning>,
     deletion_log: bool,
 ) -> HistoryWrite {
     // Said even when no history is kept.
@@ -536,7 +641,8 @@ fn record(
         admin_record,
         SystemTime::now(),
         deletion_log,
-    );
+    )
+    .with_operations(docker.map(Pruning::record).into_iter().collect());
     match history.record(&entry) {
         Ok(()) => HistoryWrite::Recorded,
         Err(error) => {
@@ -567,27 +673,29 @@ impl CleanerScreen {
             let groups = results.user_checked();
             let (admin, admin_targets) = results.admin_checked();
             let (entries, bytes) = results.selected();
-            if entries == 0 {
+            let docker = results.docker_checked();
+            if entries == 0 && docker.is_none() {
                 tracing::warn!("cleaning asked for without an entry");
                 return;
             }
-            tracing::info!(groups = groups.len(), admin = ?admin_targets, entries, bytes, "cleaning to confirm");
-            state.confirming = Some(Confirming {
+            tracing::info!(groups = groups.len(), admin = ?admin_targets, entries, bytes, ?docker, "cleaning to confirm");
+            let confirming = Confirming {
                 report: Arc::clone(&held.report),
                 entries: results.entries_of(&groups),
                 groups,
                 admin_entries: results.entries_of(&admin),
                 admin,
                 admin_targets,
-            });
-            (
+                docker,
+            };
+            let opened = (
                 entries,
                 bytes,
-                state
-                    .confirming
-                    .as_ref()
-                    .is_some_and(|confirming| !confirming.admin.is_empty()),
-            )
+                !confirming.admin.is_empty(),
+                confirming.docker.is_some(),
+            );
+            state.confirming = Some(confirming);
+            opened
         };
         self.settle();
         self.with_window(|window, _| {
@@ -596,6 +704,7 @@ impl CleanerScreen {
             cleaner.set_confirm_entries(shown(opened.0));
             cleaner.set_confirm_size(size(opened.1));
             cleaner.set_confirm_admin(opened.2);
+            cleaner.set_confirm_docker(opened.3);
             cleaner.set_confirming(true);
         });
     }
@@ -684,6 +793,7 @@ impl CleanerScreen {
             },
             history,
             deletion_log,
+            docker: confirmed.docker.clone(),
         })
     }
 
@@ -746,22 +856,27 @@ impl CleanerScreen {
             job,
             history,
             deletion_log,
+            docker,
         } = prepared;
         tracing::info!(
             ids = job.ids.len(),
             admin = job.admin.is_some(),
             history = history.is_some(),
             deletion_log,
+            ?docker,
             "cleaning started"
         );
         let report = Arc::clone(&job.report);
         let had_admin = job.admin.is_some();
         let clean = Arc::clone(&self.0.borrow().seams.clean);
         let elevate = Arc::clone(&self.0.borrow().seams.elevate);
+        let prune = Arc::clone(&self.0.borrow().seams.docker.prune);
+        let had_docker = docker.is_some();
         let entries = job.ids.len();
         let exclusions = job.inputs.exclusions.clone();
         let (step_sender, steps) = mpsc::channel();
         let (admin_sender, admin_ended) = mpsc::channel();
+        let (docker_sender, docker_asked) = mpsc::channel();
         let running = Running::start(
             "okapi-cleaning",
             tracing::info_span!("cleaning"),
@@ -793,13 +908,14 @@ impl CleanerScreen {
                     tracing::info!("authentication dismissed: the whole cleaning is cancelled");
                     cancel.cancel();
                 }
-                let receipt = clean(&job, cancel, progress);
-                let history = record(history, &receipt, admin.as_ref(), deletion_log);
-                Ok(Cleaned {
-                    receipt,
-                    admin,
-                    history,
-                })
+                let receipt = clean(&job, cancel.clone(), progress);
+                // Docker's prune last: what the user's part removes is
+                // known before the daemon, which may take minutes, works.
+                let docker = docker.map(|socket| {
+                    let min_age = job.options.min_age();
+                    prune_last(&socket, &prune, min_age, &cancel, &docker_sender)
+                });
+                Ok(recorded(history, receipt, admin, docker, deletion_log))
             },
         )
         .map_err(|error| {
@@ -812,7 +928,8 @@ impl CleanerScreen {
             running,
             steps,
             admin_ended,
-            view: CleanView::default(),
+            docker_asked,
+            view: CleanView::new(had_docker),
             report,
             deletion_log,
             close_when_done: false,
@@ -824,11 +941,13 @@ impl CleanerScreen {
         self.with_window(|window, state| {
             show(
                 &state.step_model,
-                CleanView::default().steps(had_admin, entries),
+                CleanView::new(had_docker).steps(had_admin, entries),
             );
             let cleaner = window.global::<ui::Cleaner>();
             cleaner.set_clean_cancel_asked(false);
             cleaner.set_freed(size(0));
+            cleaner.set_freed_unknown(false);
+            cleaner.set_pruning(false);
             cleaner.set_step(ui::CleanerStep::Cleaning);
         });
         self.watch_task();
@@ -837,7 +956,7 @@ impl CleanerScreen {
 
     /// Takes in the progress of the cleaning, then looks for its receipt.
     pub(super) fn watch_cleaning(&self) {
-        let (result, steps, freed, rights) = {
+        let (result, steps, freed, rights, pruning) = {
             let mut state = self.0.borrow_mut();
             let Some(Task::Cleaning(cleaning)) = state.task.as_mut() else {
                 return;
@@ -849,6 +968,7 @@ impl CleanerScreen {
                 view.steps(cleaning.had_admin, cleaning.entries),
                 view.freed,
                 view.rights,
+                view.docker_asked,
             )
         };
         self.with_window(|window, state| {
@@ -860,19 +980,23 @@ impl CleanerScreen {
                 Some(ElevationStep::Authenticated) => ui::RightsStep::Scanning,
             });
             cleaner.set_freed(size(freed));
+            cleaner.set_pruning(pruning);
         });
         match result {
             Ok(Ok(cleaned)) => self.end_cleaning(Some(&cleaned)),
             Ok(Err(found)) => self.cleaning_refused(found),
             Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => {
-                let had_admin = matches!(
-                    &self.0.borrow().task,
-                    Some(Task::Cleaning(cleaning)) if cleaning.had_admin
-                );
+                let (had_admin, docker_asked) = match &self.0.borrow().task {
+                    Some(Task::Cleaning(cleaning)) => {
+                        (cleaning.had_admin, cleaning.view.docker_asked)
+                    }
+                    _ => (false, false),
+                };
                 tracing::error!(
                     had_admin,
-                    "cleaning thread ended without a receipt: its history line is not written, and root's part, if any, may have removed entries"
+                    docker_asked,
+                    "cleaning thread ended without a receipt: its history line is not written, and root's part or Docker, if any, may have removed entries"
                 );
                 self.end_cleaning(None);
             }
@@ -956,18 +1080,24 @@ impl CleanerScreen {
         let receipt = done.map(|done| {
             (
                 done,
-                receipt_of(&done.receipt, &cleaning.report, done.admin.as_ref()),
+                receipt_of(
+                    &done.receipt,
+                    &cleaning.report,
+                    done.admin.as_ref(),
+                    done.docker.as_ref(),
+                ),
             )
         });
         if let Some((done, receipt)) = &receipt {
             tracing::info!(
                 ending = ?receipt.ending,
-                freed = receipt.freed,
+                freed = ?receipt.freed,
                 removed = receipt.removed,
                 partial = receipt.partial,
                 gone = receipt.gone,
                 kept = receipt.kept,
                 history = ?done.history,
+                docker = ?done.docker.as_ref().map(|docker| docker.record().end),
                 "cleaning ended"
             );
         }
@@ -982,6 +1112,10 @@ impl CleanerScreen {
         self.with_window(|window, state| {
             show(&state.step_model, steps);
             let shown_to = window.global::<ui::Cleaner>();
+            shown_to.set_receipt_docker(docker_shown(
+                receipt.as_ref().map(|(done, _)| *done),
+                cleaning.view.docker_asked,
+            ));
             if let Some((done, receipt)) = &receipt {
                 show(
                     &state.stop_model,
@@ -1025,7 +1159,7 @@ impl CleanerScreen {
         // Even when it freed nothing it knows of: root's part, or a thread
         // that died, may have removed entries.
         self.emit(CleanerEvent::CleaningDone {
-            freed: receipt.as_ref().map(|(_, receipt)| receipt.freed),
+            freed: receipt.as_ref().and_then(|(_, receipt)| receipt.freed),
             at: seconds(SystemTime::now()),
         });
     }
@@ -1124,9 +1258,15 @@ impl CleanerScreen {
 }
 
 /// The receipt of a cleaning: `receipt` of the user's part, cleaned from
-/// `report`, and root's part, if any. It ends cancelled when the system's
-/// question was dismissed, stopped when neither part did anything.
-fn receipt_of(receipt: &CleanReceipt, report: &ScanReport, admin: Option<&AdminDone>) -> Receipt {
+/// `report`, root's part and Docker's prune, if any. It ends cancelled when
+/// the system's question was dismissed or the prune cancelled, stopped when
+/// no part did anything.
+fn receipt_of(
+    receipt: &CleanReceipt,
+    report: &ScanReport,
+    admin: Option<&AdminDone>,
+    docker: Option<&Pruning>,
+) -> Receipt {
     let users = OutcomeFacts::all(receipt, report);
     if users
         .iter()
@@ -1144,17 +1284,61 @@ fn receipt_of(receipt: &CleanReceipt, report: &ScanReport, admin: Option<&AdminD
     // part touched anything. Root's part whose end is unknown may have
     // removed entries: never "nothing was touched".
     let unknown = problem == ui::RightsProblem::Unknown;
-    let failed = !receipt.stops().is_empty() || problem != ui::RightsProblem::None;
-    let mut shown = Receipt::new(failed && !unknown && facts.is_empty(), &facts);
+    // What the prune did, as the history line keeps it: one that ended
+    // unknown may have removed caches, and leaves what was freed unknown.
+    let prune_end = docker.map(|docker| docker.record().end);
+    let prune_unknown = prune_end.is_some_and(OperationEnd::leaves_freed_unknown);
+    let may_have_pruned = prune_end.is_some_and(OperationEnd::may_have_removed);
+    let failed = !receipt.stops().is_empty()
+        || problem != ui::RightsProblem::None
+        || docker.is_some_and(|docker| !docker.is_done());
+    let mut shown = Receipt::new(
+        failed && !unknown && !may_have_pruned && facts.is_empty(),
+        &facts,
+    );
+    shown.freed = shown
+        .freed
+        .map(|freed| freed.saturating_add(docker.map_or(0, Pruning::freed)))
+        .filter(|_| !prune_unknown);
+    // Root's part whose end is unknown: its outcomes unknown, whatever
+    // Docker said.
     if unknown && facts.is_empty() {
         shown.ending = Ending::Interrupted;
+    } else if !receipt.stops().is_empty() && facts.is_empty() {
+        // The user's part stopped before it touched anything, as the
+        // history line says, whatever Docker did after.
+        shown.ending = Ending::Stopped;
     } else if matches!(
         problem,
         ui::RightsProblem::Dismissed | ui::RightsProblem::Cancelled
+    ) || matches!(
+        docker,
+        Some(Pruning::NotAsked | Pruning::Failed(okapi_tools::docker::DockerError::Cancelled))
     ) {
         shown.ending = Ending::Cancelled;
     }
     shown
+}
+
+/// What the receipt says of Docker's prune: what `done` recorded of it; a
+/// cleaning whose thread died (none done) may have pruned once Docker was
+/// `asked`.
+fn docker_shown(done: Option<&Cleaned>, asked: bool) -> ui::OperationShown {
+    match done {
+        Some(done) => done
+            .docker
+            .as_ref()
+            .and_then(|docker| operation_shown(&docker.record()))
+            .unwrap_or_default(),
+        None => ui::OperationShown {
+            end: if asked {
+                ui::OperationEnd::Unknown
+            } else {
+                ui::OperationEnd::None
+            },
+            ..ui::OperationShown::default()
+        },
+    }
 }
 
 /// Shows `receipt` in the window.
@@ -1169,7 +1353,8 @@ fn show_receipt(
         Ending::Stopped => ui::CleanEnding::Stopped,
         Ending::Interrupted => ui::CleanEnding::Interrupted,
     });
-    cleaner.set_freed(size(receipt.freed));
+    cleaner.set_freed(size(receipt.freed.unwrap_or_default()));
+    cleaner.set_freed_unknown(receipt.freed.is_none());
     cleaner.set_removed(shown(receipt.removed));
     cleaner.set_partial(shown(receipt.partial));
     cleaner.set_gone(shown(receipt.gone));
@@ -1827,6 +2012,7 @@ mod tests {
     const ALL_DONE: super::Ended = super::Ended {
         admin_done: true,
         user: super::UserEnd::Whole,
+        docker_done: true,
         recorded: true,
     };
 
@@ -1899,6 +2085,7 @@ mod tests {
         let stopped = super::Ended {
             admin_done: false,
             user: super::UserEnd::Stopped,
+            docker_done: false,
             recorded: false,
         };
         assert_eq!(
@@ -4376,5 +4563,497 @@ mod tests {
     #[test]
     fn roots_part_alone_whose_end_is_unknown_never_says_nothing_was_touched() {
         roots_part_alone_ends(0, "{\"version\": 2".to_owned(), "Nettoyage interrompu");
+    }
+
+    /// The line of Docker's build cache, in French.
+    const DOCKER: &str = "Cache de construction Docker";
+
+    type AgesAsked = Arc<std::sync::Mutex<Vec<Duration>>>;
+    /// What the screen told the window each cleaning freed.
+    type FreedTold = Rc<std::cell::RefCell<Vec<Option<u64>>>>;
+
+    /// The results of `seams` with a Docker that accepts the user or not
+    /// (`access`), its prune answering what `answer` makes; the minimum ages
+    /// asked for land in what is returned last, and what the screen told
+    /// the window of the cleaning's end (its `freed`) in the one before.
+    fn on_results_with_docker(
+        seams: Seams,
+        access: okapi_tools::docker::Access,
+        answer: impl Fn(
+            &dyn Fn() -> bool,
+        )
+            -> Result<okapi_tools::docker::Pruned, okapi_tools::docker::DockerError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> (
+        ui::AppWindow,
+        super::super::CleanerScreen,
+        FreedTold,
+        AgesAsked,
+    ) {
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (window, screen) = on_results(Seams {
+            docker: super::super::docker::tests::fake(access, Arc::clone(&asked), answer),
+            ..seams
+        });
+        let ended = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let told = Rc::clone(&ended);
+        screen.listen(Rc::new(move |event| {
+            if let super::super::CleanerEvent::CleaningDone { freed, .. } = event {
+                told.borrow_mut().push(freed);
+            }
+        }));
+        (window, screen, ended, asked)
+    }
+
+    fn pruned(caches: usize, bytes: u64) -> okapi_tools::docker::Pruned {
+        okapi_tools::docker::Pruned { caches, bytes }
+    }
+
+    fn sandbox_seams(sandbox: &Sandbox) -> Seams {
+        sandbox.read(&sandbox.root.join("state"))
+    }
+
+    #[test]
+    fn docker_prunes_alone_once_checked_and_confirmed_and_both_receipt_and_history_say_it() {
+        let sandbox = Sandbox::new();
+        settle_files();
+        let (window, _screen, ended, asked) = on_results_with_docker(
+            sandbox_seams(&sandbox),
+            okapi_tools::docker::Access::Allowed,
+            |_| Ok(pruned(3, 3_000)),
+        );
+        let line = found(&window, DOCKER);
+        assert_eq!(
+            line.accessible_checked(),
+            Some(false),
+            "never checked before choosing (invariant 5)"
+        );
+        let description = {
+            use slint::Model as _;
+            window
+                .global::<ui::Cleaner>()
+                .get_results()
+                .iter()
+                .find(|row| row.label == DOCKER)
+                .unwrap()
+                .description
+        };
+        assert!(
+            description.contains("7 jours") && !description.contains('{'),
+            "its limits filled: {description}"
+        );
+        assert!(shows(&window, "Élagué par Docker : à cocher vous-même."));
+        let cleaner = window.global::<ui::Cleaner>();
+        assert_eq!(cleaner.get_selected_operations(), 0);
+        assert_eq!(
+            button(&window, "Nettoyer").accessible_enabled(),
+            Some(false),
+            "nothing checked"
+        );
+        line.invoke_accessible_default_action();
+        assert_eq!(cleaner.get_selected_operations(), 1);
+        assert_eq!(cleaner.get_selected_entries(), 0, "no entry of its");
+        button(&window, "Nettoyer").invoke_accessible_default_action();
+        assert!(cleaner.get_confirming(), "a prune alone is a cleaning");
+        assert!(
+            asked.lock().unwrap().is_empty(),
+            "nothing before the confirmation"
+        );
+        slint::platform::update_timers_and_animations();
+        let_the_screen_settle();
+        assert!(shows(
+            &window,
+            "Docker élaguera son cache de construction : ce qui part n'est connu qu'après."
+        ));
+        found(&window, "J'ai compris que c'est définitif").invoke_accessible_default_action();
+        button(&window, "Supprimer définitivement").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert_eq!(
+            *asked.lock().unwrap(),
+            [Duration::ZERO],
+            "once, with the settings' minimum age"
+        );
+        assert_eq!(
+            steps_shown(&window),
+            [
+                (ui::CleanStepKind::Docker, ui::RowState::Done),
+                (ui::CleanStepKind::History, ui::RowState::Done),
+            ]
+        );
+        assert!(shows(&window, "Nettoyage terminé"));
+        assert!(shows_a_text_starting(
+            &window,
+            "Docker : 3 caches retirés, "
+        ));
+        assert!(shows(
+            &window,
+            "Aucun élément n'a été retiré ; ce que Docker a fait est dit ci-dessous."
+        ));
+        assert_eq!(*ended.borrow(), [Some(3_000)], "its bytes freed, known");
+        let history = sandbox.history();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0]["removedBytes"], 3_000, "its bytes counted");
+        assert_eq!(
+            history[0]["operations"],
+            serde_json::json!([{
+                "action": "docker-build-prune",
+                "end": "done",
+                "entries": 3,
+                "bytes": 3_000,
+            }])
+        );
+    }
+
+    /// The user's part first: what it removes is gone when Docker is
+    /// asked; both counted.
+    #[test]
+    fn docker_prunes_once_the_users_part_is_over() {
+        let sandbox = Sandbox::new();
+        let old = sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let seen_gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (window, _screen, ended, _) = {
+            let old = old.clone();
+            let seen_gone = Arc::clone(&seen_gone);
+            on_results_with_docker(
+                sandbox_seams(&sandbox),
+                okapi_tools::docker::Access::Allowed,
+                move |_| {
+                    seen_gone.store(!old.exists(), std::sync::atomic::Ordering::SeqCst);
+                    Ok(pruned(1, 1_000))
+                },
+            )
+        };
+        found(&window, DOCKER).invoke_accessible_default_action();
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(
+            seen_gone.load(std::sync::atomic::Ordering::SeqCst),
+            "pip's cache removed before Docker was asked"
+        );
+        assert_eq!(
+            steps_shown(&window),
+            [
+                (ui::CleanStepKind::Check, ui::RowState::Done),
+                (ui::CleanStepKind::Remove, ui::RowState::Done),
+                (ui::CleanStepKind::Docker, ui::RowState::Done),
+                (ui::CleanStepKind::History, ui::RowState::Done),
+            ]
+        );
+        let removed = sandbox.history()[0]["removedBytes"].as_u64().unwrap();
+        assert_eq!(removed, 1_007, "pip's bytes and Docker's");
+        assert_eq!(*ended.borrow(), [Some(removed)]);
+    }
+
+    /// Docker never takes younger entries than the settings allow.
+    #[test]
+    fn docker_is_asked_for_the_settings_minimum_age() {
+        let sandbox = Sandbox::new();
+        settle_files();
+        let thirty_days_minutes = 30 * 24 * 60;
+        let inputs = Inputs {
+            min_age_minutes: Some(thirty_days_minutes),
+            ..sandbox.inputs(Some(&sandbox.root.join("state")))
+        };
+        let (window, _screen, _, asked) = on_results_with_docker(
+            Seams {
+                read: Rc::new(move || Ok(inputs.clone())),
+                ..sandbox_seams(&sandbox)
+            },
+            okapi_tools::docker::Access::Allowed,
+            |_| Ok(pruned(0, 0)),
+        );
+        found(&window, DOCKER).invoke_accessible_default_action();
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert_eq!(
+            *asked.lock().unwrap(),
+            [Duration::from_mins(thirty_days_minutes)]
+        );
+        assert!(shows(&window, "Docker : rien à retirer."));
+    }
+
+    #[test]
+    fn docker_absent_at_the_cleaning_ends_it_stopped_and_freed_nothing() {
+        let sandbox = Sandbox::new();
+        settle_files();
+        let (window, _screen, ended, _) = on_results_with_docker(
+            sandbox_seams(&sandbox),
+            okapi_tools::docker::Access::Allowed,
+            |_| {
+                Err(okapi_tools::docker::DockerError::Absent {
+                    socket: PathBuf::from(super::super::docker::tests::FAKE_SOCKET),
+                    source: std::io::Error::from(std::io::ErrorKind::ConnectionRefused),
+                })
+            },
+        );
+        found(&window, DOCKER).invoke_accessible_default_action();
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(shows(&window, "Nettoyage arrêté"));
+        assert!(shows(
+            &window,
+            "Docker : rien de retiré, le moteur ne tourne pas."
+        ));
+        assert_eq!(
+            steps_shown(&window)[0],
+            (ui::CleanStepKind::Docker, ui::RowState::NotDone)
+        );
+        assert_eq!(*ended.borrow(), [Some(0)], "nothing went: known");
+        let history = sandbox.history();
+        assert_eq!(history[0]["removedBytes"], 0);
+        assert_eq!(history[0]["complete"], false);
+        assert_eq!(
+            history[0]["operations"][0],
+            serde_json::json!({
+                "action": "docker-build-prune",
+                "end": "notDone",
+                "reason": "absent",
+            })
+        );
+    }
+
+    /// Docker asked, then silent: it may have pruned, so what was freed is
+    /// unknown, in the receipt as in the history and on the Home page.
+    #[test]
+    fn docker_silent_once_asked_leaves_what_was_freed_unknown() {
+        let sandbox = Sandbox::new();
+        settle_files();
+        let (window, _screen, ended, _) = on_results_with_docker(
+            sandbox_seams(&sandbox),
+            okapi_tools::docker::Access::Allowed,
+            |_| {
+                Err(okapi_tools::docker::DockerError::Io(std::io::Error::from(
+                    std::io::ErrorKind::TimedOut,
+                )))
+            },
+        );
+        found(&window, DOCKER).invoke_accessible_default_action();
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(
+            shows(&window, "Nettoyage terminé"),
+            "never \"nothing was touched\""
+        );
+        assert!(shows(&window, "Espace libéré : Inconnu"), "what was freed");
+        assert!(window.global::<ui::Cleaner>().get_freed_unknown());
+        assert!(shows(
+            &window,
+            "Docker : sa réponse n'a pas dit ce qui est parti, la place libérée est inconnue. Le détail est dans le journal."
+        ));
+        assert_eq!(*ended.borrow(), [None]);
+        assert_eq!(
+            sandbox.history()[0]["operations"][0],
+            serde_json::json!({
+                "action": "docker-build-prune",
+                "end": "unknown",
+                "reason": "unanswered",
+            })
+        );
+    }
+
+    /// Cancelled while Docker works: the wait ends, what went is unknown.
+    #[test]
+    fn a_cleaning_cancelled_while_docker_prunes_ends_cancelled_and_unknown() {
+        let sandbox = Sandbox::new();
+        settle_files();
+        let (window, _screen, ended, asked) = on_results_with_docker(
+            sandbox_seams(&sandbox),
+            okapi_tools::docker::Access::Allowed,
+            |cancelled| {
+                while !cancelled() {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(okapi_tools::docker::DockerError::Cancelled)
+            },
+        );
+        found(&window, DOCKER).invoke_accessible_default_action();
+        confirm(&window);
+        watch_until(&window, |window| {
+            window.global::<ui::Cleaner>().get_pruning()
+        });
+        assert!(shows(
+            &window,
+            "Docker élague son cache de construction ; ce qui part n'est connu qu'à la fin."
+        ));
+        assert_eq!(
+            steps_shown(&window)[0],
+            (ui::CleanStepKind::Docker, ui::RowState::Running)
+        );
+        let_the_screen_settle();
+        button(&window, "Annuler le nettoyage").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert_eq!(asked.lock().unwrap().len(), 1);
+        assert!(shows(&window, "Nettoyage annulé"));
+        assert!(window.global::<ui::Cleaner>().get_freed_unknown());
+        assert!(shows(
+            &window,
+            "Docker : élagage annulé en cours, ce qui est parti est inconnu."
+        ));
+        assert_eq!(*ended.borrow(), [None]);
+        assert_eq!(
+            sandbox.history()[0]["operations"][0],
+            serde_json::json!({
+                "action": "docker-build-prune",
+                "end": "unknown",
+                "reason": "cancelled",
+            })
+        );
+    }
+
+    /// Cancelled during the user's part: Docker is never asked.
+    #[test]
+    fn a_cleaning_cancelled_before_docker_never_asks_it() {
+        let sandbox = Sandbox::new();
+        settle_files();
+        let seams = sandbox_seams(&sandbox);
+        let real = Arc::clone(&seams.clean);
+        let (reached_sender, reached) = std::sync::mpsc::channel::<()>();
+        let (go, gone) = std::sync::mpsc::channel::<()>();
+        let gone = std::sync::Mutex::new(gone);
+        let clean: super::super::Clean = Arc::new(move |job, cancel, progress| {
+            reached_sender.send(()).unwrap();
+            gone.lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(30))
+                .unwrap();
+            real(job, cancel, progress)
+        });
+        let (window, _screen, ended, asked) = on_results_with_docker(
+            Seams { clean, ..seams },
+            okapi_tools::docker::Access::Allowed,
+            |_| Ok(pruned(1, 1)),
+        );
+        found(&window, DOCKER).invoke_accessible_default_action();
+        confirm(&window);
+        reached.recv_timeout(Duration::from_secs(30)).unwrap();
+        let_the_screen_settle();
+        button(&window, "Annuler le nettoyage").invoke_accessible_default_action();
+        go.send(()).unwrap();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(asked.lock().unwrap().is_empty(), "never asked");
+        assert!(shows(&window, "Nettoyage annulé"));
+        assert!(shows(
+            &window,
+            "Docker : pas demandé, le nettoyage a été annulé avant."
+        ));
+        assert_eq!(*ended.borrow(), [Some(0)], "nothing went: known");
+        assert_eq!(
+            sandbox.history()[0]["operations"][0],
+            serde_json::json!({
+                "action": "docker-build-prune",
+                "end": "notDone",
+                "reason": "cancelled",
+            })
+        );
+    }
+
+    /// The browser's cache left out, Docker's prune is still what the
+    /// cleaning takes.
+    #[test]
+    fn ignoring_the_only_browser_still_prunes_docker() {
+        let sandbox = Sandbox::new();
+        let (chrome, _, _) = chrome_open(&sandbox, false);
+        let (window, _screen, _, asked) = on_results_with_docker(
+            sandbox_seams(&sandbox),
+            okapi_tools::docker::Access::Allowed,
+            |_| Ok(pruned(1, 1)),
+        );
+        found(&window, DOCKER).invoke_accessible_default_action();
+        confirm_and_ask(&window);
+        assert!(asking(&window));
+        let_the_screen_settle();
+        button(&window, "Ignorer Chrome").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(chrome.exists(), "left out");
+        assert_eq!(asked.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn docker_that_refuses_the_user_shows_its_line_that_cannot_be_checked() {
+        let sandbox = Sandbox::new();
+        settle_files();
+        let (window, _screen, _, asked) = on_results_with_docker(
+            sandbox_seams(&sandbox),
+            okapi_tools::docker::Access::NotAllowed,
+            |_| unreachable!("never asked"),
+        );
+        let line = found(&window, DOCKER);
+        assert_eq!(line.accessible_checked(), Some(false));
+        assert!(shows(
+            &window,
+            "Docker refuse votre compte : il faut être dans le groupe docker, puis rouvrir la session."
+        ));
+        line.invoke_accessible_default_action();
+        assert_eq!(
+            line.accessible_checked(),
+            Some(false),
+            "it cannot be checked"
+        );
+        found(&window, "Applications").invoke_accessible_default_action();
+        found(&window, "Applications").invoke_accessible_default_action();
+        assert_eq!(
+            line.accessible_checked(),
+            Some(false),
+            "nor by its category's box"
+        );
+        assert_eq!(window.global::<ui::Cleaner>().get_selected_operations(), 0);
+        assert!(asked.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn without_a_socket_of_docker_there_is_no_line() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let (window, _screen) = on_results(sandbox_seams(&sandbox));
+        assert!(
+            ElementHandle::find_by_accessible_label(&window, DOCKER)
+                .next()
+                .is_none()
+        );
+    }
+
+    /// Docker present but left unchecked (`access` whatever it is): the
+    /// cleaning never asks it (invariant 5).
+    fn docker_left_unchecked_is_never_asked(access: okapi_tools::docker::Access) {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let (window, _screen, _, asked) =
+            on_results_with_docker(sandbox_seams(&sandbox), access, |_| {
+                unreachable!("never asked")
+            });
+        confirm(&window);
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
+        assert!(asked.lock().unwrap().is_empty());
+        assert!(
+            steps_shown(&window)
+                .iter()
+                .all(|(kind, _)| *kind != ui::CleanStepKind::Docker)
+        );
+        assert!(sandbox.history()[0].get("operations").is_none());
+    }
+
+    #[test]
+    fn docker_accepting_the_user_but_left_unchecked_is_never_asked() {
+        docker_left_unchecked_is_never_asked(okapi_tools::docker::Access::Allowed);
+    }
+
+    #[test]
+    fn docker_refusing_the_user_is_never_asked() {
+        docker_left_unchecked_is_never_asked(okapi_tools::docker::Access::NotAllowed);
+    }
+
+    /// A cleaning whose thread died may have pruned once Docker was asked.
+    #[test]
+    fn a_cleaning_whose_thread_died_says_docker_may_have_pruned_once_asked() {
+        assert_eq!(
+            super::docker_shown(None, true).end,
+            ui::OperationEnd::Unknown
+        );
+        assert_eq!(super::docker_shown(None, false).end, ui::OperationEnd::None);
     }
 }

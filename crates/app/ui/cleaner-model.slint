@@ -68,10 +68,11 @@ export enum RowKind { category, browser, group }
 // /tmp. Out of reach without the administrator: waiting for the rights;
 // waiting for them, unreadable to the user, or a maintenance measured by
 // root only, what it holds unknown; never the helper's to clean; nothing
-// for root to clean. None for a group preselected.
+// for root to clean. Docker's prune, left to the user, or out of reach when
+// Docker refuses them. None for a group preselected.
 export enum RowNote {
     none, cache-reset, operation, yours, rights-obtained, to-choose,
-    locked, unseen, unmeasured, unreachable, nothing,
+    locked, unseen, unmeasured, unreachable, nothing, daemon, daemon-refused,
 }
 
 // Where the rights asked for stand: their request being made (which
@@ -137,11 +138,11 @@ export struct IssueShown {
     path: string,
 }
 
-export enum CleanStepKind { admin, check, remove, history }
+export enum CleanStepKind { admin, check, remove, docker, history }
 
 // A step of a cleaning: root's part, the check of each entry, their removal,
-// the history line. Its bar runs `done` of `total`; with no total, a running
-// step sweeps.
+// the prune Docker is asked for, the history line. Its bar runs `done` of
+// `total`; with no total, a running step sweeps.
 export struct CleanStep {
     kind: CleanStepKind,
     state: RowState,
@@ -175,6 +176,20 @@ export struct ReceiptLineShown {
     paths: [PathShown],
     // How many more than the paths listed.
     more: int,
+}
+
+// How an operation of a cleaning a daemon runs (Docker's prune) ended: done
+// (`entries` caches, `size`), with nothing to remove, not asked (cancelled),
+// cancelled while it worked (cut short), refused for a reason of its own,
+// or asked with no answer that says what it did.
+export enum OperationEnd {
+    none, done, nothing, cancelled, cut-short, absent, not-allowed, unreached, refused, unknown,
+}
+
+export struct OperationShown {
+    end: OperationEnd,
+    entries: int,
+    size: Size,
 }
 
 export global Cleaner {
@@ -211,6 +226,9 @@ export global Cleaner {
     in property <[IssueShown]> notes;
     in property <Size> selected-size;
     in property <int> selected-entries;
+    // The operations of daemons checked (Docker's prune): a cleaning may
+    // take them alone.
+    in property <int> selected-operations;
     in property <int> result-entries;
     // The groups waiting for the rights, and where asking for them stands.
     in property <int> rights-waiting;
@@ -226,6 +244,8 @@ export global Cleaner {
     // Groups that need the administrator are confirmed: the system may ask
     // for the password.
     in property <bool> confirm-admin;
+    // Docker's prune is confirmed: what it removes is known only after.
+    in property <bool> confirm-docker;
     // The question about an open browser, before a cleaning: the browser,
     // the labels of its caches the cleaning takes, and their size.
     in property <bool> browser-asking;
@@ -238,6 +258,10 @@ export global Cleaner {
     in property <[CleanStep]> clean-steps;
     in property <Size> freed;
     in property <bool> clean-cancel-asked;
+    // What the cleaning freed is unknown (Docker's prune ended unknown).
+    in property <bool> freed-unknown;
+    // Docker was asked to prune: the user's part is over.
+    in property <bool> pruning;
     // The administrator's part under way: its question, then root's work.
     in property <RightsStep> clean-rights;
 
@@ -259,6 +283,8 @@ export global Cleaner {
     in property <bool> choices-unsaved;
     // Why the administrator's part of the cleaning was not done.
     in property <RightsProblem> receipt-rights;
+    // What Docker's prune did, when the cleaning asked for it.
+    in property <OperationShown> receipt-docker;
 
     callback toggle(int);
     callback confirm-delete();
@@ -381,6 +407,35 @@ export global Words {
             return @tr("L'assistant administrateur s'est interrompu : des éléments ont pu être supprimés. Le détail est dans le journal.");
         }
         return @tr("L'assistant administrateur a échoué. Le détail est dans le journal.");
+    }
+
+    // What Docker's prune did, in a receipt or the history.
+    pure public function operation(shown: OperationShown) -> string {
+        if shown.end == OperationEnd.done {
+            return @tr("Docker : {n} cache retiré, {}" | "Docker : {n} caches retirés, {}" % shown.entries, Words.size(shown.size));
+        }
+        if shown.end == OperationEnd.nothing {
+            return @tr("Docker : rien à retirer.");
+        }
+        if shown.end == OperationEnd.cut-short {
+            return @tr("Docker : élagage annulé en cours, ce qui est parti est inconnu.");
+        }
+        if shown.end == OperationEnd.cancelled {
+            return @tr("Docker : pas demandé, le nettoyage a été annulé avant.");
+        }
+        if shown.end == OperationEnd.absent {
+            return @tr("Docker : rien de retiré, le moteur ne tourne pas.");
+        }
+        if shown.end == OperationEnd.not-allowed {
+            return @tr("Docker : rien de retiré, il refuse votre compte (groupe docker).");
+        }
+        if shown.end == OperationEnd.refused {
+            return @tr("Docker : rien de retiré, il a refusé d'élaguer. Le détail est dans le journal.");
+        }
+        if shown.end == OperationEnd.unknown {
+            return @tr("Docker : sa réponse n'a pas dit ce qui est parti, la place libérée est inconnue. Le détail est dans le journal.");
+        }
+        return @tr("Docker : rien de retiré, il n'a pas pu être joint. Le détail est dans le journal.");
     }
 
     pure public function unit(unit: SizeUnit) -> string {

@@ -59,6 +59,7 @@ fn cleaning(time: i64, removed_bytes: u64, entries: Option<Vec<HistoryOutcome>>)
         gone: 5,
         kept: 1,
         complete: false,
+        operations: Vec::new(),
         admin: None,
         entries,
     }
@@ -571,4 +572,107 @@ fn a_cleaning_that_touched_nothing_says_so_and_an_unreadable_history_shows_nothi
     });
     assert_eq!(history.get_skipped(), 0);
     assert_eq!(rows(&window).len(), 0);
+}
+
+/// Docker's prune, done or not, is said in the detail of its cleaning; one
+/// whose end is unknown leaves what was freed unknown.
+#[test]
+fn a_cleaning_says_what_docker_pruned() {
+    i_slint_backend_testing::init_no_event_loop();
+    let directory = tempfile::tempdir().unwrap();
+    let prune = |end| okapi_store::OperationRecord {
+        action: okapi_rules::CleanupAction::DockerBuildPrune,
+        end,
+    };
+    record(
+        directory.path(),
+        &cleaning(before(2), 1, None).with_operations(vec![prune(
+            okapi_store::OperationEnd::NotDone {
+                reason: okapi_store::OperationReason::NotAllowed,
+            },
+        )]),
+    );
+    record(
+        directory.path(),
+        &cleaning(before(1), 1, None).with_operations(vec![prune(
+            okapi_store::OperationEnd::Unknown {
+                reason: okapi_store::OperationReason::Unanswered,
+            },
+        )]),
+    );
+    let (window, _screen) = shown_history(seams(directory.path()));
+    assert!(!rows(&window)[0].freed_known, "it may have pruned");
+    assert!(shows(
+        &window,
+        "Docker : sa réponse n'a pas dit ce qui est parti, la place libérée est inconnue. Le détail est dans le journal."
+    ));
+    assert!(rows(&window)[1].freed_known);
+    assert_eq!(
+        rows(&window)[1]
+            .operations
+            .row_data(0)
+            .map(|shown| shown.end),
+        Some(ui::OperationEnd::NotAllowed)
+    );
+}
+
+/// The user's part stopped before it touched anything, then Docker: the
+/// line never says nothing was touched once Docker freed room or may have,
+/// and does when Docker had nothing to remove.
+#[test]
+fn a_cleaning_stopped_before_docker_pruned_is_not_one_that_touched_nothing() {
+    i_slint_backend_testing::init_no_event_loop();
+    let directory = tempfile::tempdir().unwrap();
+    let stopped_then = |hours, end| {
+        let stopped = HistoryEntry {
+            stops: vec!["missingVariable".to_owned()],
+            removed: 0,
+            partial: 0,
+            gone: 0,
+            kept: 0,
+            ..cleaning(before(hours), 0, None)
+        };
+        record(
+            directory.path(),
+            &stopped.with_operations(vec![okapi_store::OperationRecord {
+                action: okapi_rules::CleanupAction::DockerBuildPrune,
+                end,
+            }]),
+        );
+    };
+    stopped_then(
+        3,
+        okapi_store::OperationEnd::Done {
+            entries: 0,
+            bytes: 2_000,
+        },
+    );
+    stopped_then(
+        2,
+        okapi_store::OperationEnd::Done {
+            entries: 0,
+            bytes: 0,
+        },
+    );
+    stopped_then(
+        1,
+        okapi_store::OperationEnd::Unknown {
+            reason: okapi_store::OperationReason::Unanswered,
+        },
+    );
+    let (window, _screen) = shown_history(seams(directory.path()));
+    let touched: Vec<bool> = rows(&window)
+        .iter()
+        .map(|row| row.touched_by_operations)
+        .collect();
+    assert_eq!(touched, [true, false, true], "newest first");
+    let nothing_touched_at = |hour: u8| {
+        shows(
+            &window,
+            &format!("Nettoyage arrêté, Rien n'a été touché, aujourd'hui à {hour} h"),
+        )
+    };
+    assert!(nothing_touched_at(10), "Docker had nothing to remove");
+    assert!(!nothing_touched_at(9), "Docker freed room");
+    assert!(!nothing_touched_at(11), "Docker may have freed room");
 }

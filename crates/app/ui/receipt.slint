@@ -5,8 +5,8 @@ import {
     ActionButton, ButtonKind, Card, Detail, Footer, FocusRing, Icon, Line, ProgressBar, Title,
 } from "widgets.slint";
 import {
-    CleanEnding, CleanStep, CleanStepKind, Cleaner, HistoryState, ReceiptKind, ReceiptLineShown,
-    RightsProblem, RightsStep, RowState, Words,
+    CleanEnding, CleanStep, CleanStepKind, Cleaner, HistoryState, OperationEnd, ReceiptKind,
+    ReceiptLineShown, RightsProblem, RightsStep, RowState, Words,
 } from "cleaner-model.slint";
 
 // A step of a cleaning: waiting, under way, done, or not done; the bar of a
@@ -17,6 +17,7 @@ component CleanStepRow inherits Rectangle {
     property <string> name: step.kind == CleanStepKind.admin ? @tr("Nettoyage des éléments administrateur")
         : step.kind == CleanStepKind.check ? @tr("Vérification de chaque élément")
         : step.kind == CleanStepKind.remove ? @tr("Suppression des éléments vérifiés")
+        : step.kind == CleanStepKind.docker ? @tr("Élagage du cache de construction de Docker")
         : @tr("Enregistrement dans l'historique");
     property <color> state-color: step.state == RowState.done ? Theme.success
         : step.state == RowState.not-done ? Theme.warning
@@ -131,6 +132,8 @@ export component CleaningPage inherits VerticalLayout {
                     ? @tr("Saisissez le mot de passe dans la fenêtre du système. Annuler n'agit qu'une fois cette fenêtre fermée.")
                     : Cleaner.clean-cancel-asked
                     ? @tr("L'élément en cours se termine ; ce qui n'est pas encore retiré reste.")
+                    : Cleaner.pruning
+                    ? @tr("Docker élague son cache de construction ; ce qui part n'est connu qu'à la fin.")
                     : @tr("Chaque élément est vérifié, puis revérifié juste avant d'être retiré.");
                 accessible-live-region: polite;
             }
@@ -317,6 +320,11 @@ export component ReceiptLine inherits VerticalLayout {
 
 // What a cleaning did.
 export component ReceiptPage inherits VerticalLayout {
+    // Docker's prune removed something, or may have.
+    property <bool> docker-may-have-removed: Cleaner.receipt-docker.end == OperationEnd.done
+        || Cleaner.receipt-docker.end == OperationEnd.unknown
+        || Cleaner.receipt-docker.end == OperationEnd.cut-short;
+
     init => {
         done.focus();
     }
@@ -338,10 +346,15 @@ export component ReceiptPage inherits VerticalLayout {
             Detail {
                 text: Cleaner.ending == CleanEnding.interrupted
                     ? @tr("Le nettoyage s'est interrompu sans reçu. Ce qui a été supprimé est dans le journal technique.")
-                    : Cleaner.ending == CleanEnding.stopped
+                    // Stopped, though Docker may have pruned after.
+                    : Cleaner.ending == CleanEnding.stopped && !docker-may-have-removed
                     ? @tr("Rien n'a été touché.")
+                    : Cleaner.ending == CleanEnding.stopped
+                    ? @tr("Aucun élément n'a été retiré ; ce que Docker a fait est dit ci-dessous.")
                     : Cleaner.ending == CleanEnding.cancelled
                     ? @tr("Ce qui n'était pas encore retiré est resté.")
+                    : Cleaner.removed + Cleaner.partial == 0 && Cleaner.receipt-docker.end != OperationEnd.none
+                    ? @tr("Aucun élément n'a été retiré ; ce que Docker a fait est dit ci-dessous.")
                     : Cleaner.removed + Cleaner.partial == 0
                     ? @tr("Rien n'a été retiré : le détail par résultat est ci-dessous.")
                     : @tr("Chaque élément a été vérifié juste avant d'être retiré.");
@@ -356,6 +369,13 @@ export component ReceiptPage inherits VerticalLayout {
             if Cleaner.receipt-rights != RightsProblem.none: Line {
                 text: @tr("La partie administrateur ne s'est pas terminée. {}", Words.rights(Cleaner.receipt-rights));
                 color: Theme.warning;
+                accessible-live-region: polite;
+            }
+            if Cleaner.receipt-docker.end != OperationEnd.none: Line {
+                text: Words.operation(Cleaner.receipt-docker);
+                color: Cleaner.receipt-docker.end == OperationEnd.done
+                    || Cleaner.receipt-docker.end == OperationEnd.nothing
+                    ? Theme.text : Theme.warning;
                 accessible-live-region: polite;
             }
             if Cleaner.deletion-log-lost: Line {
@@ -374,7 +394,7 @@ export component ReceiptPage inherits VerticalLayout {
             HorizontalLayout {
                 Stat {
                     label: @tr("Espace libéré");
-                    value: Words.size(Cleaner.freed);
+                    value: Cleaner.freed-unknown ? @tr("Inconnu") : Words.size(Cleaner.freed);
                 }
                 Stat {
                     label: @tr("Retirées");

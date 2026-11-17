@@ -133,6 +133,10 @@ component ResultLine inherits VerticalLayout {
         ? @tr("Opération du système : à cocher vous-même.")
         : line.note == RowNote.yours
         ? @tr("Votre dossier : à cocher vous-même à chaque nettoyage.")
+        : line.note == RowNote.daemon
+        ? @tr("Élagué par Docker : à cocher vous-même.")
+        : line.note == RowNote.daemon-refused
+        ? @tr("Docker refuse votre compte : il faut être dans le groupe docker, puis rouvrir la session.")
         : line.note == RowNote.rights-obtained
         ? @tr("Droits obtenus : à cocher vous-même.")
         : line.note == RowNote.to-choose
@@ -146,8 +150,10 @@ component ResultLine inherits VerticalLayout {
         : line.note == RowNote.unmeasured
         ? @tr("Se mesure avec les droits administrateur : « Obtenir les droits » ci-dessus.")
         : @tr("Demande les droits administrateur : « Obtenir les droits » ci-dessus.");
-    // What it holds is unknown until root's scan.
-    property <bool> unmeasured: line.note == RowNote.unseen || line.note == RowNote.unmeasured;
+    // What it holds is unknown until root's scan, or, for a daemon's
+    // operation, until it ran.
+    property <bool> unmeasured: line.note == RowNote.unseen || line.note == RowNote.unmeasured
+        || line.note == RowNote.daemon || line.note == RowNote.daemon-refused;
 
     if !line.hidden: Rectangle {
         min-height: Theme.results-row-height;
@@ -423,6 +429,9 @@ component Confirmation inherits ModalFrame {
     }
     Detail {
         text: @tr("Taille : {}. Éléments : {}. Rien ne passe par la corbeille : cette action est irréversible.", Words.size(Cleaner.confirm-size), Cleaner.confirm-entries);
+    }
+    if Cleaner.confirm-docker: Detail {
+        text: @tr("Docker élaguera son cache de construction : ce qui part n'est connu qu'après.");
     }
     if Cleaner.confirm-admin: Detail {
         text: @tr("Une fenêtre du système peut vous demander votre mot de passe pour les éléments administrateur. Ils sont mesurés de nouveau juste avant d'être retirés : leur nombre a pu changer depuis l'obtention des droits.");
@@ -783,7 +792,7 @@ export component ResultsPage inherits VerticalLayout {
         ActionButton {
             text: @tr("Tout désélectionner");
             kind: ButtonKind.ghost;
-            enabled: Cleaner.selected-entries > 0;
+            enabled: Cleaner.selected-entries > 0 || Cleaner.selected-operations > 0;
             cross-axis-self-alignment: center;
             clicked => {
                 Cleaner.deselect-all();
@@ -794,7 +803,7 @@ export component ResultsPage inherits VerticalLayout {
             icon: @image-url("../assets/icons/sparkles.svg");
             kind: ButtonKind.primary;
             large: true;
-            enabled: Cleaner.selected-entries > 0;
+            enabled: Cleaner.selected-entries > 0 || Cleaner.selected-operations > 0;
             cross-axis-self-alignment: center;
             clicked => {
                 Cleaner.clean();

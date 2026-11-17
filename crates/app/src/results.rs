@@ -4,10 +4,11 @@
 //! its identifiers, stay with the screen (invariant 1).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use okapi_engine::{Category, MaintenanceFound, Origin, OriginKey, ScanGroup};
-use okapi_rules::{BrowserKind, Effect, Label, Language, RuleSet};
+use okapi_rules::{BrowserKind, CleanupAction, Effect, Label, Language, RuleSet};
+use okapi_tools::docker::Access;
 
 use crate::shown::from_home;
 
@@ -26,9 +27,24 @@ fn described(language: Language, descriptions: &[Label]) -> String {
         .join(PARAGRAPH)
 }
 
+/// The values of the placeholders of the description of a rule that runs
+/// `action`, by name: from the code that runs it, their one source.
+#[must_use]
+const fn description_values(action: CleanupAction) -> &'static [(&'static str, u64)] {
+    match action {
+        CleanupAction::JournalVacuum => okapi_helper::JOURNAL_DESCRIPTION_VALUES,
+        CleanupAction::DockerBuildPrune => okapi_tools::docker::DESCRIPTION_VALUES,
+        CleanupAction::UvPrune
+        | CleanupAction::PnpmPrune
+        | CleanupAction::WindowsComponents
+        | CleanupAction::DeliveryOptimization => &[],
+    }
+}
+
 /// What the results need of one group of the report, of a target only root
-/// may read ([`GroupFacts::unseen`]), or of a maintenance root runs
-/// ([`GroupFacts::maintenance`]).
+/// may read ([`GroupFacts::unseen`]), of a maintenance root runs
+/// ([`GroupFacts::maintenance`]), or of Docker's prune
+/// ([`GroupFacts::daemon_operation`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupFacts {
     /// Its label: under its browser's line, a browser's cache needs no more.
@@ -62,6 +78,36 @@ pub struct GroupFacts {
     pub keys: BTreeSet<OriginKey>,
     /// What the user's own scan saw of it. [`Self::numbers`] are shown.
     pub seen: Seen,
+    /// The operation a daemon does for the user's session (Docker's build
+    /// cache), when the line is one: never a group of the report.
+    pub daemon: Option<DaemonOperation>,
+}
+
+/// Docker's prune of its build cache, asked on `socket`, and whether Docker
+/// accepts the user, both as found at the analysis (the cleaning never
+/// looks for another socket).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaemonOperation {
+    pub socket: PathBuf,
+    pub access: Access,
+}
+
+/// What a maintenance's description says, in `language`, its placeholders
+/// filled by the code that runs it; empty when its rule says nothing.
+fn maintenance_description(found: &MaintenanceFound, language: Language) -> String {
+    let description = found
+        .description()
+        .map(|description| {
+            okapi_rules::filled(
+                okapi_rules::description(language, description.as_str()),
+                description_values(found.action()),
+            )
+        })
+        .unwrap_or_default();
+    if description.contains('{') {
+        tracing::warn!(origin = ?found.origin(), %description, "a placeholder of a maintenance's description left unfilled");
+    }
+    description
 }
 
 /// Whether the rules of a line preselect it, and why not (invariant 5).
@@ -178,6 +224,7 @@ impl GroupFacts {
                 entries: group.items().len(),
                 bytes: group.total_size(),
             },
+            daemon: None,
         }
     }
 
@@ -232,18 +279,6 @@ impl GroupFacts {
             tracing::debug!(?origin, action = ?found.action(), "a maintenance found that no line offers");
             return None;
         };
-        let description = found
-            .description()
-            .map(|description| {
-                okapi_rules::filled(
-                    okapi_rules::description(language, description.as_str()),
-                    okapi_helper::description_values(found.action()),
-                )
-            })
-            .unwrap_or_default();
-        if description.contains('{') {
-            tracing::warn!(?origin, %description, "a placeholder of a maintenance's description left unfilled");
-        }
         tracing::info!(
             ?origin,
             target = name,
@@ -253,10 +288,36 @@ impl GroupFacts {
             origin,
             name,
             okapi_rules::label(language, found.label().as_str()),
-            description,
+            maintenance_description(found, language),
             Preselection::ToChoose,
             Seen::Operation,
         ))
+    }
+
+    /// What the results need of the maintenance `found` Docker runs for the
+    /// user's session (`daemon`: on its socket), its texts in `language`: a
+    /// line the user checks, never before choosing (invariant 5), but when
+    /// Docker refuses the user; what it would remove unknown (nothing is
+    /// scanned), and never a group of the report (invariant 1).
+    #[must_use]
+    pub fn daemon_operation(
+        found: &MaintenanceFound,
+        language: Language,
+        daemon: DaemonOperation,
+    ) -> Self {
+        let origin = found.origin();
+        tracing::info!(?origin, ?daemon, "a maintenance Docker runs");
+        Self {
+            daemon: Some(daemon),
+            ..Self::of_rule(
+                origin,
+                okapi_rules::label(language, found.label().as_str()),
+                maintenance_description(found, language),
+                Preselection::ToChoose,
+                Seen::Operation,
+                false,
+            )
+        }
     }
 
     /// The line of the rule `origin` that root's scan alone sets, asked of
@@ -270,7 +331,21 @@ impl GroupFacts {
         preselection: Preselection,
         seen: Seen,
     ) -> Self {
-        let needs_admin = true;
+        Self {
+            targets: Some(BTreeSet::from([name.to_owned()])),
+            ..Self::of_rule(origin, label, description, preselection, seen, true)
+        }
+    }
+
+    /// The line of the rule `origin` alone, labelled `label`.
+    fn of_rule(
+        origin: &Origin,
+        label: &str,
+        description: String,
+        preselection: Preselection,
+        seen: Seen,
+        needs_admin: bool,
+    ) -> Self {
         Self {
             label: label.to_owned(),
             label_alone: label.to_owned(),
@@ -279,7 +354,7 @@ impl GroupFacts {
             categories: Category::of_group(std::slice::from_ref(origin)),
             preselection,
             needs_admin,
-            targets: Some(BTreeSet::from([name.to_owned()])),
+            targets: None,
             admin: AdminState::Locked,
             checked_by_default: okapi_engine::checked_by_default(
                 preselection.is_preselected(),
@@ -288,14 +363,19 @@ impl GroupFacts {
             custom: false,
             keys: BTreeSet::from([origin.key()]),
             seen,
+            daemon: None,
         }
     }
 
-    /// Whether its checkbox may be checked: a group the user removes, or
-    /// one root's scan offers.
+    /// Whether its checkbox may be checked: a group the user removes, one
+    /// root's scan offers, or an operation of a daemon that accepts the
+    /// user.
     #[must_use]
     pub fn is_checkable(&self) -> bool {
-        !self.needs_admin || matches!(self.admin, AdminState::Unlocked { .. })
+        match &self.daemon {
+            Some(daemon) => daemon.access == Access::Allowed,
+            None => !self.needs_admin || matches!(self.admin, AdminState::Unlocked { .. }),
+        }
     }
 
     /// Its entries and size as shown: root's once its scan set the group
@@ -373,7 +453,8 @@ pub struct Results {
 impl Results {
     /// The groups of an analysis of `chosen`: those of its report, by their
     /// index there, then those root's scan alone sets
-    /// ([`GroupFacts::unseen`], [`GroupFacts::maintenance`]), which no index
+    /// ([`GroupFacts::unseen`], [`GroupFacts::maintenance`]) and Docker's
+    /// prune ([`GroupFacts::daemon_operation`]), which no index
     /// of the report names (invariant 1);
     /// those the engine checks by default are checked.
     #[must_use]
@@ -656,7 +737,7 @@ impl Results {
             return;
         };
         if !group.is_checkable() {
-            tracing::warn!(index, admin = ?group.admin, "an administrator's group out of reach cannot be checked");
+            tracing::warn!(index, admin = ?group.admin, daemon = ?group.daemon, "a group out of reach cannot be checked");
             return;
         }
         if !self.checked.remove(&index) {
@@ -805,9 +886,20 @@ impl Results {
             .filter(|index| {
                 self.groups
                     .get(*index)
-                    .is_some_and(|group| !group.needs_admin)
+                    .is_some_and(|group| !group.needs_admin && group.daemon.is_none())
             })
             .collect()
+    }
+
+    /// The socket of Docker, when its prune is checked and Docker accepts
+    /// the user: never a group of the report (invariant 1).
+    #[must_use]
+    pub fn docker_checked(&self) -> Option<PathBuf> {
+        self.checked
+            .iter()
+            .find_map(|index| self.groups.get(*index)?.daemon.as_ref())
+            .filter(|daemon| daemon.access == Access::Allowed)
+            .map(|daemon| daemon.socket.clone())
     }
 
     /// The groups checked that root's cleaning removes, and their targets.
@@ -864,6 +956,7 @@ mod tests {
                 entries: 2,
                 bytes: 10,
             },
+            daemon: None,
         }
     }
 
@@ -1157,6 +1250,65 @@ mod tests {
         assert_eq!(category_row(&results).0, CheckState::Checked);
         results.toggle_group(0);
         assert_eq!(category_row(&results).0, CheckState::Partial);
+    }
+
+    /// Docker's prune on its socket, Docker accepting the user or not.
+    fn docker_line(access: Access) -> GroupFacts {
+        GroupFacts {
+            preselection: Preselection::ToChoose,
+            checked_by_default: false,
+            seen: Seen::Operation,
+            daemon: Some(DaemonOperation {
+                socket: PathBuf::from("/run/docker.sock"),
+                access,
+            }),
+            ..group(&[Category::Apps], false, false)
+        }
+    }
+
+    /// Docker's line is never a group of the report (invariant 1), never
+    /// checked but by its own box (invariant 5), and only when Docker
+    /// accepts the user.
+    #[test]
+    fn dockers_line_is_never_a_group_to_clean_nor_checked_but_by_its_box() {
+        let mut results = Results::new(
+            vec![
+                group(&[Category::Apps], true, false),
+                group(&[Category::Apps], false, false),
+                docker_line(Access::Allowed),
+            ],
+            BTreeSet::from([Category::Apps]),
+        );
+        assert_eq!(results.checked(), &BTreeSet::from([0]));
+        results.toggle_row(0);
+        results.toggle_row(0);
+        assert!(
+            !results.checked().contains(&2),
+            "the category's box checks only what is preselected"
+        );
+        assert_eq!(results.docker_checked(), None);
+        results.toggle_group(2);
+        assert_eq!(
+            results.user_checked(),
+            BTreeSet::from([0]),
+            "never an identifier of the report"
+        );
+        assert!(results.admin_checked().0.is_empty());
+        assert_eq!(
+            results.docker_checked(),
+            Some(PathBuf::from("/run/docker.sock"))
+        );
+        results.deselect_all();
+        assert_eq!(results.docker_checked(), None);
+
+        let mut refused = Results::new(
+            vec![docker_line(Access::NotAllowed)],
+            BTreeSet::from([Category::Apps]),
+        );
+        refused.toggle_group(0);
+        refused.toggle_row(0);
+        assert!(refused.checked().is_empty(), "Docker refuses the user");
+        assert_eq!(refused.docker_checked(), None);
     }
 
     #[test]

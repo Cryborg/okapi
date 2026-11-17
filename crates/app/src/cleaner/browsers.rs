@@ -223,7 +223,7 @@ impl CleanerScreen {
             tracing::info!(
                 browser = lock.browser().key(),
                 lock = %lock.lock().display(),
-                entries_left = left,
+                left,
                 "browser ignored"
             );
             left == 0

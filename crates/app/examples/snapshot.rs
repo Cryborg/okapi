@@ -15,7 +15,7 @@ use slint::platform::software_renderer::{
     MinimalSoftwareWindow, PremultipliedRgbaColor, RepaintBufferType,
 };
 use slint::platform::{Platform, WindowAdapter};
-use slint::{ComponentHandle as _, ModelRc, PhysicalSize, VecModel};
+use slint::{ComponentHandle as _, Model as _, ModelRc, PhysicalSize, VecModel};
 
 /// The interface, as Slint generates it from `ui/`.
 mod ui {
@@ -96,9 +96,13 @@ fn description_of(label: &str, language: Language) -> slint::SharedString {
         .find_map(|(name, description)| (name.as_str() == label).then_some(description))
         .flatten()
         .unwrap();
-    // The journal rule's description shows its vacuum's limits; another
-    // has no placeholder to fill.
-    let values = okapi_helper::description_values(okapi_rules::CleanupAction::JournalVacuum);
+    // A maintenance's description shows its limits; another has no
+    // placeholder to fill.
+    let values = if label == "Docker Build Cache" {
+        okapi_tools::docker::DESCRIPTION_VALUES
+    } else {
+        okapi_helper::JOURNAL_DESCRIPTION_VALUES
+    };
     okapi_rules::filled(okapi_rules::description(language, english.as_str()), values).into()
 }
 
@@ -234,11 +238,24 @@ fn results(window: &ui::AppWindow, folded: bool, language: Language) {
         cache("Cache", Preselected, true, true),
     ]);
     rows.push(header(Apps, folded));
+    // Docker's prune, explained, and as it shows when Docker refuses the
+    // user: unchecked, out of reach.
+    let docker = row(Apps, "Docker Build Cache", ToChoose, false, language);
     rows.extend(
         [
             row(Apps, "npm Cache", Preselected, true, language),
             row(Apps, "pip Cache", Preselected, true, language),
             row(Apps, "Hugging Face Xet Cache", ToChoose, false, language),
+            ui::ResultRow {
+                note: ui::RowNote::Daemon,
+                explained: true,
+                ..docker.clone()
+            },
+            ui::ResultRow {
+                note: ui::RowNote::DaemonRefused,
+                enabled: false,
+                ..docker
+            },
         ]
         .map(|line| ui::ResultRow {
             hidden: folded,
@@ -263,6 +280,26 @@ fn results(window: &ui::AppWindow, folded: bool, language: Language) {
     cleaner.set_found(size(11, 6, ui::SizeUnit::Gigabyte));
     cleaner.set_step(ui::CleanerStep::Results);
     window.set_page(ui::Page::Cleaner);
+}
+
+/// The results, every category folded but Docker's lines.
+fn results_docker(window: &ui::AppWindow, language: Language) {
+    results(window, true, language);
+    let cleaner = window.global::<ui::Cleaner>();
+    let rows: Vec<ui::ResultRow> = cleaner
+        .get_results()
+        .iter()
+        .map(|mut row| {
+            let docker = matches!(row.note, ui::RowNote::Daemon | ui::RowNote::DaemonRefused);
+            if row.kind == ui::RowKind::Category {
+                row.folded = row.category != ui::CategoryKind::Apps;
+            } else {
+                row.hidden = !docker;
+            }
+            row
+        })
+        .collect();
+    cleaner.set_results(ModelRc::new(VecModel::from(rows)));
 }
 
 /// A receipt with every kind of line.
@@ -305,12 +342,18 @@ fn receipt(window: &ui::AppWindow) {
     cleaner.set_kept(15);
     cleaner.set_history(ui::HistoryState::Failed);
     cleaner.set_deletion_log_lost(true);
+    cleaner.set_receipt_docker(ui::OperationShown {
+        end: ui::OperationEnd::Done,
+        entries: 12,
+        size: size(2, 4, ui::SizeUnit::Gigabyte),
+    });
     {
-        use ui::CleanStepKind::{Check, History, Remove};
+        use ui::CleanStepKind::{Check, Docker, History, Remove};
         use ui::RowState::{Done, NotDone};
         cleaner.set_clean_steps(steps(&[
             (Check, Done, 14_923, 14_923),
             (Remove, Done, 14_923, 14_923),
+            (Docker, Done, 0, 0),
             (History, NotDone, 0, 0),
         ]));
     }
@@ -1291,6 +1334,32 @@ fn settings(window: &ui::AppWindow) {
     preferences.set_folder_entry_error(ui::EntryError::Personal);
 }
 
+/// The Home page being customized: Disques picked up with the keyboard
+/// when `moving`, else the toast of a widget added.
+fn home_customize(window: &ui::AppWindow, moving: bool, language: Language) {
+    home(window, language);
+    let dashboard = window.global::<ui::Dashboard>();
+    dashboard.set_editing(true);
+    dashboard.set_moving(ui::Moving {
+        shown: moving,
+        row: 1,
+        to: 1,
+        by_pointer: false,
+    });
+    // The tile after Système, in each number of columns.
+    dashboard.set_tile(ModelRc::new(VecModel::from(vec![
+        place(0, 5, 1, 1),
+        place(1, 4, 1, 1),
+        place(0, 3, 1, 1),
+        place(0, 3, 1, 1),
+    ])));
+    dashboard.set_rows_with_tile(ModelRc::new(VecModel::from(vec![6, 5, 4, 4])));
+    dashboard.set_toast(ui::Toast {
+        shown: !moving,
+        kind: ui::WidgetKind::Disks,
+    });
+}
+
 fn main() {
     let mut arguments = std::env::args().skip(1);
     let asked = arguments.next().unwrap_or_else(|| String::from("results"));
@@ -1323,6 +1392,7 @@ fn main() {
     match screen {
         "results" | "results-small" => results(&app, false, language),
         "folded" => results(&app, true, language),
+        "results-docker" => results_docker(&app, language),
         "browser" => browser(&app, language),
         "receipt" => receipt(&app),
         "choosing" => choosing(&app),
@@ -1336,30 +1406,7 @@ fn main() {
             app.set_sidebar_chosen_folded(true);
         }
         "home-disks" => home_tall(&app, true, language),
-        "home-customize" | "home-move" => {
-            home(&app, language);
-            let dashboard = app.global::<ui::Dashboard>();
-            dashboard.set_editing(true);
-            // Disques picked up with the keyboard.
-            dashboard.set_moving(ui::Moving {
-                shown: screen == "home-move",
-                row: 1,
-                to: 1,
-                by_pointer: false,
-            });
-            // The tile after Système, in each number of columns.
-            dashboard.set_tile(ModelRc::new(VecModel::from(vec![
-                place(0, 5, 1, 1),
-                place(1, 4, 1, 1),
-                place(0, 3, 1, 1),
-                place(0, 3, 1, 1),
-            ])));
-            dashboard.set_rows_with_tile(ModelRc::new(VecModel::from(vec![6, 5, 4, 4])));
-            dashboard.set_toast(ui::Toast {
-                shown: screen == "home-customize",
-                kind: ui::WidgetKind::Disks,
-            });
-        }
+        "home-customize" | "home-move" => home_customize(&app, screen == "home-move", language),
         "home-memory" => home_tall(&app, false, language),
         "disk-start" => disk(&app, ui::DiskStep::Start, language),
         // With the keys, running first: its end gives the list the focus.
@@ -1384,7 +1431,7 @@ fn main() {
         "history" | "history-small" => history(&app, false, language),
         "history-empty" => history(&app, true, language),
         other => panic!(
-            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings, history, history-small, history-empty"
+            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, results-docker, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings, history, history-small, history-empty"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

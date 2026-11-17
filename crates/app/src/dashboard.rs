@@ -2646,6 +2646,7 @@ pub mod tests {
                 gone: 0,
                 kept: 0,
                 complete: true,
+                operations: Vec::new(),
                 admin: root_done.map(|done| AdminRecord { done, reason: None }),
                 entries: None,
             })

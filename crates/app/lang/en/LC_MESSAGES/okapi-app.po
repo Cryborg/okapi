@@ -301,6 +301,10 @@ msgid "L'élément en cours se termine ; ce qui n'est pas encore retiré reste."
 msgstr "The entry under way finishes; what is not yet removed stays."
 
 msgctxt "CleaningPage"
+msgid "Docker élague son cache de construction ; ce qui part n'est connu qu'à la fin."
+msgstr "Docker is pruning its build cache; what goes is known only at the end."
+
+msgctxt "CleaningPage"
 msgid "Chaque élément est vérifié, puis revérifié juste avant d'être retiré."
 msgstr "Each entry is checked, then checked again just before it is removed."
 
@@ -315,6 +319,10 @@ msgstr "Checking each entry"
 msgctxt "CleanStepRow"
 msgid "Suppression des éléments vérifiés"
 msgstr "Removing the entries checked"
+
+msgctxt "CleanStepRow"
+msgid "Élagage du cache de construction de Docker"
+msgstr "Pruning Docker's build cache"
 
 msgctxt "CleanStepRow"
 msgid "Enregistrement dans l'historique"
@@ -537,6 +545,14 @@ msgid "Opération du système : à cocher vous-même."
 msgstr "A system operation: check it yourself."
 
 msgctxt "ResultLine"
+msgid "Élagué par Docker : à cocher vous-même."
+msgstr "Pruned by Docker: check it yourself."
+
+msgctxt "ResultLine"
+msgid "Docker refuse votre compte : il faut être dans le groupe docker, puis rouvrir la session."
+msgstr "Docker refuses your account: add it to the docker group, then log in again."
+
+msgctxt "ResultLine"
 msgid "Dossier temporaire hors de /tmp et /var/tmp : à cocher vous-même."
 msgstr "A temporary folder outside /tmp and /var/tmp: check it yourself."
 
@@ -585,6 +601,10 @@ msgid "Annuler"
 msgstr "Cancel"
 
 msgctxt "Confirmation"
+msgid "Docker élaguera son cache de construction : ce qui part n'est connu qu'après."
+msgstr "Docker will prune its build cache: what goes is known only after."
+
+msgctxt "Confirmation"
 msgid "Une fenêtre du système peut vous demander votre mot de passe pour les éléments administrateur. Ils sont mesurés de nouveau juste avant d'être retirés : leur nombre a pu changer depuis l'obtention des droits."
 msgstr "A window of the system may ask for your password for the administrator's items. They are measured again just before they are removed: their number may have changed since the rights were obtained."
 
@@ -627,6 +647,44 @@ msgstr "The administrator's helper stopped before it was done. The detail is in 
 msgctxt "Words"
 msgid "L'assistant administrateur a échoué. Le détail est dans le journal."
 msgstr "The administrator's helper failed. The detail is in the log."
+
+msgctxt "Words"
+msgid "Docker : {n} cache retiré, {}"
+msgid_plural "Docker : {n} caches retirés, {}"
+msgstr[0] "Docker: {n} cache removed, {}"
+msgstr[1] "Docker: {n} caches removed, {}"
+
+msgctxt "Words"
+msgid "Docker : rien à retirer."
+msgstr "Docker: nothing to remove."
+
+msgctxt "Words"
+msgid "Docker : élagage annulé en cours, ce qui est parti est inconnu."
+msgstr "Docker: pruning cancelled under way, what went is unknown."
+
+msgctxt "Words"
+msgid "Docker : pas demandé, le nettoyage a été annulé avant."
+msgstr "Docker: not asked, the cleaning was cancelled before."
+
+msgctxt "Words"
+msgid "Docker : rien de retiré, le moteur ne tourne pas."
+msgstr "Docker: nothing removed, the engine is not running."
+
+msgctxt "Words"
+msgid "Docker : rien de retiré, il refuse votre compte (groupe docker)."
+msgstr "Docker: nothing removed, it refuses your account (docker group)."
+
+msgctxt "Words"
+msgid "Docker : rien de retiré, il a refusé d'élaguer. Le détail est dans le journal."
+msgstr "Docker: nothing removed, it refused to prune. The detail is in the log."
+
+msgctxt "Words"
+msgid "Docker : sa réponse n'a pas dit ce qui est parti, la place libérée est inconnue. Le détail est dans le journal."
+msgstr "Docker: its answer did not say what went, the room freed is unknown. The detail is in the log."
+
+msgctxt "Words"
+msgid "Docker : rien de retiré, il n'a pas pu être joint. Le détail est dans le journal."
+msgstr "Docker: nothing removed, it could not be reached. The detail is in the log."
 
 msgctxt "ResultLine"
 msgid "Présélectionné"
@@ -763,6 +821,14 @@ msgstr "Clean"
 msgctxt "ReceiptPage"
 msgid "Le journal des suppressions que vous demandez n'a pas été écrit : ce qui a été supprimé n'est listé que dans le journal technique."
 msgstr "The deletion log you ask for was not written: what was removed is only listed in the technical log."
+
+msgctxt "ReceiptPage"
+msgid "Aucun élément n'a été retiré ; ce que Docker a fait est dit ci-dessous."
+msgstr "No entry was removed; what Docker did is said below."
+
+msgctxt "ReceiptPage"
+msgid "Inconnu"
+msgstr "Unknown"
 
 msgctxt "ReceiptPage"
 msgid "Rien n'a été retiré : le détail par résultat est ci-dessous."

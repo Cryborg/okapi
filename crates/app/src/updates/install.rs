@@ -11,17 +11,20 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
+use okapi_store::UpdateEntry;
 use okapi_tools::updates::install::{
     self, End, Ended, Phase, Progress, Simulated, SystemInstall, Why,
 };
 use okapi_tools::updates::{Kind, SnapUpdate, SystemUpdate};
 use slint::{ComponentHandle as _, SharedString};
 
-use super::{UpdatesScreen, spawn, told};
+use super::{UpdatesScreen, record, spawn, told};
 use crate::disk_usage::READ_EVERY;
 use crate::shown::{show, shown, size};
 use crate::ui;
 
+/// The thread that writes an installation's line in the history.
+const RECORD_THREAD: &str = "updates-record";
 /// How many names still waiting the outcome says before « et N autres ».
 const LEFT_NAMES_FIRST: usize = 6;
 /// How many packages removed the confirmation lists before « et N
@@ -67,6 +70,10 @@ pub(super) enum Install {
     Verifying {
         target: Target,
         ended: Ended,
+        /// When it ended, in seconds, once something was asked of the
+        /// system: its history line is dated so. None: its thread never
+        /// started, nothing to record.
+        asked_until: Option<i64>,
     },
 }
 
@@ -123,6 +130,12 @@ pub(super) struct Outcome {
     pub(super) counts: Option<Counts>,
 }
 
+/// Whether `snap` waits still in `read`: by its name, which snapd keeps (a
+/// newer revision come since is the same snap waiting).
+pub(super) fn waits(snap: &SnapUpdate, read: &[SnapUpdate]) -> bool {
+    read.iter().any(|waiting| waiting.name == snap.name)
+}
+
 /// What the outcome tells, from what was asked, how it ended and the list
 /// read again (`None`: not read). Once dpkg ran, a failure or a
 /// cancellation says no count: what it unpacked is no longer listed, yet
@@ -164,7 +177,7 @@ pub(super) fn outcome(
             Some(read) => {
                 let left: Vec<String> = asked
                     .iter()
-                    .filter(|snap| read.iter().any(|waiting| waiting.name == snap.name))
+                    .filter(|snap| waits(snap, read))
                     .map(|snap| snap.title.clone())
                     .collect();
                 // Done by snapd with some still waiting: done, the rest said
@@ -302,7 +315,7 @@ impl UpdatesScreen {
                     .snaps
                     .iter()
                     .flatten()
-                    .filter(|snap| asked.iter().any(|tried| tried.name == snap.name))
+                    .filter(|snap| waits(snap, &asked))
                     .cloned()
                     .collect();
                 if waiting.is_empty() {
@@ -376,8 +389,12 @@ impl UpdatesScreen {
         };
         let shown_target = target.shown();
         self.0.borrow_mut().retry = Some(target.clone());
+        // The answer of the last line written, if still awaited, belongs
+        // to an outcome this one closes: no longer said.
+        self.0.borrow_mut().recording = None;
+        self.0.borrow().record_timer.stop();
         if !started {
-            self.ended(target, Ended::before(End::Failed(Why::Broken)));
+            self.verify(target, Ended::before(End::Failed(Why::Broken)), None);
             return;
         }
         self.0.borrow_mut().install = Install::Running(Running {
@@ -560,8 +577,22 @@ impl UpdatesScreen {
     /// The installation ended: the list is read again, then the outcome
     /// told.
     fn ended(&self, target: Target, ended: Ended) {
-        tracing::info!(?ended, "installation ended: the list read again");
-        self.0.borrow_mut().install = Install::Verifying { target, ended };
+        let now = (self.0.borrow().seams.now)().as_second();
+        self.verify(target, ended, Some(now));
+    }
+
+    /// The list is read again after `ended`, then the outcome told.
+    fn verify(&self, target: Target, ended: Ended, asked_until: Option<i64>) {
+        tracing::info!(
+            ?ended,
+            asked = asked_until.is_some(),
+            "installation ended: the list read again"
+        );
+        self.0.borrow_mut().install = Install::Verifying {
+            target,
+            ended,
+            asked_until,
+        };
         self.with_window(|window| {
             window
                 .global::<ui::Updates>()
@@ -574,18 +605,26 @@ impl UpdatesScreen {
     /// again.
     pub(super) fn tell_outcome(&self) {
         let install = std::mem::take(&mut self.0.borrow_mut().install);
-        let Install::Verifying { target, ended } = install else {
+        let Install::Verifying {
+            target,
+            ended,
+            asked_until,
+        } = install
+        else {
             self.0.borrow_mut().install = install;
             return;
         };
-        let told = {
+        let (told, entry) = {
             let state = self.0.borrow();
-            outcome(
+            let told = outcome(
                 &target,
                 &ended,
                 (state.system_reading == ui::SourceState::Read).then_some(state.system.as_slice()),
                 state.snaps.as_deref(),
-            )
+            );
+            let entry = asked_until
+                .map(|time| record::entry(&target, &ended, &told, state.snaps.as_deref(), time));
+            (told, entry)
         };
         let retriable = retriable(
             &target,
@@ -623,7 +662,84 @@ impl UpdatesScreen {
             updates.set_result_restart(ended.system_restart);
             updates.set_result_unshown(ended.unshown_removals.join(", ").into());
             updates.set_result_unchecked(ended.removals_unchecked);
+            updates.set_result_unrecorded(false);
             updates.set_result_shown(true);
+        });
+        if let Some(entry) = entry {
+            self.record(entry);
+        } else {
+            tracing::info!("nothing asked of the system: no history line");
+        }
+    }
+
+    /// Writes the line of an installation in the history, on a thread of
+    /// its own (the history's lock and its sync to the disk never hold the
+    /// window); the outcome says when it could not be.
+    fn record(&self, entry: UpdateEntry) {
+        tracing::info!(
+            source = ?entry.source,
+            asked = entry.packages.len(),
+            went = entry.packages.iter().filter(|package| package.done).count(),
+            done = entry.done,
+            reason = entry.reason.as_deref(),
+            restart = entry.restart_required,
+            "installation to record"
+        );
+        let record = std::sync::Arc::clone(&self.0.borrow().seams.record);
+        let (sender, answer) = mpsc::channel();
+        let started = spawn(RECORD_THREAD, move || {
+            told(&sender, record(&entry).is_ok());
+        });
+        if !started {
+            self.recorded(false);
+            return;
+        }
+        self.0.borrow_mut().recording = Some(answer);
+        let weak = std::rc::Rc::downgrade(&self.0);
+        self.0
+            .borrow()
+            .record_timer
+            .start(slint::TimerMode::Repeated, READ_EVERY, move || {
+                if let Some(state) = weak.upgrade() {
+                    UpdatesScreen(state).take_recorded();
+                }
+            });
+    }
+
+    /// Says what writing the line came to, once it has; a writer gone
+    /// without a word did not write it.
+    fn take_recorded(&self) {
+        let recorded = {
+            let state = self.0.borrow();
+            let Some(answer) = &state.recording else {
+                state.record_timer.stop();
+                return;
+            };
+            match answer.try_recv() {
+                Ok(recorded) => recorded,
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => {
+                    tracing::error!("the history's writer ended without its answer");
+                    false
+                }
+            }
+        };
+        self.recorded(recorded);
+    }
+
+    fn recorded(&self, recorded: bool) {
+        {
+            let mut state = self.0.borrow_mut();
+            state.recording = None;
+            state.record_timer.stop();
+        }
+        if !recorded {
+            tracing::warn!("installation not recorded: said");
+        }
+        self.with_window(|window| {
+            window
+                .global::<ui::Updates>()
+                .set_result_unrecorded(!recorded);
         });
     }
 }
@@ -651,14 +767,13 @@ pub(super) fn retriable(
     }
     match target {
         Target::System(_) => system.iter().any(|update| update.kind != Kind::Blocked),
-        Target::Snaps(asked) => snaps.is_some_and(|read| {
-            read.iter()
-                .any(|waiting| asked.iter().any(|tried| tried.name == waiting.name))
-        }),
+        Target::Snaps(asked) => {
+            snaps.is_some_and(|read| asked.iter().any(|tried| waits(tried, read)))
+        }
     }
 }
 
-pub(super) const fn why_shown(why: Why) -> ui::InstallWhy {
+pub(crate) const fn why_shown(why: Why) -> ui::InstallWhy {
     match why {
         Why::Busy => ui::InstallWhy::Busy,
         Why::Interrupted => ui::InstallWhy::Interrupted,

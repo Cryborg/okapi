@@ -17,7 +17,8 @@ use serde::Deserialize;
 use serde::de::{Deserializer, SeqAccess, Visitor};
 
 use super::{
-    BLOCK, HistoryEntry, HistoryOutcome, LineKind, UninstallEntry, check_line_version, read_line,
+    BLOCK, HistoryEntry, HistoryOutcome, LineKind, UninstallEntry, UpdateEntry, check_line_version,
+    read_line,
 };
 use crate::StoreError;
 
@@ -30,6 +31,7 @@ pub enum HistoryRecord<D> {
         deletions: Deletions<D>,
     },
     Uninstall(UninstallEntry),
+    Update(UpdateEntry),
 }
 
 /// What is known of the deletion log of a cleaning read back.
@@ -294,16 +296,8 @@ fn read_one<D: Default + Extend<HistoryOutcome>>(
                 deletions,
             });
         }
-        Some(LineKind::Uninstall) => {
-            reading.orphan_waiting();
-            match read_line::<UninstallEntry>(history, span.start, span.end, path) {
-                Ok(line) => reading.read.records.push(HistoryRecord::Uninstall(line)),
-                Err(error @ StoreError::Invalid { .. }) => {
-                    reading.skip(span, Skip::Unreadable, Some(&error));
-                }
-                Err(error) => return Err(error),
-            }
-        }
+        Some(LineKind::Uninstall) => read_record(history, span, reading, HistoryRecord::Uninstall)?,
+        Some(LineKind::Update) => read_record(history, span, reading, HistoryRecord::Update)?,
         None => {
             let line = match read_line::<HistoryEntry>(history, span.start, span.end, path) {
                 Ok(line) => line,
@@ -331,12 +325,34 @@ fn read_one<D: Default + Extend<HistoryOutcome>>(
     Ok(())
 }
 
+/// Reads the line at `span`, of a kind that stands alone (no deletion log
+/// goes with it), into `reading` as `record` makes it; one that cannot be
+/// read is skipped. Only the file failing to be read is an error.
+fn read_record<D, T: serde::de::DeserializeOwned>(
+    history: &File,
+    span: Span,
+    reading: &mut Reading<'_, D>,
+    record: fn(T) -> HistoryRecord<D>,
+) -> Result<(), StoreError> {
+    reading.orphan_waiting();
+    match read_line::<T>(history, span.start, span.end, reading.path) {
+        Ok(line) => reading.read.records.push(record(line)),
+        Err(error @ StoreError::Invalid { .. }) => {
+            reading.skip(span, Skip::Unreadable, Some(&error));
+        }
+        Err(error) => return Err(error),
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use super::super::tests::{append, entry, outcome, recorded, uninstalled};
-    use super::super::{History, HistoryEntry, HistoryOutcome, UninstallSource};
+    use super::super::tests::{
+        append, entry, outcome, recorded, snaps_updated, uninstalled, updated,
+    };
+    use super::super::{History, HistoryEntry, HistoryOutcome, PackageSource};
     use super::*;
 
     fn read_all(directory: &Path) -> HistoryRead<Vec<HistoryOutcome>> {
@@ -356,6 +372,7 @@ mod tests {
                 },
             ),
             HistoryRecord::Uninstall(line) => ('u', line.time, None),
+            HistoryRecord::Update(line) => ('m', line.time, None),
         }
     }
 
@@ -421,7 +438,7 @@ mod tests {
         let HistoryRecord::Uninstall(uninstall) = &read.records[2] else {
             panic!("an uninstallation");
         };
-        assert_eq!(uninstall.source, UninstallSource::Snap);
+        assert_eq!(uninstall.source, PackageSource::Snap);
         assert_eq!(uninstall.name, "Android Studio");
         assert_eq!(uninstall.packages, ["android-studio"]);
         assert_eq!(uninstall.freed_bytes, Some(3));
@@ -436,13 +453,33 @@ mod tests {
     }
 
     #[test]
+    fn an_update_is_read_back_whole_between_the_others() {
+        let directory = tempfile::tempdir().unwrap();
+        cleaned_with_log(directory.path(), 100, 2);
+        updated(directory.path(), &snaps_updated(200));
+        uninstalled(directory.path(), 300);
+        let read = read_all(directory.path());
+        assert_eq!(read.skipped, 0);
+        assert_eq!(
+            summaries(&read),
+            [('c', 100, Some(2)), ('m', 200, None), ('u', 300, None)]
+        );
+        assert_eq!(
+            read.records[1],
+            HistoryRecord::Update(snaps_updated(200)),
+            "every field, each package's reason only where it was written"
+        );
+    }
+
+    #[test]
     fn a_line_that_cannot_be_read_is_skipped_and_the_rest_read() {
         let directory = tempfile::tempdir().unwrap();
         cleaned(directory.path(), 100, 7);
         for line in [
             &b"{\"version\":1,\"tim\n"[..],
             b"{\"version\":2,\"time\":150,\"removedBytes\":1}\n",
-            b"{\"version\":1,\"kind\":\"update\",\"time\":160}\n",
+            b"{\"version\":1,\"kind\":\"install\",\"time\":160}\n",
+            b"{\"version\":1,\"kind\":\"update\",\"time\":165,\"done\":true}\n",
             b"{\"version\":1,\"time\":170}\n",
             b"{\"version\":1,\"kind\":\"uninstall\",\"time\":180}\n",
             b"not json\n",
@@ -452,7 +489,7 @@ mod tests {
         uninstalled(directory.path(), 300);
         let read = read_all(directory.path());
         assert_eq!(summaries(&read), [('c', 100, None), ('u', 300, None)]);
-        assert_eq!(read.skipped, 6);
+        assert_eq!(read.skipped, 7);
     }
 
     #[test]
@@ -487,6 +524,10 @@ mod tests {
         append(directory.path(), log_at(800).as_bytes());
         append(directory.path(), b"{\"version\":1,\"time\":800}\n");
         cleaned(directory.path(), 800, 1);
+        // Followed by an update, then a cleaning at its time.
+        append(directory.path(), log_at(900).as_bytes());
+        updated(directory.path(), &snaps_updated(950));
+        cleaned(directory.path(), 900, 1);
         // And last of all.
         append(directory.path(), log_at(600).as_bytes());
         let read = read_all(directory.path());
@@ -500,12 +541,14 @@ mod tests {
                 ('c', 510, None),
                 ('c', 700, None),
                 ('c', 800, None),
+                ('m', 950, None),
+                ('c', 900, None),
             ],
             "the cleaning after an orphan read, without its log"
         );
         // 200, 300, 400 and the cut line, 500, 700 and the cut line, 800
-        // and the line without its facts, 600.
-        assert_eq!(read.skipped, 10);
+        // and the line without its facts, 900, 600.
+        assert_eq!(read.skipped, 11);
     }
 
     /// Kept but empty: never taken for a log not kept.

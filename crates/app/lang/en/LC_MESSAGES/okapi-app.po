@@ -1095,8 +1095,8 @@ msgid "{} Analysez à nouveau pour une estimation à jour."
 msgstr "{} Analyze again for an up-to-date estimate."
 
 msgctxt "ReclaimableWidget"
-msgid "L'estimation date d'avant un changement sur le système (un nettoyage, une désinstallation). Analysez à nouveau pour une estimation à jour."
-msgstr "The estimate predates a change on the system (a cleaning, an uninstallation). Analyze again for an up-to-date estimate."
+msgid "L'estimation date d'avant un changement sur le système (un nettoyage, une désinstallation, une mise à jour). Analysez à nouveau pour une estimation à jour."
+msgstr "The estimate predates a change on the system (a cleaning, an uninstallation, an update). Analyze again for an up-to-date estimate."
 
 msgctxt "ReclaimableWidget"
 msgid "Dernier nettoyage {} : {} libérés"
@@ -1905,8 +1905,8 @@ msgid "Aucun historique n'est tenu : ni XDG_STATE_HOME ni HOME ne sont utilisabl
 msgstr "No history is kept: neither XDG_STATE_HOME nor HOME can be used."
 
 msgctxt "General"
-msgid "Garde dans l'historique ({}), pour chaque nettoyage, la liste des chemins retirés. Quand l'historique dépasse la taille gardée, ses plus anciens nettoyages et désinstallations partent, avec leur liste."
-msgstr "Keeps in the history ({}), for each cleaning, the list of the paths removed. When the history grows beyond the size kept, its oldest cleanings and uninstallations go, lists included."
+msgid "Garde dans l'historique ({}), pour chaque nettoyage, la liste des chemins retirés. Quand l'historique dépasse la taille gardée, ses plus anciens nettoyages, désinstallations et mises à jour partent, avec leur liste."
+msgstr "Keeps in the history ({}), for each cleaning, the list of the paths removed. When the history grows beyond the size kept, its oldest cleanings, uninstallations and updates go, lists included."
 
 msgctxt "General"
 msgid "Journal technique"
@@ -3401,8 +3401,8 @@ msgid "Trop tard pour annuler : le système finit d'installer."
 msgstr "Too late to cancel: the system is finishing the installation."
 
 msgctxt "Installing"
-msgid "Une fois l'autorisation donnée, fermer Okapi n'arrête pas la mise à jour."
-msgstr "Once the permission is given, closing Okapi does not stop the update."
+msgid "Une fois l'autorisation donnée, fermer Okapi n'arrête pas la mise à jour, mais elle ne sera pas inscrite à l'historique."
+msgstr "Once the permission is given, closing Okapi does not stop the update, but it will not be written in the history."
 
 msgctxt "Outcome"
 msgid "Rien n'a été installé."
@@ -3427,6 +3427,10 @@ msgstr "The system also removed: {}"
 msgctxt "Outcome"
 msgid "Redémarrage nécessaire. Le système en a besoin pour finir ; redémarrez quand cela vous arrange."
 msgstr "Restart needed. The system needs it to finish; restart when it suits you."
+
+msgctxt "Outcome"
+msgid "Cette mise à jour n'a pas pu être inscrite à l'historique. Le détail est dans le journal."
+msgstr "This update could not be written in the history. The detail is in the log."
 
 msgctxt "Outcome"
 msgid "Réessayer"
@@ -3899,8 +3903,8 @@ msgid "Historique"
 msgstr "History"
 
 msgctxt "HistoryPage"
-msgid "Ce qu'Okapi a nettoyé et désinstallé sur cet ordinateur, le plus récent d'abord. Les plus anciennes opérations partent au-delà de la taille gardée."
-msgstr "What Okapi cleaned and uninstalled on this computer, newest first. The oldest operations go beyond the size kept."
+msgid "Ce qu'Okapi a nettoyé, désinstallé et mis à jour sur cet ordinateur, le plus récent d'abord. Les plus anciennes opérations partent au-delà de la taille gardée."
+msgstr "What Okapi cleaned, uninstalled and updated on this computer, newest first. The oldest operations go beyond the size kept."
 
 msgctxt "HistoryPage"
 msgid "L'historique ne peut pas être lu. Le détail est dans le journal."
@@ -3921,8 +3925,131 @@ msgid "Aucune opération pour l'instant"
 msgstr "No operation yet"
 
 msgctxt "HistoryPage"
-msgid "Chaque nettoyage et chaque désinstallation s'ajoutent ici, avec leur reçu."
-msgstr "Each cleaning and each uninstallation is added here, with its receipt."
+msgid "Chaque nettoyage, chaque désinstallation et chaque mise à jour s'ajoutent ici, avec leur reçu."
+msgstr "Each cleaning, each uninstallation and each update is added here, with its receipt."
+
+msgctxt "HistoryWords"
+msgid "Mise à jour"
+msgstr "Update"
+
+msgctxt "HistoryWords"
+msgid "Applis"
+msgstr "Apps"
+
+msgctxt "HistoryWords"
+msgid "{n} installée"
+msgid_plural "{n} installées"
+msgstr[0] "{n} installed"
+msgstr[1] "{n} installed"
+
+msgctxt "HistoryWords"
+msgid "installées : {} sur {}"
+msgstr "installed: {} of {}"
+
+msgctxt "HistoryWords"
+msgid "annulée"
+msgstr "cancelled"
+
+msgctxt "HistoryWords"
+msgid "issue inconnue"
+msgstr "outcome unknown"
+
+msgctxt "HistoryWords"
+msgid "aucune installée"
+msgstr "none installed"
+
+msgctxt "HistoryWords"
+msgid "Toutes les mises à jour demandées ont été installées."
+msgstr "Every update asked was installed."
+
+msgctxt "HistoryWords"
+msgid "Une partie des mises à jour demandées n'a pas été installée."
+msgstr "Some of the updates asked were not installed."
+
+msgctxt "HistoryWords"
+msgid "Annulée avant toute installation."
+msgstr "Cancelled before anything was installed."
+
+msgctxt "HistoryWords"
+msgid "Okapi ne sait pas ce qui a été installé : l'installation s'est arrêtée en cours de route, ou ne répondait plus."
+msgstr "Okapi does not know what was installed: the installation stopped partway, or no longer answered."
+
+msgctxt "HistoryWords"
+msgid "Aucune mise à jour n'a été installée."
+msgstr "No update was installed."
+
+msgctxt "HistoryWords"
+msgid "Une autre installation était en cours."
+msgstr "Another installation was under way."
+
+msgctxt "HistoryWords"
+msgid "Une installation précédente avait été interrompue."
+msgstr "A previous installation had been interrupted."
+
+msgctxt "HistoryWords"
+msgid "Des paquets n'ont pas pu être téléchargés."
+msgstr "Packages could not be downloaded."
+
+msgctxt "HistoryWords"
+msgid "Il n'y avait plus assez de place sur le disque."
+msgstr "There was not enough room left on the disk."
+
+msgctxt "HistoryWords"
+msgid "L'autorisation n'a pas été donnée."
+msgstr "The permission was not given."
+
+msgctxt "HistoryWords"
+msgid "Les mises à jour avaient changé depuis la recherche."
+msgstr "The updates had changed since the search."
+
+msgctxt "HistoryWords"
+msgid "Une appli à mettre à jour était ouverte."
+msgstr "An app to update was open."
+
+msgctxt "HistoryWords"
+msgid "Des paquets n'étaient pas signés par une source de confiance."
+msgstr "Packages were not signed by a trusted source."
+
+msgctxt "HistoryWords"
+msgid "Le gestionnaire de mises à jour ne répondait plus."
+msgstr "The update manager no longer answered."
+
+msgctxt "HistoryWords"
+msgid "Le gestionnaire de mises à jour a échoué. Le détail est dans le journal."
+msgstr "The update manager failed. The detail is in the log."
+
+msgctxt "HistoryWords"
+msgid "{} {} : installée"
+msgstr "{} {}: installed"
+
+msgctxt "HistoryWords"
+msgid "{} {} : encore en attente"
+msgstr "{} {}: still waiting"
+
+msgctxt "HistoryWords"
+msgid "{} {} : état inconnu"
+msgstr "{} {}: state unknown"
+
+msgctxt "HistoryWords"
+msgid "{} {} : non installée. {}"
+msgstr "{} {}: not installed. {}"
+
+msgctxt "HistoryWords"
+msgid "{} {} : non installée"
+msgstr "{} {}: not installed"
+
+msgctxt "UpdateDetail"
+msgid "Le système a demandé un redémarrage pour la terminer."
+msgstr "The system asked for a restart to finish it."
+
+msgctxt "UpdateDetail"
+msgid "Demandées :"
+msgstr "Asked:"
+
+msgctxt "UpdateDetail"
+msgid "Mises à jour demandées"
+msgstr "Updates asked"
+
 msgctxt "PathListCard"
 msgid "Dossier"
 msgstr "Folder"

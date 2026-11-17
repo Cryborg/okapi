@@ -82,15 +82,18 @@ impl LastAnalysis {
         Ok(Some(analysis))
     }
 
-    /// Whether a cleaning or an uninstallation was recorded since this
-    /// analysis started (one running beside it included), in the history of
-    /// `directory`, by the interface or the command line: only they open or
-    /// write the history, so its date tells, however long the history. An
-    /// uninstallation outdates it too, having removed files the analysis may
-    /// have counted (the caches of a snap whose data went). A cleaning that
-    /// removed nothing counts too, and so would a history touched by hand:
-    /// the summary is then said outdated, which costs a new analysis. Not
-    /// seen: a cleaning or an uninstallation cut short before its line was written, a history
+    /// Whether a cleaning, an uninstallation or an installation of updates
+    /// was recorded since this analysis started (one running beside it
+    /// included), in the history of `directory`, by the interface or the
+    /// command line: only they open or write the history, so its date tells,
+    /// however long the history. An uninstallation outdates it too, having
+    /// removed files the analysis may have counted (the caches of a snap
+    /// whose data went), and so do updates (apt's cache of packages, a
+    /// snap's old revisions). A cleaning that removed nothing counts too, as
+    /// do updates refused or cancelled, and so would a history touched by
+    /// hand: the summary is then said
+    /// outdated, which costs a new analysis. Not seen: an operation cut
+    /// short before its line was written, a history
     /// restored with an older date, a clock set back, or a history on a
     /// filesystem whose clock lags. Without a history, the one set aside
     /// tells, by when it was set aside (a history set aside before its next
@@ -245,7 +248,7 @@ mod tests {
             .unwrap()
             .record_uninstall(&crate::UninstallEntry {
                 time: analysis.time,
-                source: crate::UninstallSource::Deb,
+                source: crate::PackageSource::Deb,
                 name: "GIMP".to_owned(),
                 packages: vec!["gimp".to_owned()],
                 freed_bytes: Some(1),

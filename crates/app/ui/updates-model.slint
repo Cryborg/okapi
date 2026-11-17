@@ -164,6 +164,8 @@ export global Updates {
     in property <bool> result-unchecked;
     // Something of it still waits and trying again may mend it.
     in property <bool> result-retriable;
+    // Its line could not be written in the history.
+    in property <bool> result-unrecorded;
 
     // Downloads the package lists, then reads again.
     callback search-now();

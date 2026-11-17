@@ -325,6 +325,7 @@ mod tests {
             .map(|record| match record {
                 HistoryRecord::Cleaning { line, .. } => line.time,
                 HistoryRecord::Uninstall(line) => line.time,
+                HistoryRecord::Update(line) => line.time,
             })
             .collect()
     }
@@ -502,7 +503,7 @@ mod tests {
             .record_uninstall(&super::super::UninstallEntry {
                 name,
                 time: 50,
-                source: super::super::UninstallSource::Deb,
+                source: super::super::PackageSource::Deb,
                 packages: Vec::new(),
                 freed_bytes: None,
                 data_removed: false,

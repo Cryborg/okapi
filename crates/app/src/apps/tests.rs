@@ -557,7 +557,7 @@ fn a_deb_goes_as_shown_and_is_recorded_once_gone() {
             lines[0].data_removed
         ),
         (
-            UninstallSource::Deb,
+            PackageSource::Deb,
             vec!["gimp".to_owned(), "gimp-help-fr".to_owned()],
             Some(4_000_000),
             false
@@ -1281,7 +1281,7 @@ fn a_flatpak_of_the_system_goes_with_its_extensions_without_a_cancel_and_is_reco
             lines[0].freed_bytes
         ),
         (
-            UninstallSource::Flatpak,
+            PackageSource::Flatpak,
             vec![
                 "org.gnome.Builder".to_owned(),
                 "org.gnome.Builder.Locale".to_owned()

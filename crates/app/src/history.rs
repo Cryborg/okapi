@@ -1,23 +1,25 @@
-//! The History screen: every cleaning and uninstallation the history keeps
-//! (`okapi_store::History::read_all`), newest first, and the one chosen in
-//! detail, with its entries by result when its deletion log was kept. The
-//! history is read on a thread of its own each time the page is shown, and
-//! when a cleaning ends while it is; the window looks for what it read every
-//! [`READ_EVERY`]. A reading asked for while one runs is done once it ends,
-//! never two at once.
+//! The History screen: every cleaning, uninstallation and installation of
+//! updates the history keeps (`okapi_store::History::read_all`), newest
+//! first, and the one chosen in detail, with its entries by result when its
+//! deletion log was kept. The history is read on a thread of its own each
+//! time the page is shown, and when a cleaning ends while it is; the window
+//! looks for what it read every [`READ_EVERY`]. A reading asked for while
+//! one runs is done once it ends, never two at once. Also how the other
+//! screens add their lines ([`open_to_record`]).
 
 use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use okapi_store::{
-    Deletions, History, HistoryEntry, HistoryOutcome, HistoryRead, HistoryRecord, StoreError,
-    UninstallEntry, UninstallSource,
+    Deletions, History, HistoryEntry, HistoryOutcome, HistoryRead, HistoryRecord,
+    HistoryUnavailable, PackageSource, StoreError, UninstallEntry, UpdateEntry,
 };
 use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 
@@ -26,9 +28,31 @@ use crate::disk_usage::READ_EVERY;
 use crate::receipt::{OutcomeFacts, ReceiptLines};
 use crate::shown::{show, shown, size};
 use crate::ui;
+use crate::updates::record;
 
 /// The thread that reads the history.
 const READER_NAME: &str = "okapi-history-read";
+
+/// Writes the history line of an operation (an uninstallation, updates
+/// installed); a failure is traced where it is met.
+pub type Record<T> = Arc<dyn Fn(&T) -> Result<(), HistoryUnavailable> + Send + Sync>;
+
+/// The user's history, opened to add the line of `what` (`uninstallation`,
+/// `update`): its failure traced.
+///
+/// # Errors
+///
+/// [`HistoryUnavailable`]: no state directory known, or the history not
+/// opened.
+pub fn open_to_record(what: &'static str) -> Result<History, HistoryUnavailable> {
+    let Some(directory) = okapi_platform::state_directory() else {
+        tracing::error!(what, "no state directory: not recorded");
+        return Err(HistoryUnavailable::NoDirectory);
+    };
+    History::open(&directory)
+        .inspect_err(|error| tracing::error!(%error, what, "history not opened: not recorded"))
+        .map_err(HistoryUnavailable::from)
+}
 
 /// Where the screen reads the history, and its clock.
 #[derive(Debug, Clone)]
@@ -317,6 +341,7 @@ fn operations(
                     (line.time, row, log)
                 }
                 HistoryRecord::Uninstall(line) => (line.time, uninstall_row(&line), None),
+                HistoryRecord::Update(line) => (line.time, update_row(&line), None),
             };
             let at = crate::dashboard::moment(time, now, zone)?;
             Some(Operation {
@@ -413,11 +438,7 @@ fn uninstall_row(line: &UninstallEntry) -> ui::HistoryRow {
         freed_known: line.freed_bytes.is_some(),
         freed: size(line.freed_bytes.unwrap_or_default()),
         name: line.name.as_str().into(),
-        source: match line.source {
-            UninstallSource::Deb => ui::AppSource::Deb,
-            UninstallSource::Snap => ui::AppSource::Snap,
-            UninstallSource::Flatpak => ui::AppSource::Flatpak,
-        },
+        source: source_shown(line.source),
         packages: model(
             line.packages
                 .iter()
@@ -426,6 +447,81 @@ fn uninstall_row(line: &UninstallEntry) -> ui::HistoryRow {
         ),
         data_removed: line.data_removed,
         ..ui::HistoryRow::default()
+    }
+}
+
+const fn source_shown(source: PackageSource) -> ui::AppSource {
+    match source {
+        PackageSource::Deb => ui::AppSource::Deb,
+        PackageSource::Snap => ui::AppSource::Snap,
+        PackageSource::Flatpak => ui::AppSource::Flatpak,
+    }
+}
+
+/// An installation of updates' row: how it ended, by what became of each
+/// update asked (one done by its daemon may have left some waiting), then
+/// by its line.
+fn update_row(line: &UpdateEntry) -> ui::HistoryRow {
+    let installed = line.packages.iter().filter(|package| package.done).count();
+    let unknown = line
+        .packages
+        .iter()
+        .any(|package| package.reason.as_deref() == Some(record::UNKNOWN));
+    let end = if unknown {
+        ui::UpdateEnd::Unknown
+    } else if installed == line.packages.len() {
+        ui::UpdateEnd::Done
+    } else if line.reason.as_deref() == Some(record::CANCELLED) {
+        ui::UpdateEnd::Cancelled
+    } else if installed > 0 {
+        ui::UpdateEnd::Partly
+    } else {
+        ui::UpdateEnd::Failed
+    };
+    let updated = line
+        .packages
+        .iter()
+        .map(|package| {
+            let state = match package.reason.as_deref() {
+                _ if package.done => ui::UpdateState::Installed,
+                Some(record::WAITING) => ui::UpdateState::Waiting,
+                Some(record::UNKNOWN) => ui::UpdateState::Unknown,
+                _ => ui::UpdateState::NotInstalled,
+            };
+            ui::UpdatedShown {
+                name: package.name.as_str().into(),
+                version: package.version.as_str().into(),
+                state,
+                why: why_said(package.reason.as_deref()),
+            }
+        })
+        .collect();
+    ui::HistoryRow {
+        kind: ui::HistoryKind::Update,
+        source: source_shown(line.source),
+        update_end: end,
+        update_why: why_said(line.reason.as_deref()),
+        update_installed: shown(installed),
+        update_left: shown(line.packages.len() - installed),
+        updated: model(updated),
+        restart_required: line.restart_required,
+        ..ui::HistoryRow::default()
+    }
+}
+
+/// The cause a reason of an update's line names, as the History says it;
+/// none for a reason that is no cause (cancelled, waiting, unknown), or one
+/// this version does not know (traced).
+fn why_said(reason: Option<&str>) -> ui::InstallWhy {
+    match reason {
+        None | Some(record::CANCELLED | record::WAITING | record::UNKNOWN) => ui::InstallWhy::None,
+        Some(key) => record::why_of_key(key).map_or_else(
+            || {
+                tracing::warn!(key, "a reason of an update this version does not know");
+                ui::InstallWhy::None
+            },
+            crate::updates::why_shown,
+        ),
     }
 }
 

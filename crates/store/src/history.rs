@@ -31,7 +31,9 @@ const HISTORY_VERSION: u32 = 1;
 /// deletion log is on a line of its own before it, never read. More (a link
 /// to another file, a line of a deletion log whose cleaning line is missing,
 /// a cleaning line written by an earlier Okapi with its deletion log in it)
-/// is not read, which is traced.
+/// is not read, which is traced. The lines of updates installed after it
+/// count too, up to a few kilobytes each: a year of daily updates without a
+/// cleaning says no last cleaning.
 const MAX_LINE: u64 = 1024 * 1024;
 /// The blocks the history is read by from its end, none of them kept.
 const BLOCK: u64 = 64 * 1024;
@@ -392,7 +394,7 @@ pub enum Opened {
 pub struct UninstallEntry {
     /// Seconds since the clock's origin, negative before it.
     pub time: i64,
-    pub source: UninstallSource,
+    pub source: PackageSource,
     /// The application, as the user saw it.
     pub name: String,
     /// What went, by the names its source gives (packages, a snap, a
@@ -408,13 +410,53 @@ pub struct UninstallEntry {
     pub data_removed: bool,
 }
 
-/// Who removed an application.
+/// Who removed an application, or updated packages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum UninstallSource {
+pub enum PackageSource {
     Deb,
     Snap,
     Flatpak,
+}
+
+/// One installation of updates (the system's, or snaps), as kept in the
+/// history beside the cleanings: its line says its kind. Written once the
+/// list was read again, so that what each update came to is known.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateEntry {
+    /// When it ended, in seconds since the clock's origin, negative before
+    /// it.
+    pub time: i64,
+    pub source: PackageSource,
+    /// Every update asked, in the order asked.
+    pub packages: Vec<UpdatedPackage>,
+    /// It ran to its end without an error. Never bytes: a reader that knows
+    /// no kind would take the line for a cleaning's.
+    pub done: bool,
+    /// Why it was not done, by a stable name of the caller's, when none of
+    /// its packages went or what went is unknown; absent when some went and
+    /// others did not, which say why themselves.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The system asked to be restarted to finish it.
+    pub restart_required: bool,
+}
+
+/// An update asked, and what became of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatedPackage {
+    /// As its source names it.
+    pub name: String,
+    /// The version it was to be updated to.
+    pub version: String,
+    /// It went.
+    pub done: bool,
+    /// Why it did not, by a stable name of the caller's, when its line does
+    /// not say it for all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// The kind a line says: a cleaning's says none, and one unknown makes the
@@ -423,6 +465,7 @@ pub enum UninstallSource {
 #[serde(rename_all = "lowercase")]
 enum LineKind {
     Uninstall,
+    Update,
     /// The deletion log of the cleaning on the next line.
     Deletions,
 }
@@ -548,14 +591,16 @@ impl History {
     }
 
     /// The last cleaning the history of `directory` keeps, read from its
-    /// last line, past the lines of the applications uninstalled after it:
+    /// last line, past the lines of the applications uninstalled and the
+    /// updates installed after it:
     /// `None` when there is none, or when the line met does not say one (a
     /// write cut short, another version or kind, too long), traced at each
     /// reading. A line before one that cannot be read, or before a deletion
     /// log whose cleaning line is missing, is never taken for the last
     /// cleaning: a cleaning may have come after. A history of
-    /// uninstallations alone, or none, is read on into the one set aside
-    /// before it. All the lines read are bounded together as one line is.
+    /// uninstallations and updates alone, or none, is read on into the one
+    /// set aside before it. All the lines read are bounded together as one
+    /// line is.
     ///
     /// # Errors
     ///
@@ -565,7 +610,7 @@ impl History {
     pub fn last_cleaning(directory: &Path) -> Result<Option<LastCleaning>, StoreError> {
         let path = Self::path(directory);
         let _span = tracing::info_span!("last_cleaning", path = %path.display()).entered();
-        // Its start reached past uninstallations alone (or none): the
+        // Its start reached past other lines alone (or none): the
         // history set aside before it is read on, within what is left of
         // the bound.
         let room = match file::open_regular(&path)? {
@@ -678,6 +723,26 @@ impl History {
         )
     }
 
+    /// Adds the line of `entry`, an installation of updates, as [`record`]
+    /// adds a cleaning's.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Unwritable`], traced.
+    ///
+    /// [`record`]: Self::record
+    pub fn record_update(&mut self, entry: &UpdateEntry) -> Result<(), StoreError> {
+        self.line(&Line {
+            version: HISTORY_VERSION,
+            kind: Some(LineKind::Update),
+            entry,
+        })
+        .and_then(|bytes| self.write(bytes))
+        .inspect_err(|error| {
+            tracing::error!(%error, source = ?entry.source, packages = entry.packages.len(), "update not recorded");
+        })
+    }
+
     /// `line`, as written: JSON, then a line break.
     fn line<T: Serialize>(&self, line: &Line<'_, T>) -> Result<Vec<u8>, StoreError> {
         let mut bytes = serde_json::to_vec(line).map_err(|error| StoreError::Unwritable {
@@ -749,7 +814,7 @@ fn find_last_cleaning(history: &File, path: &Path, max_line: u64) -> Result<Sear
     let length = history.metadata().map_err(unreadable)?.len();
     let mut until = length;
     let mut scanned = 0;
-    let mut uninstalls = 0;
+    let mut skipped = 0;
     loop {
         // The lines passed count against the bound, as one line would.
         let room = max_line.saturating_sub(length - until);
@@ -760,13 +825,13 @@ fn find_last_cleaning(history: &File, path: &Path, max_line: u64) -> Result<Sear
                 tracing::info!(
                     path = %path.display(),
                     scanned,
-                    uninstalls,
+                    skipped,
                     "start of the history reached without a cleaning line"
                 );
                 return Ok(Searched::Start { length });
             }
             Tail::TooLong => {
-                tracing::warn!(scanned, uninstalls, max = max_line, elapsed = ?started.elapsed(), "history lines too long: not read");
+                tracing::warn!(scanned, skipped, max = max_line, elapsed = ?started.elapsed(), "history lines too long: not read");
                 return Ok(Searched::Found(None));
             }
             Tail::Line { start, end } => (start, end),
@@ -778,15 +843,15 @@ fn find_last_cleaning(history: &File, path: &Path, max_line: u64) -> Result<Sear
                     offset = start,
                     length = end - start,
                     scanned,
-                    uninstalls,
+                    skipped,
                     ?elapsed,
                     ?last,
                     "last cleaning read"
                 );
                 return Ok(Searched::Found(Some(last)));
             }
-            Ok(LineRead::Uninstall) => {
-                uninstalls += 1;
+            Ok(LineRead::Skipped) => {
+                skipped += 1;
                 until = start;
             }
             Ok(LineRead::Deletions) => {
@@ -794,14 +859,14 @@ fn find_last_cleaning(history: &File, path: &Path, max_line: u64) -> Result<Sear
                     offset = start,
                     length = end - start,
                     scanned,
-                    uninstalls,
+                    skipped,
                     ?elapsed,
                     "deletion log without its cleaning line: no last cleaning"
                 );
                 return Ok(Searched::Found(None));
             }
             Err(error @ (StoreError::Invalid { .. } | StoreError::UnsupportedVersion { .. })) => {
-                tracing::warn!(offset = start, length = end - start, scanned, uninstalls, ?elapsed, %error, "history line unreadable: no last cleaning");
+                tracing::warn!(offset = start, length = end - start, scanned, skipped, ?elapsed, %error, "history line unreadable: no last cleaning");
                 return Ok(Searched::Found(None));
             }
             Err(error) => return Err(error),
@@ -815,8 +880,8 @@ enum Searched {
     /// What it says of the last cleaning: one, or none (a line that cannot
     /// be read, a deletion log without its cleaning line, too much to read).
     Found(Option<LastCleaning>),
-    /// Its start reached, `length` bytes read, past uninstallations alone:
-    /// the file before it says.
+    /// Its start reached, `length` bytes read, past lines that are not
+    /// cleanings alone: the file before it says.
     Start { length: u64 },
 }
 
@@ -873,8 +938,8 @@ pub struct LastCleaning {
 }
 
 /// What the last cleaning is read from in a line, in one pass: the rest is
-/// skipped. A cleaning's line says no kind and its bytes; an
-/// uninstallation's says its kind, and its time like any.
+/// skipped. A cleaning's line says no kind and its bytes; any other says
+/// its kind, and its time like any.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LastLine {
@@ -951,8 +1016,9 @@ fn last_line(mut file: &File, until: u64, block: u64, max_line: u64) -> io::Resu
 #[derive(Debug, PartialEq, Eq)]
 enum LineRead {
     Cleaning(LastCleaning),
-    /// An application uninstalled: the line before is read.
-    Uninstall,
+    /// A line written after the last cleaning that is not one (an
+    /// application uninstalled, updates installed): the line before is read.
+    Skipped,
     /// A deletion log, whose cleaning line should follow: a write cut short.
     Deletions,
 }
@@ -965,7 +1031,7 @@ fn parse(history: &File, start: u64, end: u64, path: &Path) -> Result<LineRead, 
     check_line_version(history, start, end, path)?;
     let read: LastLine = read_line(history, start, end, path)?;
     match read.kind {
-        Some(LineKind::Uninstall) => return Ok(LineRead::Uninstall),
+        Some(LineKind::Uninstall | LineKind::Update) => return Ok(LineRead::Skipped),
         Some(LineKind::Deletions) => return Ok(LineRead::Deletions),
         None => {}
     }
@@ -1582,7 +1648,7 @@ mod tests {
             .unwrap()
             .record_uninstall(&UninstallEntry {
                 time,
-                source: UninstallSource::Snap,
+                source: PackageSource::Snap,
                 name: "Android Studio".to_owned(),
                 packages: vec!["android-studio".to_owned()],
                 freed_bytes: Some(3),
@@ -1613,12 +1679,143 @@ mod tests {
     #[test]
     fn each_source_of_an_uninstallation_is_written_by_its_name() {
         for (source, name) in [
-            (UninstallSource::Deb, "deb"),
-            (UninstallSource::Snap, "snap"),
-            (UninstallSource::Flatpak, "flatpak"),
+            (PackageSource::Deb, "deb"),
+            (PackageSource::Snap, "snap"),
+            (PackageSource::Flatpak, "flatpak"),
         ] {
             assert_eq!(serde_json::to_value(source).unwrap(), name);
         }
+    }
+
+    /// IDEE-5's second example: snaps, one refused while its app was open.
+    pub(super) fn snaps_updated(time: i64) -> UpdateEntry {
+        UpdateEntry {
+            time,
+            source: PackageSource::Snap,
+            packages: vec![
+                UpdatedPackage {
+                    name: "spotify".to_owned(),
+                    version: "1.2.74".to_owned(),
+                    done: false,
+                    reason: Some("appsOpen".to_owned()),
+                },
+                UpdatedPackage {
+                    name: "firefox".to_owned(),
+                    version: "145.0-1".to_owned(),
+                    done: true,
+                    reason: None,
+                },
+            ],
+            done: false,
+            reason: None,
+            restart_required: false,
+        }
+    }
+
+    pub(super) fn updated(directory: &Path, entry: &UpdateEntry) {
+        History::open(directory)
+            .unwrap()
+            .record_update(entry)
+            .unwrap();
+    }
+
+    #[test]
+    fn an_update_says_its_kind_each_package_and_never_removed_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        updated(
+            directory.path(),
+            &UpdateEntry {
+                time: 1_763_300_000,
+                source: PackageSource::Deb,
+                packages: vec![UpdatedPackage {
+                    name: "firefox".to_owned(),
+                    version: "145.0+build1-0ubuntu1".to_owned(),
+                    done: true,
+                    reason: None,
+                }],
+                done: true,
+                reason: None,
+                restart_required: true,
+            },
+        );
+        updated(directory.path(), &snaps_updated(1_763_300_400));
+        updated(
+            directory.path(),
+            &UpdateEntry {
+                packages: Vec::new(),
+                reason: Some("cancelled".to_owned()),
+                ..snaps_updated(1_763_300_500)
+            },
+        );
+        // The format IDEE-5 fixed, word for word.
+        assert_eq!(
+            lines(directory.path()),
+            [
+                serde_json::json!({
+                    "version": 1,
+                    "kind": "update",
+                    "time": 1_763_300_000,
+                    "source": "deb",
+                    "packages": [{"name": "firefox", "version": "145.0+build1-0ubuntu1", "done": true}],
+                    "done": true,
+                    "restartRequired": true,
+                }),
+                serde_json::json!({
+                    "version": 1,
+                    "kind": "update",
+                    "time": 1_763_300_400,
+                    "source": "snap",
+                    "packages": [
+                        {"name": "spotify", "version": "1.2.74", "done": false, "reason": "appsOpen"},
+                        {"name": "firefox", "version": "145.0-1", "done": true},
+                    ],
+                    "done": false,
+                    "restartRequired": false,
+                }),
+                serde_json::json!({
+                    "version": 1,
+                    "kind": "update",
+                    "time": 1_763_300_500,
+                    "source": "snap",
+                    "packages": [],
+                    "done": false,
+                    "reason": "cancelled",
+                    "restartRequired": false,
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_last_cleaning_is_found_past_the_updates_and_uninstallations_after_it() {
+        let directory = tempfile::tempdir().unwrap();
+        recorded(directory.path(), &[(100, 7, None)]);
+        updated(directory.path(), &snaps_updated(200));
+        uninstalled(directory.path(), 300);
+        updated(directory.path(), &snaps_updated(400));
+        assert_eq!(
+            last(directory.path()),
+            Some(LastCleaning {
+                time: 100,
+                freed: Some(7)
+            })
+        );
+    }
+
+    #[test]
+    fn updates_alone_are_no_last_cleaning_and_the_one_set_aside_says() {
+        let directory = tempfile::tempdir().unwrap();
+        updated(directory.path(), &snaps_updated(200));
+        assert_eq!(last(directory.path()), None);
+        // Set aside with a cleaning in it, the history read on into it.
+        recorded(directory.path(), &[(300, 5, None)]);
+        std::fs::rename(
+            History::path(directory.path()),
+            History::rotated_path(directory.path()),
+        )
+        .unwrap();
+        updated(directory.path(), &snaps_updated(400));
+        assert_eq!(last(directory.path()).map(|last| last.time), Some(300));
     }
 
     #[test]
@@ -1670,6 +1867,7 @@ mod tests {
     fn a_line_without_its_facts_is_never_passed() {
         for line in [
             &b"{\"version\":1,\"kind\":\"uninstall\"}\n"[..],
+            b"{\"version\":1,\"kind\":\"update\"}\n",
             b"{\"version\":1,\"time\":200}\n",
         ] {
             let directory = tempfile::tempdir().unwrap();
@@ -1684,7 +1882,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         recorded(directory.path(), &[(100, 7, None)]);
         uninstalled(directory.path(), 200);
-        uninstalled(directory.path(), 300);
+        updated(directory.path(), &snaps_updated(300));
         let path = History::path(directory.path());
         let history = File::open(&path).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();

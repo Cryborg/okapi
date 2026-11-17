@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use okapi_rules::Language;
-use okapi_store::{History, HistoryUnavailable, UninstallEntry, UninstallSource};
+use okapi_store::{HistoryUnavailable, PackageSource, UninstallEntry};
 use okapi_tools::apps::icons::IconPixels;
 use okapi_tools::apps::uninstall::{
     Checked, Ended, Going, Gone, Removal, Step, Target, Uninstaller, Why, check, remove_as_shown,
@@ -44,9 +44,8 @@ const READ_AGAIN_AFTER: jiff::SignedDuration = jiff::SignedDuration::from_mins(5
 /// Reads the sources in `language`: what each finds comes on the sender;
 /// the flag stops measuring.
 pub type Read = Rc<dyn Fn(Language, &Sender<Arrival>, &Arc<AtomicBool>)>;
-/// Writes the history line of an uninstallation; a failure is traced where
-/// it is met.
-pub type Record = Arc<dyn Fn(&UninstallEntry) -> Result<(), HistoryUnavailable> + Send + Sync>;
+/// Writes the history line of an uninstallation.
+pub type Record = crate::history::Record<UninstallEntry>;
 
 /// What the screen reads and asks of the machine: the system's, or a test's.
 #[derive(Clone)]
@@ -123,15 +122,7 @@ impl AppsSeams {
 
 /// Writes `entry` in the user's history (its write traces its own failure).
 fn record_system(entry: &UninstallEntry) -> Result<(), HistoryUnavailable> {
-    let Some(directory) = okapi_platform::state_directory() else {
-        tracing::error!("no state directory: uninstallation not recorded");
-        return Err(HistoryUnavailable::NoDirectory);
-    };
-    History::open(&directory)
-        .inspect_err(
-            |error| tracing::error!(%error, "history not opened: uninstallation not recorded"),
-        )?
-        .record_uninstall(entry)?;
+    crate::history::open_to_record("uninstallation")?.record_uninstall(entry)?;
     Ok(())
 }
 
@@ -1056,9 +1047,9 @@ impl AppsScreen {
             let entry = UninstallEntry {
                 time: now.as_second(),
                 source: match target.source() {
-                    Source::Deb => UninstallSource::Deb,
-                    Source::Snap => UninstallSource::Snap,
-                    Source::Flatpak => UninstallSource::Flatpak,
+                    Source::Deb => PackageSource::Deb,
+                    Source::Snap => PackageSource::Snap,
+                    Source::Flatpak => PackageSource::Flatpak,
                 },
                 name: operation.name.clone(),
                 // What went is known once removed: `went` writes it.

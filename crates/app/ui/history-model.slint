@@ -2,10 +2,27 @@
 import { OperationShown, ReceiptLineShown, RightsProblem, Size } from "cleaner-model.slint";
 import { Moment } from "dashboard-model.slint";
 import { AppSource } from "apps-model.slint";
+import { InstallWhy } from "updates-model.slint";
 
 export enum HistoryReading { reading, read, unreadable }
 
-export enum HistoryKind { cleaning, uninstall }
+export enum HistoryKind { cleaning, uninstall, update }
+
+// How an installation of updates ended: every update asked installed, some,
+// cancelled before anything, none, or not known (dpkg stopped, the daemon
+// fell silent).
+export enum UpdateEnd { done, partly, cancelled, failed, unknown }
+
+// What became of an update asked.
+export enum UpdateState { installed, not-installed, waiting, unknown }
+
+export struct UpdatedShown {
+    name: string,
+    version: string,
+    state: UpdateState,
+    // Why it was not installed, when it says so itself.
+    why: InstallWhy,
+}
 
 // What kept a cleaning from touching anything, by the name its line keeps.
 export enum HistoryStop {
@@ -47,11 +64,19 @@ export struct HistoryRow {
     touched-by-operations: bool,
     // Entries of its deletion log that could not be read back.
     unreadable-entries: int,
-    // An uninstallation.
+    // An uninstallation (and the source of an update).
     name: string,
     source: AppSource,
     packages: [string],
     data-removed: bool,
+    // An installation of updates: how it ended and why, the updates asked
+    // installed and not, each of them, and the restart the system asked for.
+    update-end: UpdateEnd,
+    update-why: InstallWhy,
+    update-installed: int,
+    update-left: int,
+    updated: [UpdatedShown],
+    restart-required: bool,
 }
 
 export global History {

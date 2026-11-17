@@ -568,7 +568,7 @@ component General inherits Card {
             name: @tr("Journal des suppressions");
             description: Preferences.state-directory == ""
                 ? @tr("Aucun historique n'est tenu : ni XDG_STATE_HOME ni HOME ne sont utilisables.")
-                : @tr("Garde dans l'historique ({}), pour chaque nettoyage, la liste des chemins retirés. Quand l'historique dépasse la taille gardée, ses plus anciens nettoyages et désinstallations partent, avec leur liste.", Preferences.state-directory);
+                : @tr("Garde dans l'historique ({}), pour chaque nettoyage, la liste des chemins retirés. Quand l'historique dépasse la taille gardée, ses plus anciens nettoyages, désinstallations et mises à jour partent, avec leur liste.", Preferences.state-directory);
             HorizontalLayout {
                 spacing: Theme.spacing-m;
                 Detail {

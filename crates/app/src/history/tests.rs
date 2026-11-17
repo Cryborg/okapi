@@ -2,7 +2,9 @@ use std::path::Path;
 
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use okapi_rules::Language;
-use okapi_store::{AdminRecord, HistoryEntry, HistoryOutcome, UninstallEntry};
+use okapi_store::{
+    AdminRecord, HistoryEntry, HistoryOutcome, UninstallEntry, UpdateEntry, UpdatedPackage,
+};
 use slint::Model as _;
 
 use super::*;
@@ -74,7 +76,7 @@ fn uninstall(directory: &Path, time: i64) {
         .unwrap()
         .record_uninstall(&UninstallEntry {
             time,
-            source: UninstallSource::Flatpak,
+            source: PackageSource::Flatpak,
             name: "GIMP".to_owned(),
             packages: vec!["org.gimp.GIMP".to_owned()],
             freed_bytes: Some(300_000_000),
@@ -332,6 +334,156 @@ fn the_arrows_choose_the_next_and_previous_operation() {
     assert_eq!(history.get_chosen(), 0);
 }
 
+fn package(name: &str, done: bool, reason: Option<&str>) -> UpdatedPackage {
+    UpdatedPackage {
+        name: name.to_owned(),
+        version: "2.0".to_owned(),
+        done,
+        reason: reason.map(str::to_owned),
+    }
+}
+
+fn updated(directory: &Path, entry: &UpdateEntry) {
+    History::open(directory)
+        .unwrap()
+        .record_update(entry)
+        .unwrap();
+}
+
+/// The system, all done, a restart asked; snaps, one refused while its app
+/// was open; the system stopped in dpkg; snaps none of which went, for a
+/// reason this version does not know.
+fn kept_updates(directory: &Path) {
+    updated(
+        directory,
+        &UpdateEntry {
+            time: before(5),
+            source: PackageSource::Deb,
+            packages: vec![package("openssl", true, None), package("bash", true, None)],
+            done: true,
+            reason: None,
+            restart_required: true,
+        },
+    );
+    updated(
+        directory,
+        &UpdateEntry {
+            time: before(4),
+            source: PackageSource::Snap,
+            packages: vec![
+                package("spotify", false, Some("appsOpen")),
+                package("firefox", true, None),
+                package("obs-studio", false, Some("waiting")),
+            ],
+            done: false,
+            reason: None,
+            restart_required: false,
+        },
+    );
+    updated(
+        directory,
+        &UpdateEntry {
+            time: before(3),
+            source: PackageSource::Deb,
+            packages: vec![package("zsh", false, Some("unknown"))],
+            done: false,
+            reason: Some("unanswered".to_owned()),
+            restart_required: false,
+        },
+    );
+    updated(
+        directory,
+        &UpdateEntry {
+            time: before(2),
+            source: PackageSource::Snap,
+            packages: vec![package("vlc", false, None)],
+            done: false,
+            reason: Some("aLaterReason".to_owned()),
+            restart_required: false,
+        },
+    );
+}
+
+#[test]
+fn each_update_shows_how_it_ended_and_each_package_asked() {
+    i_slint_backend_testing::init_no_event_loop();
+    let directory = tempfile::tempdir().unwrap();
+    kept_updates(directory.path());
+    let (window, _screen) = shown_history(seams(directory.path()));
+    let ends: Vec<_> = rows(&window)
+        .iter()
+        .map(|row| (row.kind, row.update_end, row.update_why))
+        .collect();
+    assert_eq!(
+        ends,
+        [
+            (
+                ui::HistoryKind::Update,
+                ui::UpdateEnd::Failed,
+                ui::InstallWhy::None
+            ),
+            (
+                ui::HistoryKind::Update,
+                ui::UpdateEnd::Unknown,
+                ui::InstallWhy::Unanswered
+            ),
+            (
+                ui::HistoryKind::Update,
+                ui::UpdateEnd::Partly,
+                ui::InstallWhy::None
+            ),
+            (
+                ui::HistoryKind::Update,
+                ui::UpdateEnd::Done,
+                ui::InstallWhy::None
+            ),
+        ]
+    );
+    let line = |label: &str| {
+        ElementHandle::find_by_accessible_label(&window, label)
+            .find(|element| element.accessible_role() == Some(AccessibleRole::ListItem))
+            .unwrap_or_else(|| panic!("no line {label}"))
+    };
+    for (label, said) in [
+        (
+            "Mise à jour, Système · 2 installées, aujourd'hui à 7 h",
+            &[
+                "Toutes les mises à jour demandées ont été installées.",
+                "Le système a demandé un redémarrage pour la terminer.",
+                "openssl 2.0 : installée",
+            ][..],
+        ),
+        (
+            "Mise à jour, Applis · installées : 1 sur 3, aujourd'hui à 8 h",
+            &[
+                "Une partie des mises à jour demandées n'a pas été installée.",
+                "spotify 2.0 : non installée. Une appli à mettre à jour était ouverte.",
+                "obs-studio 2.0 : encore en attente",
+            ],
+        ),
+        (
+            "Mise à jour, Système · issue inconnue, aujourd'hui à 9 h",
+            &[
+                "Okapi ne sait pas ce qui a été installé : l'installation s'est arrêtée en cours de route, ou ne répondait plus.",
+                "Le gestionnaire de mises à jour ne répondait plus.",
+                "zsh 2.0 : état inconnu",
+            ],
+        ),
+        (
+            "Mise à jour, Applis · aucune installée, aujourd'hui à 10 h",
+            &[
+                "Aucune mise à jour n'a été installée.",
+                "vlc 2.0 : non installée",
+            ],
+        ),
+    ] {
+        line(label).invoke_accessible_default_action();
+        for text in said {
+            assert!(shows(&window, text), "{label}: {text}");
+        }
+    }
+}
+
 #[test]
 fn the_sidebar_leads_to_the_history() {
     let crate::Screens { window, .. } = crate::wide_window(
@@ -347,7 +499,7 @@ fn the_sidebar_leads_to_the_history() {
     slint::platform::update_timers_and_animations();
     assert!(shows(
         &window,
-        "Ce qu'Okapi a nettoyé et désinstallé sur cet ordinateur, le plus récent d'abord. Les plus anciennes opérations partent au-delà de la taille gardée."
+        "Ce qu'Okapi a nettoyé, désinstallé et mis à jour sur cet ordinateur, le plus récent d'abord. Les plus anciennes opérations partent au-delà de la taille gardée."
     ));
 }
 
@@ -436,7 +588,7 @@ fn what_cannot_be_read_back_is_said() {
         .unwrap()
         .record_uninstall(&UninstallEntry {
             time: before(3),
-            source: UninstallSource::Snap,
+            source: PackageSource::Snap,
             name: "Spotify".to_owned(),
             packages: vec!["spotify".to_owned()],
             freed_bytes: None,

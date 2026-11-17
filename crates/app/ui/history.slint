@@ -9,7 +9,13 @@ import { DashboardWords } from "dashboard-widgets.slint";
 import { DayKind, Moment } from "dashboard-model.slint";
 import { AppWords } from "apps.slint";
 import { ReceiptLine, Stat } from "receipt.slint";
-import { DeletionLog, History, HistoryAdmin, HistoryKind, HistoryReading, HistoryRow, HistoryStop } from "history-model.slint";
+import { UpdatesWords } from "updates.slint";
+import { InstallWhy } from "updates-model.slint";
+import { AppSource } from "apps-model.slint";
+import {
+    DeletionLog, History, HistoryAdmin, HistoryKind, HistoryReading, HistoryRow, HistoryStop, UpdatedShown, UpdateEnd,
+    UpdateState,
+} from "history-model.slint";
 
 global HistoryWords {
     // The day said above its first line: "Aujourd'hui", "Hier", "8 novembre".
@@ -27,7 +33,99 @@ global HistoryWords {
         if operation.kind == HistoryKind.uninstall {
             return @tr("Désinstallation");
         }
+        if operation.kind == HistoryKind.update {
+            return @tr("Mise à jour");
+        }
         return operation.stops.length > 0 ? @tr("Nettoyage arrêté") : @tr("Nettoyage");
+    }
+
+    // Whom an installation of updates updated.
+    pure public function updated-name(operation: HistoryRow) -> string {
+        operation.source == AppSource.deb ? UpdatesWords.system-name() : @tr("Applis")
+    }
+
+    // How an installation of updates ended, in a few words.
+    pure public function update-state(operation: HistoryRow) -> string {
+        if operation.update-end == UpdateEnd.done {
+            return @tr("{n} installée" | "{n} installées" % operation.update-installed);
+        }
+        if operation.update-end == UpdateEnd.partly {
+            return @tr("installées : {} sur {}", operation.update-installed, operation.update-installed + operation.update-left);
+        }
+        if operation.update-end == UpdateEnd.cancelled {
+            return @tr("annulée");
+        }
+        if operation.update-end == UpdateEnd.unknown {
+            return @tr("issue inconnue");
+        }
+        @tr("aucune installée")
+    }
+
+    // How an installation of updates ended, in a sentence.
+    pure public function update-end(operation: HistoryRow) -> string {
+        if operation.update-end == UpdateEnd.done {
+            return @tr("Toutes les mises à jour demandées ont été installées.");
+        }
+        if operation.update-end == UpdateEnd.partly {
+            return @tr("Une partie des mises à jour demandées n'a pas été installée.");
+        }
+        if operation.update-end == UpdateEnd.cancelled {
+            return @tr("Annulée avant toute installation.");
+        }
+        if operation.update-end == UpdateEnd.unknown {
+            return @tr("Okapi ne sait pas ce qui a été installé : l'installation s'est arrêtée en cours de route, ou ne répondait plus.");
+        }
+        @tr("Aucune mise à jour n'a été installée.")
+    }
+
+    // Why an installation did not end as asked, said afterwards.
+    pure public function update-why(why: InstallWhy) -> string {
+        if why == InstallWhy.busy {
+            return @tr("Une autre installation était en cours.");
+        }
+        if why == InstallWhy.interrupted {
+            return @tr("Une installation précédente avait été interrompue.");
+        }
+        if why == InstallWhy.offline {
+            return @tr("Des paquets n'ont pas pu être téléchargés.");
+        }
+        if why == InstallWhy.no-space {
+            return @tr("Il n'y avait plus assez de place sur le disque.");
+        }
+        if why == InstallWhy.refused {
+            return @tr("L'autorisation n'a pas été donnée.");
+        }
+        if why == InstallWhy.changed {
+            return @tr("Les mises à jour avaient changé depuis la recherche.");
+        }
+        if why == InstallWhy.apps-open {
+            return @tr("Une appli à mettre à jour était ouverte.");
+        }
+        if why == InstallWhy.unsigned {
+            return @tr("Des paquets n'étaient pas signés par une source de confiance.");
+        }
+        if why == InstallWhy.unanswered {
+            return @tr("Le gestionnaire de mises à jour ne répondait plus.");
+        }
+        if why == InstallWhy.broken {
+            return @tr("Le gestionnaire de mises à jour a échoué. Le détail est dans le journal.");
+        }
+        ""
+    }
+
+    // What became of an update asked: its name, its version, its state.
+    pure public function updated(update: UpdatedShown) -> string {
+        if update.state == UpdateState.installed {
+            return @tr("{} {} : installée", update.name, update.version);
+        }
+        if update.state == UpdateState.waiting {
+            return @tr("{} {} : encore en attente", update.name, update.version);
+        }
+        if update.state == UpdateState.unknown {
+            return @tr("{} {} : état inconnu", update.name, update.version);
+        }
+        update.why != InstallWhy.none ? @tr("{} {} : non installée. {}", update.name, update.version, update-why(update.why))
+            : @tr("{} {} : non installée", update.name, update.version)
     }
 
     // What a line is read as: its name, its badge, its summary, when.
@@ -46,6 +144,9 @@ global HistoryWords {
     pure public function summary(operation: HistoryRow) -> string {
         if operation.kind == HistoryKind.uninstall {
             return operation.freed-known ? @tr("{} · {}", operation.name, freed(operation)) : operation.name;
+        }
+        if operation.kind == HistoryKind.update {
+            return @tr("{} · {}", updated-name(operation), update-state(operation));
         }
         // Root's part, or Docker, may have removed entries before the
         // user's stopped.
@@ -143,7 +244,9 @@ component OperationRow inherits VerticalLayout {
                 border-radius: Theme.radius-medium;
                 background: root.chosen ? Theme.surface : Theme.surface-2;
                 Icon {
-                    source: operation.kind == HistoryKind.uninstall ? @image-url("../assets/icons/package.svg") : @image-url("../assets/icons/sparkles.svg");
+                    source: operation.kind == HistoryKind.uninstall ? @image-url("../assets/icons/package.svg")
+                        : operation.kind == HistoryKind.update ? @image-url("../assets/icons/download.svg")
+                        : @image-url("../assets/icons/sparkles.svg");
                     colorize: Theme.text-2;
                     width: Theme.icon-small;
                     height: Theme.icon-small;
@@ -361,6 +464,57 @@ component UninstallDetail inherits VerticalLayout {
     }
 }
 
+// The chosen installation of updates: how it ended, why, the restart asked
+// for, then each update asked and what became of it.
+component UpdateDetail inherits VerticalLayout {
+    in property <HistoryRow> operation;
+    spacing: Theme.spacing-s;
+    VerticalLayout {
+        padding-left: Theme.spacing-xl;
+        padding-right: Theme.spacing-xl;
+        spacing: Theme.spacing-s;
+        Line {
+            text: HistoryWords.updated-name(operation);
+        }
+        Detail {
+            text: HistoryWords.update-end(operation);
+            color: operation.update-end == UpdateEnd.done ? Theme.text-2 : Theme.warning;
+        }
+        if operation.update-why != InstallWhy.none: Detail {
+            text: HistoryWords.update-why(operation.update-why);
+            color: Theme.text;
+        }
+        if operation.restart-required: Detail {
+            text: @tr("Le système a demandé un redémarrage pour la terminer.");
+            color: Theme.text;
+        }
+        if operation.updated.length > 0: Detail {
+            text: @tr("Demandées :");
+        }
+    }
+    if operation.updated.length > 0: updated-view := ScrollView {
+        vertical-stretch: 1;
+        accessible-role: list;
+        accessible-label: @tr("Mises à jour demandées");
+        content-width: self.visible-width;
+        content-height: updated-lines.preferred-height;
+        updated-lines := VerticalLayout {
+            width: updated-view.visible-width;
+            padding-left: Theme.spacing-xl + Theme.spacing-l;
+            padding-right: Theme.spacing-xl;
+            spacing: Theme.spacing-xs;
+            alignment: start;
+            for update in operation.updated: Detail {
+                text: HistoryWords.updated(update);
+                color: update.state == UpdateState.installed ? Theme.text : Theme.warning;
+            }
+        }
+    }
+    if operation.updated.length == 0: Rectangle {
+        vertical-stretch: 1;
+    }
+}
+
 // The operation chosen, in detail.
 component Chosen inherits Card {
     in property <HistoryRow> operation;
@@ -392,6 +546,10 @@ component Chosen inherits Card {
             vertical-stretch: 1;
             operation: root.operation;
         }
+        if operation.kind == HistoryKind.update: UpdateDetail {
+            vertical-stretch: 1;
+            operation: root.operation;
+        }
     }
 }
 
@@ -407,7 +565,7 @@ export component HistoryPage inherits VerticalLayout {
             text: @tr("Historique");
         }
         Detail {
-            text: @tr("Ce qu'Okapi a nettoyé et désinstallé sur cet ordinateur, le plus récent d'abord. Les plus anciennes opérations partent au-delà de la taille gardée.");
+            text: @tr("Ce qu'Okapi a nettoyé, désinstallé et mis à jour sur cet ordinateur, le plus récent d'abord. Les plus anciennes opérations partent au-delà de la taille gardée.");
         }
     }
     if History.reading == HistoryReading.unreadable: Banner {
@@ -446,7 +604,7 @@ export component HistoryPage inherits VerticalLayout {
                 horizontal-alignment: center;
             }
             Detail {
-                text: @tr("Chaque nettoyage et chaque désinstallation s'ajoutent ici, avec leur reçu.");
+                text: @tr("Chaque nettoyage, chaque désinstallation et chaque mise à jour s'ajoutent ici, avec leur reçu.");
                 horizontal-alignment: center;
             }
         }

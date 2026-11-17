@@ -555,7 +555,7 @@ Options :
 Réglages : {settings}
   (exclusions, ajoutées à --exclude ; customFolders ; minAgeMinutes ; deletionLog ;
   language, \"fr\" ou \"en\", sinon celle de la session)
-Historique (nettoyages et désinstallations) : {history}
+Historique (nettoyages, désinstallations et mises à jour) : {history}
   (mis de côté dans history.1.jsonl avant un nettoyage quand il dépasse la
   taille gardée ; le précédent mis de côté part alors, avec tout ce qu'il
   contient, journaux des suppressions compris)
@@ -591,7 +591,7 @@ Options:
 Settings: {settings}
   (exclusions, added to --exclude; customFolders; minAgeMinutes; deletionLog;
   language, \"fr\" or \"en\", else the session's)
-History (cleanings and uninstallations): {history}
+History (cleanings, uninstallations and updates): {history}
   (set aside as history.1.jsonl before a cleaning once beyond the size
   kept; the one set aside before then goes, with everything in it,
   deletion logs included)

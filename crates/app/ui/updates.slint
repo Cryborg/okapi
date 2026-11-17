@@ -10,7 +10,7 @@ import { ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon,
 import { Updates, UpdatesStep, SourceState, SourceFailure, UpdateKind, SystemLine, SnapLine, InstallStep, InstallTarget, InstallPhase, InstallEnd, InstallWhy } from "updates-model.slint";
 
 // What the screen says, the same for the eye and the ear.
-global UpdatesWords {
+export global UpdatesWords {
     // Why a source could not be read.
     pure public function failure(failure: SourceFailure) -> string {
         if failure == SourceFailure.busy {
@@ -671,7 +671,7 @@ component Installing inherits Card {
             text: @tr("Trop tard pour annuler : le système finit d'installer.");
         }
         Detail {
-            text: @tr("Une fois l'autorisation donnée, fermer Okapi n'arrête pas la mise à jour.");
+            text: @tr("Une fois l'autorisation donnée, fermer Okapi n'arrête pas la mise à jour, mais elle ne sera pas inscrite à l'historique.");
             color: Theme.text-3;
         }
     }
@@ -726,6 +726,10 @@ component Outcome inherits Card {
         }
         if Updates.result-restart: Banner {
             text: @tr("Redémarrage nécessaire. Le système en a besoin pour finir ; redémarrez quand cela vous arrange.");
+        }
+        if Updates.result-unrecorded: Detail {
+            text: @tr("Cette mise à jour n'a pas pu être inscrite à l'historique. Le détail est dans le journal.");
+            color: Theme.warning;
         }
         HorizontalLayout {
             alignment: end;

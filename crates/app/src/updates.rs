@@ -16,6 +16,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use okapi_rules::Language;
+use okapi_store::{HistoryUnavailable, UpdateEntry};
 use okapi_tools::packages::reboot::RebootRequired;
 use okapi_tools::updates::install::Installer;
 use okapi_tools::updates::{
@@ -26,6 +27,7 @@ use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 
 use crate::dates::MINUTES_EVERY;
 use crate::disk_usage::READ_EVERY;
+use crate::history::Record;
 use crate::shown::{show, shown, size};
 use crate::ui;
 
@@ -38,14 +40,18 @@ const LISTS_OLD_AFTER: Duration = Duration::from_hours(7 * 24);
 const SYSTEM_LINES_FIRST: usize = 6;
 
 mod install;
+pub(crate) mod record;
 
+pub(crate) use install::why_shown;
 use install::{Install, Target};
 
-/// What the screen reads and installs with, and its clock.
+/// What the screen reads and installs with, where it records what it
+/// installed, and its clock.
 #[derive(Clone)]
 pub struct UpdatesSeams {
     pub sources: Arc<dyn Sources>,
     pub installer: Arc<dyn Installer>,
+    pub record: Record<UpdateEntry>,
     /// The distribution's name, said beside « Système ».
     pub distribution: Option<String>,
     pub now: fn() -> Timestamp,
@@ -60,6 +66,7 @@ impl UpdatesSeams {
         Self {
             sources: Arc::clone(&system) as Arc<dyn Sources>,
             installer: system,
+            record: Arc::new(record_system),
             distribution: okapi_platform::distribution()
                 .inspect_err(|error| tracing::warn!(%error, "distribution unknown"))
                 .ok()
@@ -68,6 +75,12 @@ impl UpdatesSeams {
             zone: crate::dashboard::system_zone(),
         }
     }
+}
+
+/// Writes `entry` in the user's history (its write traces its own failure).
+fn record_system(entry: &UpdateEntry) -> Result<(), HistoryUnavailable> {
+    crate::history::open_to_record("update")?.record_update(entry)?;
+    Ok(())
 }
 
 /// What a search's threads tell.
@@ -124,9 +137,12 @@ struct State {
     install: Install,
     /// What the last installation asked: « Réessayer » asks it again.
     retry: Option<Target>,
+    /// The line of the last installation being written: whether it was.
+    recording: Option<Receiver<bool>>,
     timer: slint::Timer,
     minutes_timer: slint::Timer,
     install_timer: slint::Timer,
+    record_timer: slint::Timer,
 }
 
 /// The updates screen.
@@ -161,9 +177,11 @@ impl UpdatesScreen {
             removed_model: Rc::new(VecModel::default()),
             install: Install::Idle,
             retry: None,
+            recording: None,
             timer: slint::Timer::default(),
             minutes_timer: slint::Timer::default(),
             install_timer: slint::Timer::default(),
+            record_timer: slint::Timer::default(),
             seams,
         };
         let updates = window.global::<ui::Updates>();

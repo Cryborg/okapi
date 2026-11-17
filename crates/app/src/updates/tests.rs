@@ -87,6 +87,9 @@ struct Fake {
     dies: bool,
     /// What the update says once let go.
     said_after_hold: Vec<Updating>,
+    /// The history lines written, and whether writing one fails.
+    recorded: Mutex<Vec<UpdateEntry>>,
+    unrecordable: bool,
 }
 
 impl Default for Fake {
@@ -134,6 +137,8 @@ impl Default for Fake {
             installed: AtomicBool::new(false),
             dies: false,
             said_after_hold: Vec::new(),
+            recorded: Mutex::new(Vec::new()),
+            unrecordable: false,
         }
     }
 }
@@ -275,9 +280,18 @@ impl Installer for Fake {
 }
 
 fn seams_of(fake: &Arc<Fake>) -> UpdatesSeams {
+    let recording = Arc::clone(fake);
     UpdatesSeams {
         sources: Arc::clone(fake) as Arc<dyn Sources>,
         installer: Arc::clone(fake) as Arc<dyn Installer>,
+        record: Arc::new(move |entry: &UpdateEntry| {
+            recording.recorded.lock().unwrap().push(entry.clone());
+            if recording.unrecordable {
+                Err(HistoryUnavailable::NoDirectory)
+            } else {
+                Ok(())
+            }
+        }),
         distribution: Some("Ubuntu 26.04".into()),
         now,
         zone: TimeZone::UTC,
@@ -1066,6 +1080,61 @@ fn what_is_still_waiting_after_the_update_is_named() {
     assert_eq!(shown.get_result_left_names(), "openssl, mesa");
 }
 
+#[test]
+fn each_installation_writes_one_line_in_the_history_once_read_again() {
+    // Catches a line never written, written before the list is read again,
+    // or twice.
+    let fake = Arc::new(Fake {
+        system: eight,
+        snaps: two_snaps,
+        snaps_after: || two_snaps().map(|snaps| snaps.into_iter().take(1).collect::<Vec<_>>()),
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_snaps();
+    installed(&window);
+    read_until(&window, |_| !fake.recorded.lock().unwrap().is_empty());
+    // Asked again: the timer of the line has nothing more to tell.
+    read_once();
+    let recorded = fake.recorded.lock().unwrap().clone();
+    assert_eq!(recorded.len(), 1);
+    let line = &recorded[0];
+    assert_eq!(line.source, okapi_store::PackageSource::Snap);
+    assert_eq!(line.time, now().as_second());
+    let went: Vec<(&str, bool)> = line
+        .packages
+        .iter()
+        .map(|package| (package.name.as_str(), package.done))
+        .collect();
+    // App Center waits still in the list read again: by its name.
+    assert_eq!(went, [("snap-store", false), ("obs-studio", true)]);
+    assert_eq!(line.packages[1].version, "32.0.2");
+    assert!(!updates(&window).get_result_unrecorded());
+}
+
+#[test]
+fn a_line_that_cannot_be_written_is_said_with_the_outcome() {
+    let fake = Arc::new(Fake {
+        system: eight,
+        unrecordable: true,
+        ..Fake::default()
+    });
+    let window = on_updates(&fake);
+    read(&window);
+    updates(&window).invoke_update_system();
+    installed(&window);
+    read_until(&window, |window| updates(window).get_result_unrecorded());
+    assert!(shows(
+        &window,
+        "Cette mise à jour n'a pas pu être inscrite à l'historique. Le détail est dans le journal."
+    ));
+    let recorded = fake.recorded.lock().unwrap();
+    assert_eq!(recorded.len(), 1);
+    assert!(recorded[0].done);
+    assert_eq!(recorded[0].packages.len(), 7, "held back never asked");
+}
+
 fn removing(removals: Vec<Vec<&'static str>>) -> Arc<Fake> {
     Arc::new(Fake {
         system: eight,
@@ -1099,6 +1168,11 @@ fn what_the_update_removes_is_asked_first_and_refused_installs_nothing() {
     assert!(
         fake.updates_asked.lock().unwrap().is_empty(),
         "nothing installed"
+    );
+    read_once();
+    assert!(
+        fake.recorded.lock().unwrap().is_empty(),
+        "nothing asked of the system, nothing recorded"
     );
 }
 

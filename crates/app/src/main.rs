@@ -1047,6 +1047,7 @@ mod tests {
         "Operations",
         "CleaningDetail",
         "UninstallDetail",
+        "UpdateDetail",
         "HistoryPage",
     ];
 

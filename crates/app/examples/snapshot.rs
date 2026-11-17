@@ -374,7 +374,7 @@ fn receipt(window: &ui::AppWindow) {
     window.set_page(ui::Page::Cleaner);
 }
 
-/// The History screen: a few days of cleanings and uninstallations, the
+/// The History screen: a few days of cleanings, updates and uninstallations, the
 /// newest chosen with its deletion log; none at all when `empty`.
 fn history(window: &ui::AppWindow, empty: bool, language: Language) {
     window.set_page(ui::Page::History);
@@ -410,16 +410,19 @@ fn history_rows() -> Vec<ui::HistoryRow> {
         deletion_log: ui::DeletionLog::Read,
         ..ui::HistoryRow::default()
     };
-    vec![
-        ui::HistoryRow {
-            day_first: true,
-            days_above: 1,
-            ..cleaning(
-                at(ui::DayKind::Today, 0, 9, 41),
-                size(1, 9, ui::SizeUnit::Gigabyte),
-                12,
-            )
-        },
+    let mut rows = vec![ui::HistoryRow {
+        day_first: true,
+        days_above: 1,
+        ..cleaning(
+            at(ui::DayKind::Today, 0, 9, 41),
+            size(1, 9, ui::SizeUnit::Gigabyte),
+            12,
+        )
+    }];
+    rows.extend(history_updates(|hour, minute| {
+        at(ui::DayKind::Today, 0, hour, minute)
+    }));
+    rows.extend([
         ui::HistoryRow {
             kind: ui::HistoryKind::Uninstall,
             at: at(ui::DayKind::Today, 0, 9, 5),
@@ -467,7 +470,74 @@ fn history_rows() -> Vec<ui::HistoryRow> {
                 2,
             )
         },
+    ]);
+    rows
+}
+
+/// Two installations of updates of today, at the moments `today` gives:
+/// snaps, one not installed, then the system, all of it.
+fn history_updates(today: impl Fn(i32, i32) -> ui::Moment) -> [ui::HistoryRow; 2] {
+    let installed = |name: &str, version: &str| {
+        updated(
+            name,
+            version,
+            ui::UpdateState::Installed,
+            ui::InstallWhy::None,
+        )
+    };
+    let snaps = vec![
+        updated(
+            "spotify",
+            "1.2.74",
+            ui::UpdateState::NotInstalled,
+            ui::InstallWhy::AppsOpen,
+        ),
+        installed("firefox", "145.0-1"),
+        installed("obs-studio", "32.0.2"),
+    ];
+    let system = vec![
+        installed("openssl", "3.5.1-1ubuntu2"),
+        installed("libssl3t64", "3.5.1-1ubuntu2"),
+    ];
+    [
+        ui::HistoryRow {
+            kind: ui::HistoryKind::Update,
+            at: today(9, 20),
+            days_above: 1,
+            source: ui::AppSource::Snap,
+            update_end: ui::UpdateEnd::Partly,
+            update_installed: 2,
+            update_left: 1,
+            updated: ModelRc::new(VecModel::from(snaps)),
+            ..ui::HistoryRow::default()
+        },
+        ui::HistoryRow {
+            kind: ui::HistoryKind::Update,
+            at: today(9, 12),
+            days_above: 1,
+            source: ui::AppSource::Deb,
+            update_end: ui::UpdateEnd::Done,
+            update_installed: 47,
+            restart_required: true,
+            updated: ModelRc::new(VecModel::from(system)),
+            ..ui::HistoryRow::default()
+        },
     ]
+}
+
+/// An update asked, as the History screen shows it.
+fn updated(
+    name: &str,
+    version: &str,
+    state: ui::UpdateState,
+    why: ui::InstallWhy,
+) -> ui::UpdatedShown {
+    ui::UpdatedShown {
+        name: name.into(),
+        version: version.into(),
+        state,
+        why,
+    }
 }
 
 /// The entries by result of the cleaning chosen on the History screen.
@@ -1817,12 +1887,16 @@ fn main() {
         "apps-leftovers-empty" => apps_leftovers(&app, true, language),
         "settings" => settings(&app),
         "history" | "history-small" => history(&app, false, language),
+        "history-update" => {
+            history(&app, false, language);
+            app.global::<ui::History>().set_chosen(1);
+        }
         "history-empty" => history(&app, true, language),
         other if let Some(scene) = LargeScene::named(other.trim_end_matches("-small")) => {
             large_files(&app, scene, language);
         }
         other => panic!(
-            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings, history, history-small, history-empty, large-start, large-searching, large-stopped, large-result, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt (each also -small)"
+            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings, history, history-small, history-update, history-empty, large-start, large-searching, large-stopped, large-result, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt (each also -small)"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

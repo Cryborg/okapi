@@ -66,7 +66,7 @@ fn open_no_link(path: &Path) -> io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
-fn read_up_to(file: std::fs::File, limit: usize) -> io::Result<Vec<u8>> {
+pub(crate) fn read_up_to(file: std::fs::File, limit: usize) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     let cap = u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1);
     file.take(cap).read_to_end(&mut bytes)?;

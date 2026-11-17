@@ -26,6 +26,7 @@ mod units;
 
 pub use block::{device_labels, removable, rotational};
 pub use capped::read_regular_capped;
+pub(crate) use capped::read_up_to;
 pub use confinement::confinement;
 pub use desktop::{DesktopEntry, application_name, desktop_entry, desktop_entry_lossy};
 pub use memory::{MemoryStatus, memory};

@@ -46,7 +46,10 @@ pub use session::{
     create_private_directory, effective_user, open_existing_journal, open_for_reading,
     open_journal, real_user, running_as_root, try_lock_journal_exclusive, try_lock_journal_shared,
 };
-pub use trash::{Trash, TrashError};
+pub use trash::{
+    Deletion, InformationRefusal, InformationRemoval, Trash, TrashError, home_trash,
+    information_folder, read_deletion, remove_information,
+};
 #[cfg(target_os = "linux")]
 pub use user_dirs::guarded_personal_folders;
 #[cfg(target_os = "linux")]

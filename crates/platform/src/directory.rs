@@ -12,6 +12,7 @@ mod system;
 #[path = "directory/unsupported.rs"]
 mod system;
 
+pub(crate) use system::link_refused;
 #[cfg(target_os = "linux")]
 pub use system::open_path;
 pub use system::{Directory, mount_root, out_of_descriptors, tells_mount_roots};

@@ -21,7 +21,8 @@ export enum SettingsState {
 // stops every analysis too), or why the analyses leave it alone.
 export enum PathKind {
     folder, file, extension, absent, invalid, reading,
-    link, not-folder, protected, personal, not-owned, unsure, unreadable, unverifiable,
+    link, not-folder, protected, personal, trash, trash-unknown, not-owned, unsure, unreadable,
+    unverifiable,
 }
 
 export struct PathRow {
@@ -38,7 +39,8 @@ export enum ThemeChoice { system, light, dark }
 export enum EntryError {
     none, invalid, unreadable, duplicate, not-text, chooser,
     // Why a folder to clean is refused.
-    absent, link, not-folder, protected, personal, not-owned, unsure, unverifiable,
+    absent, link, not-folder, protected, personal, trash, trash-unknown, not-owned, unsure,
+    unverifiable,
 }
 
 // The two lists of paths the settings hold.

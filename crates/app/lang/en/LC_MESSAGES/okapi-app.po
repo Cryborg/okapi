@@ -4095,6 +4095,14 @@ msgid "Dossier personnel"
 msgstr "Personal folder"
 
 msgctxt "PathListCard"
+msgid "Corbeille"
+msgstr "Trash"
+
+msgctxt "PathListCard"
+msgid "Corbeille illisible"
+msgstr "Unreadable trash"
+
+msgctxt "PathListCard"
 msgid "Autre compte"
 msgstr "Other account"
 
@@ -4149,6 +4157,14 @@ msgstr "Okapi never empties this folder: it is or holds a folder your session or
 msgctxt "PathListCard"
 msgid "Okapi ne vide jamais un dossier personnel (Documents, Images, Téléchargements...) ni ce qui en contient un : choisissez un dossier à l'intérieur."
 msgstr "Okapi never empties a personal folder (Documents, Pictures, Downloads...) nor what holds one: choose a folder inside it."
+
+msgctxt "PathListCard"
+msgid "Okapi ne vide jamais comme dossier choisi la corbeille, ce qu'elle contient ni ce qui la contient : la ligne « Corbeille » du Nettoyeur vide la corbeille, choisissez un dossier à côté d'elle."
+msgstr "Okapi never empties as a chosen folder the trash, what it holds nor what holds it: the Cleaner's “Trash” line empties the trash, choose a folder beside it."
+
+msgctxt "PathListCard"
+msgid "Okapi ne sait pas lire votre corbeille : il ne peut vérifier aucun dossier à nettoyer."
+msgstr "Okapi cannot read your trash: it can check no folder to clean."
 
 msgctxt "PathListCard"
 msgid "Ce dossier appartient à un autre compte ou au système : Okapi ne le vide pas."

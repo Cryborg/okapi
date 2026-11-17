@@ -313,6 +313,12 @@ component PathListCard inherits Card {
         if kind == PathKind.protected {
             return @tr("Protégé");
         }
+        if kind == PathKind.trash-unknown {
+            return @tr("Corbeille illisible");
+        }
+        if kind == PathKind.trash {
+            return @tr("Corbeille");
+        }
         if kind == PathKind.personal {
             return @tr("Dossier personnel");
         }
@@ -335,7 +341,8 @@ component PathListCard inherits Card {
     // said as a warning; an invalid one stops them, said as a danger.
     pure function left-alone(kind: PathKind) -> bool {
         kind == PathKind.link || kind == PathKind.not-folder || kind == PathKind.protected
-            || kind == PathKind.personal || kind == PathKind.not-owned
+            || kind == PathKind.personal || kind == PathKind.trash || kind == PathKind.trash-unknown
+            || kind == PathKind.not-owned
             || kind == PathKind.unsure || kind == PathKind.unreadable || kind == PathKind.unverifiable
     }
 
@@ -476,6 +483,8 @@ component PathListCard inherits Card {
                     : root.entry-error == EntryError.not-folder ? @tr("Ce n'est pas un dossier.")
                     : root.entry-error == EntryError.protected ? @tr("Okapi ne vide jamais ce dossier : il est ou contient un dossier dont votre session ou vos applis dépendent (dossier utilisateur, réglages, caches...).")
                     : root.entry-error == EntryError.personal ? @tr("Okapi ne vide jamais un dossier personnel (Documents, Images, Téléchargements...) ni ce qui en contient un : choisissez un dossier à l'intérieur.")
+                    : root.entry-error == EntryError.trash ? @tr("Okapi ne vide jamais comme dossier choisi la corbeille, ce qu'elle contient ni ce qui la contient : la ligne « Corbeille » du Nettoyeur vide la corbeille, choisissez un dossier à côté d'elle.")
+                    : root.entry-error == EntryError.trash-unknown ? @tr("Okapi ne sait pas lire votre corbeille : il ne peut vérifier aucun dossier à nettoyer.")
                     : root.entry-error == EntryError.not-owned ? @tr("Ce dossier appartient à un autre compte ou au système : Okapi ne le vide pas.")
                     : root.entry-error == EntryError.unsure ? @tr("Sur une clé FAT ou exFAT, un partage réseau ou d'une machine virtuelle, un système FUSE ou superposé, ou un système qu'Okapi ne sait pas dire, l'âge des fichiers n'est pas sûr : Okapi ne les vide pas.")
                     : root.entry-error == EntryError.unverifiable ? @tr("Okapi ne sait pas lire la liste de vos dossiers personnels (user-dirs.dirs) : il ne peut vérifier aucun dossier à nettoyer.")

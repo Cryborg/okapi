@@ -6,7 +6,7 @@ use std::time::Instant;
 use okapi_platform::{FileIdentity, IDENTITY_SUPPORTED, ROOT_USER};
 use okapi_rules::{RuleSet, TemplateVariables};
 
-use crate::custom::PersonalFolders;
+use crate::custom::{PersonalFolders, TrashFolder};
 use crate::maintenance;
 use crate::options::ScanOptions;
 use crate::paths::is_absent_kind;
@@ -65,10 +65,13 @@ pub fn scan_watched(
         let custom_folders = options.chosen_custom_folders();
         entries.extend(custom_folders.iter().copied().map(RuleEntry::Custom));
         // Read only when a custom folder is to be judged against them.
-        let personal = if custom_folders.is_empty() {
-            PersonalFolders::none()
+        let (personal, trash) = if custom_folders.is_empty() {
+            (PersonalFolders::none(), TrashFolder::none())
         } else {
-            PersonalFolders::read(variables, Readers::SYSTEM.identity)
+            (
+                PersonalFolders::read(variables, Readers::SYSTEM.identity),
+                TrashFolder::read(variables, Readers::SYSTEM.identity),
+            )
         };
         let planning = Planning {
             misc: rules.misc(),
@@ -77,6 +80,7 @@ pub fn scan_watched(
             readers: Readers::SYSTEM,
             user,
             personal: &personal,
+            trash: &trash,
         };
         scan_entries(&entries, &planning, Limits::DEFAULT, watch)
     } else {

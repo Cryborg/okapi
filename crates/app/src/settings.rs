@@ -1223,6 +1223,8 @@ fn examine_folder(entry: &str) -> Examined {
                 CustomFolderRefusal::NotOwned => ui::PathKind::NotOwned,
                 CustomFolderRefusal::Protected(_) => ui::PathKind::Protected,
                 CustomFolderRefusal::Personal => ui::PathKind::Personal,
+                CustomFolderRefusal::Trash => ui::PathKind::Trash,
+                CustomFolderRefusal::TrashUnknown(_) => ui::PathKind::TrashUnknown,
                 CustomFolderRefusal::UnsureFilesystem => ui::PathKind::Unsure,
             }
         }
@@ -1241,6 +1243,8 @@ fn admitted(list: ui::PathList, kind: ui::PathKind) -> Examined {
             ui::PathKind::NotFolder | ui::PathKind::File => ui::EntryError::NotFolder,
             ui::PathKind::Protected => ui::EntryError::Protected,
             ui::PathKind::Personal => ui::EntryError::Personal,
+            ui::PathKind::Trash => ui::EntryError::Trash,
+            ui::PathKind::TrashUnknown => ui::EntryError::TrashUnknown,
             ui::PathKind::NotOwned => ui::EntryError::NotOwned,
             ui::PathKind::Unsure => ui::EntryError::Unsure,
             ui::PathKind::Unverifiable => ui::EntryError::Unverifiable,

@@ -4,8 +4,11 @@
 //! A custom folder is a plain directory of the user's, never a link, never
 //! a variable's directory nor one of its ancestors (invariant 6), never one
 //! of the user's personal folders (Documents, Pictures...) nor one of their
-//! ancestors, all compared by identity, so an alias or a bind mount changes
-//! nothing; and it lies on a filesystem whose dates and identities can be
+//! ancestors, never the trash of the home folder, a folder in it nor one
+//! holding it on its real path (a bind mount of the trash, or of a folder in
+//! it, seen elsewhere is not told), all compared by identity, so an alias or a
+//! bind mount of the folder itself changes nothing; and it lies on a
+//! filesystem whose dates and identities can be
 //! trusted (not FAT, FUSE, a network share, a virtual machine's host or a
 //! stacked one), since its files' age is all that keeps the recent ones
 //! (invariant 2). What it holds is offered as any rule's root offers it,
@@ -13,6 +16,7 @@
 //! files keep the dates they had elsewhere); the folder itself never is.
 
 use std::collections::BTreeSet;
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -20,7 +24,7 @@ use okapi_platform::{FileIdentity, ROOT_USER, filesystem_may_alias, filesystem_u
 use okapi_rules::{TemplateVariables, Variable};
 use thiserror::Error;
 
-use crate::paths::{NotADirectory, is_plain_absolute, real_directory};
+use crate::paths::{NotADirectory, is_absent, is_plain_absolute, real_directory};
 use crate::protection::{ProtectedRoots, identities_up};
 use crate::walk::{IdentityReader, Readers};
 
@@ -59,6 +63,11 @@ pub enum CustomFolderRefusal {
     Protected(Variable),
     /// It is one of the user's personal folders, or one of their ancestors.
     Personal,
+    /// It is the trash of the user's home folder, holds it, or lies in it: its
+    /// entries go by the dates their `.trashinfo` say, through its own rule.
+    Trash,
+    /// The trash cannot be read: no folder may be told out of it.
+    TrashUnknown(io::ErrorKind),
     /// The personal folders cannot be read: none may be told apart.
     PersonalUnknown(io::ErrorKind),
     /// It lies on a filesystem without a change date of its own (FAT,
@@ -93,9 +102,9 @@ impl CustomFolder {
 
     /// Whether a scan would walk it now, as the settings screen asks when it
     /// is added and shown: the variables' directories of `variables`, the
-    /// personal folders they name, the user the process acts as, the
-    /// system's readers. The user's exclusions are not judged here: one
-    /// that covers it is said by the scan (`Excluded`).
+    /// personal folders they name, the trash of their data folder, the user
+    /// the process acts as, the system's readers. The user's exclusions are
+    /// not judged here: one that covers it is said by the scan (`Excluded`).
     ///
     /// # Errors
     ///
@@ -107,9 +116,11 @@ impl CustomFolder {
             CustomFolderRefusal::Unreadable(unreadable.error)
         })?;
         let personal = PersonalFolders::read(variables, Readers::SYSTEM.identity);
+        let trash = TrashFolder::read(variables, Readers::SYSTEM.identity);
         let guard = Guard {
             protected: &protected,
             personal: &personal,
+            trash: &trash,
             user: okapi_platform::effective_user(),
             readers: Readers::SYSTEM,
         };
@@ -158,7 +169,11 @@ impl CustomFolder {
         if let Some(variable) = guard.protected.folder_refusal(identity) {
             return Err(CustomFolderRefusal::Protected(variable));
         }
-        if let Some(refusal) = guard.personal.refusal(identity) {
+        if let Some(refusal) = guard
+            .personal
+            .refusal(identity)
+            .or_else(|| guard.trash.refusal(identity, &real, guard.readers.identity))
+        {
             return Err(refusal);
         }
         // Below it, a walk never enters another filesystem: judging its own
@@ -190,6 +205,7 @@ impl CustomFolder {
 pub(crate) struct Guard<'a> {
     pub(crate) protected: &'a ProtectedRoots,
     pub(crate) personal: &'a PersonalFolders,
+    pub(crate) trash: &'a TrashFolder,
     /// Who will remove what it holds, and must own it.
     pub(crate) user: Option<u32>,
     pub(crate) readers: Readers,
@@ -247,6 +263,96 @@ impl PersonalFolders {
                 .contains(&identity)
                 .then_some(CustomFolderRefusal::Personal),
             Err(error) => Some(CustomFolderRefusal::PersonalUnknown(*error)),
+        }
+    }
+}
+
+/// The trash of the user's home folder, which no custom folder may be, hold
+/// nor lie in; `None` when there is none. Or why it cannot be read, which
+/// refuses every custom folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TrashFolder(Result<Option<Trash>, io::ErrorKind>);
+
+/// The trash, by identity: its own, and those of the folders that hold it
+/// on its real path (where a link leads, when it is one; a bind mount of it
+/// elsewhere is not seen holding it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Trash {
+    identity: FileIdentity,
+    /// Its own identity and its ancestors'.
+    holding: BTreeSet<FileIdentity>,
+}
+
+impl TrashFolder {
+    /// None: no custom folder to judge.
+    pub(crate) const fn none() -> Self {
+        Self(Ok(None))
+    }
+
+    /// The trash at `path`; through a link, the folder it leads to, which is
+    /// the trash all the same.
+    pub(crate) fn at(path: &Path, identity_of: IdentityReader) -> Self {
+        let identity = match fs::metadata(path) {
+            Ok(metadata) => identity_of(&metadata),
+            Err(error) if is_absent(&error) => {
+                tracing::debug!(trash = %path.display(), "no trash: no folder to clean refused for it");
+                return Self::none();
+            }
+            Err(error) => {
+                tracing::warn!(trash = %path.display(), %error, code = error.raw_os_error(), "trash unreadable: no folder to clean can be judged");
+                return Self(Err(error.kind()));
+            }
+        };
+        let Some(identity) = identity else {
+            tracing::warn!(trash = %path.display(), "identity of the trash unknown: no folder to clean can be judged");
+            return Self(Err(io::ErrorKind::Unsupported));
+        };
+        match identities_up(path, identity_of) {
+            Ok(up) => Self(Ok(Some(Trash {
+                identity,
+                holding: up.into_iter().map(|(_, identity)| identity).collect(),
+            }))),
+            Err((ancestor, error)) => {
+                tracing::warn!(trash = %path.display(), ancestor = %ancestor.display(), ?error, "folders holding the trash unreadable: no folder to clean can be judged");
+                Self(Err(error))
+            }
+        }
+    }
+
+    /// The trash in the data folder of `variables`; none without one.
+    pub(crate) fn read(variables: &TemplateVariables, identity_of: IdentityReader) -> Self {
+        variables
+            .value_of(Variable::LocalShare)
+            .map_or_else(Self::none, |data| {
+                Self::at(&okapi_platform::home_trash(data), identity_of)
+            })
+    }
+
+    /// Why the folder of identity `identity` at the real path `real` is
+    /// refused: it is the trash, holds it or lies in it.
+    fn refusal(
+        &self,
+        identity: FileIdentity,
+        real: &Path,
+        identity_of: IdentityReader,
+    ) -> Option<CustomFolderRefusal> {
+        let trash = match &self.0 {
+            Ok(Some(trash)) => trash,
+            Ok(None) => return None,
+            Err(error) => return Some(CustomFolderRefusal::TrashUnknown(*error)),
+        };
+        if trash.holding.contains(&identity) {
+            return Some(CustomFolderRefusal::Trash);
+        }
+        match identities_up(real, identity_of) {
+            Ok(up) => up
+                .iter()
+                .any(|(_, identity)| *identity == trash.identity)
+                .then_some(CustomFolderRefusal::Trash),
+            Err((path, error)) => {
+                tracing::debug!(folder = %real.display(), path = %path.display(), ?error, "custom folder's ancestors unreadable");
+                Some(CustomFolderRefusal::Unreadable(error))
+            }
         }
     }
 }

@@ -1511,6 +1511,25 @@ fn settings(window: &ui::AppWindow) {
     preferences.set_folder_entry_error(ui::EntryError::Personal);
 }
 
+/// The settings, the trash refused as a folder to clean, and one listed
+/// whose trash cannot be read.
+fn settings_trash(window: &ui::AppWindow) {
+    settings(window);
+    let preferences = window.global::<ui::Preferences>();
+    preferences.set_folders(ModelRc::new(VecModel::from(vec![
+        ui::PathRow {
+            text: "~/.local/share/Trash/files".into(),
+            kind: ui::PathKind::Trash,
+        },
+        ui::PathRow {
+            text: "~/Projets/okapi/target".into(),
+            kind: ui::PathKind::TrashUnknown,
+        },
+    ])));
+    preferences.set_folder_entry("~/.local/share".into());
+    preferences.set_folder_entry_error(ui::EntryError::Trash);
+}
+
 /// The Home page being customized: Disques picked up with the keyboard
 /// when `moving`, else the toast of a widget added.
 fn home_customize(window: &ui::AppWindow, moving: bool, language: Language) {
@@ -2105,6 +2124,7 @@ fn main() {
         "apps-leftovers" => apps_leftovers(&app, false, language),
         "apps-leftovers-empty" => apps_leftovers(&app, true, language),
         "settings" => settings(&app),
+        "settings-trash" => settings_trash(&app),
         "history" | "history-small" => history(&app, false, language),
         "history-update" => {
             history(&app, false, language);
@@ -2118,7 +2138,7 @@ fn main() {
             duplicates(&app, scene, language);
         }
         other => panic!(
-            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings, history, history-small, history-update, history-empty, large-start, large-searching, large-stopped, large-result, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-result, duplicates-empty, duplicates-confirm (each also -small)"
+            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings, settings-trash, history, history-small, history-update, history-empty, large-start, large-searching, large-stopped, large-result, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-result, duplicates-empty, duplicates-confirm (each also -small)"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

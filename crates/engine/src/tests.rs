@@ -139,6 +139,8 @@ struct Run<'a> {
     user: Option<u32>,
     /// The personal folders no custom folder may be.
     personal: crate::custom::PersonalFolders,
+    /// The trash no custom folder may be, hold nor lie in.
+    trash: crate::custom::TrashFolder,
     /// Who watches the scan and the cleaning.
     watch: crate::watch::Watch,
 }
@@ -239,6 +241,7 @@ impl<'a> Run<'a> {
             limits: Limits::DEFAULT,
             user: Some(TEST_USER),
             personal: crate::custom::PersonalFolders::none(),
+            trash: crate::custom::TrashFolder::none(),
             watch: crate::watch::Watch::none(),
         }
     }
@@ -251,6 +254,7 @@ impl<'a> Run<'a> {
             readers: self.readers,
             user: self.user,
             personal: &self.personal,
+            trash: &self.trash,
         };
         scan_entries(&self.entries, &planning, self.limits, &self.watch)
     }

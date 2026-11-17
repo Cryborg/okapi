@@ -937,6 +937,18 @@ fn custom_folder_refusal(language: Language, refusal: CustomFolderRefusal) -> St
                 format!("the personal folders cannot be read ({error})")
             }
         }
+        CustomFolderRefusal::Trash => pick(
+            "c'est la corbeille, il la contient ou il s'y trouve",
+            "it is, holds or lies in the trash",
+        ),
+        CustomFolderRefusal::TrashUnknown(error) => {
+            let error = error_text(language, error, None);
+            if french {
+                format!("la corbeille est illisible ({error})")
+            } else {
+                format!("the trash cannot be read ({error})")
+            }
+        }
         CustomFolderRefusal::UnsureFilesystem => pick(
             "sur une clé FAT ou exFAT, un partage réseau ou d'une machine virtuelle, un système FUSE ou superposé, ou un système qu'Okapi ne sait pas dire, l'âge des fichiers n'est pas sûr",
             "on a FAT or exFAT drive, a network or virtual machine share, a FUSE or stacked filesystem, or one Okapi cannot tell, the age of files cannot be trusted",
@@ -1406,6 +1418,8 @@ mod tests {
             CustomFolderRefusal::Protected(Variable::Home),
             CustomFolderRefusal::Personal,
             CustomFolderRefusal::PersonalUnknown(unreadable),
+            CustomFolderRefusal::Trash,
+            CustomFolderRefusal::TrashUnknown(unreadable),
             CustomFolderRefusal::UnsureFilesystem,
         ] {
             for language in [Language::French, Language::English] {

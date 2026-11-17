@@ -7,11 +7,102 @@ use std::os::unix::fs::symlink;
 use super::clean::{clean, ids, make_recent, run_later};
 use super::*;
 use crate::clean::{CleanResult, KeepReason};
-use crate::custom::{CustomFolder, CustomFolderRefusal, PersonalFolders};
+use crate::custom::{CustomFolder, CustomFolderRefusal, PersonalFolders, TrashFolder};
 use crate::report::{Category, Origin};
 
 fn folder(path: &Path) -> CustomFolder {
     CustomFolder::new(path.to_path_buf()).unwrap()
+}
+
+#[test]
+fn a_trash_moved_elsewhere_by_a_link_is_refused_where_it_went() {
+    let fixture = Fixture::new();
+    fixture.directory("disk/Bin/files/project");
+    fixture.directory("disk/Bin/info");
+    fixture.directory("disk/other");
+    fixture.directory("home/share");
+    symlink(fixture.path("disk/Bin"), fixture.path("home/share/Trash")).unwrap();
+    let disk = folder(&fixture.path("disk"));
+    let inside = folder(&fixture.path("disk/Bin/files/project"));
+    let other = folder(&fixture.path("disk/other"));
+    let mut run = Run::new(
+        &fixture,
+        [&disk, &inside, &other].map(RuleEntry::Custom).to_vec(),
+    );
+    let variables = fixture.variables(&[(Variable::LocalShare, "home/share")]);
+    run.trash = TrashFolder::read(&variables, file_identity);
+    assert_eq!(
+        refusals(&run.scan()),
+        [&disk, &inside].map(|folder| (folder.path().to_path_buf(), CustomFolderRefusal::Trash))
+    );
+    // A link that leads nowhere it can be read: none may be told out of it.
+    fixture.directory("looping/share");
+    symlink(
+        fixture.path("looping/share/Trash"),
+        fixture.path("looping/share/Trash"),
+    )
+    .unwrap();
+    let looping = fixture.variables(&[(Variable::LocalShare, "looping/share")]);
+    run.trash = TrashFolder::read(&looping, file_identity);
+    let refused = refusals(&run.scan());
+    assert_eq!(refused.len(), 3, "{refused:?}");
+    assert!(
+        refused
+            .iter()
+            .all(|(_, refusal)| matches!(refusal, CustomFolderRefusal::TrashUnknown(_))),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn the_trash_or_a_folder_in_it_is_refused_by_identity() {
+    let fixture = Fixture::new();
+    fixture.directory("share/Trash/files/project");
+    fixture.directory("share/Trash/info");
+    fixture.directory("share/beside");
+    symlink(fixture.path("share"), fixture.path("alias")).unwrap();
+    let trash = folder(&fixture.path("share/Trash"));
+    let files = folder(&fixture.path("share/Trash/files"));
+    let inside = folder(&fixture.path("share/Trash/files/project"));
+    // Through a link above it: its real place is judged.
+    let aliased = folder(&fixture.path("alias/Trash/info"));
+    let beside = folder(&fixture.path("share/beside"));
+    let mut run = Run::new(
+        &fixture,
+        [&trash, &files, &inside, &aliased, &beside]
+            .map(RuleEntry::Custom)
+            .to_vec(),
+    );
+    let variables = fixture.variables(&[(Variable::LocalShare, "share")]);
+    run.trash = TrashFolder::read(&variables, file_identity);
+    assert_eq!(
+        refusals(&run.scan()),
+        [&trash, &files, &inside, &aliased]
+            .map(|folder| (folder.path().to_path_buf(), CustomFolderRefusal::Trash))
+    );
+    // When it cannot be told, none may be told out of it.
+    run.trash = TrashFolder::at(&fixture.path("share/Trash"), |_| None);
+    let unknown = CustomFolderRefusal::TrashUnknown(std::io::ErrorKind::Unsupported);
+    assert_eq!(
+        refusals(&run.scan()),
+        [&trash, &files, &inside, &aliased, &beside]
+            .map(|folder| (folder.path().to_path_buf(), unknown))
+    );
+    // A folder that holds it is no more emptied by age.
+    let holding = folder(&fixture.path("share"));
+    run.entries = vec![RuleEntry::Custom(&holding)];
+    run.trash = TrashFolder::read(&variables, file_identity);
+    assert_eq!(
+        refusals(&run.scan()),
+        [(holding.path().to_path_buf(), CustomFolderRefusal::Trash)]
+    );
+    run.entries = [&trash, &files, &inside, &aliased, &beside]
+        .map(RuleEntry::Custom)
+        .to_vec();
+    // Without one in the data folder, nothing to refuse.
+    let elsewhere = fixture.variables(&[(Variable::LocalShare, "share/beside")]);
+    run.trash = TrashFolder::read(&elsewhere, file_identity);
+    assert_eq!(refusals(&run.scan()), []);
 }
 
 /// The refusals of the custom folders in `report`, by the path written.
@@ -508,6 +599,17 @@ fn the_check_judges_a_folder_against_the_variables_and_the_personal_folders() {
         folder(&fixture.path("guest")).check(&variables),
         Err(CustomFolderRefusal::Protected(Variable::Home))
     );
+    // The trash of its data folder, at the adding as at each scan.
+    fixture.directory("guest/.local/share/Trash/files");
+    let variables = fixture.variables(&[
+        (Variable::Home, "guest"),
+        (Variable::Config, "guest/.config"),
+        (Variable::LocalShare, "guest/.local/share"),
+    ]);
+    assert_eq!(
+        folder(&fixture.path("guest/.local/share/Trash/files")).check(&variables),
+        Err(CustomFolderRefusal::Trash)
+    );
 }
 
 /// Through [`crate::scan`] itself: the folders are planned only when their
@@ -524,6 +626,7 @@ fn a_real_scan_plans_the_folders_only_when_chosen_against_the_personal_ones() {
         "guest/.local/share",
         "tmp",
         "guest/Projets/Docs",
+        "guest/.local/share/Trash/files/old",
     ] {
         fixture.directory(directory);
     }
@@ -542,19 +645,23 @@ fn a_real_scan_plans_the_folders_only_when_chosen_against_the_personal_ones() {
     ]);
     let rules = okapi_rules::RuleSet::embedded(okapi_rules::Os::Linux).unwrap();
     let docs = folder(&fixture.path("guest/Projets/Docs"));
+    let trashed = folder(&fixture.path("guest/.local/share/Trash/files/old"));
     let options = |chosen: Category| {
         fixture
             .options(Exclusions::none())
             .with_categories(BTreeSet::from([chosen]))
-            .with_custom_folders(vec![docs.clone()])
+            .with_custom_folders(vec![docs.clone(), trashed.clone()])
     };
     let unchosen = crate::scan(&rules, &variables, &options(Category::Gaming));
     assert_eq!(refusals(&unchosen), [], "never planned unchosen");
     let chosen = crate::scan(&rules, &variables, &options(Category::Custom));
     assert_eq!(
         refusals(&chosen),
-        [(docs.path().to_path_buf(), CustomFolderRefusal::Personal)],
-        "the personal folders read where the variables say"
+        [
+            (docs.path().to_path_buf(), CustomFolderRefusal::Personal),
+            (trashed.path().to_path_buf(), CustomFolderRefusal::Trash),
+        ],
+        "the personal folders and the trash read where the variables say"
     );
 }
 

@@ -14,7 +14,7 @@ use okapi_rules::{
     PathMatcher, RelativePath, SingleFileTarget, TemplatePath, TemplateVariables, Variable,
 };
 
-use crate::custom::{CustomFolder, CustomFolderRefusal, Guard, PersonalFolders};
+use crate::custom::{CustomFolder, CustomFolderRefusal, Guard, PersonalFolders, TrashFolder};
 use crate::options::ScanOptions;
 use crate::paths::{NotADirectory, is_absent, is_system_temporary, real_directory};
 use crate::protection::ProtectedRoots;
@@ -201,6 +201,8 @@ pub(crate) struct Planning<'a> {
     pub(crate) user: Option<u32>,
     /// What no custom folder may be, besides the variables' directories.
     pub(crate) personal: &'a PersonalFolders,
+    /// Which no custom folder may be, hold nor lie in.
+    pub(crate) trash: &'a TrashFolder,
 }
 
 /// Turns rules into checked roots, recording why a root is not walked.
@@ -645,6 +647,7 @@ impl Planner<'_> {
         let guard = Guard {
             protected: self.protected,
             personal: self.planning.personal,
+            trash: self.planning.trash,
             user: self.planning.user,
             readers: self.planning.readers,
         };

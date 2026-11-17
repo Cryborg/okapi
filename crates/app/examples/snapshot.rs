@@ -685,7 +685,7 @@ fn cell(kind: ui::WidgetKind, size: ui::WidgetSize, places: Vec<ui::CellPlace>) 
         ui::WidgetKind::Reclaimable => vec![Wide, Full],
         ui::WidgetKind::Disks | ui::WidgetKind::Memory => vec![Small, Wide, Tall, Large],
         ui::WidgetKind::Processor => vec![Small, Wide],
-        ui::WidgetKind::System => vec![Small],
+        ui::WidgetKind::System | ui::WidgetKind::Updates => vec![Small],
     };
     ui::WidgetCell {
         kind,
@@ -756,6 +756,89 @@ fn default_cells() -> (Vec<ui::WidgetCell>, Vec<i32>) {
         ),
     ];
     (cells, vec![5, 5, 3, 3])
+}
+
+/// The Home page with the updates widget moved just under Récupérable, in
+/// view, the updates read as the screen `updates` (`pending`, `uptodate`)
+/// shows them. Placed in 1 to 4 columns as `dashboard::layout` would.
+fn home_updates(window: &ui::AppWindow, updates_state: &str, language: Language) {
+    use ui::WidgetKind::{Disks, Memory, Processor, Reclaimable, System, Updates};
+    use ui::WidgetSize::{Full, Small, Wide};
+    updates(window, updates_state, language);
+    window.global::<ui::Updates>().set_read_at(ui::Moment {
+        day: ui::DayKind::Today,
+        day_of_month: 0,
+        month: 0,
+        year: 0,
+        hour: 9,
+        minute: 10,
+    });
+    home(window, language);
+    let cells = vec![
+        cell(
+            Reclaimable,
+            Full,
+            vec![
+                place(0, 0, 1, 1),
+                place(0, 0, 2, 1),
+                place(0, 0, 3, 1),
+                place(0, 0, 4, 1),
+            ],
+        ),
+        cell(
+            Updates,
+            Small,
+            vec![
+                place(0, 1, 1, 1),
+                place(0, 1, 1, 1),
+                place(0, 1, 1, 1),
+                place(0, 1, 1, 1),
+            ],
+        ),
+        cell(
+            Disks,
+            Wide,
+            vec![
+                place(0, 2, 1, 1),
+                place(0, 2, 2, 1),
+                place(1, 1, 2, 1),
+                place(1, 1, 2, 1),
+            ],
+        ),
+        cell(
+            Memory,
+            Small,
+            vec![
+                place(0, 3, 1, 1),
+                place(0, 3, 1, 1),
+                place(0, 2, 1, 1),
+                place(3, 1, 1, 1),
+            ],
+        ),
+        cell(
+            Processor,
+            Wide,
+            vec![
+                place(0, 4, 1, 1),
+                place(0, 4, 2, 1),
+                place(1, 2, 2, 1),
+                place(0, 2, 2, 1),
+            ],
+        ),
+        cell(
+            System,
+            Small,
+            vec![
+                place(0, 5, 1, 1),
+                place(0, 5, 1, 1),
+                place(0, 3, 1, 1),
+                place(2, 2, 1, 1),
+            ],
+        ),
+    ];
+    let dashboard = window.global::<ui::Dashboard>();
+    dashboard.set_cells(ModelRc::new(VecModel::from(cells)));
+    dashboard.set_rows(ModelRc::new(VecModel::from(vec![6, 6, 4, 3])));
 }
 
 /// The Home page, an analysis of today kept and the system read.
@@ -1864,6 +1947,8 @@ fn main() {
             app.set_sidebar_chosen_folded(true);
         }
         "home-disks" => home_tall(&app, true, language),
+        "home-updates" => home_updates(&app, "pending", language),
+        "home-updates-uptodate" => home_updates(&app, "uptodate", language),
         "home-customize" | "home-move" => home_customize(&app, screen == "home-move", language),
         "home-memory" => home_tall(&app, false, language),
         "disk-start" => disk(&app, ui::DiskStep::Start, language),
@@ -1896,7 +1981,7 @@ fn main() {
             large_files(&app, scene, language);
         }
         other => panic!(
-            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, home-disks, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings, history, history-small, history-update, history-empty, large-start, large-searching, large-stopped, large-result, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt (each also -small)"
+            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings, history, history-small, history-update, history-empty, large-start, large-searching, large-stopped, large-result, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt (each also -small)"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

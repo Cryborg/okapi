@@ -13,15 +13,18 @@ pub(crate) enum WidgetKind {
     Memory,
     Processor,
     System,
+    /// What waits for an update: the updates screen's last reading.
+    Updates,
 }
 
 impl WidgetKind {
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::Reclaimable,
         Self::Disks,
         Self::Memory,
         Self::Processor,
         Self::System,
+        Self::Updates,
     ];
 
     /// The name the layout keeps it by: never changed once released.
@@ -32,6 +35,7 @@ impl WidgetKind {
             Self::Memory => "memory",
             Self::Processor => "processor",
             Self::System => "system",
+            Self::Updates => "updates",
         }
     }
 
@@ -45,7 +49,7 @@ impl WidgetKind {
             Self::Reclaimable => matches!(size, WidgetSize::Wide | WidgetSize::Full),
             Self::Disks | Self::Memory => !matches!(size, WidgetSize::Full),
             Self::Processor => matches!(size, WidgetSize::Small | WidgetSize::Wide),
-            Self::System => matches!(size, WidgetSize::Small),
+            Self::System | Self::Updates => matches!(size, WidgetSize::Small),
         }
     }
 
@@ -53,13 +57,20 @@ impl WidgetKind {
     /// applications only from Wide on.
     pub(crate) fn sources(self, size: WidgetSize) -> BTreeSet<Source> {
         match self {
-            Self::Reclaimable => BTreeSet::new(),
+            Self::Reclaimable | Self::Updates => BTreeSet::new(),
             Self::Disks => BTreeSet::from([Source::Volumes]),
             Self::Memory if size == WidgetSize::Small => BTreeSet::from([Source::Memory]),
             Self::Memory => BTreeSet::from([Source::Memory, Source::Applications]),
             Self::Processor => BTreeSet::from([Source::Processor]),
             Self::System => BTreeSet::from([Source::System]),
         }
+    }
+
+    /// Whether the default dashboard has it: the mockup's widgets. One that
+    /// asks a daemon (the updates, from snapd's store) comes only when the
+    /// user adds it.
+    pub(crate) const fn in_default(self) -> bool {
+        !matches!(self, Self::Updates)
     }
 }
 
@@ -68,15 +79,16 @@ pub(crate) const fn starting_size(kind: WidgetKind) -> WidgetSize {
     match kind {
         WidgetKind::Reclaimable => WidgetSize::Full,
         WidgetKind::Disks | WidgetKind::Processor => WidgetSize::Wide,
-        WidgetKind::Memory | WidgetKind::System => WidgetSize::Small,
+        WidgetKind::Memory | WidgetKind::System | WidgetKind::Updates => WidgetSize::Small,
     }
 }
 
-/// The dashboard shown when none is kept: every widget, in the catalog's
-/// order, at its starting size, as the mockup lays them out.
+/// The dashboard shown when none is kept: every widget it has, in the
+/// catalog's order, at its starting size, as the mockup lays them out.
 pub(crate) fn default_widgets() -> Vec<(WidgetKind, WidgetSize)> {
     WidgetKind::ALL
         .into_iter()
+        .filter(|kind| kind.in_default())
         .map(|kind| (kind, starting_size(kind)))
         .collect()
 }
@@ -117,21 +129,37 @@ mod tests {
             [WidgetSize::Small, WidgetSize::Wide]
         );
         assert_eq!(accepted(WidgetKind::System), [WidgetSize::Small]);
+        assert_eq!(accepted(WidgetKind::Updates), [WidgetSize::Small]);
+        assert_eq!(
+            starting_size(WidgetKind::Updates),
+            WidgetSize::Small,
+            "added at a size it takes"
+        );
     }
 
     #[test]
-    fn the_default_dashboard_has_every_widget_once_at_a_size_it_takes() {
+    fn the_default_dashboard_has_each_of_its_widgets_once_at_a_size_it_takes() {
         let widgets = default_widgets();
-        assert_eq!(widgets.len(), WidgetKind::ALL.len());
         for kind in WidgetKind::ALL {
             let sizes: Vec<_> = widgets
                 .iter()
                 .filter(|(shown, _)| *shown == kind)
                 .map(|(_, size)| *size)
                 .collect();
+            if !kind.in_default() {
+                assert!(sizes.is_empty(), "{kind:?} never");
+                continue;
+            }
             assert_eq!(sizes.len(), 1, "{kind:?} once");
             assert!(kind.accepts(sizes[0]), "{kind:?} at a size it takes");
         }
+    }
+
+    #[test]
+    fn the_updates_widget_reads_nothing_of_the_sampler_and_is_never_in_the_default() {
+        assert!(WidgetKind::Updates.sources(WidgetSize::Small).is_empty());
+        assert!(!WidgetKind::Updates.in_default());
+        assert_eq!(WidgetKind::named("updates"), Some(WidgetKind::Updates));
     }
 
     #[test]

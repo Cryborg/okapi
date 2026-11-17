@@ -242,8 +242,9 @@ struct Followers {
 }
 
 /// Binds the Home page to `window`: it follows the page shown, its
-/// "Analyser" asks `cleaner`, and it hears what `cleaner` does. The other
-/// screens follow the page shown too, and the History hears a cleaning end.
+/// "Analyser" asks `cleaner`, it hears what `cleaner` does, and its updates
+/// widget reads by the updates screen. The other screens follow the page
+/// shown too, and the History hears a cleaning end.
 fn attach_home(
     window: &AppWindow,
     screen: &CleanerScreen,
@@ -262,6 +263,8 @@ fn attach_home(
         history,
     } = followers;
     disk.read_volumes_from(Rc::new(move || volumes.volumes()));
+    let reading = updates.clone();
+    dashboard.read_updates_with(Rc::new(move || reading.read_if_due()));
     let history_told = history.clone();
     let heard = dashboard.clone();
     let cleaner = screen.clone();
@@ -997,6 +1000,7 @@ mod tests {
         "SnapNote",
         "Settled",
         "UpdatesPage",
+        "UpdatesWidget",
         "Removals",
         "Installing",
         "Outcome",

@@ -24,6 +24,9 @@ export global DashboardWords {
         if kind == WidgetKind.processor {
             return @tr("Processeur");
         }
+        if kind == WidgetKind.updates {
+            return @tr("Mises à jour");
+        }
         return @tr("Système");
     }
 
@@ -39,6 +42,9 @@ export global DashboardWords {
         }
         if kind == WidgetKind.processor {
             return @image-url("../assets/icons/cpu.svg");
+        }
+        if kind == WidgetKind.updates {
+            return @image-url("../assets/icons/package.svg");
         }
         return @image-url("../assets/icons/monitor.svg");
     }
@@ -56,6 +62,9 @@ export global DashboardWords {
         }
         if kind == WidgetKind.processor {
             return @tr("L'utilisation du processeur n'a pas pu être lue.");
+        }
+        if kind == WidgetKind.updates {
+            return @tr("Okapi ne trouve pas de gestionnaire de mises à jour sur ce système.");
         }
         return @tr("Les informations du système n'ont pas pu être lues.");
     }
@@ -141,6 +150,9 @@ export global DashboardWords {
         }
         if kind == WidgetKind.processor {
             return @tr("L'utilisation du processeur et sa charge moyenne.");
+        }
+        if kind == WidgetKind.updates {
+            return @tr("Ce qui attend une mise à jour, la sécurité d'abord. Rien ne s'installe depuis l'Accueil.");
         }
         return @tr("Distribution, noyau, bureau et durée depuis le démarrage.");
     }

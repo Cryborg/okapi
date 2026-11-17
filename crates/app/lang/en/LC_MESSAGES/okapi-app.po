@@ -4879,3 +4879,59 @@ msgid "Le seul fichier parcouru est petit, exclu ou à un autre compte : il n'y 
 msgid_plural "Les {} fichiers parcourus sont petits, exclus ou à d'autres comptes : il n'y a rien à faire ici."
 msgstr[0] "The only file looked through is small, excluded or another account's: there is nothing to do here."
 msgstr[1] "The {} files looked through are small, excluded or other accounts': there is nothing to do here."
+
+msgctxt "DashboardWords"
+msgid "Mises à jour"
+msgstr "Updates"
+
+msgctxt "DashboardWords"
+msgid "Okapi ne trouve pas de gestionnaire de mises à jour sur ce système."
+msgstr "Okapi finds no update manager on this system."
+
+msgctxt "DashboardWords"
+msgid "Ce qui attend une mise à jour, la sécurité d'abord. Rien ne s'installe depuis l'Accueil."
+msgstr "What waits for an update, security first. Nothing installs from Home."
+
+msgctxt "UpdatesWidget"
+msgid "Tout est à jour"
+msgstr "Everything is up to date"
+
+msgctxt "UpdatesWidget"
+msgid "Les applis sont à jour"
+msgstr "The apps are up to date"
+
+msgctxt "UpdatesWidget"
+msgid "Recherche en échec"
+msgstr "Search failed"
+
+msgctxt "UpdatesWidget"
+msgid "Aucune mise à jour trouvée"
+msgstr "No update found"
+
+msgctxt "UpdatesWidget"
+msgid "Les mises à jour n'ont pas pu être recherchées. Le détail est dans Mises à jour."
+msgstr "The updates could not be searched. The detail is in Updates."
+
+msgctxt "UpdatesWidget"
+msgid "La recherche n'a pas tout vérifié. Le détail est dans Mises à jour."
+msgstr "The search did not check everything. The detail is in Updates."
+
+msgctxt "UpdatesWidget"
+msgid "Installation…"
+msgstr "Installing…"
+
+msgctxt "UpdatesWidget"
+msgid "Recherche…"
+msgstr "Searching…"
+
+msgctxt "UpdatesWidget"
+msgid "{} de sécurité"
+msgstr "{} for security"
+
+msgctxt "UpdatesWidget"
+msgid "Recherché {}"
+msgstr "Searched {}"
+
+msgctxt "UpdatesWidget"
+msgid "Voir les mises à jour"
+msgstr "See the updates"

@@ -1,0 +1,72 @@
+// The Mises à jour widget of the Home page: what the updates screen read
+// last, in its words, and the way to that screen. Nothing installs from the
+// Home page. Apart from dashboard-widgets.slint, which updates.slint
+// imports: it imports both.
+import { Theme } from "theme.slint";
+import { ActionButton, ButtonKind, Detail } from "widgets.slint";
+import { Dashboard, ReadingState, WidgetKind } from "dashboard-model.slint";
+import { DashboardWords, WidgetCard } from "dashboard-widgets.slint";
+import { InstallStep, SourceState, Updates, UpdatesStep } from "updates-model.slint";
+import { UpdatesWords } from "updates.slint";
+
+export component UpdatesWidget inherits WidgetCard {
+    // "Voir les mises à jour": the updates screen.
+    callback open-updates();
+
+    property <bool> waits: UpdatesWords.summary() != "";
+    // Neither source could be read.
+    property <bool> nothing-read: Updates.system-state != SourceState.read && Updates.snaps-state != SourceState.read;
+    property <string> heading: root.waits ? UpdatesWords.summary()
+        : UpdatesWords.settled() ? (Updates.system-state == SourceState.read ? @tr("Tout est à jour") : @tr("Les applis sont à jour"))
+        : root.nothing-read ? @tr("Recherche en échec")
+        : @tr("Aucune mise à jour trouvée");
+    // Why it is not said up to date, when nothing waits.
+    property <string> unsure: root.waits || UpdatesWords.settled() ? ""
+        : root.nothing-read ? @tr("Les mises à jour n'ont pas pu être recherchées. Le détail est dans Mises à jour.")
+        : @tr("La recherche n'a pas tout vérifié. Le détail est dans Mises à jour.");
+
+    kind: WidgetKind.updates;
+    // Until a first list is read; then the last one, while another is
+    // searched.
+    state: !Updates.has-read ? ReadingState.reading
+        : UpdatesWords.no-source() ? ReadingState.unavailable : ReadingState.read;
+    note: Updates.install-step != InstallStep.idle ? @tr("Installation…")
+        : Updates.step == UpdatesStep.searching ? @tr("Recherche…") : "";
+    summary: root.heading;
+
+    if root.state != ReadingState.reading: VerticalLayout {
+        vertical-stretch: 1;
+        spacing: Theme.spacing-xs;
+        if root.state == ReadingState.read: Text {
+            text: root.heading;
+            color: Theme.text;
+            font-size: Theme.font-heading;
+            font-weight: Theme.weight-semibold;
+            wrap: word-wrap;
+            // Its words are the card's summary, read with its title.
+            accessible-role: none;
+        }
+        if root.state == ReadingState.read && root.unsure != "": Detail {
+            text: root.unsure;
+            color: Theme.warning;
+        }
+        if root.state == ReadingState.read: Detail {
+            text: @tr("Recherché {}", DashboardWords.moment(Updates.read-at));
+        }
+        Rectangle {
+            vertical-stretch: 1;
+        }
+        HorizontalLayout {
+            alignment: start;
+            ActionButton {
+                text: @tr("Voir les mises à jour");
+                kind: ButtonKind.ghost;
+                // Customizing, the widgets' actions wait.
+                enabled: !Dashboard.editing;
+                clicked => {
+                    root.open-updates();
+                }
+            }
+        }
+    }
+}

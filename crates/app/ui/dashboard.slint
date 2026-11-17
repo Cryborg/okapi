@@ -4,6 +4,7 @@ import { Theme, Screen } from "theme.slint";
 import { Title, Detail, Icon, ScrolledList, ActionButton, ButtonKind, Banner, FocusRing, ModalFrame } from "widgets.slint";
 import { AddableWidget, CellPlace, Dashboard, FocusPart, MoveCancel, ReadingState, ReclaimableState, WidgetKind, WidgetSize } from "dashboard-model.slint";
 import { DashboardWords, DisksWidget, MemoryWidget, ProcessorWidget, ReclaimableWidget, SystemWidget } from "dashboard-widgets.slint";
+import { UpdatesWidget } from "updates-widget.slint";
 
 // The tile that ends the grid in the Personnaliser mode.
 component AddTile inherits Rectangle {
@@ -259,6 +260,8 @@ component DropSlot inherits Rectangle {
 export component DashboardPage inherits Rectangle {
     // "Voir les derniers résultats": the cleaner's page.
     callback open-cleaner();
+    // "Voir les mises à jour": the updates screen.
+    callback open-updates();
 
     property <length> grid-width: view.visible-width - 2 * Screen.page-margin;
     property <int> columns: max(1, min(Dashboard.rows.length,
@@ -578,6 +581,14 @@ export component DashboardPage inherits Rectangle {
                                 slot: index;
                                 size: cell.size;
                                 accepted: cell.accepted;
+                            }
+                            if cell.kind == WidgetKind.updates: UpdatesWidget {
+                                slot: index;
+                                size: cell.size;
+                                accepted: cell.accepted;
+                                open-updates => {
+                                    root.open-updates();
+                                }
                             }
                         }
 

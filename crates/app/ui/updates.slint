@@ -64,6 +64,25 @@ export global UpdatesWords {
         system + snaps > 0 ? UpdatesWords.count(system + snaps, Updates.system-security) : ""
     }
 
+    // Neither source is on this system.
+    pure public function no-source() -> bool {
+        Updates.system-state == SourceState.absent && Updates.snaps-state == SourceState.absent
+    }
+
+    // Nothing waits in what was read.
+    pure public function nothing-waits() -> bool {
+        (Updates.system-state != SourceState.read || Updates.system-count == 0)
+            && (Updates.snaps-state != SourceState.read || Updates.snap-lines.length == 0)
+    }
+
+    // Up to date, read by lists known to be recent from every source there
+    // is: an old or undated list says nothing of what came out since.
+    pure public function settled() -> bool {
+        Updates.step == UpdatesStep.read && !Updates.refresh-failed && !Updates.lists-old
+            && Updates.system-state != SourceState.failed && Updates.snaps-state != SourceState.failed
+            && nothing-waits()
+    }
+
     pure public function kind(kind: UpdateKind) -> string {
         kind == UpdateKind.security ? @tr("Sécurité") : kind == UpdateKind.blocked ? @tr("Retenue") : ""
     }
@@ -775,14 +794,8 @@ export component UpdatesPage inherits VerticalLayout {
 
     property <bool> searching: Updates.step == UpdatesStep.searching;
     property <bool> read: Updates.step == UpdatesStep.read;
-    property <bool> no-source: Updates.system-state == SourceState.absent && Updates.snaps-state == SourceState.absent;
-    property <bool> nothing-waits: (Updates.system-state != SourceState.read || Updates.system-count == 0)
-        && (Updates.snaps-state != SourceState.read || Updates.snap-lines.length == 0);
-    // Up to date only by lists known to be recent: an old or undated list
-    // says nothing of what came out since.
-    property <bool> settled: root.read && !Updates.refresh-failed && !Updates.lists-old
-        && Updates.system-state != SourceState.failed && Updates.snaps-state != SourceState.failed
-        && root.nothing-waits;
+    property <bool> no-source: UpdatesWords.no-source();
+    property <bool> settled: UpdatesWords.settled();
     property <bool> blocks: (root.read || (root.searching && Updates.has-read)) && !root.settled;
 
     ScrollView {

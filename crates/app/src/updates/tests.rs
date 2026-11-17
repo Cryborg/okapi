@@ -2121,3 +2121,173 @@ fn each_cause_is_shown_as_itself() {
     assert_eq!(why_shown(Why::Broken), ui::InstallWhy::Broken);
     assert_eq!(why_shown(Why::AppsOpen), ui::InstallWhy::AppsOpen);
 }
+
+/// The window on the Home page, its updates read through `fake`; its layout
+/// kept with the updates widget alone when `widget`, else the default one.
+fn on_home(fake: &Arc<Fake>, widget: bool) -> (ui::AppWindow, tempfile::TempDir) {
+    let directory = tempfile::tempdir().unwrap();
+    if widget {
+        okapi_store::DashboardLayout {
+            widgets: vec![okapi_store::DashboardWidget {
+                kind: "updates".to_owned(),
+                size: okapi_store::WidgetSize::Small,
+            }],
+        }
+        .save(directory.path())
+        .unwrap();
+    }
+    let seams = Seams {
+        updates: seams_of(fake),
+        ..seams_never_scanning()
+    };
+    let home = crate::dashboard::DashboardSeams {
+        config_directory: Some(directory.path().to_owned()),
+        ..crate::dashboard::tests::inert()
+    };
+    let crate::Screens { window, .. } = crate::wide_window(seams, home, Language::French);
+    (window, directory)
+}
+
+/// What the updates widget says of itself to a screen reader.
+fn widget_said(window: &ui::AppWindow) -> String {
+    ElementHandle::find_by_accessible_label(window, "Mises à jour")
+        .find(|element| element.accessible_role() == Some(AccessibleRole::Groupbox))
+        .expect("the updates widget")
+        .accessible_description()
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[test]
+fn the_home_page_s_widget_reads_the_updates_at_launch_and_leads_to_them() {
+    // Catches a widget left reading at launch: the page shown first is never
+    // said shown.
+    let fake = Arc::new(Fake {
+        system: eight,
+        ..Fake::default()
+    });
+    let (window, _directory) = on_home(&fake, true);
+    assert_eq!(window.get_page(), ui::Page::Home);
+    read(&window);
+    assert_eq!(fake.readings.load(Ordering::SeqCst), 1);
+    assert_eq!(fake.refreshes.load(Ordering::SeqCst), 0, "never downloads");
+    assert_eq!(widget_said(&window), "7 mises à jour, dont 3 de sécurité");
+    assert!(shows(&window, "Recherché aujourd'hui à 22 h"));
+    // Nothing installs from the Home page.
+    let installs = ElementHandle::find_by_element_type_name(&window, "DashboardPage")
+        .next()
+        .unwrap()
+        .query_descendants()
+        .match_accessible_role(AccessibleRole::Button)
+        .find_all()
+        .into_iter()
+        .filter_map(|element| element.accessible_label().map(String::from))
+        .filter(|label| label.contains("Mettre à jour"))
+        .count();
+    assert_eq!(installs, 0);
+    button(&window, "Voir les mises à jour").invoke_accessible_default_action();
+    assert_eq!(window.get_page(), ui::Page::Updates);
+}
+
+#[test]
+fn the_home_page_reads_the_updates_again_only_once_old() {
+    let fake = Arc::new(Fake::default());
+    let (window, _directory) = on_home(&fake, true);
+    read(&window);
+    assert_eq!(widget_said(&window), "Tout est à jour");
+    let leave_and_come_back = |window: &ui::AppWindow| {
+        button(window, "Nettoyeur").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        button(window, "Accueil").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        read(window);
+    };
+    later(4 * 60);
+    leave_and_come_back(&window);
+    assert_eq!(fake.readings.load(Ordering::SeqCst), 1, "still fresh");
+    later(60);
+    leave_and_come_back(&window);
+    assert_eq!(fake.readings.load(Ordering::SeqCst), 2, "read again");
+}
+
+#[test]
+fn the_home_page_without_the_widget_reads_no_update_until_it_is_added() {
+    let fake = Arc::new(Fake::default());
+    let (window, _directory) = on_home(&fake, false);
+    read_once();
+    assert_eq!(fake.readings.load(Ordering::SeqCst), 0);
+    assert_eq!(updates(&window).get_step(), ui::UpdatesStep::Idle);
+    window
+        .global::<ui::Dashboard>()
+        .invoke_add(ui::WidgetKind::Updates);
+    read(&window);
+    assert_eq!(fake.readings.load(Ordering::SeqCst), 1);
+}
+
+fn snaps_refused() -> Result<Vec<Refresh>, SnapdError> {
+    Err(SnapdError::Refused {
+        status: 500,
+        kind: "internal-error".into(),
+        message: "store down".into(),
+    })
+}
+
+#[test]
+fn the_widget_says_a_search_that_checked_nothing() {
+    // Catches « Tout est à jour » said of what was never read.
+    let fake = Arc::new(Fake {
+        system: || {
+            Err(PackageKitError::Failed {
+                code: error_code::NO_NETWORK,
+                details: "offline".into(),
+            })
+        },
+        snaps: snaps_refused,
+        ..Fake::default()
+    });
+    let (window, _directory) = on_home(&fake, true);
+    read(&window);
+    assert_eq!(widget_said(&window), "Recherche en échec");
+    assert!(shows(
+        &window,
+        "Les mises à jour n'ont pas pu être recherchées. Le détail est dans Mises à jour."
+    ));
+}
+
+#[test]
+fn the_widget_says_a_search_that_did_not_check_everything() {
+    let fake = Arc::new(Fake {
+        snaps: snaps_refused,
+        ..Fake::default()
+    });
+    let (window, _directory) = on_home(&fake, true);
+    read(&window);
+    assert_eq!(widget_said(&window), "Aucune mise à jour trouvée");
+    assert!(shows(
+        &window,
+        "La recherche n'a pas tout vérifié. Le détail est dans Mises à jour."
+    ));
+}
+
+#[test]
+fn the_widget_is_unavailable_without_any_source() {
+    let (window, _directory) = {
+        let fake = Arc::new(Fake {
+            system: || Err(PackageKitError::Absent),
+            snaps: || {
+                Err(SnapdError::Absent {
+                    socket: PathBuf::from("/run/snapd.socket"),
+                    source: io::ErrorKind::NotFound.into(),
+                })
+            },
+            ..Fake::default()
+        });
+        on_home(&fake, true)
+    };
+    read(&window);
+    assert_eq!(widget_said(&window), "Indisponible");
+    assert!(shows(
+        &window,
+        "Okapi ne trouve pas de gestionnaire de mises à jour sur ce système."
+    ));
+}

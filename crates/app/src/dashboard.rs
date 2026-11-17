@@ -172,6 +172,9 @@ struct State {
     /// The readings no longer reach the page.
     lost: bool,
     timer: slint::Timer,
+    /// Reads what waits for an update, when it was not lately: the updates
+    /// screen's own search, the widget's source.
+    read_updates: Option<Rc<dyn Fn()>>,
 }
 
 /// A widget picked up: from where, and where it is shown to go.
@@ -271,6 +274,7 @@ impl DashboardScreen {
             uses: VecDeque::with_capacity(CURVE_READINGS),
             lost: false,
             timer: slint::Timer::default(),
+            read_updates: None,
         })));
         let weak = Rc::downgrade(&screen.0);
         screen
@@ -778,8 +782,10 @@ impl DashboardScreen {
     }
 
     /// After a change of the list: the places shown again, the sources
-    /// followed again, the layout kept.
+    /// followed again (the updates read if their widget came), the layout
+    /// kept.
     fn edited(&self) {
+        self.read_updates();
         self.reposition();
         {
             let mut state = self.0.borrow_mut();
@@ -824,6 +830,33 @@ impl DashboardScreen {
         self.0.borrow().volumes.clone()
     }
 
+    /// Reads what waits for an update by `read` whenever the page shows the
+    /// updates widget, and now if it does: the page shown at launch is never
+    /// said shown again.
+    pub fn read_updates_with(&self, read: Rc<dyn Fn()>) {
+        self.0.borrow_mut().read_updates = Some(read);
+        self.read_updates();
+    }
+
+    /// Reads what waits for an update, when the page shows its widget.
+    fn read_updates(&self) {
+        let read = {
+            let state = self.0.borrow();
+            let shown = state
+                .widgets
+                .iter()
+                .any(|(kind, _)| *kind == WidgetKind::Updates)
+                && state
+                    .window
+                    .upgrade()
+                    .is_some_and(|window| window.get_page() == ui::Page::Home);
+            state.read_updates.clone().filter(|_| shown)
+        };
+        if let Some(read) = read {
+            read();
+        }
+    }
+
     /// Follows the page shown: read while the Home page is; the volumes
     /// alone while the disk usage screen is; nothing else.
     pub fn page_shown(&self, page: ui::Page) {
@@ -856,6 +889,7 @@ impl DashboardScreen {
             self.judge_outdated();
             self.read_last_cleaning();
             self.show();
+            self.read_updates();
         } else {
             tracing::info!(?page, "dashboard hidden: readings paused");
             (self.0.borrow().seams.commands)(Command::Pause);
@@ -1261,6 +1295,7 @@ const fn catalog_kind(kind: ui::WidgetKind) -> WidgetKind {
         ui::WidgetKind::Memory => WidgetKind::Memory,
         ui::WidgetKind::Processor => WidgetKind::Processor,
         ui::WidgetKind::System => WidgetKind::System,
+        ui::WidgetKind::Updates => WidgetKind::Updates,
     }
 }
 
@@ -1271,6 +1306,7 @@ const fn widget_kind(kind: WidgetKind) -> ui::WidgetKind {
         WidgetKind::Memory => ui::WidgetKind::Memory,
         WidgetKind::Processor => ui::WidgetKind::Processor,
         WidgetKind::System => ui::WidgetKind::System,
+        WidgetKind::Updates => ui::WidgetKind::Updates,
     }
 }
 
@@ -1879,6 +1915,22 @@ pub mod tests {
                 .map(|(kind, size)| DashboardWidget {
                     kind: (*kind).to_owned(),
                     size: *size,
+                })
+                .collect(),
+        }
+        .save(directory)
+        .unwrap();
+    }
+
+    /// A layout kept with every widget of the catalog, each at its starting
+    /// size: the default one lacks some.
+    fn every_widget_kept(directory: &Path) {
+        DashboardLayout {
+            widgets: WidgetKind::ALL
+                .into_iter()
+                .map(|kind| DashboardWidget {
+                    kind: kind.name().to_owned(),
+                    size: catalog::starting_size(kind),
                 })
                 .collect(),
         }
@@ -3799,6 +3851,7 @@ pub mod tests {
     #[test]
     fn with_every_widget_there_the_dialog_says_none_is_left_and_closes_on_escape() {
         let directories = Directories::new();
+        every_widget_kept(&directories.config);
         let (seams, _sampler) = directories.seams();
         let window = on_home(seams);
         customizing(&window);
@@ -3946,6 +3999,7 @@ pub mod tests {
     #[test]
     fn a_click_outside_a_dialog_never_closes_it() {
         let directories = Directories::new();
+        every_widget_kept(&directories.config);
         let (seams, _sampler) = directories.seams();
         let window = on_home(seams);
         customizing(&window);

@@ -237,6 +237,13 @@ impl UpdatesScreen {
             self.0.borrow().minutes_timer.stop();
             return;
         }
+        self.read_if_due();
+    }
+
+    /// A search when none was made or the last is old, unless one runs or
+    /// an installation does (which reads the list again itself); else the
+    /// moments said again. For this page, and for the Home page's widget.
+    pub fn read_if_due(&self) {
         let due = {
             let state = self.0.borrow();
             state.search.is_none()
@@ -245,11 +252,15 @@ impl UpdatesScreen {
                     older_than(read_at, (state.seams.now)(), READ_AGAIN_AFTER)
                 })
         };
+        tracing::debug!(due, "updates looked at");
         if due {
             self.search(false);
         } else {
             self.show_moments();
-            self.watch_minutes();
+            // The minutes since are said on this page alone.
+            if self.0.borrow().on_page {
+                self.watch_minutes();
+            }
         }
     }
 

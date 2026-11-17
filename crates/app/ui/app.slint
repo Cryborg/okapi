@@ -122,6 +122,9 @@ export component AppWindow inherits Window {
                 open-cleaner => {
                     root.page = Page.cleaner;
                 }
+                open-updates => {
+                    root.page = Page.updates;
+                }
             }
             if root.page == Page.cleaner: CleanerPage {
                 vertical-stretch: 1;

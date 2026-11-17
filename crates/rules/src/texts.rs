@@ -280,13 +280,14 @@ mod tests {
 
     /// Whether a rule of `effect` is a line of the results, its description
     /// shown: one that deletes, or a maintenance the interface offers (the
-    /// journal's vacuum, by the privileged helper; not the others).
+    /// journal's vacuum, by the privileged helper; Docker's build cache, by
+    /// its daemon; not the others).
     fn is_offered<D, A>(effect: &Effect<D, A>) -> bool {
         matches!(
             effect,
             Effect::Delete(_)
                 | Effect::Maintenance {
-                    action: CleanupAction::JournalVacuum,
+                    action: CleanupAction::JournalVacuum | CleanupAction::DockerBuildPrune,
                     ..
                 }
         )
@@ -444,12 +445,14 @@ mod tests {
                 "{entry:?}"
             );
         }
-        let journal = rules_on_linux()
-            .into_iter()
-            .find(|rule| rule.label == "Journal Logs")
-            .and_then(|rule| rule.description)
-            .unwrap();
-        assert_eq!(placeholders(&journal), ["days", "gigabytes"]);
+        for label in ["Journal Logs", "Docker Build Cache"] {
+            let description = rules_on_linux()
+                .into_iter()
+                .find(|rule| rule.label == label)
+                .and_then(|rule| rule.description)
+                .unwrap();
+            assert_eq!(placeholders(&description), ["days", "gigabytes"], "{label}");
+        }
     }
 
     #[test]

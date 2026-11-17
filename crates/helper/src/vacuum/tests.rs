@@ -759,10 +759,7 @@ fn a_journal_behind_a_link_is_unfit_beforehand() {
 
 #[test]
 fn the_description_shows_the_limits_the_vacuum_uses() {
-    assert_eq!(
-        description_values(CleanupAction::JournalVacuum),
-        [("days", 30), ("gigabytes", 1)]
-    );
+    assert_eq!(DESCRIPTION_VALUES, [("days", 30), ("gigabytes", 1)]);
     assert_eq!(Limits::JOURNAL.max_age, Duration::from_hours(30 * 24));
     assert_eq!(Limits::JOURNAL.max_use, 1_000_000_000);
 }

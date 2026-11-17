@@ -1,10 +1,11 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A built-in maintenance operation that replaces raw deletion for a target.
 ///
 /// A rule only names the operation: the command it runs is fixed in Okapi's
-/// code, never supplied by the rule (invariant 4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+/// code, never supplied by the rule (invariant 4). Written by the name the
+/// rule files give it (the history keeps it so).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CleanupAction {
     UvPrune,
@@ -41,5 +42,27 @@ mod tests {
         assert_eq!(action, CleanupAction::JournalVacuum);
         let error = serde_json::from_str::<CleanupAction>("\"rm -rf /\"").unwrap_err();
         assert!(error.to_string().contains("unknown variant"), "{error}");
+    }
+
+    #[test]
+    fn each_action_is_kept_by_its_name_in_the_rule_files() {
+        for action in [
+            CleanupAction::UvPrune,
+            CleanupAction::PnpmPrune,
+            CleanupAction::WindowsComponents,
+            CleanupAction::DeliveryOptimization,
+            CleanupAction::DockerBuildPrune,
+            CleanupAction::JournalVacuum,
+        ] {
+            let written = serde_json::to_string(&action).unwrap();
+            assert_eq!(
+                serde_json::from_str::<CleanupAction>(&written).unwrap(),
+                action
+            );
+        }
+        assert_eq!(
+            serde_json::to_string(&CleanupAction::DockerBuildPrune).unwrap(),
+            "\"docker-build-prune\""
+        );
     }
 }

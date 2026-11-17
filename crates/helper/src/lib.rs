@@ -42,7 +42,9 @@ pub use request::{
     HELPER_MIN_AGE_FLOOR, MAX_REQUEST_BYTES, Operation, Refusal, Request, Selection, admin_targets,
     read_request, request_line,
 };
-pub use vacuum::{MACHINE_ID, MachineId, Unfit, description_values, unfit};
+pub use vacuum::{
+    DESCRIPTION_VALUES as JOURNAL_DESCRIPTION_VALUES, MACHINE_ID, MachineId, Unfit, unfit,
+};
 
 /// The version of the request and of the answer; a helper of another version
 /// refuses the request (`unsupportedVersion`), which the interface says as a

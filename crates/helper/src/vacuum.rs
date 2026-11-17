@@ -27,12 +27,11 @@ use okapi_engine::{
 use okapi_platform::{
     Directory, EntryStatus, EntryType, Reached, Unreached, reach_path, reach_with,
 };
-use okapi_rules::CleanupAction;
 use okapi_store::HistoryOutcome;
 
 /// An archived journal whose first entry is older than this many days goes.
 /// The one source of this limit: the rule's description shows it
-/// ([`description_values`]).
+/// ([`DESCRIPTION_VALUES`]).
 pub const JOURNAL_MAX_AGE_DAYS: u64 = 30;
 
 /// Archived journals go, oldest first, while a machine's directory takes
@@ -43,22 +42,11 @@ pub const JOURNAL_MAX_USE_GIGABYTES: u64 = 1;
 const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 const BYTES_PER_GIGABYTE: u64 = 1_000_000_000;
 
-/// The values of the placeholders of the description of a rule that runs
-/// `action`, by name: those of the operation the helper does.
-#[must_use]
-pub const fn description_values(action: CleanupAction) -> &'static [(&'static str, u64)] {
-    match action {
-        CleanupAction::JournalVacuum => &[
-            ("days", JOURNAL_MAX_AGE_DAYS),
-            ("gigabytes", JOURNAL_MAX_USE_GIGABYTES),
-        ],
-        CleanupAction::UvPrune
-        | CleanupAction::PnpmPrune
-        | CleanupAction::WindowsComponents
-        | CleanupAction::DeliveryOptimization
-        | CleanupAction::DockerBuildPrune => &[],
-    }
-}
+/// The values of the placeholders of the vacuum's description, by name.
+pub const DESCRIPTION_VALUES: &[(&str, u64)] = &[
+    ("days", JOURNAL_MAX_AGE_DAYS),
+    ("gigabytes", JOURNAL_MAX_USE_GIGABYTES),
+];
 
 /// The limits of a vacuum: an archive older than `max_age` goes, then the
 /// oldest while a directory takes more than `max_use` bytes.

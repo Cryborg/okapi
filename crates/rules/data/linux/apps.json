@@ -1,7 +1,7 @@
 {
   "type": "apps",
   "apps": [
-    { "id": "docker-build-cache", "name": "Docker Build Cache", "paths": ["${HOME}"], "cleanupAction": "docker-build-prune", "description": "Optional native cleanup of the active local Docker engine build cache. Prunes dangling cache unused for seven days with a 10 GB retained-cache target. Rebuilds may take longer. Does not prune containers, volumes, images, or custom Buildx builders; savings are not estimated." },
+    { "id": "docker-build-cache", "name": "Docker Build Cache", "paths": ["${HOME}"], "cleanupAction": "docker-build-prune", "description": "The build cache of the local Docker engine: its entries unused for at least {days} days go while the cache takes more than {gigabytes} GB; under that, nothing goes. Builds may take longer. Containers, images, volumes and the caches of other buildx builders are not touched" },
     { "id": "discord", "name": "Discord", "paths": ["${CONFIG}/discord/Cache/Cache_Data", "${CONFIG}/discord/Code Cache", "${CONFIG}/discord/GPUCache"], "description": "Discord Electron app cache, compiled code cache, and GPU cache" },
     { "id": "vscode", "name": "VS Code", "paths": ["${CONFIG}/Code/Cache/Cache_Data", "${CONFIG}/Code/Code Cache", "${CONFIG}/Code/GPUCache", "${CONFIG}/Code/logs", "${CONFIG}/Code/CachedExtensionVSIXs", "${CONFIG}/Code/CachedData"], "description": "VS Code web, compiled code, GPU, and extension caches, downloaded extension packages, and logs" },
     { "id": "slack", "name": "Slack", "paths": ["${CONFIG}/Slack/Cache/Cache_Data", "${CONFIG}/Slack/Code Cache", "${CONFIG}/Slack/GPUCache"], "description": "Slack Electron app cache, compiled code cache, and GPU cache" },

@@ -328,6 +328,13 @@ impl ScanOptions {
         self.now
     }
 
+    /// The minimum age given to [`ScanOptions::new`], every rule's at least:
+    /// what an operation a daemon runs (Docker's prune) never goes under.
+    #[must_use]
+    pub const fn min_age(&self) -> Duration {
+        self.min_age
+    }
+
     /// The categories walked; none means all.
     #[must_use]
     pub const fn categories(&self) -> &BTreeSet<Category> {

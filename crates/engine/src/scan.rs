@@ -284,11 +284,7 @@ pub(crate) fn scan_entries(
         return report.finish();
     }
     report.roots(root_identities);
-    report.maintenances(maintenance::found(
-        entries,
-        planning.variables,
-        planning.options,
-    ));
+    report.maintenances(maintenance::found(entries, planning));
     for (group, attributes) in attributes {
         report.group(
             attributes,

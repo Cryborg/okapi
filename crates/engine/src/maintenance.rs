@@ -11,7 +11,7 @@ use okapi_rules::{CleanupAction, Effect, Label, TemplatePath, TemplateVariables}
 use crate::options::ScanOptions;
 use crate::paths::is_absent_kind;
 use crate::report::Origin;
-use crate::roots::RuleEntry;
+use crate::roots::{Planning, RuleEntry};
 
 /// A maintenance operation the scan found the place of.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,14 +60,13 @@ impl MaintenanceFound {
     }
 }
 
-/// The maintenance operations of `entries` that `options` choose, each
-/// offered when one of its places is there and not excluded: read without
-/// following it, nothing run.
-pub(crate) fn found(
-    entries: &[RuleEntry<'_>],
-    variables: &TemplateVariables,
-    options: &ScanOptions,
-) -> Vec<MaintenanceFound> {
+/// The maintenance operations of `entries` that the planning's options
+/// choose, each offered when one of its places is there and not excluded:
+/// read without following it, nothing run.
+pub(crate) fn found(entries: &[RuleEntry<'_>], planning: &Planning<'_>) -> Vec<MaintenanceFound> {
+    let Planning {
+        variables, options, ..
+    } = planning;
     entries
         .iter()
         .filter_map(|entry| {

@@ -30,10 +30,6 @@ fn described(language: Language, descriptions: &[Label]) -> String {
 /// may read ([`GroupFacts::unseen`]), or of a maintenance root runs
 /// ([`GroupFacts::maintenance`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "one flag per fact of the group, each read on its own by the lines shown"
-)]
 pub struct GroupFacts {
     /// Its label: under its browser's line, a browser's cache needs no more.
     pub label: String,

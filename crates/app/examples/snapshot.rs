@@ -1842,6 +1842,129 @@ fn large_result(large: &ui::LargeFiles<'_>, scene: LargeScene, language: Languag
     }
 }
 
+/// What the duplicates screen shows in a scene: its groups, none, or the
+/// confirmation open over them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DuplicateScene {
+    Result,
+    Empty,
+    Confirm,
+}
+
+impl DuplicateScene {
+    fn named(name: &str) -> Option<Self> {
+        Some(match name {
+            "duplicates-result" => Self::Result,
+            "duplicates-empty" => Self::Empty,
+            "duplicates-confirm" => Self::Confirm,
+            _ => return None,
+        })
+    }
+}
+
+/// A copy of the duplicates screen under header `head`: `path` from the
+/// home folder, modified on `day` `month` `year`, checked or kept `why`.
+fn duplicate_copy(
+    head: i32,
+    path: &str,
+    (day, month, year): (i32, i32, i32),
+    why: ui::KeptWhy,
+) -> ui::DuplicateRow {
+    let (folder, name) = path.rsplit_once('/').unwrap();
+    let checked = why == ui::KeptWhy::None;
+    ui::DuplicateRow {
+        head,
+        name: name.into(),
+        folder: folder.into(),
+        path: path.into(),
+        full_path: path.into(),
+        size: size(2, 4, ui::SizeUnit::Gigabyte),
+        modified: ui::Moment {
+            day: ui::DayKind::Other,
+            day_of_month: day,
+            month,
+            year,
+            hour: 18,
+            minute: 2,
+        },
+        checked,
+        checkable: true,
+        why,
+        ..ui::DuplicateRow::default()
+    }
+}
+
+/// A header of the duplicates screen: its file, copies, what it frees.
+fn duplicate_head(
+    name: &str,
+    copies: i32,
+    gain: ui::Size,
+    open: bool,
+    checked: i32,
+) -> ui::DuplicateRow {
+    ui::DuplicateRow {
+        is_head: true,
+        name: name.into(),
+        size: size(2, 4, ui::SizeUnit::Gigabyte),
+        copies,
+        gain,
+        open,
+        checked_count: checked,
+        ..ui::DuplicateRow::default()
+    }
+}
+
+/// The duplicates screen at `scene`, its result shown.
+fn duplicates(window: &ui::AppWindow, scene: DuplicateScene, language: Language) {
+    use ui::SizeUnit::Gigabyte;
+    window.set_page(ui::Page::Duplicates);
+    let duplicates = window.global::<ui::Duplicates>();
+    duplicates.set_min_size(size(1, 0, ui::SizeUnit::Megabyte));
+    duplicates.set_searched_names(
+        said(
+            language,
+            "Documents, Images, Vidéos, Téléchargements",
+            "Documents, Pictures, Videos, Downloads",
+        )
+        .into(),
+    );
+    duplicates.set_compared(said(language, "12\u{202F}840", "12,840").into());
+    duplicates.set_minutes(2);
+    duplicates.set_rule_said(true);
+    duplicates.set_step(ui::ToolStep::Result);
+    if scene == DuplicateScene::Empty {
+        return;
+    }
+    let downloads = said(language, "~/Téléchargements", "~/Downloads");
+    let videos = said(language, "~/Vidéos", "~/Videos");
+    let film = |folder: &str| format!("{folder}/vacances-2025.mp4");
+    let first = duplicate_copy(0, &film(downloads), (2, 8, 2025), ui::KeptWhy::None);
+    let mut kept = duplicate_copy(0, &film(videos), (30, 7, 2025), ui::KeptWhy::Outside);
+    kept.why_first = said(language, "Téléchargements", "Downloads").into();
+    kept.last = true;
+    kept.checkable = false;
+    let rows = vec![
+        duplicate_head("vacances-2025.mp4", 2, size(2, 4, Gigabyte), true, 1),
+        first,
+        kept,
+        duplicate_head(
+            "ubuntu-24.04.2-desktop-amd64.iso",
+            3,
+            size(4, 8, Gigabyte),
+            false,
+            2,
+        ),
+    ];
+    duplicates.set_rows(ModelRc::new(VecModel::from(rows)));
+    duplicates.set_groups(2);
+    duplicates.set_duplicated(size(7, 2, Gigabyte));
+    duplicates.set_current(1);
+    duplicates.set_chosen_size(size(7, 2, Gigabyte));
+    duplicates.set_chosen_files(3);
+    duplicates.set_chosen_groups(2);
+    duplicates.set_confirming(scene == DuplicateScene::Confirm);
+}
+
 /// The large files screen at `scene`.
 fn large_files(window: &ui::AppWindow, scene: LargeScene, language: Language) {
     use ui::SizeUnit::{Gigabyte, Megabyte};
@@ -1980,8 +2103,11 @@ fn main() {
         other if let Some(scene) = LargeScene::named(other.trim_end_matches("-small")) => {
             large_files(&app, scene, language);
         }
+        other if let Some(scene) = DuplicateScene::named(other.trim_end_matches("-small")) => {
+            duplicates(&app, scene, language);
+        }
         other => panic!(
-            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings, history, history-small, history-update, history-empty, large-start, large-searching, large-stopped, large-result, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt (each also -small)"
+            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings, history, history-small, history-update, history-empty, large-start, large-searching, large-stopped, large-result, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-result, duplicates-empty, duplicates-confirm (each also -small)"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

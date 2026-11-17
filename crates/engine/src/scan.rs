@@ -314,6 +314,7 @@ fn plan(
     planning: &Planning<'_>,
     report: &mut ReportBuilder,
 ) -> Option<Planned> {
+    let started = Instant::now();
     let protected = match protection(
         planning.variables,
         planning.options,
@@ -363,10 +364,22 @@ fn plan(
         reserved,
         ..
     } = planner;
+    // Every rule is planned, chosen or not (its roots reserve their place):
+    // only the chosen ones' issues are the analysis's to tell.
     for issue in issues {
-        report.issue(issue);
+        if issue.origins().is_empty() || planning.options.chooses(issue.origins()) {
+            report.issue(issue);
+        } else {
+            tracing::debug!(?issue, "issue of a rule not chosen: not told");
+        }
     }
     report.add_stats(&stats);
+    tracing::info!(
+        rules = entries.len(),
+        roots = roots_by_rule.len(),
+        elapsed = ?started.elapsed(),
+        "scan planned"
+    );
     let places = roots_by_rule
         .iter()
         .map(|(_, root)| root.identity)

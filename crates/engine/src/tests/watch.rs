@@ -682,3 +682,42 @@ fn a_chosen_root_below_one_left_out_is_walked_alone() {
         "the outer root left out is not walked, the inner one offered once"
     );
 }
+
+#[test]
+fn only_the_chosen_categories_issues_are_told() {
+    let fixture = Fixture::new();
+    for name in ["apps", "gpu"] {
+        fixture.directory(&format!("elsewhere-{name}"));
+        std::os::unix::fs::symlink(
+            fixture.path(&format!("elsewhere-{name}")),
+            fixture.path(&format!("link-{name}")),
+        )
+        .unwrap();
+    }
+    let rules = [
+        app_on(AppFile::Apps, "apps", &fixture.path("link-apps"), false),
+        app_on(AppFile::GpuCache, "gpu", &fixture.path("link-gpu"), true),
+    ];
+    let told = |categories: &[Category]| {
+        let mut run = Run::new(&fixture, entries(&rules));
+        run.options = run
+            .options
+            .clone()
+            .with_categories(categories.iter().copied().collect());
+        let (report, _) = scan_watching(run, Cancel::new());
+        report
+            .issues()
+            .iter()
+            .map(|issue| match issue {
+                ScanIssue::UnsafeRoot { path, .. } => path.clone(),
+                other => panic!("{other:?}"),
+            })
+            .collect::<Vec<PathBuf>>()
+    };
+    assert_eq!(told(&[Category::Apps]), [fixture.path("link-apps")]);
+    assert_eq!(
+        told(&[]),
+        [fixture.path("link-apps"), fixture.path("link-gpu")],
+        "every category when none is chosen"
+    );
+}

@@ -1,7 +1,7 @@
 // The widgets of the Home page, drawn from the mockup's
 // (docs/design/tableau-de-bord/project/Widget.dc.html).
 import { Theme } from "theme.slint";
-import { Card, Detail, Icon, ReadIconNote, Badge, ProgressBar, ActionButton, ButtonKind, ScrolledList, FocusRing } from "widgets.slint";
+import { Card, Detail, Icon, ReadIconNote, SilentDetail, SilentText, Badge, ProgressBar, ActionButton, ButtonKind, ScrolledList, FocusRing } from "widgets.slint";
 import { Cleaner, CleanerStep, RightsStep, Words } from "cleaner-model.slint";
 import {
     Dashboard, DayKind, DisksShown, FocusPart, MemoryShown, Moment, MoveCancel, ProcessorShown, ReadingState, Reclaimable,
@@ -814,6 +814,12 @@ component Caption inherits Text {
     font-size: Theme.font-caption;
 }
 
+// A `Caption`, never read.
+component SilentCaption inherits SilentText {
+    color: Theme.text-3;
+    font-size: Theme.font-caption;
+}
+
 // A volume: its icon, its name, a badge when it is nearly full or does not
 // answer, then, by how much room it has, its bar and what is free.
 component VolumeLine inherits VerticalLayout {
@@ -872,12 +878,11 @@ component VolumeLine inherits VerticalLayout {
             vertical-alignment: center;
             accessible-role: none;
         }
-        if root.detailed: Caption {
+        if root.detailed: SilentCaption {
             horizontal-stretch: 1;
             text: root.where;
             overflow: elide;
             vertical-alignment: center;
-            accessible-role: none;
         }
         if root.volume.space == SpaceState.known && root.volume.nearly-full: Badge {
             cross-axis-self-alignment: center;
@@ -900,10 +905,9 @@ component VolumeLine inherits VerticalLayout {
             accessible-role: none;
         }
     }
-    if root.placed && !root.detailed: Caption {
+    if root.placed && !root.detailed: SilentCaption {
         text: root.where;
         overflow: elide;
-        accessible-role: none;
     }
     if root.volume.space == SpaceState.known && !root.detailed: HorizontalLayout {
         spacing: Theme.spacing-m;
@@ -927,19 +931,17 @@ component VolumeLine inherits VerticalLayout {
         tone: root.volume.nearly-full ? Theme.warning : Theme.accent;
         label: root.bar-label;
     }
-    if root.volume.space == SpaceState.known && root.detailed: Caption {
+    if root.volume.space == SpaceState.known && root.detailed: SilentCaption {
         text: @tr("{} utilisés ({} %)", Words.size(root.volume.used), root.volume.percent);
-        accessible-role: none;
     }
-    if root.volume.space == SpaceState.not-responding && root.detailed: Detail {
+    if root.volume.space == SpaceState.not-responding && root.detailed: SilentDetail {
         text: root.silent;
-        accessible-role: none;
     }
-    // Placed, its filesystem is said just above.
+    // Placed, its filesystem is said just above. Read: the volume's label
+    // leaves it out.
     if root.volume.space != SpaceState.known && !root.detailed && !root.placed: Caption {
         text: root.volume.filesystem;
         overflow: elide;
-        accessible-role: none;
     }
 }
 
@@ -1110,17 +1112,15 @@ export component MemoryWidget inherits WidgetCard {
                         font-weight: Theme.weight-semibold;
                         accessible-role: none;
                     }
-                    if !root.large: Detail {
+                    if !root.large: SilentDetail {
                         vertical-alignment: bottom;
                         wrap: no-wrap;
                         text: root.of-total;
-                        accessible-role: none;
                     }
                 }
                 // Beside the larger figure it would not fit.
-                if root.large: Detail {
+                if root.large: SilentDetail {
                     text: root.of-total;
-                    accessible-role: none;
                 }
                 ProgressBar {
                     height: Theme.bar-height-large;
@@ -1133,10 +1133,9 @@ export component MemoryWidget inherits WidgetCard {
                 if !root.large || !root.shown.has-swap: Caption {
                     text: root.shown.has-swap ? root.swap : @tr("Pas de swap");
                 }
-                if root.large && root.shown.has-swap: Caption {
+                if root.large && root.shown.has-swap: SilentCaption {
                     text: root.swap;
                     // Its bar says it.
-                    accessible-role: none;
                 }
                 if root.large && root.shown.has-swap: ProgressBar {
                     height: Theme.bar-height-small;
@@ -1211,11 +1210,12 @@ export component ProcessorWidget inherits WidgetCard {
                     height: Theme.border-width;
                     background: Theme.border;
                 }
-                Caption {
-                    x: parent.width - self.width;
+                SilentCaption {
+                    width: parent.width;
+                    height: self.preferred-height;
                     y: 0;
+                    horizontal-alignment: right;
                     text: @tr("{} %", root.shown.scale);
-                    accessible-role: none;
                 }
                 Path {
                     width: parent.width;
@@ -1244,14 +1244,12 @@ export component ProcessorWidget inherits WidgetCard {
                 }
             }
             HorizontalLayout {
-                Caption {
+                SilentCaption {
                     horizontal-stretch: 1;
                     text: @tr("il y a 2 min");
-                    accessible-role: none;
                 }
-                Caption {
+                SilentCaption {
                     text: root.shown.filling ? @tr("maintenant · la courbe se remplit") : @tr("maintenant");
-                    accessible-role: none;
                 }
             }
         }

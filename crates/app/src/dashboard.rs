@@ -3225,7 +3225,8 @@ pub mod tests {
             &window,
             "Système (/okapi-test · ext4) : 159,0 Go libres"
         ));
-        assert!(shows(&window, "/okapi-test · ext4"));
+        // Read with its name, written below it silent.
+        assert!(!shows(&window, "/okapi-test · ext4"));
     }
 
     #[test]
@@ -3235,8 +3236,14 @@ pub mod tests {
             &window,
             "Système (/okapi-test · ext4) : 159,0 Go libres sur 198,0 Go"
         ));
-        assert!(shows(&window, "39,0 Go utilisés (19 %)"));
-        assert!(shows(&window, "14,0 Go utilisés (93 %)"));
+        // Read by its bar, written below it silent.
+        assert!(shows(&window, "39,0 Go utilisés sur 198,0 Go, soit 19 %"));
+        assert!(!shows(&window, "39,0 Go utilisés (19 %)"));
+        assert!(!shows(&window, "14,0 Go utilisés (93 %)"));
+        // Where it is mounted, with its name; why a volume has no size, with
+        // its name too.
+        assert!(!shows(&window, "/okapi-test · ext4"));
+        assert!(!shows(&window, "Sa taille s'affichera dès qu'il répondra."));
     }
 
     #[test]
@@ -3299,7 +3306,13 @@ pub mod tests {
             .unwrap();
         take_in();
         assert!(shows(&window, "Firefox : environ 3,0 Go"));
-        assert!(shows(&window, "Swap : 2,0 Go sur 8,0 Go"));
+        // Said once, by its bar: written above it, silent; so is the total
+        // beside the figure.
+        assert_eq!(
+            ElementHandle::find_by_accessible_label(&window, "Swap : 2,0 Go sur 8,0 Go").count(),
+            1
+        );
+        assert!(!shows(&window, "occupés sur 32,0 Go"));
         // A new list replaces the one before.
         sink.send(Sample::Memory(Ok(reading_of(8 * GB, Some(Ok(firefox(5)))))))
             .unwrap();
@@ -3388,6 +3401,8 @@ pub mod tests {
         assert!(shows(&window, "22,0 Go disponibles"));
         assert!(shows(&window, "Swap : 2,0 Go sur 8,0 Go"));
         assert!(!shows(&window, "Firefox : environ 3,0 Go"));
+        // The total beside the figure, said by the bar.
+        assert!(!shows(&window, "occupés sur 32,0 Go"));
     }
 
     #[test]
@@ -3526,9 +3541,10 @@ pub mod tests {
             &window,
             "Courbe en cours de remplissage, 12 % maintenant"
         ));
-        assert!(shows(&window, "il y a 2 min"));
-        assert!(shows(&window, "maintenant · la courbe se remplit"));
-        assert!(shows(&window, "50 %"), "the scale");
+        // Read by the curve, its written words silent.
+        assert!(!shows(&window, "il y a 2 min"));
+        assert!(!shows(&window, "maintenant · la courbe se remplit"));
+        assert!(!shows(&window, "50 %"), "the scale");
         assert_eq!(window.global::<ui::Dashboard>().get_curve_span(), 59);
         for _ in 1..CURVE_READINGS {
             used(&sampler, Some(0.3));
@@ -3540,7 +3556,11 @@ pub mod tests {
         ));
         assert!(!shows(&window, "maintenant · la courbe se remplit"));
         used(&sampler, Some(0.6));
-        assert!(shows(&window, "100 %"), "the scale for the whole");
+        assert_eq!(
+            window.global::<ui::Dashboard>().get_processor().scale,
+            100,
+            "the scale for the whole"
+        );
         go_to(&window, "À propos");
         go_to(&window, "Accueil");
         used(&sampler, None);

@@ -2961,10 +2961,6 @@ msgid "Comparaison du contenu"
 msgstr "Comparing the content"
 
 msgctxt "DuplicateSearching"
-msgid "Les groupes s'affichent à la fin de la comparaison. Échap arrête la recherche."
-msgstr "The groups show at the end of the comparison. Escape stops the search."
-
-msgctxt "DuplicateSearching"
 msgid "Recherche arrêtée. Rien n'a été gardé : une nouvelle recherche repart du début."
 msgstr "Search stopped. Nothing was kept: a new search starts from the beginning."
 
@@ -2976,17 +2972,9 @@ msgctxt "DuplicateSearching"
 msgid "La recherche a échoué : rien n'a été gardé. Le détail est dans le journal."
 msgstr "The search failed: nothing was kept. The details are in the log."
 
-msgctxt "TreeLine"
-msgid "A d'autres noms : la retirer ne libérerait rien"
-msgstr "Has other names: removing it would free nothing"
-
 msgctxt "Tree"
 msgid "Groupes de doublons, triés par place à gagner"
 msgstr "Groups of duplicates, sorted by space to gain"
-
-msgctxt "Tree"
-msgid "↑ ↓ se déplacer. Espace : cocher. Entrée ou → : déplier. ← : replier."
-msgstr "↑ ↓ move. Space: check. Enter or →: expand. ←: collapse."
 
 msgctxt "DuplicatePanel"
 msgid "Détails de la ligne qui a le focus"
@@ -3005,8 +2993,8 @@ msgid "Modifié : {}"
 msgstr "Modified: {}"
 
 msgctxt "DuplicatePanel"
-msgid "C'est la seule copie gardée de ce groupe : une copie reste toujours. Pour garder une autre copie à sa place, décochez-la d'abord."
-msgstr "This is the only copy kept in this group: one copy always stays. To keep another copy instead, uncheck it first."
+msgid "Seule copie gardée du groupe : décochez-en une autre pour la garder à sa place."
+msgstr "The only copy kept in the group: uncheck another one to keep it instead."
 
 msgctxt "DuplicatePanel"
 msgid "Ce fichier a d'autres noms : le retirer ne libérerait rien, son contenu reste sous ses autres noms."
@@ -3025,8 +3013,8 @@ msgid "Vers la corbeille : {}. Gardées : {}."
 msgstr "To the trash: {}. Kept: {}."
 
 msgctxt "DuplicatePanel"
-msgid "Descendez sur une copie pour voir son dossier, sa taille et sa date."
-msgstr "Move down to a copy to see its folder, size and date."
+msgid "Choisissez une copie pour voir ses détails."
+msgstr "Choose a copy to see its details."
 
 msgctxt "DuplicatePanel"
 msgid "Montrer dans le dossier"
@@ -3119,10 +3107,6 @@ msgstr "Files: {}. Groups: {}."
 msgctxt "DuplicateResult"
 msgid "Mise à la corbeille…"
 msgstr "Moving to the trash…"
-
-msgctxt "DuplicateResult"
-msgid "La place n'est libérée qu'en vidant la corbeille."
-msgstr "The space is freed only when the trash is emptied."
 
 msgctxt "DuplicateResult"
 msgid "Mettre à la corbeille"
@@ -5047,8 +5031,8 @@ msgid "{}, certains de ses dossiers cochés"
 msgstr "{}, some of its folders checked"
 
 msgctxt "QuickMenu"
-msgid "Déjà coché : dans chaque groupe, on garde la copie hors des Téléchargements et du Bureau (sinon celle du Bureau), sinon celle qui a d'autres noms, sinon la plus ancienne, sinon le chemin le plus court. Une copie qui n'est dans aucun de ces dossiers n'est pas cochée d'avance : {}."
-msgstr "Already checked: in each group, the copy outside Downloads and the Desktop is kept (else the one on the Desktop), else the one with other names, else the oldest, else the shortest path. A copy in none of these folders is not checked beforehand: {}."
+msgid "Déjà coché : chaque groupe garde de préférence sa copie hors des Téléchargements et du Bureau. Seules les copies dans {} peuvent être cochées d'avance."
+msgstr "Already checked: each group keeps its copy outside Downloads and the Desktop when it can. Only copies in {} can be checked beforehand."
 
 msgctxt "QuickMenu"
 msgid "Aucun dossier Documents, Images… connu : rien n'est coché d'avance."

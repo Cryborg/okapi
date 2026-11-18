@@ -41,6 +41,29 @@ export component Icon inherits Image {
     accessible-role: none;
 }
 
+// An icon that says a state in place of words: its label is read, and
+// shown in a tooltip, its shape never left to the colour alone.
+export component StateIcon inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <color> tone: Theme.text-2;
+    width: Theme.icon-small;
+    height: Theme.icon-small;
+    accessible-role: image;
+    accessible-label: root.label;
+    Icon {
+        source: root.icon;
+        colorize: root.tone;
+        width: parent.width;
+        height: parent.height;
+    }
+    // Shown on hover, it takes no click from the line it is in. Its text is
+    // styled: the label goes in as it is.
+    Tooltip {
+        text: @markdown("\{root.label}");
+    }
+}
+
 // A small line led by an icon in its tone: the icon only marks it, the
 // words that follow say it all.
 component IconLine inherits HorizontalLayout {

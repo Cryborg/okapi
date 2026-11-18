@@ -1280,7 +1280,6 @@ mod tests {
         "PickLine",
         "DuplicateStart",
         "DuplicateSearching",
-        "TreeLine",
         "Tree",
         "DuplicatePanel",
         "QuickMenu",

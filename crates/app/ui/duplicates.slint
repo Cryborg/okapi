@@ -7,7 +7,7 @@ import { Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
 import {
     ActionButton, Badge, Banner, ButtonKind, Card, CheckMark, Detail, Footer, FocusRing, Icon,
-    ModalFrame, ProgressBar, Title, TitleLine,
+    ModalFrame, ProgressBar, StateIcon, Title, TitleLine,
 } from "widgets.slint";
 import { DuplicateRow, Duplicates, KeptWhy, QuickRule, SearchStage } from "duplicates-model.slint";
 import { FoldersState, SearchPhase, ToolRefusal, ToolStep } from "user-files-model.slint";
@@ -71,8 +71,13 @@ global DuplicateWords {
             return "";
         }
         return row.why == KeptWhy.other-device ? @tr("Pas de corbeille sur ce disque : Okapi ne supprime jamais sans corbeille")
-            : row.other-names ? @tr("A d'autres noms : la retirer ne libérerait rien")
+            : row.other-names ? other-names()
             : @tr("Une copie reste toujours");
+    }
+
+    // What a copy with other names means, beside its link.
+    pure public function other-names() -> string {
+        return @tr("A d'autres noms : la retirer ne libérerait rien");
     }
 
     // What a refusal of Okapi means at the receipt.
@@ -270,10 +275,6 @@ component DuplicateSearching inherits FocusScope {
                 }
             }
         }
-        if root.running: Detail {
-            text: @tr("Les groupes s'affichent à la fin de la comparaison. Échap arrête la recherche.");
-            wrap: word-wrap;
-        }
         // Where the groups will show: shapes, never read.
         if root.running: Card {
             vertical-stretch: 1;
@@ -465,39 +466,31 @@ component TreeLine inherits Rectangle {
                 overflow: elide;
             }
             HorizontalLayout {
+                alignment: start;
                 spacing: Theme.spacing-s;
                 Detail {
                     text: DashboardWords.moment-first(line.modified);
                     accessible-role: none;
                     wrap: no-wrap;
                 }
-                if line.other-names: Icon {
-                    source: @image-url("../assets/icons/link.svg");
-                    colorize: Theme.text-2;
-                    width: Theme.icon-small;
-                    height: Theme.icon-small;
-                }
-                if line.other-names: Detail {
-                    horizontal-stretch: 1;
-                    text: @tr("A d'autres noms : la retirer ne libérerait rien");
-                    accessible-role: none;
-                    wrap: no-wrap;
-                    overflow: elide;
+                if line.other-names: StateIcon {
+                    icon: @image-url("../assets/icons/link.svg");
+                    label: DuplicateWords.other-names();
                 }
             }
         }
-        // A badge too long for its column is cut at its end: the panel says
-        // it whole.
+        // Why a copy is kept: a checked one, its box says it. A badge too
+        // long for its column is cut at its end: the panel says it whole.
         Rectangle {
             width: Theme.duplicate-fate-width;
-            Badge {
+            if !line.checked: Badge {
                 elide: true;
                 width: min(self.preferred-width, parent.width);
                 x: parent.width - self.width;
-                text: DuplicateWords.fate(line);
-                icon: line.checked ? @image-url("../assets/icons/trash-2.svg") : @image-url("../assets/icons/shield.svg");
-                tone: line.checked ? Theme.info : Theme.text-2;
-                tone-soft: line.checked ? Theme.info-soft : Theme.surface-2;
+                text: DuplicateWords.kept(line);
+                icon: @image-url("../assets/icons/shield.svg");
+                tone: Theme.text-2;
+                tone-soft: Theme.surface-2;
             }
         }
     }
@@ -601,18 +594,6 @@ component Tree inherits FocusScope {
                 }
             }
         }
-        Rectangle {
-            height: Theme.border-width;
-            background: Theme.border;
-        }
-        HorizontalLayout {
-            padding: Theme.spacing-s;
-            padding-left: Theme.spacing-l;
-            Detail {
-                text: @tr("↑ ↓ se déplacer. Espace : cocher. Entrée ou → : déplier. ← : replier.");
-                overflow: elide;
-            }
-        }
     }
 }
 
@@ -638,13 +619,13 @@ component DuplicatePanel inherits Card {
             font-weight: Theme.weight-semibold;
             wrap: word-wrap;
         }
-        if !root.line.is-head: HorizontalLayout {
+        if !root.line.is-head && !root.line.checked: HorizontalLayout {
             alignment: start;
             Badge {
-                text: DuplicateWords.fate(root.line);
-                icon: root.line.checked ? @image-url("../assets/icons/trash-2.svg") : @image-url("../assets/icons/shield.svg");
-                tone: root.line.checked ? Theme.info : Theme.text-2;
-                tone-soft: root.line.checked ? Theme.info-soft : Theme.surface-2;
+                text: DuplicateWords.kept(root.line);
+                icon: @image-url("../assets/icons/shield.svg");
+                tone: Theme.text-2;
+                tone-soft: Theme.surface-2;
             }
         }
         if !root.line.is-head: VerticalLayout {
@@ -662,7 +643,7 @@ component DuplicatePanel inherits Card {
             }
         }
         if !root.line.is-head && root.line.last && root.line.why != KeptWhy.other-device && !root.line.other-names: Detail {
-            text: @tr("C'est la seule copie gardée de ce groupe : une copie reste toujours. Pour garder une autre copie à sa place, décochez-la d'abord.");
+            text: @tr("Seule copie gardée du groupe : décochez-en une autre pour la garder à sa place.");
             wrap: word-wrap;
         }
         if !root.line.is-head && root.line.other-names: Detail {
@@ -682,7 +663,7 @@ component DuplicatePanel inherits Card {
                 wrap: word-wrap;
             }
             Detail {
-                text: @tr("Descendez sur une copie pour voir son dossier, sa taille et sa date.");
+                text: @tr("Choisissez une copie pour voir ses détails.");
                 wrap: word-wrap;
             }
         }
@@ -728,7 +709,7 @@ component QuickMenu inherits PopupWindow {
                 padding: Theme.spacing-s;
                 Detail {
                     width: Theme.quick-menu-note-width;
-                    text: Duplicates.rule-said ? @tr("Déjà coché : dans chaque groupe, on garde la copie hors des Téléchargements et du Bureau (sinon celle du Bureau), sinon celle qui a d'autres noms, sinon la plus ancienne, sinon le chemin le plus court. Une copie qui n'est dans aucun de ces dossiers n'est pas cochée d'avance : {}.", Duplicates.folder-names)
+                    text: Duplicates.rule-said ? @tr("Déjà coché : chaque groupe garde de préférence sa copie hors des Téléchargements et du Bureau. Seules les copies dans {} peuvent être cochées d'avance.", Duplicates.folder-names)
                         : @tr("Aucun dossier Documents, Images… connu : rien n'est coché d'avance.");
                 }
             }
@@ -1000,8 +981,8 @@ component DuplicateResult inherits VerticalLayout {
                     }
                 }
                 Detail {
-                    text: Duplicates.trashing ? @tr("Mise à la corbeille…")
-                        : @tr("La place n'est libérée qu'en vidant la corbeille.");
+                    // Empty, it keeps its room: the footer never moves.
+                    text: Duplicates.trashing ? @tr("Mise à la corbeille…") : "";
                     accessible-live-region: polite;
                     overflow: elide;
                 }

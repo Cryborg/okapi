@@ -3,7 +3,7 @@
 // moved, a result without a list, and the files of a receipt that stayed.
 import { Theme, Screen } from "theme.slint";
 import { Words } from "cleaner-model.slint";
-import { ActionButton, Banner, Card, CheckMark, Detail, FocusRing, Icon, ScrolledList } from "widgets.slint";
+import { ActionButton, Banner, Card, CheckMark, Detail, FocusRing, Icon, ScrolledList, SilentDetail } from "widgets.slint";
 import { FoldersState, KeptShown, PersonalShown, ReceiptWhy, ToolRefusal } from "user-files-model.slint";
 
 // What a receipt says of a file that stayed, the same for the eye and the
@@ -162,10 +162,9 @@ component PickLine inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
         }
-        Detail {
+        SilentDetail {
             vertical-alignment: center;
             text: root.path;
-            accessible-role: none;
             overflow: elide;
         }
     }
@@ -272,9 +271,9 @@ component KeptLine inherits Rectangle {
                 font-weight: Theme.weight-medium;
                 overflow: elide;
             }
+            // Read: the line's label leaves it out.
             Detail {
                 text: root.kept.folder;
-                accessible-role: none;
                 overflow: elide;
             }
         }
@@ -289,9 +288,8 @@ component KeptLine inherits Rectangle {
                 font-weight: Theme.weight-semibold;
                 wrap: word-wrap;
             }
-            if root.more != "": Detail {
+            if root.more != "": SilentDetail {
                 text: root.more;
-                accessible-role: none;
                 wrap: word-wrap;
             }
         }

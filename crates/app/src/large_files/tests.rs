@@ -15,7 +15,7 @@ use slint::Model as _;
 use slint::platform::Key;
 
 use super::*;
-use crate::cleaner::tests::{defaults, press, seams_never_scanning, shows};
+use crate::cleaner::tests::{defaults, labels_read, press, seams_never_scanning, shows};
 use crate::cleaner::{Problem, Seams};
 use crate::dashboard::tests::inert;
 
@@ -264,6 +264,11 @@ fn the_home_folder_holds_its_folders_and_gives_back_their_choice() {
     let sandbox = Sandbox::new();
     with_every_folder(&sandbox);
     let (window, _screen) = on_large_files(seams(&sandbox, &Rc::default(), &no_exclusion(), None));
+    // A folder's place read by its box, written beside its name silent.
+    let place = folder_box(&window, "Documents")
+        .accessible_description()
+        .unwrap();
+    assert!(!shows(&window, &place), "{place}");
     // One folder left out by hand: the home folder's box partly checked.
     large(&window).invoke_toggle_folder(2);
     assert_eq!(folder_line(&window, "Dossier personnel"), (false, true));
@@ -488,6 +493,13 @@ fn a_filter_s_menu_answers_the_keyboard() {
     searched(&window);
     // Opened on « Tous les types »: one down is the first kind.
     open_menu(&window, "Type");
+    // A choice's count read with its name, written beside it silent.
+    let read = labels_read(&window);
+    let count = read
+        .iter()
+        .find_map(|label| label.strip_prefix("Tous les types, "))
+        .unwrap();
+    assert!(!shows(&window, count), "{count}");
     press(&window, Key::DownArrow);
     press(&window, Key::Return);
     slint::platform::update_timers_and_animations();
@@ -529,10 +541,14 @@ fn a_file_that_cannot_go_is_shown_with_its_reason_and_never_checked() {
     large(&window).invoke_toggle(0);
     assert!(!rows(&window)[0].checked);
     assert_eq!(large(&window).get_chosen_files(), 0);
-    assert!(shows(
-        &window,
-        "A d'autres noms : le retirer ne libérerait rien"
-    ));
+    // Read by its line, written below its name silent.
+    let reason = "A d'autres noms : le retirer ne libérerait rien";
+    assert!(
+        i_slint_backend_testing::ElementHandle::find_by_element_type_name(&window, "BigLine")
+            .filter_map(|line| line.accessible_label())
+            .any(|label| label.ends_with(&format!("case désactivée : {reason}")))
+    );
+    assert!(!shows(&window, reason));
 }
 
 #[test]
@@ -588,6 +604,8 @@ fn a_file_written_since_the_search_stays_and_the_receipt_says_why() {
     assert_eq!(stayed[0].folder, "~/Vidéos");
     assert_eq!(stayed[0].why, ui::ReceiptWhy::Changed);
     assert!(shows(&window, "rendu.mkv, A changé depuis la recherche"));
+    // Its folder, left out of its line's label, is read where it is written.
+    assert!(shows(&window, "~/Vidéos"));
 }
 
 #[test]
@@ -818,6 +836,8 @@ fn a_line_is_read_as_its_file_and_what_becomes_of_it() {
         &window,
         "rendu.mkv, ~/Vidéos/Montage, modifié le 11 janvier 1970 à 0 h, 2,0 Mo, Vidéo, coché, vers la corbeille"
     ));
+    // Its folder written below its name, silent.
+    assert!(!shows(&window, "~/Vidéos/Montage"));
 }
 
 #[test]

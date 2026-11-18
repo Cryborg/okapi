@@ -8,7 +8,7 @@ import { DashboardWords } from "dashboard-widgets.slint";
 import { DayKind, Moment } from "dashboard-model.slint";
 import {
     ActionButton, Badge, Banner, ButtonKind, Card, CheckMark, Detail, Footer, FocusRing, Icon,
-    ModalFrame, ProgressBar, SortHeader, Title, TitleLine,
+    ModalFrame, ProgressBar, SilentDetail, SortHeader, Title, TitleLine,
 } from "widgets.slint";
 import { AgeShown, ChosenFile, FileKindShown, LargeFileRow, LargeFiles, LargeSort, LargeWhy } from "large-files-model.slint";
 import { FoldersState, SearchPhase, ToolRefusal, ToolStep } from "user-files-model.slint";
@@ -508,9 +508,8 @@ component BigChoice inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
         }
-        if root.count != "": Detail {
+        if root.count != "": SilentDetail {
             text: root.count;
-            accessible-role: none;
             vertical-alignment: center;
         }
     }
@@ -759,19 +758,17 @@ component BigLine inherits Rectangle {
                     width: Theme.icon-small;
                     height: Theme.icon-small;
                 }
-                Detail {
+                SilentDetail {
                     horizontal-stretch: 1;
                     text: root.line.why == LargeWhy.none ? root.line.folder : BigWords.locked(root.line);
-                    accessible-role: none;
                     wrap: no-wrap;
                     overflow: elide;
                 }
             }
         }
-        Detail {
+        SilentDetail {
             width: Screen.narrow ? Theme.big-date-width-narrow : Theme.big-date-width;
             text: BigWords.day(root.line.modified);
-            accessible-role: none;
             vertical-alignment: center;
             wrap: no-wrap;
             overflow: elide;
@@ -1051,9 +1048,8 @@ component BigChosenLine inherits Rectangle {
                 font-weight: Theme.weight-medium;
                 overflow: elide;
             }
-            Detail {
+            SilentDetail {
                 text: root.file.folder;
-                accessible-role: none;
                 overflow: elide;
             }
     }

@@ -352,10 +352,6 @@ component BigSearching inherits FocusScope {
                 }
             }
         }
-        if root.running: Detail {
-            text: @tr("La liste s'affiche à la fin de la recherche. Échap arrête la recherche.");
-            wrap: word-wrap;
-        }
         if root.running: Card {
             vertical-stretch: 1;
             clip: true;
@@ -941,18 +937,6 @@ component BigList inherits FocusScope {
                 }
             }
         }
-        Rectangle {
-            height: Theme.border-width;
-            background: Theme.border;
-        }
-        HorizontalLayout {
-            padding: Theme.spacing-s;
-            padding-left: Theme.spacing-l;
-            Detail {
-                text: @tr("↑ ↓ se déplacer. Espace : cocher. Entrée : montrer dans le dossier.");
-                overflow: elide;
-            }
-        }
     }
 }
 
@@ -981,15 +965,6 @@ component BigPanel inherits Card {
                 font-size: Theme.font-heading;
                 font-weight: Theme.weight-semibold;
                 wrap: word-wrap;
-            }
-        }
-        if root.line.checked: HorizontalLayout {
-            alignment: start;
-            Badge {
-                text: @tr("Vers la corbeille");
-                icon: @image-url("../assets/icons/trash-2.svg");
-                tone: Theme.info;
-                tone-soft: Theme.info-soft;
             }
         }
         VerticalLayout {
@@ -1390,8 +1365,8 @@ component BigResult inherits VerticalLayout {
                     }
                 }
                 Detail {
-                    text: LargeFiles.trashing ? @tr("Mise à la corbeille…")
-                        : @tr("La place n'est libérée qu'en vidant la corbeille.");
+                    // Empty, it keeps its room: the footer never moves.
+                    text: LargeFiles.trashing ? @tr("Mise à la corbeille…") : "";
                     accessible-live-region: polite;
                     overflow: elide;
                 }

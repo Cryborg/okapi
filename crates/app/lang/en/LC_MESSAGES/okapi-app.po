@@ -4511,10 +4511,6 @@ msgid "Liste des fichiers"
 msgstr "Listing the files"
 
 msgctxt "BigSearching"
-msgid "La liste s'affiche à la fin de la recherche. Échap arrête la recherche."
-msgstr "The list shows at the end of the search. Escape stops the search."
-
-msgctxt "BigSearching"
 msgid "Recherche arrêtée. Rien n'a été gardé : une liste à moitié faite ne dirait pas quels sont les plus gros."
 msgstr "Search stopped. Nothing was kept: a list half made would not tell which are the largest."
 
@@ -4570,17 +4566,9 @@ msgctxt "BigList"
 msgid "Taille"
 msgstr "Size"
 
-msgctxt "BigList"
-msgid "↑ ↓ se déplacer. Espace : cocher. Entrée : montrer dans le dossier."
-msgstr "↑ ↓ move. Space: check. Enter: show in its folder."
-
 msgctxt "BigPanel"
 msgid "Détails du fichier qui a le focus"
 msgstr "Details of the file with the focus"
-
-msgctxt "BigPanel"
-msgid "Vers la corbeille"
-msgstr "To the trash"
 
 msgctxt "BigPanel"
 msgid "Dossier : {}"
@@ -4713,10 +4701,6 @@ msgstr[1] "{n} files"
 msgctxt "BigResult"
 msgid "Mise à la corbeille…"
 msgstr "Moving to the trash…"
-
-msgctxt "BigResult"
-msgid "La place n'est libérée qu'en vidant la corbeille."
-msgstr "The space is freed only when the trash is emptied."
 
 msgctxt "BigResult"
 msgid "Mettre à la corbeille"

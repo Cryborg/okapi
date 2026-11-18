@@ -2603,6 +2603,18 @@ pub mod tests {
             .is_some()
     }
 
+    /// Every label read in the window, whatever reads it.
+    pub fn labels_read(window: &ui::AppWindow) -> Vec<String> {
+        use i_slint_backend_testing::ElementRoot as _;
+        window
+            .root_element()
+            .query_descendants()
+            .find_all()
+            .into_iter()
+            .filter_map(|element| element.accessible_label().map(String::from))
+            .collect()
+    }
+
     pub fn shows_a_text_starting(window: &ui::AppWindow, start: &str) -> bool {
         ElementHandle::find_by_element_type_name(window, "Text").any(|text| {
             text.accessible_label()
@@ -3017,6 +3029,8 @@ pub mod tests {
             gpu.accessible_description().as_deref(),
             Some("Shaders Mesa et NVIDIA.")
         );
+        // Said once, by its box: written below its name, silent.
+        assert!(!shows(&window, "Shaders Mesa et NVIDIA."));
         assert!(shows(
             &window,
             "Toujours épargnés : fichiers modifiés depuis moins de 60 min. Exclusions : 0."
@@ -3311,6 +3325,8 @@ pub mod tests {
             system.accessible_description().as_deref(),
             Some("Terminé : éléments : 4, 1,5 ko")
         );
+        // Said by its line, its written count silent.
+        assert!(!shows(&window, "Éléments : 4"));
 
         // The variables read are empty: the real scan stops before reading.
         scan.go.send(()).unwrap();

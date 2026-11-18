@@ -1735,6 +1735,14 @@ mod tests {
         );
         assert!(shows(&window, "Vérification de chaque élément"));
         assert!(shows(&window, "Suppression des éléments vérifiés"));
+        // Each said once, by its step, its figure or its line: the words
+        // written beside them silent.
+        assert!(!shows(&window, "1 sur 1"));
+        assert!(shows(&window, "Retirées : 1"));
+        assert!(!shows(&window, "Espace libéré"));
+        assert!(shows(&window, "Déplier Retirées"));
+        assert!(!shows(&window, "Retirées"));
+        assert!(!shows(&window, "1"));
         let history = sandbox.history();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0]["removed"], 1);
@@ -1819,7 +1827,12 @@ mod tests {
             window.global::<ui::Cleaner>().get_problem(),
             ui::SetupProblem::History
         );
-        assert!(shows_a_text_starting(
+        // Read by its banner, its written words silent.
+        assert!(shows(
+            &window,
+            "L'historique ne peut pas être tenu alors que vous demandez le journal des suppressions : rien n'est supprimé. Le détail est dans le journal."
+        ));
+        assert!(!shows_a_text_starting(
             &window,
             "L'historique ne peut pas être tenu"
         ));
@@ -2336,6 +2349,12 @@ mod tests {
             "Taille : 14 o. Éléments : 2."
         ));
         let_the_screen_settle();
+        // Said once, by its box: its written words are silent.
+        assert_eq!(
+            ElementHandle::find_by_accessible_label(&window, "J'ai compris que c'est définitif")
+                .count(),
+            1
+        );
         found(&window, "J'ai compris que c'est définitif").invoke_accessible_default_action();
         button(&window, "Supprimer définitivement").invoke_accessible_default_action();
         watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
@@ -3813,7 +3832,12 @@ mod tests {
         };
         let notes = || ElementHandle::find_by_accessible_label(&window, note).count();
         show(&[ErrorKind::PermissionDenied]);
-        assert!(shows_a_text_starting(
+        // Read by its button, its written name silent.
+        assert!(shows(
+            &window,
+            "Déplier Gardées : permission refusée par le système"
+        ));
+        assert!(!shows(
             &window,
             "Gardées : permission refusée par le système"
         ));
@@ -3824,7 +3848,7 @@ mod tests {
             ErrorKind::Other,
         ] {
             show(&[other]);
-            assert!(shows_a_text_starting(&window, "Gardées : refus du système"));
+            assert!(shows(&window, "Déplier Gardées : refus du système"));
             assert_eq!(notes(), 0, "{other:?}: said of a refused permission alone");
         }
         show(&[
@@ -3832,10 +3856,10 @@ mod tests {
             ErrorKind::PermissionDenied,
             ErrorKind::PermissionDenied,
         ]);
-        assert!(shows_a_text_starting(&window, "Gardées : refus du système"));
-        assert!(shows_a_text_starting(
+        assert!(shows(&window, "Déplier Gardées : refus du système"));
+        assert!(shows(
             &window,
-            "Gardées : permission refusée par le système"
+            "Déplier Gardées : permission refusée par le système"
         ));
         assert_eq!(notes(), 1, "once, under its own line");
     }
@@ -4234,7 +4258,15 @@ mod tests {
         let cleaner = window.global::<ui::Cleaner>();
         cleaner.invoke_obtain_rights();
         assert_eq!(cleaner.get_rights_step(), ui::RightsStep::Preparing);
-        assert!(shows(&window, "Préparation de la demande des droits…"));
+        // Said once, by its banner: its written words are silent.
+        assert_eq!(
+            ElementHandle::find_by_accessible_label(
+                &window,
+                "Préparation de la demande des droits…"
+            )
+            .count(),
+            1
+        );
         let_the_screen_settle();
         button(&window, "Annuler").invoke_accessible_default_action();
         assert_eq!(cleaner.get_rights_step(), ui::RightsStep::Withdrawing);
@@ -5153,10 +5185,10 @@ mod tests {
         );
         let line = found(&window, DOCKER);
         assert_eq!(line.accessible_checked(), Some(false));
-        assert!(shows(
-            &window,
-            "Docker refuse votre compte : il faut être dans le groupe docker, puis rouvrir la session."
-        ));
+        // Read by its box, its written note silent.
+        let note = "Docker refuse votre compte : il faut être dans le groupe docker, puis rouvrir la session.";
+        assert_eq!(line.accessible_description().as_deref(), Some(note));
+        assert!(!shows(&window, note));
         line.invoke_accessible_default_action();
         assert_eq!(
             line.accessible_checked(),
@@ -5249,12 +5281,14 @@ mod tests {
                 })
                 .unwrap_or_else(|| panic!("no {role} for {label}"))
         };
+        let note = "À faire vous-même : la commande ci-dessous, dans un terminal.";
         for (label, command) in [
             ("Paquets uv inutilisés", "uv cache prune"),
             ("Paquets pnpm inutilisés", "pnpm store prune"),
         ] {
             let line = found(&window, label);
             assert_eq!(line.accessible_checked(), Some(false), "{label}");
+            assert_eq!(line.accessible_description().as_deref(), Some(note));
             line.invoke_accessible_default_action();
             assert_eq!(line.accessible_checked(), Some(false), "a disabled box");
             let field = of_line(label, "Commande à copier");
@@ -5262,10 +5296,8 @@ mod tests {
             assert_eq!(field.accessible_read_only(), Some(true), "{label}");
             of_line(label, "Copier").invoke_accessible_default_action();
         }
-        assert!(shows(
-            &window,
-            "À faire vous-même : la commande ci-dessous, dans un terminal."
-        ));
+        // Read by each box, its written note silent.
+        assert!(!shows(&window, note));
         let cleaner = window.global::<ui::Cleaner>();
         assert_eq!(cleaner.get_selected_operations(), 0);
         assert_eq!(cleaner.get_selected_entries(), 0);

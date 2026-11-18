@@ -2,7 +2,8 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme, Screen } from "theme.slint";
 import {
-    ActionButton, ButtonKind, Card, Detail, Footer, FocusRing, Icon, Line, ProgressBar, Title,
+    ActionButton, ButtonKind, Card, Detail, Footer, FocusRing, Icon, Line, ProgressBar,
+    SilentDetail, SilentLine, Title,
 } from "widgets.slint";
 import {
     CleanEnding, CleanStep, CleanStepKind, Cleaner, HistoryState, OperationEnd, ReceiptKind,
@@ -86,12 +87,11 @@ component CleanStepRow inherits Rectangle {
                 label: name;
             }
             // On one line, however many entries.
-            Detail {
+            SilentDetail {
                 min-width: Theme.step-count-width;
                 horizontal-stretch: 0;
                 wrap: no-wrap;
                 text: counted ? @tr("{} sur {}", step.done, step.total) : "";
-                accessible-role: none;
                 horizontal-alignment: right;
                 vertical-alignment: center;
             }
@@ -183,9 +183,8 @@ export component Stat inherits VerticalLayout {
     spacing: Theme.spacing-xs;
     accessible-role: text;
     accessible-label: @tr("{} : {}", label, value);
-    Detail {
+    SilentDetail {
         text: root.label;
-        accessible-role: none;
     }
     Text {
         text: root.value;
@@ -266,23 +265,20 @@ export component ReceiptLine inherits VerticalLayout {
                 height: Theme.icon-small;
                 cross-axis-self-alignment: center;
             }
-            Line {
+            SilentLine {
                 horizontal-stretch: 1;
                 text: root.name;
-                accessible-role: none;
                 vertical-alignment: center;
             }
-            Detail {
+            SilentDetail {
                 width: Theme.results-entries-width;
                 text: line.count;
-                accessible-role: none;
                 horizontal-alignment: right;
                 vertical-alignment: center;
             }
-            Line {
+            SilentLine {
                 width: Theme.results-size-width;
                 text: line.sized ? Words.size(line.size) : "";
-                accessible-role: none;
                 horizontal-alignment: right;
                 vertical-alignment: center;
             }

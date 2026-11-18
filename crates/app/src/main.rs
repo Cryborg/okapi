@@ -1391,6 +1391,15 @@ mod tests {
         let history = window.global::<ui::History>();
         history.set_reading(ui::HistoryReading::Reading);
         assert!(reads(&window, "Lecture de l'historique…"));
+        // Said once, by the line beside the title: its written words silent.
+        assert_eq!(
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+                &window,
+                "Lecture de l'historique…"
+            )
+            .count(),
+            1
+        );
         // Read again under a list shown: nothing said.
         history.set_rows(slint::ModelRc::new(slint::VecModel::from(vec![
             ui::HistoryRow::default(),

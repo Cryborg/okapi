@@ -3,7 +3,7 @@
 import { Theme, Screen } from "theme.slint";
 import {
     ActionButton, ButtonKind, Card, CheckMark, Detail, Footer, FocusRing, Icon,
-    Line, ProgressBar, Title,
+    Line, ProgressBar, SilentDetail, SilentLine, Title,
 } from "widgets.slint";
 import {
     CategoryChoice, CategoryKind, Cleaner, CleanerStep, OutcomeKind, ProblemBanner, RowState,
@@ -84,9 +84,8 @@ component CategoryCard inherits Rectangle {
                 font-weight: Theme.weight-semibold;
             }
             // Its cost, when it has one, is said with the results.
-            Detail {
+            SilentDetail {
                 text: Words.description(choice.kind);
-                accessible-role: none;
             }
         }
         Rectangle {
@@ -261,15 +260,13 @@ component ScanRowView inherits Rectangle {
                 overflow: elide;
             }
         }
-        if scan.state != RowState.running: Detail {
+        if scan.state != RowState.running: SilentDetail {
             horizontal-stretch: 1;
-            accessible-role: none;
             vertical-alignment: center;
             text: scan.state == RowState.done ? @tr("Éléments : {}", scan.entries) : "";
         }
-        Line {
+        SilentLine {
             width: Theme.row-size-width;
-            accessible-role: none;
             horizontal-alignment: right;
             vertical-alignment: center;
             text: scan.state == RowState.done ? Words.size(scan.size) : "";

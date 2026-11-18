@@ -4,7 +4,7 @@ import { ScrollView } from "std-widgets.slint";
 import { Theme, Screen } from "theme.slint";
 import {
     ActionButton, Banner, ButtonKind, Badge, Card, CheckMark, Detail, Footer, FocusRing, Icon,
-    IconButton, IconNote, Line, ModalFrame, SortHeader, Title,
+    IconButton, IconNote, Line, ModalFrame, SilentDetail, SilentLine, SortHeader, Title,
 } from "widgets.slint";
 import {
     BrowserStep, CheckState, Cleaner, IssueKind, IssueShown, ProblemBanner, ResultBadge,
@@ -28,9 +28,8 @@ component RightsBanner inherits Rectangle {
             colorize: Theme.admin;
             cross-axis-self-alignment: center;
         }
-        said := Line {
+        said := SilentLine {
             horizontal-stretch: 1;
-            accessible-role: none;
             color: Theme.text;
             vertical-alignment: center;
             wrap: word-wrap;
@@ -332,9 +331,8 @@ component ResultLine inherits VerticalLayout {
                             icon: @image-url("../assets/icons/triangle-alert.svg");
                             tone: Theme.warning;
                         }
-                        if line.badge == ResultBadge.admin && root.noted: Detail {
+                        if line.badge == ResultBadge.admin && root.noted: SilentDetail {
                             text: root.note;
-                            accessible-role: none;
                         }
                         // The command the user runs by hand: selectable,
                         // and copied by its button; never run (invariant 4).
@@ -448,16 +446,15 @@ component ResultLine inherits VerticalLayout {
                     }
                 }
             }
+            // Read: the checkbox says neither how many nor how much.
             Detail {
                 width: Theme.results-entries-width;
-                accessible-role: none;
                 horizontal-alignment: right;
                 vertical-alignment: center;
                 text: root.unmeasured ? "" : "\{line.entries}";
             }
             Line {
                 width: Theme.results-size-width;
-                accessible-role: none;
                 horizontal-alignment: right;
                 vertical-alignment: center;
                 text: root.unmeasured ? "" : Words.size(line.size);
@@ -573,9 +570,8 @@ component Confirmation inherits ModalFrame {
                 checked: Cleaner.understood;
                 cross-axis-self-alignment: center;
             }
-            understood-text := Detail {
+            understood-text := SilentDetail {
                 text: @tr("J'ai compris que c'est définitif");
-                accessible-role: none;
                 vertical-alignment: center;
             }
         }

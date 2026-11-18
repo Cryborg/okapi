@@ -34,6 +34,47 @@ export component Title inherits Text {
     font-weight: Theme.weight-semibold;
 }
 
+// Words something else says already: never read. A `Detail` set to no
+// role is still read (Slint 1.18 gives the root of a component inheriting
+// `Text` its label, whatever its instance says): only a `Text` of its own
+// set to none is silent.
+export component SilentText inherits VerticalLayout {
+    in property <string> text;
+    in property <color> color;
+    in property <length> font-size;
+    in property <int> font-weight;
+    in property <TextHorizontalAlignment> horizontal-alignment;
+    in property <TextVerticalAlignment> vertical-alignment;
+    in property <TextWrap> wrap;
+    in property <TextOverflow> overflow;
+    Text {
+        text: root.text;
+        accessible-role: none;
+        color: root.color;
+        font-size: root.font-size;
+        font-weight: root.font-weight;
+        horizontal-alignment: root.horizontal-alignment;
+        vertical-alignment: root.vertical-alignment;
+        wrap: root.wrap;
+        overflow: root.overflow;
+    }
+}
+
+// A `Line`, never read.
+export component SilentLine inherits SilentText {
+    color: Theme.text;
+    font-size: Theme.font-label;
+    font-weight: Theme.weight-medium;
+    wrap: word-wrap;
+}
+
+// A `Detail`, never read.
+export component SilentDetail inherits SilentText {
+    color: Theme.text-2;
+    font-size: Theme.font-small;
+    wrap: word-wrap;
+}
+
 // An icon beside words that say the same: never read.
 export component Icon inherits Image {
     width: Theme.icon;
@@ -82,11 +123,10 @@ component IconLine inherits HorizontalLayout {
 // A note led by an icon, never read: the control it explains reads it.
 export component IconNote inherits IconLine {
     in property <string> text;
-    Detail {
+    SilentDetail {
         horizontal-stretch: 1;
         text: root.text;
         color: root.tone;
-        accessible-role: none;
     }
 }
 
@@ -482,13 +522,12 @@ export component TitleLine inherits HorizontalLayout {
                 transform-rotation: root.loading ? 360deg * mod(animation-tick() / 1ms, Theme.loading-turn / 1ms) / (Theme.loading-turn / 1ms) : 0deg;
                 cross-axis-self-alignment: center;
             }
-            Detail {
+            SilentDetail {
                 horizontal-stretch: 1;
                 text: root.loading ? root.loading-text : "";
                 vertical-alignment: center;
                 wrap: no-wrap;
                 overflow: elide;
-                accessible-role: none;
             }
         }
     }
@@ -657,12 +696,11 @@ export component Banner inherits Rectangle {
             colorize: root.warning ? Theme.warning : Theme.info;
             cross-axis-self-alignment: center;
         }
-        Detail {
+        SilentDetail {
             horizontal-stretch: 1;
             text: root.text;
             color: Theme.text;
             vertical-alignment: center;
-            accessible-role: none;
         }
         @children
     }

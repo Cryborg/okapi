@@ -145,6 +145,27 @@ pub struct Removed {
     pub pruned: bool,
 }
 
+/// What became of a runtime asked to go.
+#[derive(Debug)]
+pub enum RuntimeEnd {
+    Removed,
+    /// Not installed when asked: gone, but not freed by this removal.
+    AlreadyGone,
+    /// Not asked: an earlier one was refused the rights, or unanswered.
+    NotAsked,
+    Failed(FlatpakError),
+}
+
+/// What a removal of runtimes did.
+#[derive(Debug)]
+pub struct RuntimesRemoved {
+    /// Each runtime's end, in the order asked.
+    pub ends: Vec<RuntimeEnd>,
+    /// The repository was pruned: the space of those removed is free (or
+    /// will be, once an application still running them closes).
+    pub pruned: bool,
+}
+
 /// Flatpak's system helper, joined on the system bus.
 #[derive(Debug, Clone)]
 pub struct SystemHelper {
@@ -232,6 +253,63 @@ impl SystemHelper {
             "flatpak removed"
         );
         Ok(removed)
+    }
+
+    /// Removes each runtime of `references` (`runtime/<id>/<arch>/<branch>`),
+    /// in their order, then prunes the repository once if one went (no
+    /// triggers: flatpak runs them for an application only). The rights not
+    /// given, or the helper silent or gone, asks nothing more: the others are
+    /// not asked. The helper refusing one (`Can't remove …, it is needed
+    /// for …`) goes on with the next. `heard` is told each end as it comes,
+    /// by the rank of its reference.
+    pub fn remove_runtimes(
+        &self,
+        references: &[String],
+        heard: &dyn Fn(usize, &RuntimeEnd),
+    ) -> RuntimesRemoved {
+        let _span = tracing::info_span!("flatpak_runtimes", count = references.len()).entered();
+        let mut ends = Vec::with_capacity(references.len());
+        let mut stopped = false;
+        for (rank, reference) in references.iter().enumerate() {
+            if stopped {
+                heard(rank, &RuntimeEnd::NotAsked);
+                ends.push(RuntimeEnd::NotAsked);
+                continue;
+            }
+            let called = self.call(
+                UNINSTALL,
+                &(NO_FLAGS, reference.as_str(), DEFAULT_INSTALLATION),
+                self.waits.uninstall,
+            );
+            let end = match called {
+                Ok(()) => {
+                    tracing::info!(%reference, "a runtime removed");
+                    RuntimeEnd::Removed
+                }
+                Err(FlatpakError::NotInstalled(_)) => {
+                    tracing::info!(%reference, "a runtime already gone");
+                    RuntimeEnd::AlreadyGone
+                }
+                Err(error @ FlatpakError::Service { .. }) => {
+                    tracing::warn!(%reference, %error, "a runtime kept by the helper");
+                    RuntimeEnd::Failed(error)
+                }
+                Err(error) => {
+                    tracing::warn!(%reference, %error, "a runtime not removed: the next ones not asked");
+                    stopped = true;
+                    RuntimeEnd::Failed(error)
+                }
+            };
+            heard(rank, &end);
+            ends.push(end);
+        }
+        let pruned = ends.iter().any(|end| matches!(end, RuntimeEnd::Removed))
+            && self
+                .call(PRUNE, &(NO_FLAGS, DEFAULT_INSTALLATION), self.waits.cleanup)
+                .inspect_err(|error| tracing::warn!(%error, "repository not pruned: the space may not be freed yet"))
+                .is_ok();
+        tracing::info!(pruned, "flatpak's runtimes asked to go");
+        RuntimesRemoved { ends, pruned }
     }
 
     /// Calls `method` with `body`, waiting `wait` at most.

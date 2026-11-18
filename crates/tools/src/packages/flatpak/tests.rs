@@ -405,3 +405,77 @@ fn an_application_and_its_extensions_wait_as_long_as_an_uninstallation() {
         started.elapsed()
     );
 }
+
+const PLATFORM: &str = "runtime/org.gnome.Platform/x86_64/45";
+const SDK: &str = "runtime/org.gnome.Sdk/x86_64/45";
+const CODECS: &str = "runtime/org.freedesktop.Platform.codecs-extra/x86_64/23.08";
+
+/// The kind of each end, in order: what a test compares.
+fn ends(removed: &RuntimesRemoved) -> Vec<&'static str> {
+    removed
+        .ends
+        .iter()
+        .map(|end| match end {
+            RuntimeEnd::Removed => "removed",
+            RuntimeEnd::AlreadyGone => "gone",
+            RuntimeEnd::NotAsked => "not asked",
+            RuntimeEnd::Failed(_) => "failed",
+        })
+        .collect()
+}
+
+#[test]
+fn runtimes_are_removed_in_their_order_then_the_repository_pruned_once_without_triggers() {
+    // Catches a runtime asked with flags or for another installation, the
+    // repository pruned after each or never, the triggers run for runtimes.
+    let (helper, heard) = fake_helper(|_, _| Answer::Done);
+    let removed = helper.remove_runtimes(&strings(&[PLATFORM, SDK]), &|_, _| {});
+    assert_eq!(ends(&removed), ["removed", "removed"]);
+    assert!(removed.pruned);
+    let calls: Vec<Heard> = heard.try_iter().collect();
+    assert!(calls.iter().all(|call| call.flags == 0 && call.strings.last().is_some_and(String::is_empty)), "{calls:?}");
+    let said: Vec<(&str, &str)> = calls
+        .iter()
+        .map(|call| (call.member.as_str(), call.strings[0].as_str()))
+        .collect();
+    assert_eq!(
+        said,
+        [(UNINSTALL, PLATFORM), (UNINSTALL, SDK), (PRUNE, "")]
+    );
+}
+
+#[test]
+fn the_rights_refused_ask_no_other_runtime_and_a_runtime_kept_asks_the_next() {
+    // Catches a polkit window opened again for each runtime after a no, a
+    // runtime the helper keeps (needed by an application) stopping the
+    // others, one already gone told removed, and a prune of nothing.
+    let (helper, heard) = fake_helper(|member, reference| match (member, reference) {
+        (UNINSTALL, PLATFORM) => Answer::Error("org.freedesktop.Flatpak.Error.RuntimeUsed"),
+        (UNINSTALL, SDK) => Answer::Error("org.freedesktop.Flatpak.Error.NotInstalled"),
+        (UNINSTALL, CODECS) => Answer::Error("org.freedesktop.DBus.Error.AccessDenied"),
+        _ => Answer::Done,
+    });
+    // Each end told as it comes, by its rank: a line of history is written
+    // for each before the next is asked.
+    let told = std::cell::RefCell::new(Vec::new());
+    let removed = helper.remove_runtimes(&strings(&[PLATFORM, SDK, CODECS, LOCALE]), &|rank, _| {
+        told.borrow_mut().push(rank);
+    });
+    assert_eq!(ends(&removed), ["failed", "gone", "failed", "not asked"]);
+    assert_eq!(told.into_inner(), [0, 1, 2, 3]);
+    assert!(!removed.pruned, "nothing went: nothing pruned");
+    let asked: Vec<String> = heard.try_iter().map(|heard| heard.strings[0].clone()).collect();
+    assert_eq!(asked, strings(&[PLATFORM, SDK, CODECS]));
+
+    // One went, the prune refused: the space is not known free.
+    let (helper, _heard) = fake_helper(|member, _| {
+        if member == PRUNE {
+            Answer::Error("org.freedesktop.Flatpak.Error.Aborted")
+        } else {
+            Answer::Done
+        }
+    });
+    let removed = helper.remove_runtimes(&strings(&[PLATFORM]), &|_, _| {});
+    assert_eq!(ends(&removed), ["removed"]);
+    assert!(!removed.pruned);
+}

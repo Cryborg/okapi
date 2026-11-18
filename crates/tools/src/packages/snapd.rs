@@ -58,6 +58,9 @@ pub enum SnapdError {
     /// A name that is no snap's, or none at all: nothing was asked.
     #[error("not a snap's name: {0:?}")]
     InvalidName(String),
+    /// A revision that is no snap's revision: nothing was asked.
+    #[error("not a snap's revision: {0:?}")]
+    InvalidRevision(String),
     /// The socket was reached, then failed or fell silent.
     #[error("snapd did not answer: {0}")]
     Io(#[source] io::Error),
@@ -262,6 +265,14 @@ pub fn is_snap_name(name: &str) -> bool {
         && (!name.contains('_') || (!instance.is_empty() && instance.bytes().all(lower)))
 }
 
+/// Whether `revision` is a revision of a snap from the store: a number, as
+/// snapd writes it. It is then safe in a request. One installed from a file
+/// (`x1`) is not: its file may be elsewhere (`snap try`).
+#[must_use]
+pub fn is_revision(revision: &str) -> bool {
+    !revision.is_empty() && revision.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 /// `name`, if it is a snap's name; refused, traced, before anything is
 /// asked.
 fn checked(name: &str) -> Result<&str, SnapdError> {
@@ -390,6 +401,33 @@ impl Snapd {
             method: "POST",
             path: &format!("/v2/snaps/{name}"),
             body: Some(serde_json::json!({ "action": "remove", "purge": purge }).to_string()),
+            interactive: true,
+            wait: ASKING_WAIT,
+        })?;
+        started(envelope)
+    }
+
+    /// Removes the revision `revision` of the snap `name` alone, its data of
+    /// that revision with it for every account (no copy kept), polkit asking
+    /// the user for the rights: the change it started. snapd refuses the
+    /// revision in use, but removes the whole snap when it is its only one,
+    /// and the one in use of a snap disabled: the caller never asks either.
+    ///
+    /// # Errors
+    /// A name that is no snap's or a revision that is none (nothing asked),
+    /// whatever kept snapd from answering, or its refusal.
+    pub fn remove_revision(&self, name: &str, revision: &str) -> Result<String, SnapdError> {
+        let name = checked(name)?;
+        if !is_revision(revision) {
+            tracing::error!(name, revision, "a snap's revision refused: nothing asked");
+            return Err(SnapdError::InvalidRevision(revision.to_owned()));
+        }
+        let envelope = self.request(&Request {
+            method: "POST",
+            path: &format!("/v2/snaps/{name}"),
+            body: Some(
+                serde_json::json!({ "action": "remove", "revision": revision }).to_string(),
+            ),
             interactive: true,
             wait: ASKING_WAIT,
         })?;

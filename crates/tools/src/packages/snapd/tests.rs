@@ -368,9 +368,12 @@ fn a_change_that_is_not_a_number_is_refused_and_never_asked() {
     };
     let names = ["firefox".to_owned()];
     for change in ["../x", "", "7?select=all", "７"] {
-        let starting: [(&str, &Starting<'_>); 3] = [
+        let starting: [(&str, &Starting<'_>); 4] = [
             ("forget", &|snapd| snapd.forget(3, "firefox")),
             ("remove", &|snapd| snapd.remove("firefox", false)),
+            ("remove a revision", &|snapd| {
+                snapd.remove_revision("firefox", "3")
+            }),
             ("refresh", &|snapd| snapd.refresh(&names)),
         ];
         for (what, start) in starting {
@@ -419,6 +422,48 @@ fn a_refresh_asks_polkit_for_the_snaps_named_and_never_for_none() {
     assert!(matches!(
         snapd.refresh(&["ok".to_owned(), "../x".to_owned()]),
         Err(SnapdError::InvalidName(name)) if name == "../x"
+    ));
+}
+
+#[test]
+fn a_revision_s_removal_asks_polkit_for_that_revision_alone() {
+    // Catches a removal of the whole snap (no revision sent), a revision
+    // sent as a number snapd would not read the same, one that cannot ask
+    // for the rights, and a revision put as it came in the body.
+    let (_directory, snapd, requests) = serving(with_length(
+        "202 Accepted",
+        r#"{"type":"async","status-code":202,"status":"Accepted","result":null,"change":"11"}"#,
+    ));
+    assert_eq!(
+        snapd.remove_revision("android-studio", "248").unwrap(),
+        "11"
+    );
+    let request = requests.recv().unwrap();
+    assert!(
+        request.starts_with("POST /v2/snaps/android-studio HTTP/1.1\r\n"),
+        "{request}"
+    );
+    assert!(request.contains("\r\nX-Allow-Interaction: true\r\n"));
+    let body = request.split("\r\n\r\n").nth(1).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(body).unwrap(),
+        serde_json::json!({ "action": "remove", "revision": "248" })
+    );
+    // No socket: anything asked would fail as `Absent`.
+    let directory = tempfile::tempdir().unwrap();
+    let snapd = Snapd::at(&directory.path().join("none"), Duration::from_secs(1));
+    for revision in ["", "24a", "x", "x12", "-3", "1 2", "２"] {
+        assert!(
+            matches!(
+                snapd.remove_revision("firefox", revision),
+                Err(SnapdError::InvalidRevision(_))
+            ),
+            "{revision:?}"
+        );
+    }
+    assert!(matches!(
+        snapd.remove_revision("../x", "3"),
+        Err(SnapdError::InvalidName(_))
     ));
 }
 

@@ -763,6 +763,7 @@ fn why_of_snapd(error: &SnapdError) -> Why {
             SnapdError::Io(_) | SnapdError::Truncated { .. } => Why::Unanswered,
             SnapdError::Absent { .. }
             | SnapdError::InvalidName(_)
+            | SnapdError::InvalidRevision(_)
             | SnapdError::TooLarge
             | SnapdError::Malformed(_)
             | SnapdError::Json(_)

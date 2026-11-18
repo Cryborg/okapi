@@ -371,7 +371,7 @@ fn why_packagekit(error: &PackageKitError) -> Why {
 }
 
 /// Why, as the screen says it, flatpak's helper did not remove.
-fn why_flatpak(error: &FlatpakError) -> Why {
+pub(crate) fn why_flatpak(error: &FlatpakError) -> Why {
     match error {
         FlatpakError::Absent => Why::Absent,
         FlatpakError::NotAuthorized(_) => Why::NotAuthorized,
@@ -389,6 +389,8 @@ pub(crate) fn why_snapd(error: &SnapdError) -> Why {
     match error {
         SnapdError::Absent { .. } => Why::Absent,
         SnapdError::InvalidName(_) => Why::NotFound,
+        // Never asked: Okapi held what snapd never writes.
+        SnapdError::InvalidRevision(_) => Why::Unclear,
         error if error.timed_out() => Why::TimedOut,
         error if error.rights_refused() => Why::NotAuthorized,
         error if error.busy() => Why::Busy,

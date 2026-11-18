@@ -1223,12 +1223,8 @@ msgid "Sa taille n'a pas pu être lue."
 msgstr "Its size could not be read."
 
 msgctxt "VolumeLine"
-msgid "Le partage réseau n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra."
-msgstr "The network share did not answer the last reading. Its size will show as soon as it answers."
-
-msgctxt "VolumeLine"
-msgid "Le volume n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra."
-msgstr "The volume did not answer the last reading. Its size will show as soon as it answers."
+msgid "Sa taille s'affichera dès qu'il répondra."
+msgstr "Its size will show as soon as it answers."
 
 msgctxt "VolumeLine"
 msgid "{} : {}"
@@ -1257,10 +1253,6 @@ msgstr "{} used of {}, {}%"
 msgctxt "VolumeLine"
 msgid "{} utilisés ({} %)"
 msgstr "{} used ({}%)"
-
-msgctxt "VolumeLine"
-msgid "{}, aucune réponse au dernier relevé"
-msgstr "{}, no answer to the last reading"
 
 msgctxt "DisksWidget"
 msgid "Volumes : {}"
@@ -1301,10 +1293,6 @@ msgstr "{}: about {}"
 msgctxt "Applications"
 msgid "environ {}"
 msgstr "about {}"
-
-msgctxt "Applications"
-msgid "Valeurs approchées : une application partage une partie de sa mémoire avec d'autres, leur somme ne tombe donc pas sur le total."
-msgstr "Approximate values: an application shares part of its memory with others, so their sum does not match the total."
 
 msgctxt "MemoryWidget"
 msgid "{} occupés sur {}"

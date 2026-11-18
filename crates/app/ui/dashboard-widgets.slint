@@ -838,9 +838,9 @@ component VolumeLine inherits VerticalLayout {
         : @tr("{} libres", Words.size(volume.free));
     property <string> bar-label: @tr("{} utilisés sur {}, soit {} %", Words.size(volume.used), Words.size(volume.total), volume.percent);
     property <float> part-used: max(volume.percent, 1) / 100;
+    // Why no size: a failure is said aloud only, the missing bar shows it.
     property <string> silent: volume.space == SpaceState.failed ? @tr("Sa taille n'a pas pu être lue.")
-        : volume.place == VolumePlace.network ? @tr("Le partage réseau n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra.")
-        : @tr("Le volume n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra.");
+        : @tr("Sa taille s'affichera dès qu'il répondra.");
 
     spacing: Theme.spacing-xs;
     accessible-role: text;
@@ -930,13 +930,13 @@ component VolumeLine inherits VerticalLayout {
         text: @tr("{} utilisés ({} %)", Words.size(root.volume.used), root.volume.percent);
         accessible-role: none;
     }
-    if root.volume.space != SpaceState.known && root.detailed: Detail {
+    if root.volume.space == SpaceState.not-responding && root.detailed: Detail {
         text: root.silent;
         accessible-role: none;
     }
     // Placed, its filesystem is said just above.
     if root.volume.space != SpaceState.known && !root.detailed && !root.placed: Caption {
-        text: root.volume.space == SpaceState.failed ? root.silent : @tr("{}, aucune réponse au dernier relevé", root.volume.filesystem);
+        text: root.volume.filesystem;
         overflow: elide;
         accessible-role: none;
     }
@@ -1019,8 +1019,6 @@ export component DisksWidget inherits WidgetCard {
 component Applications inherits VerticalLayout {
     // Taller lines, a rule under each.
     in property <bool> ruled;
-    // The note on approximate values.
-    in property <bool> noted;
     property <length> line: ruled ? Theme.widget-line-large : Theme.widget-line;
     property <MemoryShown> shown: Dashboard.memory;
     spacing: Theme.spacing-xs;
@@ -1076,10 +1074,6 @@ component Applications inherits VerticalLayout {
                 }
             }
         }
-    }
-    if root.noted && root.shown.applications-state == ReadingState.read: Caption {
-        text: @tr("Valeurs approchées : une application partage une partie de sa mémoire avec d'autres, leur somme ne tombe donc pas sur le total.");
-        wrap: word-wrap;
     }
 }
 
@@ -1152,7 +1146,6 @@ export component MemoryWidget inherits WidgetCard {
             if root.size != WidgetSize.small && root.size != WidgetSize.tall: Applications {
                 horizontal-stretch: 1;
                 ruled: root.large;
-                noted: root.large;
             }
         }
         if root.size == WidgetSize.tall: Rectangle {

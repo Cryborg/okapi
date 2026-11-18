@@ -3188,11 +3188,11 @@ pub mod tests {
         ));
         assert!(shows(
             &window,
-            "nas:/photos (partage réseau) : Le partage réseau n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra."
+            "nas:/photos (partage réseau) : Sa taille s'affichera dès qu'il répondra."
         ));
         assert!(shows(
             &window,
-            "disque lent : Le volume n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra."
+            "disque lent : Sa taille s'affichera dès qu'il répondra."
         ));
         assert!(shows(
             &window,
@@ -3204,7 +3204,9 @@ pub mod tests {
             ElementHandle::find_by_element_type_name(&window, "Badge").count(),
             4
         );
-        assert!(shows(&window, "nfs4, aucune réponse au dernier relevé"));
+        // Its filesystem only: its badge says it did not answer.
+        assert!(shows(&window, "nfs4"));
+        assert!(!shows(&window, "Sa taille n'a pas pu être lue."), "said aloud only");
         assert!(shows(&window, "Volumes : 6"));
         assert_eq!(
             said(&window, "Disques").as_deref(),
@@ -3295,7 +3297,8 @@ pub mod tests {
         take_in();
         assert!(shows(&window, "Firefox : environ 3,0 Go"));
         assert!(shows(&window, "Swap : 2,0 Go sur 8,0 Go"));
-        assert!(shows_a_text_starting(&window, "Valeurs approchées"));
+        // Each line says « environ »: no note beside them.
+        assert!(!shows_a_text_starting(&window, "Valeurs approchées"));
         // A new list replaces the one before.
         sink.send(Sample::Memory(Ok(reading_of(8 * GB, Some(Ok(firefox(5)))))))
             .unwrap();
@@ -3344,7 +3347,7 @@ pub mod tests {
             reading_home(&[("disks", WidgetSize::Wide)], volumes, None);
         assert!(shows(
             &window,
-            "disque lent : Le volume n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra."
+            "disque lent : Sa taille s'affichera dès qu'il répondra."
         ));
         assert!(!shows(&window, "Système : 0 o libres sur 0 o"), "no ghost");
         // Fewer volumes: those gone are no longer said.
@@ -3360,7 +3363,7 @@ pub mod tests {
         take_in();
         assert!(!shows(
             &window,
-            "disque lent : Le volume n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra."
+            "disque lent : Sa taille s'affichera dès qu'il répondra."
         ));
         assert!(!shows(&window, "Système : 0 o libres sur 0 o"), "no ghost");
         assert!(shows(&window, "Volumes : 3"));
@@ -3417,7 +3420,7 @@ pub mod tests {
         ));
         assert!(shows(
             &window,
-            "nas:/photos (/mnt/photos · nfs4 · partage réseau) : Le partage réseau n'a pas répondu au dernier relevé. Sa taille s'affichera dès qu'il répondra."
+            "nas:/photos (/mnt/photos · nfs4 · partage réseau) : Sa taille s'affichera dès qu'il répondra."
         ));
     }
 

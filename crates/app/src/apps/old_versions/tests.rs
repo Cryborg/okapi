@@ -62,6 +62,8 @@ fn listed() -> Value {
 struct Fake {
     files: PathBuf,
     answer: Retired,
+    /// Each asked, by its rank in the removal, told this instead when set.
+    by_rank: Vec<Retired>,
     /// What the removal returns: runtimes' room withheld.
     withheld: bool,
     /// Each removal asked, by its identifiers.
@@ -76,6 +78,7 @@ impl Fake {
         Self {
             files: files.to_path_buf(),
             answer,
+            by_rank: Vec::new(),
             withheld: false,
             asked: Arc::default(),
             searches: Arc::default(),
@@ -101,8 +104,9 @@ impl Fake {
                 if let Some(held) = &removing.held {
                     let _ = held.lock().unwrap().recv();
                 }
-                for id in ids {
-                    told(report.find(*id).unwrap(), &removing.answer);
+                for (rank, id) in ids.iter().enumerate() {
+                    let answer = removing.by_rank.get(rank).unwrap_or(&removing.answer);
+                    told(report.find(*id).unwrap(), answer);
                 }
                 removing.withheld
             }),
@@ -385,16 +389,20 @@ fn while_old_versions_go_nothing_else_on_the_screen_starts() {
 
 #[test]
 fn the_rights_refused_say_so_and_write_nothing() {
+    // Catches the ones not asked after the refusal counted as failures of
+    // their own: the outcome would no longer say the rights.
     if confined() {
         return;
     }
     let files = snap_files();
     let recorded = writable();
-    let (window, _) = on_page(
-        Fake::new(files.path(), Retired::Failed(Why::NotAuthorized)).seams(),
-        Arc::clone(&recorded),
-    );
+    let fake = Fake {
+        by_rank: vec![Retired::Failed(Why::NotAuthorized), Retired::NotAsked],
+        ..Fake::new(files.path(), Retired::Removed)
+    };
+    let (window, _) = on_page(fake.seams(), Arc::clone(&recorded));
     tab(&window).invoke_toggle(0);
+    tab(&window).invoke_toggle(1);
     remove(&window);
     assert_eq!(tab(&window).get_outcome(), ui::OldOutcome::Refused);
     assert_eq!(recorded.lock().unwrap().as_deref(), Some(&[][..]));
@@ -468,4 +476,100 @@ fn closing_waits_a_little_for_a_removal_under_way() {
         "its history line written"
     );
     later.join().unwrap();
+}
+
+/// The rank of `name` among the applications listed.
+fn line_of_app(window: &ui::AppWindow, name: &str) -> i32 {
+    let rank = window
+        .global::<ui::Apps>()
+        .get_lines()
+        .iter()
+        .position(|line| line.name == name)
+        .unwrap();
+    i32::try_from(rank).unwrap()
+}
+
+#[test]
+fn an_uninstallation_and_a_removal_of_old_versions_never_run_together() {
+    // Catches, both ways, two daemons asked at once and two windows of
+    // polkit: an uninstallation started while old versions go, and old
+    // versions asked while an uninstallation is under way.
+    if confined() {
+        return;
+    }
+    let files = snap_files();
+    let (release, waiting) = mpsc::channel();
+    let fake = Fake {
+        held: Some(Arc::new(Mutex::new(waiting))),
+        ..Fake::new(files.path(), Retired::Removed)
+    };
+    let (window, _) = on_page(fake.seams(), writable());
+    let apps = window.global::<ui::Apps>();
+    tab(&window).invoke_toggle(0);
+    tab(&window).invoke_retire();
+    tab(&window).invoke_confirm();
+    read_until(&window, |window| tab(window).get_retiring());
+    apps.invoke_choose(line_of_app(&window, "Android Studio"));
+    apps.invoke_uninstall();
+    assert_eq!(
+        apps.get_step(),
+        ui::UninstallStep::Closed,
+        "refused while old versions go"
+    );
+    release.send(()).unwrap();
+    settled(&window);
+
+    apps.invoke_choose(line_of_app(&window, "Android Studio"));
+    apps.invoke_uninstall();
+    assert_ne!(apps.get_step(), ui::UninstallStep::Closed);
+    tab(&window).invoke_toggle(0);
+    tab(&window).invoke_retire();
+    assert!(
+        !tab(&window).get_confirming(),
+        "refused while an uninstallation is open"
+    );
+}
+
+#[test]
+fn what_went_what_was_kept_and_what_was_gone_already_are_told_apart() {
+    // Catches a version gone before the asking counted removed (and
+    // written in the history), one not asked counted otherwise than for
+    // the rights, and everything gone already told as a failure.
+    if confined() {
+        return;
+    }
+    let files = snap_files();
+    let fake = Fake {
+        by_rank: vec![Retired::Removed, Retired::Gone, Retired::NotAsked],
+        ..Fake::new(files.path(), Retired::Removed)
+    };
+    let recorded = writable();
+    let (window, _) = on_page(fake.seams(), Arc::clone(&recorded));
+    for index in 0..3 {
+        tab(&window).invoke_toggle(index);
+    }
+    remove(&window);
+    assert_eq!(tab(&window).get_outcome(), ui::OldOutcome::Partly);
+    assert_eq!(tab(&window).get_removed(), 1);
+    assert_eq!(tab(&window).get_kept(), 1);
+    assert_eq!(recorded.lock().unwrap().as_ref().map(Vec::len), Some(1));
+}
+
+#[test]
+fn everything_gone_already_is_no_failure() {
+    // Catches versions gone before the asking (snapd's own refresh) told as
+    // a removal that failed.
+    if confined() {
+        return;
+    }
+    let files = snap_files();
+    let fake = Fake::new(files.path(), Retired::Gone);
+    let (window, _) = on_page(fake.seams(), writable());
+    tab(&window).invoke_toggle(0);
+    remove(&window);
+    assert_eq!(
+        tab(&window).get_outcome(),
+        ui::OldOutcome::None,
+        "gone already: nothing to say but the list read again"
+    );
 }

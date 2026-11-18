@@ -374,7 +374,22 @@ impl AppsScreen {
                 .map(|finding| finding.receiver.try_recv())
         };
         match found {
-            Some(Ok(found)) => self.found_old_versions(found),
+            Some(Ok(found)) => {
+                let stopped = self
+                    .0
+                    .borrow()
+                    .old_versions
+                    .finding
+                    .as_ref()
+                    .is_some_and(|finding| finding.stop.load(Ordering::Relaxed));
+                self.found_old_versions(found);
+                if stopped {
+                    tracing::info!(
+                        "old versions found with their measures stopped: looked for again on the page"
+                    );
+                    self.0.borrow_mut().old_versions.again = true;
+                }
+            }
             Some(Err(TryRecvError::Disconnected)) => {
                 tracing::error!("the search of old versions ended without a word");
                 {
@@ -401,9 +416,10 @@ impl AppsScreen {
             }
             Some(Err(TryRecvError::Empty)) | None => {}
         }
+        // Made on the page only: a search measures while the page is shown.
         let again = {
             let state = self.0.borrow();
-            state.old_versions.again && !state.old_versions.held()
+            state.old_versions.again && !state.old_versions.held() && state.on_page
         };
         if again {
             self.find_old_versions();
@@ -533,7 +549,7 @@ impl AppsScreen {
             }
             Err(error) => {
                 tracing::error!(%error, "no thread to remove old versions: nothing asked");
-                self.0.borrow_mut().old_versions.told = Some(Told::Ended(Ended::default()));
+                self.0.borrow_mut().old_versions.told = Some(Told::CutShort);
             }
         }
         // The other tabs' actions wait for it: each says so. The leftovers'
@@ -623,6 +639,8 @@ impl AppsScreen {
             Some(Told::CutShort) => (ui::OldOutcome::Interrupted, &quiet),
             Some(Told::Ended(ended)) => (
                 match (ended.removed, ended.kept_for_rights, ended.kept_otherwise) {
+                    // All gone before it was asked: the list read again says so.
+                    (0, 0, 0) => ui::OldOutcome::None,
                     (0, 1.., 0) => ui::OldOutcome::Refused,
                     (0, _, _) => ui::OldOutcome::Nothing,
                     (_, 0, 0) => ui::OldOutcome::Done,

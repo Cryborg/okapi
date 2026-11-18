@@ -531,10 +531,25 @@ fn the_deletion_log_is_switched_and_the_journal_says_where_it_is() {
             .unwrap()
     };
     assert_eq!(switch().accessible_checked(), Some(false));
+    // Said once, by the switch: its row's name and state written silent.
+    assert_eq!(
+        ElementHandle::find_by_accessible_label(&window, "Journal des suppressions").count(),
+        1
+    );
+    assert!(!shows(&window, "Désactivé"));
+    // As every field says the name of its row.
+    for name in ["Ajouter une exclusion", "Ajouter un dossier à nettoyer"] {
+        assert_eq!(
+            ElementHandle::find_by_accessible_label(&window, name).count(),
+            1,
+            "{name}"
+        );
+    }
     switch().invoke_accessible_default_action();
     written(&screens);
     assert!(sandbox.settings().deletion_log);
     assert_eq!(switch().accessible_checked(), Some(true));
+    assert!(!shows(&window, "Activé"));
     switch().invoke_accessible_default_action();
     written(&screens);
     assert!(!sandbox.settings().deletion_log);

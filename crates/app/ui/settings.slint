@@ -5,7 +5,7 @@ import { ScrollView } from "std-widgets.slint";
 import { Theme, Screen } from "theme.slint";
 import {
     ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, IconButton, Line,
-    ScrolledList, Title,
+    ScrolledList, SilentDetail, SilentLine, Title,
 } from "widgets.slint";
 import {
     EntryError, LanguageChoice, PathKind, PathList, PathRow, Preferences, SaveRefusal, SettingsState,
@@ -222,10 +222,9 @@ component SettingRow inherits HorizontalLayout {
         horizontal-stretch: 1;
         alignment: center;
         spacing: Theme.spacing-xxs;
-        Line {
+        SilentLine {
             text: root.name;
             // The control reads it.
-            accessible-role: none;
         }
         if root.description != "": Detail {
             text: root.description;
@@ -436,10 +435,9 @@ component PathListCard inherits Card {
 
         VerticalLayout {
             spacing: Theme.spacing-s;
-            Line {
+            SilentLine {
                 text: root.add-label;
                 // The field reads it.
-                accessible-role: none;
             }
             HorizontalLayout {
                 spacing: Theme.spacing-s;
@@ -583,10 +581,9 @@ component General inherits Card {
                 : @tr("Garde dans l'historique la liste des chemins retirés à chaque nettoyage. Les plus anciennes opérations partent quand l'historique dépasse la taille gardée.");
             HorizontalLayout {
                 spacing: Theme.spacing-m;
-                Detail {
+                SilentDetail {
                     text: Preferences.deletion-log ? @tr("Activé") : @tr("Désactivé");
                     // The switch says it.
-                    accessible-role: none;
                     vertical-alignment: center;
                     wrap: no-wrap;
                 }

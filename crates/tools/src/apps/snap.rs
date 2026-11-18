@@ -13,17 +13,29 @@ use crate::packages::snapd::is_snap_name;
 
 /// What snapd says of one revision.
 #[derive(Debug, Deserialize)]
-struct Revision {
+pub(crate) struct Revision {
     name: String,
+    /// Its number, as snapd writes it.
+    #[serde(rename = "revision", default)]
+    pub(crate) number: String,
     #[serde(default)]
-    version: String,
+    pub(crate) version: String,
+    /// `app`, `base`, `snapd`, `os`, `kernel`, `gadget`...
     #[serde(rename = "type", default)]
-    kind: String,
+    pub(crate) kind: String,
+    /// `active` for the one in use; `installed` for every other.
     #[serde(default)]
-    status: String,
+    pub(crate) status: String,
     /// Absent when snapd does not say it.
     #[serde(rename = "installed-size", default)]
-    installed_size: Option<u64>,
+    pub(crate) installed_size: Option<u64>,
+    /// When the one in use was put in use, in RFC 3339: snapd says it of
+    /// that one only.
+    #[serde(rename = "install-date", default)]
+    pub(crate) install_date: Option<String>,
+    /// Why it cannot be used, when it cannot.
+    #[serde(default)]
+    pub(crate) broken: Option<String>,
     #[serde(default)]
     publisher: Option<Publisher>,
     #[serde(default)]
@@ -66,6 +78,30 @@ fn shown_launcher(active: &Revision, root: &Path, reading: &Reading) -> Option<L
     })
 }
 
+/// The revisions of `result` (snapd's list of every revision), in its order
+/// (each snap's oldest first), by their snap's name; a revision of a name
+/// that is no snap's passed over, traced.
+///
+/// # Errors
+///
+/// `result` is no list of revisions.
+pub(crate) fn revisions_by_name(
+    result: &serde_json::Value,
+) -> Result<BTreeMap<String, Vec<Revision>>, serde_json::Error> {
+    let mut by_name: BTreeMap<String, Vec<Revision>> = BTreeMap::new();
+    for revision in Vec::<Revision>::deserialize(result)? {
+        if is_snap_name(&revision.name) {
+            by_name
+                .entry(revision.name.clone())
+                .or_default()
+                .push(revision);
+        } else {
+            tracing::warn!(name = %revision.name, "a snap's name refused");
+        }
+    }
+    Ok(by_name)
+}
+
 /// The snaps of `result` (snapd's list of every revision), their launchers
 /// read under `root` (`/`, or a test's folder), their data under `home`.
 #[must_use]
@@ -76,24 +112,13 @@ pub fn read_snaps(
     reading: &Reading,
 ) -> SourceReading {
     let _span = tracing::info_span!("snaps").entered();
-    let revisions = match Vec::<Revision>::deserialize(result) {
-        Ok(revisions) => revisions,
+    let by_name = match revisions_by_name(result) {
+        Ok(by_name) => by_name,
         Err(error) => {
             tracing::warn!(%error, "snapd's list unreadable");
             return SourceReading::Failed(error.to_string());
         }
     };
-    let mut by_name: BTreeMap<String, Vec<Revision>> = BTreeMap::new();
-    for revision in revisions {
-        if is_snap_name(&revision.name) {
-            by_name
-                .entry(revision.name.clone())
-                .or_default()
-                .push(revision);
-        } else {
-            tracing::warn!(name = %revision.name, "a snap's name refused");
-        }
-    }
     let mut apps = Vec::new();
     let mut rest = Rest::default();
     let mut without_size = 0_usize;

@@ -4,7 +4,10 @@
 //! is measured, its data is `~/.var/app/<id>`. An application of the
 //! system's installation is uninstalled by flatpak's system helper, with the
 //! extensions that go with it ([`related`]); one of the user's installation
-//! is not (no service changes it).
+//! is not (no service changes it). The runtimes no application uses any
+//! more are told by [`unused`].
+
+pub mod unused;
 
 use std::collections::HashSet;
 use std::fmt;
@@ -290,7 +293,7 @@ fn declared(folder: &Path) -> Vec<Installation> {
 }
 
 /// What a reference names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum RefKind {
     App,
     Runtime,
@@ -298,7 +301,7 @@ enum RefKind {
 
 /// A flatpak, as flatpak names it: `app/<id>/<arch>/<branch>` or
 /// `runtime/…`; each part a name read from a folder, never a path.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FlatpakRef {
     kind: RefKind,
     id: String,
@@ -321,6 +324,22 @@ impl FlatpakRef {
     #[must_use]
     pub fn app(id: &str, arch: &str, branch: &str) -> Option<Self> {
         Self::new(RefKind::App, id, arch, branch)
+    }
+
+    #[must_use]
+    pub fn branch(&self) -> &str {
+        &self.branch
+    }
+
+    /// The runtime `text` names as a metadata writes it (`runtime=`,
+    /// `sdk=`: `<id>/<arch>/<branch>`), if it is one.
+    fn runtime_of(text: &str) -> Option<Self> {
+        let mut parts = text.split('/');
+        let (id, arch, branch) = (parts.next()?, parts.next()?, parts.next()?);
+        if parts.next().is_some() {
+            return None;
+        }
+        Self::new(RefKind::Runtime, id, arch, branch)
     }
 
     /// The reference `text` writes (`app/<id>/<arch>/<branch>`), if it is
@@ -388,6 +407,9 @@ impl fmt::Display for FlatpakRef {
 struct Listed {
     names: Vec<String>,
     whole: bool,
+    /// A folder's name was refused (not a name, not UTF-8): what it holds
+    /// is not known.
+    refused: bool,
 }
 
 /// The names of the folders in `folder` that may be names: never a link
@@ -401,6 +423,7 @@ struct Listed {
 fn subfolders(folder: &Path) -> io::Result<Listed> {
     let mut names = Vec::new();
     let mut whole = true;
+    let mut refused = false;
     for entry in std::fs::read_dir(folder)? {
         let read = entry.and_then(|entry| Ok((entry.file_name(), entry.file_type()?)));
         let (name, kind) = match read {
@@ -419,11 +442,16 @@ fn subfolders(folder: &Path) -> io::Result<Listed> {
             Some(name) if names_a_folder(name) => names.push(name.to_owned()),
             _ => {
                 tracing::warn!(?name, folder = %folder.display(), "a flatpak folder's name refused");
+                refused = true;
             }
         }
     }
     names.sort_unstable();
-    Ok(Listed { names, whole })
+    Ok(Listed {
+        names,
+        whole,
+        refused,
+    })
 }
 
 /// [`subfolders`], none when it is gone; `partial` set when it, or an entry
@@ -451,12 +479,33 @@ fn subfolders_or_none(folder: &Path, partial: &mut bool) -> Vec<String> {
 ///
 /// `active` could not be read.
 fn deployment(branch: &Path) -> io::Result<Option<PathBuf>> {
+    Ok(match active(branch)? {
+        Active::At(deployment) => Some(deployment),
+        Active::None | Active::Refused => None,
+    })
+}
+
+/// What a branch's `active` names.
+pub(crate) enum Active {
+    /// No `active`: nothing deployed.
+    None,
+    /// One that is not a folder beside it: never followed (traced).
+    Refused,
+    At(PathBuf),
+}
+
+/// The deployment `active` names in `branch`.
+///
+/// # Errors
+///
+/// `active` could not be read.
+fn active(branch: &Path) -> io::Result<Active> {
     let active = branch.join("active");
     let target = match std::fs::read_link(&active) {
         Ok(target) => target,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             tracing::debug!(path = %active.display(), "no active deployment");
-            return Ok(None);
+            return Ok(Active::None);
         }
         Err(error) => {
             tracing::warn!(path = %active.display(), %error, "the active deployment unreadable");
@@ -465,15 +514,15 @@ fn deployment(branch: &Path) -> io::Result<Option<PathBuf>> {
     };
     let Some(name) = target.to_str().filter(|name| names_a_folder(name)) else {
         tracing::warn!(path = %active.display(), target = %target.display(), "the active deployment is not beside it: refused");
-        return Ok(None);
+        return Ok(Active::Refused);
     };
     let deployment = branch.join(name);
     let is_folder = std::fs::symlink_metadata(&deployment).is_ok_and(|metadata| metadata.is_dir());
     if !is_folder {
         tracing::warn!(path = %active.display(), "the active deployment is not a folder beside it");
-        return Ok(None);
+        return Ok(Active::Refused);
     }
-    Ok(Some(deployment))
+    Ok(Active::At(deployment))
 }
 
 /// The ids of the applications `installation` holds, each `app/<id>`,
@@ -487,27 +536,37 @@ pub(crate) fn app_ids(installation: &Installation) -> Result<Vec<String>, String
     if !presence(installation)? {
         return Ok(Vec::new());
     }
-    let app_folder = installation.path.join(RefKind::App.folder());
-    match subfolders(&app_folder) {
-        Ok(Listed { names, whole: true }) => Ok(names),
-        Ok(Listed { whole: false, .. }) => {
-            Err(format!("{} not listed whole", app_folder.display()))
-        }
+    kind_ids(&installation.path, RefKind::App).map(|listed| listed.names)
+}
+
+/// The ids of what of `kind` the installation at `installation` (there)
+/// holds, `app/<id>` or `runtime/<id>`, listed whole.
+///
+/// # Errors
+///
+/// Why they could not be listed whole: the folder unreadable, an entry of
+/// it, or the folder missing beside no repository.
+fn kind_ids(installation: &Path, kind: RefKind) -> Result<Listed, String> {
+    let folder = installation.join(kind.folder());
+    match subfolders(&folder) {
+        Ok(listed) if listed.whole => Ok(listed),
+        Ok(_) => Err(format!("{} not listed whole", folder.display())),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            missing_for_sure(&app_folder)?;
+            missing_for_sure(&folder)?;
             // flatpak makes its repository with the installation: a folder
             // without it is a disk not mounted there, maybe.
-            let repository = installation.path.join(REPOSITORY);
+            let repository = installation.join(REPOSITORY);
             if std::fs::symlink_metadata(&repository).is_ok_and(|metadata| metadata.is_dir()) {
-                Ok(Vec::new())
+                Ok(Listed {
+                    names: Vec::new(),
+                    whole: true,
+                    refused: false,
+                })
             } else {
-                Err(format!(
-                    "{} holds no repository",
-                    installation.path.display()
-                ))
+                Err(format!("{} holds no repository", installation.display()))
             }
         }
-        Err(error) => Err(format!("{}: {error}", app_folder.display())),
+        Err(error) => Err(format!("{}: {error}", folder.display())),
     }
 }
 
@@ -521,7 +580,9 @@ pub(crate) fn deployments(installation: &Path, id: &str) -> io::Result<Vec<PathB
     let folder = installation.join(RefKind::App.folder()).join(id);
     let mut found = Vec::new();
     let listed = |folder: &Path| match subfolders(folder) {
-        Ok(Listed { names, whole: true }) => Ok(names),
+        Ok(Listed {
+            names, whole: true, ..
+        }) => Ok(names),
         Ok(Listed { whole: false, .. }) => Err(io::Error::other("not listed whole")),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(error) => Err(error),
@@ -717,15 +778,18 @@ fn app_of(
     })
 }
 
-/// What an extension of an application's metadata says when it goes with
-/// the application.
+/// What a metadata's extension point (`[Extension <name>]`) says.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Extension {
-    name: String,
-    /// Its branches: its own, or the application's.
-    branches: Vec<String>,
+pub(crate) struct Extension {
+    pub(crate) name: String,
+    /// Its branches: its own, or those of what it extends.
+    pub(crate) branches: Vec<String>,
     /// Its own subdirectories are extensions too (`<name>.<x>`).
-    subdirectories: bool,
+    pub(crate) subdirectories: bool,
+    /// It goes with what it extends, as libflatpak tells it: marked
+    /// `autodelete`, a subset of locales, or translations or debugging
+    /// symbols by their name.
+    deleted: bool,
 }
 
 /// Whether a key file's `value` says true.
@@ -788,11 +852,18 @@ pub(crate) fn key_file_groups(text: &str) -> Vec<KeyGroup> {
 }
 
 /// The extensions of `metadata` that go with their application (whose
-/// branch is `branch`), as libflatpak tells them: marked `autodelete`, a
-/// subset of locales, or translations or debugging symbols by their name.
-/// Each is only a candidate: whether it is the application's is told by its
-/// own metadata ([`Owner::not_its_own`]).
+/// branch is `branch`). Each is only a candidate: whether it is the
+/// application's is told by its own metadata ([`Owner::not_its_own`]).
 fn extensions_deleted(metadata: &str, branch: &str) -> Vec<Extension> {
+    extension_points(metadata, branch)
+        .into_iter()
+        .filter(|extension| extension.deleted)
+        .collect()
+}
+
+/// Every extension point of `metadata`, of what is on the branch `branch`,
+/// whose name may name a folder: the tag after `@` left out.
+pub(crate) fn extension_points(metadata: &str, branch: &str) -> Vec<Extension> {
     key_file_groups(metadata)
         .into_iter()
         .filter_map(|group| {
@@ -802,7 +873,7 @@ fn extensions_deleted(metadata: &str, branch: &str) -> Vec<Extension> {
             let deleted = says_true(value(KEY_AUTODELETE))
                 || says_true(value(KEY_LOCALE_SUBSET))
                 || ALWAYS_DELETED.iter().any(|suffix| name.ends_with(suffix));
-            if !deleted || !names_a_folder(name) {
+            if !names_a_folder(name) {
                 return None;
             }
             let branches: Vec<String> = match (value(KEY_VERSIONS), value(KEY_VERSION)) {
@@ -818,6 +889,7 @@ fn extensions_deleted(metadata: &str, branch: &str) -> Vec<Extension> {
                 name: name.to_owned(),
                 branches,
                 subdirectories: says_true(value(KEY_SUBDIRECTORIES)),
+                deleted,
             })
         })
         .collect()
@@ -843,7 +915,9 @@ fn deployed_or_unclear(
 /// [`Why::Unclear`] when they cannot be listed whole (traced).
 fn runtime_ids(installation: &Path, app: &FlatpakRef) -> Result<Vec<String>, Why> {
     match subfolders(&installation.join(RefKind::Runtime.folder())) {
-        Ok(Listed { names, whole: true }) => Ok(names),
+        Ok(Listed {
+            names, whole: true, ..
+        }) => Ok(names),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
         Ok(Listed { whole: false, .. }) => {
             tracing::warn!(%app, "the runtimes not listed whole: what goes unknown");

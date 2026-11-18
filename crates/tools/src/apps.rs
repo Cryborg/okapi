@@ -9,6 +9,8 @@ pub mod flatpak;
 pub mod icons;
 pub mod leftovers;
 pub mod measure;
+#[cfg(target_os = "linux")]
+pub mod old_versions;
 pub mod snap;
 #[cfg(target_os = "linux")]
 pub mod snapshots;

@@ -45,7 +45,7 @@ pub(crate) enum Reason {
     Shortest,
     /// It lies in this folder, chosen by the user.
     InFolder(usize),
-    /// It lies outside the personal folders: the rule leaves it to the
+    /// It lies outside the personal folders, known: the rule leaves it to the
     /// user.
     OutsidePersonal,
     /// It lies on another filesystem than the trash, which cannot take it.
@@ -216,6 +216,9 @@ pub(crate) fn preselected(copies: &[Facts<'_>], folders: &[Folder]) -> Vec<Chose
         .iter()
         .enumerate()
         .map(|(index, copy)| match &kept {
+            // The folders unknown, no copy is said outside them: one in
+            // Documents would be.
+            _ if folders.is_empty() => Chosen::Kept(None),
             _ if copy.folder.is_none() => Chosen::Kept(Some(Reason::OutsidePersonal)),
             Some((keeper, reason)) if *keeper == index => Chosen::Kept(reason.clone()),
             _ => Chosen::going_if(copy.may_go()),
@@ -586,6 +589,18 @@ mod tests {
             checked(&preselected(&facts(&outside, &folders), &folders)),
             [false, false]
         );
+    }
+
+    #[test]
+    fn with_the_folders_unknown_no_copy_is_said_outside_them() {
+        let copies = [
+            copy("/home/ana/Documents/lib.so", 1),
+            copy("/home/ana/Téléchargements/lib.so", 8),
+        ];
+        let chosen = preselected(&facts(&copies, &[]), &[]);
+        assert_eq!(checked(&chosen), [false, false]);
+        assert_eq!(reason(&chosen[0]), None);
+        assert_eq!(reason(&chosen[1]), None);
     }
 
     #[test]

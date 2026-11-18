@@ -340,6 +340,45 @@ fn results_of(window: &ui::AppWindow, language: Language, notes: &[ui::RowNote])
     cleaner.set_results(ModelRc::new(VecModel::from(rows)));
 }
 
+/// The results, a line of each kind, folded: preselected, left to choose,
+/// the trash, unlocked by root's scan, locked, only root may read, measured
+/// by root only, Docker's prune (accepted, refused), the user's by hand, a
+/// folder of the user's. The browsers' category, with none, is hidden.
+fn results_kinds(window: &ui::AppWindow, language: Language) {
+    const KINDS: [&str; 10] = [
+        "Thumbnail Cache",
+        "Font Cache",
+        "Trash",
+        "Crash Reports",
+        "APT Package Cache",
+        "Snap Cache",
+        "Journal Logs",
+        "Docker Build Cache",
+        "uv Unused Packages",
+        "~/Projets/okapi/target",
+    ];
+    results(window, false, language);
+    let shown: Vec<&str> = KINDS
+        .iter()
+        .map(|label| okapi_rules::label(language, label))
+        .collect();
+    let cleaner = window.global::<ui::Cleaner>();
+    let rows: Vec<ui::ResultRow> = cleaner
+        .get_results()
+        .iter()
+        .map(|mut row| {
+            row.explained = false;
+            row.folded = false;
+            row.hidden = match row.kind {
+                ui::RowKind::Group => !shown.contains(&row.label.as_str()),
+                _ => row.category == ui::CategoryKind::Browsers,
+            };
+            row
+        })
+        .collect();
+    cleaner.set_results(ModelRc::new(VecModel::from(rows)));
+}
+
 /// A receipt with every kind of line.
 fn receipt(window: &ui::AppWindow) {
     use ui::ReceiptKind::{
@@ -2284,7 +2323,7 @@ fn reading_scene(app: &ui::AppWindow, screen: &str, language: Language) {
             app.global::<ui::OldVersions>().set_finding(true);
         }
         other => panic!(
-            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, results-sorted, folded, results-docker, results-by-hand, browser, confirm, confirm-risks, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, groups-closed, groups-closed-small, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-start-reading, disk-scanning, disk-result, disk-result-small, disk-result-keys, disk-stopped, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-reading, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, apps-leftovers-reading, apps-old-versions, apps-old-versions-confirm, apps-old-versions-reading, settings, settings-trash, history, history-small, history-update, history-empty, history-reading, large-start, large-start-reading, large-searching, large-stopped, large-result, large-smallest, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-start, duplicates-start-reading, duplicates-start-home, duplicates-result, duplicates-empty, duplicates-confirm, duplicates-quick (each also -small)"
+            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, results-sorted, folded, results-docker, results-by-hand, results-kinds, browser, confirm, confirm-risks, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, groups-closed, groups-closed-small, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-start-reading, disk-scanning, disk-result, disk-result-small, disk-result-keys, disk-stopped, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-reading, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, apps-leftovers-reading, apps-old-versions, apps-old-versions-confirm, apps-old-versions-reading, settings, settings-trash, history, history-small, history-update, history-empty, history-reading, large-start, large-start-reading, large-searching, large-stopped, large-result, large-smallest, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-start, duplicates-start-reading, duplicates-start-home, duplicates-result, duplicates-empty, duplicates-confirm, duplicates-quick (each also -small)"
         ),
     }
 }
@@ -2328,6 +2367,7 @@ fn main() {
             &[ui::RowNote::Daemon, ui::RowNote::DaemonRefused],
         ),
         "results-by-hand" => results_of(&app, language, &[ui::RowNote::ByHand]),
+        "results-kinds" => results_kinds(&app, language),
         "browser" => browser(&app, language),
         "confirm" | "confirm-risks" => confirmation(&app, screen == "confirm-risks", language),
         "receipt" => receipt(&app),

@@ -3677,6 +3677,10 @@ msgid "Éléments : {}."
 msgstr "Items: {}."
 
 msgctxt "HistoryWords"
+msgid "{} {}"
+msgstr "{} {}"
+
+msgctxt "HistoryWords"
 msgid "Aujourd'hui"
 msgstr "Today"
 

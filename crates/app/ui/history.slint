@@ -3,7 +3,7 @@
 // docs/design/maquette/project/History.dc.html.
 import { ListView, ScrollView } from "std-widgets.slint";
 import { Theme, Screen } from "theme.slint";
-import { Badge, Banner, Card, Detail, FocusRing, Icon, Line, TitleLine } from "widgets.slint";
+import { Banner, Card, Detail, FocusRing, Icon, Line, StateIcon, TitleLine } from "widgets.slint";
 import { OperationEnd, Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
 import { DayKind, Moment } from "dashboard-model.slint";
@@ -127,6 +127,19 @@ global HistoryWords {
         }
         update.why != InstallWhy.none ? @tr("{} {} : non installée. {}", update.name, update.version, update-why(update.why))
             : @tr("{} {} : non installée", update.name, update.version)
+    }
+
+    // What is written of an update asked: its state is its icon's, a
+    // failure and its reason said in words.
+    pure public function updated-shown(update: UpdatedShown) -> string {
+        update.state == UpdateState.not-installed ? updated(update) : @tr("{} {}", update.name, update.version)
+    }
+
+    pure public function updated-icon(update: UpdatedShown) -> image {
+        update.state == UpdateState.installed ? @image-url("../assets/icons/circle-check.svg")
+            : update.state == UpdateState.waiting ? @image-url("../assets/icons/clock.svg")
+            : update.state == UpdateState.unknown ? @image-url("../assets/icons/info.svg")
+            : @image-url("../assets/icons/triangle-alert.svg")
     }
 
     // What a line is read as: its name, its badge, its summary, when.
@@ -272,13 +285,11 @@ component OperationRow inherits VerticalLayout {
                         font-weight: root.chosen ? Theme.weight-semibold : Theme.weight-medium;
                         min-width: self.preferred-width;
                     }
-                    if operation.admin != HistoryAdmin.none: Badge {
-                        text: @tr("Administrateur");
+                    if operation.admin != HistoryAdmin.none: StateIcon {
                         icon: @image-url("../assets/icons/shield.svg");
+                        label: @tr("Administrateur");
                         tone: Theme.admin;
-                        tone-soft: Theme.admin-soft;
                         cross-axis-self-alignment: center;
-                        elide: true;
                     }
                 }
                 Text {
@@ -517,9 +528,19 @@ component UpdateDetail inherits VerticalLayout {
             padding-right: Theme.spacing-xl;
             spacing: Theme.spacing-xs;
             alignment: start;
-            for update in operation.updated: Detail {
-                text: HistoryWords.updated(update);
-                color: update.state == UpdateState.installed ? Theme.text : Theme.warning;
+            for update in operation.updated: HorizontalLayout {
+                spacing: Theme.spacing-s;
+                StateIcon {
+                    icon: HistoryWords.updated-icon(update);
+                    label: HistoryWords.updated(update);
+                    tone: update.state == UpdateState.installed ? Theme.success : Theme.warning;
+                    cross-axis-self-alignment: center;
+                }
+                Detail {
+                    horizontal-stretch: 1;
+                    text: HistoryWords.updated-shown(update);
+                    color: update.state == UpdateState.installed ? Theme.text : Theme.warning;
+                }
             }
         }
     }

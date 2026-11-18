@@ -458,7 +458,9 @@ fn each_update_shows_how_it_ended_and_each_package_asked() {
             &[
                 "Toutes les mises à jour demandées ont été installées.",
                 "Le système a demandé un redémarrage pour la terminer.",
+                // Said by its icon, written without its state.
                 "openssl 3.5.1 : installée",
+                "openssl 3.5.1",
                 "bash 5.2.37 : installée",
             ][..],
         ),

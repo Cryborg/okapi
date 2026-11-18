@@ -781,7 +781,7 @@ fn with_no_folder_known_no_copy_is_said_outside_one() {
     let window = on_duplicates(seams);
     assert!(shows(
         &window,
-        "Aucun dossier Documents, Images… trouvé : cochez « Dossier personnel » pour chercher. Rien n'y sera coché d'avance."
+        "Aucun dossier Documents, Images… trouvé : cochez « Dossier personnel » pour chercher."
     ));
     duplicates(&window).set_whole_home(true);
     searched(&window);

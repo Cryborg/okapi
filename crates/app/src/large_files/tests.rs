@@ -589,7 +589,7 @@ fn a_file_written_since_the_search_stays_and_the_receipt_says_why() {
     assert_eq!(stayed[0].why, ui::ReceiptWhy::Changed);
     assert!(shows(
         &window,
-        "rendu.mkv, A changé depuis la recherche, Son contenu n'est plus celui de la recherche."
+        "rendu.mkv, A changé depuis la recherche"
     ));
 }
 

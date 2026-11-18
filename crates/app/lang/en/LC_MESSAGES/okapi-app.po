@@ -3113,6 +3113,10 @@ msgid "Mettre à la corbeille"
 msgstr "Move to the trash"
 
 msgctxt "KeptLine"
+msgid "{}, {}"
+msgstr "{}, {}"
+
+msgctxt "KeptLine"
 msgid "{}, {}, {}"
 msgstr "{}, {}, {}"
 
@@ -4255,32 +4259,16 @@ msgid "Refusé par Okapi"
 msgstr "Refused by Okapi"
 
 msgctxt "ReceiptWords"
-msgid "Son contenu n'est plus celui de la recherche."
-msgstr "Its content is no longer what the search found."
-
-msgctxt "ReceiptWords"
 msgid "Déplacé ou supprimé entre-temps."
 msgstr "Moved or deleted meanwhile."
 
 msgctxt "ReceiptWords"
-msgid "Sans copie identique à sa place, celle-ci reste."
-msgstr "With no identical copy in its place, this one stays."
+msgid "Aucune autre copie sûre de rester (corbeille, autre compte, FAT ou exFAT)."
+msgstr "No other copy sure to stay (trash, other account, FAT or exFAT)."
 
 msgctxt "ReceiptWords"
-msgid "Aucune autre copie n'est sûre de rester : dans une corbeille, à un autre compte, sur un disque, une clé ou une carte au format FAT ou exFAT, ou peut-être ce même fichier vu ailleurs. Celle-ci reste."
-msgstr "No other copy is sure to stay: in a trash, another account's, on a FAT- or exFAT-formatted disk, drive or card, or maybe this very file seen elsewhere. This one stays."
-
-msgctxt "ReceiptWords"
-msgid "Okapi ne supprime jamais sans corbeille."
-msgstr "Okapi never deletes without a trash."
-
-msgctxt "ReceiptWords"
-msgid "Le système n'a pas permis de le déplacer."
-msgstr "The system did not allow moving it."
-
-msgctxt "ReceiptWords"
-msgid "Exclu depuis la recherche, il reste à sa place."
-msgstr "Excluded since the search, it stays where it is."
+msgid "Exclu depuis la recherche."
+msgstr "Excluded since the search."
 
 msgctxt "ReceiptWords"
 msgid "Un autre programme l'a changé pendant le déplacement : il reste restaurable depuis la corbeille."
@@ -4295,16 +4283,16 @@ msgid "Où chercher ?"
 msgstr "Where to search?"
 
 msgctxt "FolderPicker"
-msgid "Aucun dossier Documents, Images… trouvé : cochez « Dossier personnel » pour chercher. Rien n'y sera coché d'avance."
-msgstr "No Documents, Pictures… folder found: check “Home folder” to search. Nothing will be checked beforehand."
+msgid "Aucun dossier Documents, Images… trouvé : cochez « Dossier personnel » pour chercher."
+msgstr "No Documents, Pictures… folder found: check “Home folder” to search."
 
 msgctxt "FolderPicker"
 msgid "Votre dossier personnel n'a pas pu être lu : rien ne peut être recherché. Le détail est dans le journal."
 msgstr "Your home folder could not be read: nothing can be searched. The details are in the log."
 
 msgctxt "FolderPicker"
-msgid "La liste de vos dossiers (Documents, Images…) n'a pas pu être lue : seul le dossier personnel entier peut être parcouru, et rien n'y est coché d'avance."
-msgstr "The list of your folders (Documents, Pictures…) could not be read: only the whole home folder can be searched, and nothing is checked beforehand."
+msgid "La liste de vos dossiers (Documents, Images…) n'a pas pu être lue : seul le dossier personnel entier peut être parcouru."
+msgstr "The list of your folders (Documents, Pictures…) could not be read: only the whole home folder can be searched."
 
 msgctxt "FolderPicker"
 msgid "Dossier personnel"

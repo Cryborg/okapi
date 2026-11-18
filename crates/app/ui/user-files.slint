@@ -41,28 +41,21 @@ global ReceiptWords {
         return @tr("Refusé par Okapi");
     }
 
-    // `okapi`: what a refusal of Okapi means, the tool's own.
+    // `okapi`: what a refusal of Okapi means, the tool's own. Nothing when
+    // the reason and its icon say it all.
     pure public function why-more(kept: KeptShown, okapi: string) -> string {
-        if kept.why == ReceiptWhy.changed {
-            return @tr("Son contenu n'est plus celui de la recherche.");
+        if kept.why == ReceiptWhy.changed || kept.why == ReceiptWhy.keeper-changed
+            || kept.why == ReceiptWhy.other-device || kept.why == ReceiptWhy.refused {
+            return "";
         }
         if kept.why == ReceiptWhy.gone {
             return @tr("Déplacé ou supprimé entre-temps.");
         }
-        if kept.why == ReceiptWhy.keeper-changed {
-            return @tr("Sans copie identique à sa place, celle-ci reste.");
-        }
         if kept.why == ReceiptWhy.no-sure-keeper {
-            return @tr("Aucune autre copie n'est sûre de rester : dans une corbeille, à un autre compte, sur un disque, une clé ou une carte au format FAT ou exFAT, ou peut-être ce même fichier vu ailleurs. Celle-ci reste.");
-        }
-        if kept.why == ReceiptWhy.other-device {
-            return @tr("Okapi ne supprime jamais sans corbeille.");
-        }
-        if kept.why == ReceiptWhy.refused {
-            return @tr("Le système n'a pas permis de le déplacer.");
+            return @tr("Aucune autre copie sûre de rester (corbeille, autre compte, FAT ou exFAT).");
         }
         if kept.why == ReceiptWhy.excluded {
-            return @tr("Exclu depuis la recherche, il reste à sa place.");
+            return @tr("Exclu depuis la recherche.");
         }
         if kept.why == ReceiptWhy.unchecked {
             return @tr("Un autre programme l'a changé pendant le déplacement : il reste restaurable depuis la corbeille.");
@@ -201,14 +194,14 @@ export component FolderPicker inherits VerticalLayout {
         font-weight: Theme.weight-semibold;
     }
     if root.folders-state == FoldersState.none: Banner {
-        text: @tr("Aucun dossier Documents, Images… trouvé : cochez « Dossier personnel » pour chercher. Rien n'y sera coché d'avance.");
+        text: @tr("Aucun dossier Documents, Images… trouvé : cochez « Dossier personnel » pour chercher.");
     }
     if root.folders-state == FoldersState.homeless: Banner {
         text: @tr("Votre dossier personnel n'a pas pu être lu : rien ne peut être recherché. Le détail est dans le journal.");
         warning: true;
     }
     if root.folders-state == FoldersState.unread: Banner {
-        text: @tr("La liste de vos dossiers (Documents, Images…) n'a pas pu être lue : seul le dossier personnel entier peut être parcouru, et rien n'y est coché d'avance.");
+        text: @tr("La liste de vos dossiers (Documents, Images…) n'a pas pu être lue : seul le dossier personnel entier peut être parcouru.");
         warning: true;
     }
     Card {
@@ -245,7 +238,8 @@ component KeptLine inherits Rectangle {
     in property <string> more;
     min-height: Theme.kept-line-height;
     accessible-role: list-item;
-    accessible-label: @tr("{}, {}, {}", root.kept.name, root.why, root.more);
+    accessible-label: root.more == "" ? @tr("{}, {}", root.kept.name, root.why)
+        : @tr("{}, {}, {}", root.kept.name, root.why, root.more);
     Rectangle {
         y: parent.height - self.height;
         height: Theme.border-width;
@@ -295,7 +289,7 @@ component KeptLine inherits Rectangle {
                 font-weight: Theme.weight-semibold;
                 wrap: word-wrap;
             }
-            Detail {
+            if root.more != "": Detail {
                 text: root.more;
                 accessible-role: none;
                 wrap: word-wrap;

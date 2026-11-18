@@ -6,7 +6,7 @@ import { Theme, Screen } from "theme.slint";
 import { Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
 import { DayKind } from "dashboard-model.slint";
-import { ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, Line, ModalFrame, ProgressBar, ReadIconNote, TitleLine } from "widgets.slint";
+import { ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, Line, ModalFrame, ProgressBar, ReadIconNote, StateIcon, TitleLine } from "widgets.slint";
 import { Updates, UpdatesStep, SourceState, SourceFailure, UpdateKind, SystemLine, SnapLine, InstallStep, InstallTarget, InstallPhase, InstallEnd, InstallWhy } from "updates-model.slint";
 
 // What the screen says, the same for the eye and the ear.
@@ -408,19 +408,13 @@ component SnapRow inherits Row {
                 font-size: Theme.font-small;
                 overflow: elide;
             }
-            if root.line.verified: Icon {
-                source: @image-url("../assets/icons/circle-check.svg");
-                colorize: Theme.accent;
+            if root.line.verified: StateIcon {
+                icon: @image-url("../assets/icons/circle-check.svg");
+                label: @tr("Éditeur vérifié");
+                tone: Theme.accent;
                 width: Theme.icon-badge;
                 height: Theme.icon-badge;
                 cross-axis-self-alignment: center;
-            }
-            if root.line.verified: Text {
-                text: @tr("vérifié");
-                accessible-role: none;
-                color: Theme.text-2;
-                font-size: Theme.font-caption;
-                vertical-alignment: center;
             }
         }
     }
@@ -919,10 +913,6 @@ export component UpdatesPage inherits VerticalLayout {
                             text: name;
                             color: Theme.text;
                         }
-                        Detail {
-                            text: @tr("Okapi ne redémarre rien lui-même.");
-                            color: Theme.text-3;
-                        }
                     }
                 }
             }
@@ -975,16 +965,14 @@ export component UpdatesPage inherits VerticalLayout {
                     }
                     Card {
                         VerticalLayout {
-                            // The download failing first is its cause.
-                            if Updates.system-state == SourceState.failed: Inline {
+                            // The download failing first is its cause; the
+                            // list still shown then is the old one, its age
+                            // on the badge above.
+                            if Updates.system-state == SourceState.failed || (Updates.refresh-failed && Updates.system-state == SourceState.read): Inline {
                                 text: UpdatesWords.failure(Updates.refresh-failed ? Updates.refresh-failure : Updates.system-failure);
                             }
-                            // The list shown is the old one: said only when there is one.
-                            if Updates.refresh-failed && Updates.system-state == SourceState.read: Inline {
-                                text: @tr("{} La liste date du dernier téléchargement réussi.", UpdatesWords.failure(Updates.refresh-failure));
-                            }
                             if Updates.system-state == SourceState.read && Updates.system-count + Updates.system-held == 0: Quiet {
-                                text: Updates.lists-old ? @tr("Aucune mise à jour dans cette liste, qui n'est peut-être plus à jour : « Rechercher maintenant » la télécharge à nouveau.")
+                                text: Updates.lists-old ? @tr("Aucune mise à jour dans cette liste.")
                                     : @tr("Aucune mise à jour");
                             }
                             if Updates.system-state == SourceState.read && Updates.system-count + Updates.system-held > 0: HorizontalLayout {

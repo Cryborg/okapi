@@ -2125,8 +2125,8 @@ msgid "Réessayer"
 msgstr "Try again"
 
 msgctxt "SnapRow"
-msgid "vérifié"
-msgstr "verified"
+msgid "Éditeur vérifié"
+msgstr "Verified publisher"
 
 msgctxt "SnapNote"
 msgid "Les applis snap se mettent à jour seules. Prochain passage {}."
@@ -2205,10 +2205,6 @@ msgid "{} paquets"
 msgstr "{} packages"
 
 msgctxt "UpdatesPage"
-msgid "Okapi ne redémarre rien lui-même."
-msgstr "Okapi restarts nothing by itself."
-
-msgctxt "UpdatesPage"
 msgid "Recherche en attente d'une autre installation…"
 msgstr "Search waiting for another installation…"
 
@@ -2233,10 +2229,6 @@ msgid "Liste du {}"
 msgstr "List of {}"
 
 msgctxt "UpdatesPage"
-msgid "{} La liste date du dernier téléchargement réussi."
-msgstr "{} The list is from the last successful download."
-
-msgctxt "UpdatesPage"
 msgid "Liste d'aujourd'hui"
 msgstr "Today's list"
 
@@ -2249,8 +2241,8 @@ msgid "Aucune mise à jour"
 msgstr "No update"
 
 msgctxt "UpdatesPage"
-msgid "Aucune mise à jour dans cette liste, qui n'est peut-être plus à jour : « Rechercher maintenant » la télécharge à nouveau."
-msgstr "No update in this list, which may be out of date: “Search now” downloads it again."
+msgid "Aucune mise à jour dans cette liste."
+msgstr "No update in this list."
 
 msgctxt "UpdatesPage"
 msgid "Liste d'âge inconnu"

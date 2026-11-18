@@ -768,10 +768,7 @@ fn old_lists_with_nothing_waiting(stamp: fn() -> io::Result<Option<SystemTime>>,
     assert!(updates(&window).get_lists_old());
     assert!(!shows(&window, "Tout est à jour"));
     assert!(shows(&window, badge), "{badge}");
-    assert!(shows(
-        &window,
-        "Aucune mise à jour dans cette liste, qui n'est peut-être plus à jour : « Rechercher maintenant » la télécharge à nouveau."
-    ));
+    assert!(shows(&window, "Aucune mise à jour dans cette liste."));
     // Downloaded again: fresh, whatever the stamp says.
     button(&window, "Rechercher maintenant").invoke_accessible_default_action();
     read(&window);
@@ -834,10 +831,8 @@ fn lists_not_downloaded_again_are_dated_and_kept() {
     assert!(!shows(&window, "Liste du 11 novembre"), "three days: fresh");
     button(&window, "Rechercher maintenant").invoke_accessible_default_action();
     read(&window);
-    assert!(shows(
-        &window,
-        "La recherche n'a pas pu joindre Internet. La liste date du dernier téléchargement réussi."
-    ));
+    // Its age on the badge, the old list kept.
+    assert!(shows(&window, "La recherche n'a pas pu joindre Internet."));
     assert!(shows(&window, "Liste du 11 novembre"));
     assert_eq!(updates(&window).get_system_count(), 7, "the old list kept");
 }
@@ -880,7 +875,6 @@ fn a_restart_awaited_is_said_with_its_packages() {
     assert!(!shows(&window, "libc6"), "folded");
     fold.invoke_accessible_default_action();
     assert!(shows(&window, "libc6"));
-    assert!(shows(&window, "Okapi ne redémarre rien lui-même."));
 }
 
 #[test]

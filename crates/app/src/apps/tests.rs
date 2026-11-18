@@ -797,6 +797,12 @@ fn snap_uninstalled(purge: bool) {
     ask(&window, "Android Studio");
     let data = checkbox(&window, "Supprimer aussi ses données (5,0 Mo)");
     assert_eq!(data.accessible_checked(), Some(false), "unchecked");
+    // Said once, by its box: its written words are silent.
+    assert_eq!(
+        ElementHandle::find_by_accessible_label(&window, "Supprimer aussi ses données (5,0 Mo)")
+            .count(),
+        1
+    );
     assert!(shows(&window, "Votre mot de passe vous sera demandé."));
     assert!(!shows(
         &window,

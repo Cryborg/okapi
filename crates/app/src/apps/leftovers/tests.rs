@@ -285,6 +285,14 @@ fn nothing_goes_unchecked_and_what_is_checked_goes_once_confirmed() {
     let (window, _) = on_page(seams, crate::apps::tests::arrivals, settings(true));
     window.global::<ui::Apps>().set_tab(ui::AppsTab::Leftovers);
     assert_eq!(tab(&window).get_checked_count(), 0);
+    // Its folder read with its line, written below its name silent.
+    let path = tab(&window).get_lines().row_data(0).unwrap().path;
+    assert!(
+        i_slint_backend_testing::ElementHandle::find_by_element_type_name(&window, "LeftoverRow")
+            .filter_map(|line| line.accessible_label())
+            .any(|label| label.contains(path.as_str()))
+    );
+    assert!(!shows(&window, &path));
     // Nothing checked, the button is only disabled.
     assert_eq!(
         button(&window, "Mettre à la corbeille").accessible_enabled(),

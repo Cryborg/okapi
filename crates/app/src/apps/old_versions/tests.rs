@@ -17,7 +17,7 @@ use slint::Model as _;
 
 use super::*;
 use crate::apps::{AppsSeams, READ_EVERY};
-use crate::cleaner::tests::{button, seams_never_scanning, shows};
+use crate::cleaner::tests::{button, seams_never_scanning, shows, shows_a_text_starting};
 
 const WAIT: Duration = Duration::from_secs(20);
 
@@ -252,6 +252,13 @@ fn the_old_versions_are_found_with_the_list_none_checked_and_their_room_told() {
     assert_eq!(tab(&window).get_flatpaks().row_count(), 0);
     assert_eq!(tab(&window).get_checked_count(), 0);
     assert!(tab(&window).get_has_total(), "the badge says the room");
+    // Its revision read with its line, written below its name silent.
+    assert!(
+        i_slint_backend_testing::ElementHandle::find_by_element_type_name(&window, "OldRow")
+            .filter_map(|line| line.accessible_label())
+            .any(|label| label.contains("Révision 248"))
+    );
+    assert!(!shows_a_text_starting(&window, "Révision"));
 }
 
 #[test]

@@ -4,7 +4,7 @@
 // and removed by snapd or flatpak's helper, never by Okapi.
 import { ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { ActionButton, Banner, ButtonKind, Card, CheckMark, Detail, FocusRing, Icon, ModalFrame, ProgressBar } from "widgets.slint";
+import { ActionButton, Banner, ButtonKind, Card, CheckMark, Detail, FocusRing, Icon, ModalFrame, ProgressBar, SilentDetail } from "widgets.slint";
 import { Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
 import { AppSource, OldOutcome, OldRoom, OldVersionLine, OldVersions } from "apps-model.slint";
@@ -89,9 +89,8 @@ component OldRow inherits Rectangle {
                 color: Theme.text;
                 overflow: elide;
             }
-            Detail {
+            SilentDetail {
                 text: OldWords.detail(line);
-                accessible-role: none;
                 overflow: elide;
             }
         }

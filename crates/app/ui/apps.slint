@@ -6,7 +6,7 @@ import { LineEdit, ListView } from "std-widgets.slint";
 import { Theme, Screen } from "theme.slint";
 import {
     ActionButton, Banner, ButtonKind, Card, CheckMark, Detail, FocusRing, Icon, IconButton,
-    Badge, ModalFrame, ProgressBar, SortHeader, StateIcon, TitleLine,
+    Badge, ModalFrame, ProgressBar, SilentDetail, SortHeader, StateIcon, TitleLine,
 } from "widgets.slint";
 import { Size, Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
@@ -573,9 +573,8 @@ component Uninstall inherits ModalFrame {
                 checked: Apps.purge;
                 cross-axis-self-alignment: center;
             }
-            data-text := Detail {
+            data-text := SilentDetail {
                 text: Apps.has-data ? @tr("Supprimer aussi ses données ({})", Words.size(Apps.data-size)) : @tr("Supprimer aussi ses données");
-                accessible-role: none;
                 vertical-alignment: center;
             }
         }
@@ -798,9 +797,8 @@ component LeftoverRow inherits Rectangle {
                 color: Theme.text;
                 overflow: elide;
             }
-            Detail {
+            SilentDetail {
                 text: line.checkable ? line.path : @tr("Trop de fichiers pour être vérifié : {}", line.path);
-                accessible-role: none;
                 overflow: elide;
             }
         }

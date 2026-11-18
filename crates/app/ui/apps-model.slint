@@ -130,15 +130,12 @@ export global OldVersions {
     // Other persons log in here: what they installed is not seen.
     in property <bool> other-accounts;
     in property <int> checked-count;
-    in property <Size> checked-size;
     // Of what is checked: snaps, and when their room comes back; runtimes.
     in property <bool> checked-snaps;
     in property <Size> checked-now;
     in property <bool> has-now;
     in property <Size> checked-later;
     in property <bool> has-later;
-    in property <bool> has-shared;
-    in property <bool> has-unknown;
     in property <bool> checked-runtimes;
     in property <Size> checked-about;
     // What would go.
@@ -152,6 +149,9 @@ export global OldVersions {
     in property <int> kept;
     // A history line could not be written.
     in property <bool> unrecorded;
+    // Runtimes went, and flatpak did not prune its repository: their room
+    // is not given back yet.
+    in property <bool> unpruned;
 
     callback toggle(int);
     callback retire();

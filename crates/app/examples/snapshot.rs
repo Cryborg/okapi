@@ -1549,7 +1549,6 @@ fn apps_old_versions(app: &ui::AppWindow, confirming: bool, language: Language) 
     old.set_total(size(3, 4, ui::SizeUnit::Gigabyte));
     old.set_has_total(true);
     old.set_checked_count(2);
-    old.set_checked_size(size(2, 7, ui::SizeUnit::Gigabyte));
     old.set_checked_snaps(true);
     old.set_checked_now(size(0, 0, ui::SizeUnit::Byte));
     old.set_has_now(false);

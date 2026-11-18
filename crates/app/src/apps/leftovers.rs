@@ -556,6 +556,8 @@ impl AppsScreen {
             &state.seams.zone,
         );
         leftovers.set_busy(tab.busy() || state.old_versions.retiring());
+        // What runs here holds the old versions' tab back.
+        self.show_old_versions();
     }
 
     /// The window closes: a move of leftovers is waited for a little (each

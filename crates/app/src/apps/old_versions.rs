@@ -30,9 +30,12 @@ use crate::ui;
 /// Finds the old versions, measuring until the flag is set.
 pub type Find = Arc<dyn Fn(&AtomicBool) -> OldVersions + Send + Sync>;
 /// Asks the daemons to remove old versions of a report, each told as it
-/// ends.
-pub type Retire =
-    Arc<dyn Fn(&OldVersionReport, &[OldVersionId], &dyn Fn(&OldVersion, &Retired)) + Send + Sync>;
+/// ends: whether runtimes went while their room is not given back.
+pub type Retire = Arc<
+    dyn Fn(&OldVersionReport, &[OldVersionId], &dyn Fn(&OldVersion, &Retired)) -> bool
+        + Send
+        + Sync,
+>;
 
 /// What the tab asks of the machine: the system's, or a test's.
 #[derive(Clone)]
@@ -50,13 +53,24 @@ impl std::fmt::Debug for OldVersionSeams {
 }
 
 /// What a removal said, once over.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(super) struct Ended {
     removed: usize,
-    kept: usize,
-    /// Every one kept was for want of the rights.
-    refused: bool,
+    /// Kept for want of the rights: refused, or not asked after a refusal.
+    kept_for_rights: usize,
+    /// Kept otherwise: changed since, failed.
+    kept_otherwise: usize,
+    /// Runtimes went, flatpak's repository not pruned: their room is not
+    /// given back yet.
+    unpruned: bool,
+    /// A history line could not be written.
     unrecorded: bool,
+}
+
+impl Ended {
+    const fn kept(&self) -> usize {
+        self.kept_for_rights + self.kept_otherwise
+    }
 }
 
 /// What the tab says of the last removal.
@@ -92,7 +106,7 @@ pub(super) struct OldVersionsState {
     retiring: Option<Receiver<Ended>>,
     confirming: bool,
     /// A search asked while one could not start: made once free.
-    pub(super) again: bool,
+    again: bool,
     /// What the last removal said, until closed.
     told: Option<Told>,
     snaps_model: Rc<VecModel<ui::OldVersionLine>>,
@@ -102,7 +116,7 @@ pub(super) struct OldVersionsState {
 
 impl OldVersionsState {
     /// Whether a new report would come under the user's hand.
-    pub(super) fn held(&self) -> bool {
+    fn held(&self) -> bool {
         self.busy() || self.confirming || !self.checked.is_empty()
     }
 
@@ -196,7 +210,7 @@ fn line_of(
     now: jiff::Timestamp,
     zone: &jiff::tz::TimeZone,
 ) -> ui::OldVersionLine {
-    let index = i32::try_from(index).unwrap_or(i32::MAX);
+    let index = shown(index);
     match version.kind() {
         OldKind::Revision(revision) => {
             let (room, bytes) = match revision.room {
@@ -243,7 +257,6 @@ fn line_of(
 /// Says on `global` what `checked` gives back, and when.
 fn show_checked(global: &ui::OldVersions<'_>, checked: &[&OldVersion]) {
     global.set_checked_count(shown(checked.len()));
-    global.set_checked_size(size(sum(checked.iter().copied())));
     let rooms = || {
         checked.iter().filter_map(|version| match version.kind() {
             OldKind::Revision(revision) => Some(revision.room),
@@ -265,8 +278,6 @@ fn show_checked(global: &ui::OldVersions<'_>, checked: &[&OldVersion]) {
     global.set_has_now(freed_now > 0);
     global.set_checked_later(size(later));
     global.set_has_later(later > 0);
-    global.set_has_shared(rooms().any(|room| matches!(room, Room::Shared(_))));
-    global.set_has_unknown(rooms().any(|room| room == Room::Unknown));
     let runtimes = || {
         checked
             .iter()
@@ -343,7 +354,7 @@ impl AppsScreen {
         self.watch();
     }
 
-    /// The page left: measures stop, what was found is shown.
+    /// Stops the runtimes' measures: the search ends with what it measured.
     pub(super) fn stop_old_versions(&self) {
         if let Some(finding) = &self.0.borrow().old_versions.finding {
             finding.stop.store(true, Ordering::Relaxed);
@@ -456,7 +467,6 @@ impl AppsScreen {
     fn cancel_retire(&self) {
         self.0.borrow_mut().old_versions.confirming = false;
         self.show_old_versions();
-        // A search owed meanwhile waits for the boxes to be let go.
     }
 
     /// Asks the daemons, on a thread, to remove what is checked: each read
@@ -521,15 +531,13 @@ impl AppsScreen {
             }
             Err(error) => {
                 tracing::error!(%error, "no thread to remove old versions: nothing asked");
-                self.0.borrow_mut().old_versions.told = Some(Told::Ended(Ended {
-                    removed: 0,
-                    kept: 0,
-                    refused: false,
-                    unrecorded: false,
-                }));
+                self.0.borrow_mut().old_versions.told = Some(Told::Ended(Ended::default()));
             }
         }
-        self.show_old_versions();
+        // The other tabs' actions wait for it: each says so. The leftovers'
+        // shows this tab too.
+        self.show_leftovers();
+        self.show_lines_now();
         self.watch();
     }
 
@@ -605,36 +613,36 @@ impl AppsScreen {
         old_global.set_retiring(old.retiring.is_some());
         old_global.set_confirming(old.confirming);
         old_global.set_busy(old.busy() || state.operation.is_some() || state.leftovers.busy());
-        let (outcome, removed, kept, unrecorded) = match &old.told {
-            None => (ui::OldOutcome::None, 0, 0, false),
-            Some(Told::CutShort) => (ui::OldOutcome::Interrupted, 0, 0, false),
+        let quiet = Ended::default();
+        let (outcome, ended) = match &old.told {
+            None => (ui::OldOutcome::None, &quiet),
+            Some(Told::CutShort) => (ui::OldOutcome::Interrupted, &quiet),
             Some(Told::Ended(ended)) => (
-                match (ended.removed, ended.kept) {
-                    (0, _) if ended.refused => ui::OldOutcome::Refused,
-                    (0, _) => ui::OldOutcome::Nothing,
-                    (_, 0) => ui::OldOutcome::Done,
+                match (ended.removed, ended.kept_for_rights, ended.kept_otherwise) {
+                    (0, 1.., 0) => ui::OldOutcome::Refused,
+                    (0, _, _) => ui::OldOutcome::Nothing,
+                    (_, 0, 0) => ui::OldOutcome::Done,
                     _ => ui::OldOutcome::Partly,
                 },
-                ended.removed,
-                ended.kept,
-                ended.unrecorded,
+                ended,
             ),
         };
         old_global.set_outcome(outcome);
-        old_global.set_removed(shown(removed));
-        old_global.set_kept(shown(kept));
-        old_global.set_unrecorded(unrecorded);
+        old_global.set_removed(shown(ended.removed));
+        old_global.set_kept(shown(ended.kept()));
+        old_global.set_unpruned(ended.unpruned);
+        old_global.set_unrecorded(ended.unrecorded);
     }
 
-    /// The window closes: a removal under way is left to the daemons, which
-    /// end it; what goes after is not in the history (traced).
+    /// The window closes: a removal under way is waited for a little; past
+    /// that, the version in a daemon's hands ends there, the next ones are
+    /// never asked, and the history misses what goes after (traced).
     pub(super) fn leave_old_versions(&self) {
-        if self.0.borrow().old_versions.retiring() {
-            tracing::warn!(
-                "a removal of old versions left at closing: the daemons end what they took, its last history lines may be missing"
-            );
-        }
         self.stop_old_versions();
+        let retiring = self.0.borrow_mut().old_versions.retiring.take();
+        if let Some(retiring) = retiring {
+            crate::user_files::wait_at_closing(&retiring, "old versions");
+        }
     }
 }
 
@@ -648,13 +656,8 @@ fn retire_and_record(
     now: fn() -> jiff::Timestamp,
     names: &[String],
 ) -> Ended {
-    let ended = std::cell::RefCell::new(Ended {
-        removed: 0,
-        kept: 0,
-        refused: true,
-        unrecorded: false,
-    });
-    retire(report, ids, &|version, retired| {
+    let ended = std::cell::RefCell::new(Ended::default());
+    let unpruned = retire(report, ids, &|version, retired| {
         let mut ended = ended.borrow_mut();
         match retired {
             Retired::Removed => {
@@ -674,16 +677,14 @@ fn retire_and_record(
             }
             // Gone before, or by another: not this removal's.
             Retired::Gone => {}
-            Retired::Failed(Why::NotAuthorized) | Retired::NotAsked => ended.kept += 1,
-            Retired::Changed | Retired::Failed(_) => {
-                ended.kept += 1;
-                ended.refused = false;
-            }
+            Retired::Failed(Why::NotAuthorized) | Retired::NotAsked => ended.kept_for_rights += 1,
+            Retired::Changed | Retired::Failed(_) => ended.kept_otherwise += 1,
         }
     });
-    let mut ended = ended.into_inner();
-    ended.refused &= ended.kept > 0;
-    ended
+    Ended {
+        unpruned,
+        ..ended.into_inner()
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -726,7 +727,7 @@ mod system {
         report: &OldVersionReport,
         ids: &[OldVersionId],
         told: &dyn Fn(&OldVersion, &Retired),
-    ) {
+    ) -> bool {
         old_versions::retire(
             report,
             ids,
@@ -734,7 +735,7 @@ mod system {
             &SystemHelper::connect,
             REVISION_WAIT,
             told,
-        );
+        )
     }
 }
 

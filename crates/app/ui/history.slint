@@ -451,7 +451,7 @@ component UninstallDetail inherits VerticalLayout {
         text: operation.freed-known ? HistoryWords.freed(operation) : @tr("Espace libéré inconnu.");
     }
     if operation.later-known: Detail {
-        text: @tr("Rendu plus tard par snapd, quand il vide son cache de téléchargements : {}.", Words.size(operation.later));
+        text: @tr("Rendu plus tard par snapd : {}.", Words.size(operation.later));
         wrap: word-wrap;
     }
     if operation.removed-part == RemovedPart.app: Detail {

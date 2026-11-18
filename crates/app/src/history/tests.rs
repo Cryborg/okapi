@@ -668,12 +668,32 @@ fn an_old_version_removed_is_named_so_with_what_snapd_gives_back_later() {
             later_bytes: Some(1_600_000_000),
         })
         .unwrap();
+    History::open(directory.path())
+        .unwrap()
+        .record_uninstall(&UninstallEntry {
+            time: before(2),
+            source: PackageSource::Flatpak,
+            name: "org.gnome.Platform 45".to_owned(),
+            packages: vec!["runtime/org.gnome.Platform/x86_64/45".to_owned()],
+            freed_bytes: None,
+            data_removed: false,
+            part: UninstallPart::UnusedRuntime,
+            later_bytes: None,
+        })
+        .unwrap();
     let (window, _screen) = shown_history(seams(directory.path()));
     let rows = rows(&window);
-    assert_eq!(rows[0].removed_part, ui::RemovedPart::OldVersion);
-    assert!(rows[0].later_known);
-    window.global::<ui::History>().invoke_choose(0);
+    // The runtime, newest.
+    assert_eq!(rows[0].removed_part, ui::RemovedPart::UnusedRuntime);
+    assert_eq!(rows[1].removed_part, ui::RemovedPart::OldVersion);
+    assert!(rows[1].later_known);
+    let history = window.global::<ui::History>();
+    history.invoke_choose(0);
+    assert!(shows(&window, "Environnement retiré"));
+    assert!(!shows(&window, "Ses données ont été gardées."), "a runtime has none");
+    history.invoke_choose(1);
     assert!(shows(&window, "Ancienne version retirée"));
+    assert!(shows(&window, "Rendu plus tard par snapd : 1,6 Go."));
     assert!(shows(
         &window,
         "Les données de cette version ont été supprimées, pour tous les comptes."

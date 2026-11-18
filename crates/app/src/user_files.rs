@@ -448,24 +448,26 @@ pub(crate) fn exclusion_paths(
     Ok(paths)
 }
 
-/// The window closes: the move of `what` heard on `moving` is waited for a
-/// little (each file is one rename; a cut one leaves at most a
-/// `.trashinfo` without its file, or a file in the trash not read again).
+/// The window closes: the work on `what` heard on `moving` is waited for a
+/// little. A move to the trash is renames, ended in that time (a cut one
+/// leaves at most a `.trashinfo` without its file, or a file in the trash
+/// not read again); old versions removed by their daemons may not be, and
+/// what goes after is not in the history.
 pub(crate) fn wait_at_closing<T>(moving: &Receiver<T>, what: &str) {
     let started = Instant::now();
     match moving.recv_timeout(TRASH_WAIT) {
         Ok(_) => {
-            tracing::info!(waited = ?started.elapsed(), what, "move to the trash ended before closing");
+            tracing::info!(waited = ?started.elapsed(), what, "ended before closing");
         }
         Err(RecvTimeoutError::Disconnected) => {
             tracing::error!(
                 waited = ?started.elapsed(),
                 what,
-                "the move to the trash ended without word: some may be in the trash"
+                "ended without word before closing: what it did is unknown"
             );
         }
         Err(RecvTimeoutError::Timeout) => {
-            tracing::warn!(waited = ?started.elapsed(), what, "move to the trash left running at closing");
+            tracing::warn!(waited = ?started.elapsed(), what, "left running at closing");
         }
     }
 }

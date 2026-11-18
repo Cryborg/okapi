@@ -4,9 +4,11 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
 use std::time::{Duration, Instant};
 
 use okapi_rules::Language;
+use okapi_store::HistoryUnavailable;
 use okapi_tools::apps::leftovers::InstalledPlaces;
 use okapi_tools::apps::old_versions::find;
 use okapi_tools::packages::snapd::SnapdError;
@@ -33,7 +35,7 @@ pub(crate) fn inert() -> OldVersionSeams {
                 stop,
             )
         }),
-        retire: Arc::new(|_, _, _| {}),
+        retire: Arc::new(|_, _, _| false),
     }
 }
 
@@ -54,27 +56,61 @@ fn listed() -> Value {
     ])
 }
 
-/// The removals asked, by their identifiers.
-type Asked = Arc<Mutex<Vec<Vec<OldVersionId>>>>;
+/// A search over [`listed`] and a removal that tells each asked as
+/// `answer` says, all they were asked counted.
+#[derive(Clone)]
+struct Fake {
+    files: PathBuf,
+    answer: Retired,
+    /// What the removal returns: runtimes' room withheld.
+    withheld: bool,
+    /// Each removal asked, by its identifiers.
+    asked: Arc<Mutex<Vec<Vec<OldVersionId>>>>,
+    searches: Arc<AtomicUsize>,
+    /// A removal waits for a word here before it ends, when set.
+    held: Option<Arc<Mutex<mpsc::Receiver<()>>>>,
+}
 
-/// A search over [`listed`], the snaps' files in `files`; a removal that
-/// tells each asked as `answer` says.
-fn seams_of(files: PathBuf, asked: Asked, answer: Retired) -> OldVersionSeams {
-    OldVersionSeams {
-        find: Arc::new(move |stop| {
-            find(
-                Ok(listed()),
-                InstalledPlaces::new(files.clone(), Vec::new(), None),
-                Path::new("/nonexistent"),
-                stop,
-            )
-        }),
-        retire: Arc::new(move |report, ids, told| {
-            asked.lock().unwrap().push(ids.to_vec());
-            for id in ids {
-                told(report.find(*id).unwrap(), &answer);
-            }
-        }),
+impl Fake {
+    fn new(files: &Path, answer: Retired) -> Self {
+        Self {
+            files: files.to_path_buf(),
+            answer,
+            withheld: false,
+            asked: Arc::default(),
+            searches: Arc::default(),
+            held: None,
+        }
+    }
+
+    fn seams(&self) -> OldVersionSeams {
+        let searched = self.clone();
+        let removing = self.clone();
+        OldVersionSeams {
+            find: Arc::new(move |stop| {
+                searched.searches.fetch_add(1, Ordering::Relaxed);
+                find(
+                    Ok(listed()),
+                    InstalledPlaces::new(searched.files.clone(), Vec::new(), None),
+                    Path::new("/nonexistent"),
+                    stop,
+                )
+            }),
+            retire: Arc::new(move |report, ids, told| {
+                removing.asked.lock().unwrap().push(ids.to_vec());
+                if let Some(held) = &removing.held {
+                    let _ = held.lock().unwrap().recv();
+                }
+                for id in ids {
+                    told(report.find(*id).unwrap(), &removing.answer);
+                }
+                removing.withheld
+            }),
+        }
+    }
+
+    fn searches(&self) -> usize {
+        self.searches.load(Ordering::Relaxed)
     }
 }
 
@@ -102,12 +138,16 @@ fn settled(window: &ui::AppWindow) {
     });
 }
 
-/// The window on the applications page; the tab's seams `seams`, the
-/// history lines written kept in `recorded`.
-fn on_page(
-    seams: OldVersionSeams,
-    recorded: Arc<Mutex<Vec<UninstallEntry>>>,
-) -> (ui::AppWindow, crate::apps::AppsScreen) {
+/// The history lines written; none when it cannot be written.
+type Recorded = Arc<Mutex<Option<Vec<UninstallEntry>>>>;
+
+fn writable() -> Recorded {
+    Arc::new(Mutex::new(Some(Vec::new())))
+}
+
+/// The window on the applications page, on the old versions' tab; the
+/// tab's seams `seams`, the history lines written kept in `recorded`.
+fn on_page(seams: OldVersionSeams, recorded: Recorded) -> (ui::AppWindow, crate::apps::AppsScreen) {
     let cleaner = seams_never_scanning();
     let seams = crate::cleaner::Seams {
         apps: AppsSeams {
@@ -118,7 +158,9 @@ fn on_page(
             }),
             old_versions: seams,
             record: Arc::new(move |entry| {
-                recorded.lock().unwrap().push(entry.clone());
+                let mut recorded = recorded.lock().unwrap();
+                let lines = recorded.as_mut().ok_or(HistoryUnavailable::NoDirectory)?;
+                lines.push(entry.clone());
                 Ok(())
             }),
             ..crate::apps::tests::inert()
@@ -140,20 +182,32 @@ fn on_page(
 }
 
 /// The snaps' folder of a test: Android Studio's 248 alone, its 249 shared
-/// with the download cache; core22's not there.
+/// with the download cache, twice as large; core22's not there.
 fn snap_files() -> tempfile::TempDir {
     let files = tempfile::tempdir().unwrap();
     std::fs::write(files.path().join("android-studio_248.snap"), [1; 8192]).unwrap();
     let cached = files.path().join("android-studio_249.snap");
-    std::fs::write(&cached, [1; 8192]).unwrap();
+    std::fs::write(&cached, [1; 16384]).unwrap();
     std::fs::hard_link(&cached, files.path().join("cache-entry")).unwrap();
     files
 }
 
 /// Whether the tests cannot see the system as it is (a container): the
-/// library then proposes nothing at all.
+/// library then proposes nothing at all, and the tests that need a version
+/// say so and pass over.
 fn confined() -> bool {
-    okapi_platform::confinement().is_some()
+    let confined = okapi_platform::confinement().is_some();
+    if confined {
+        eprintln!("confined: no old version can be found here, the test passes over");
+    }
+    confined
+}
+
+/// Removes what is checked, once confirmed, and waits for the end.
+fn remove(window: &ui::AppWindow) {
+    tab(window).invoke_retire();
+    tab(window).invoke_confirm();
+    settled(window);
 }
 
 #[test]
@@ -166,8 +220,8 @@ fn the_old_versions_are_found_with_the_list_none_checked_and_their_room_told() {
     }
     let files = snap_files();
     let (window, _) = on_page(
-        seams_of(files.path().to_path_buf(), Arc::default(), Retired::Removed),
-        Arc::default(),
+        Fake::new(files.path(), Retired::Removed).seams(),
+        writable(),
     );
     let lines: Vec<(String, String, ui::OldRoom, bool)> = tab(&window)
         .get_snaps()
@@ -194,31 +248,21 @@ fn the_old_versions_are_found_with_the_list_none_checked_and_their_room_told() {
     assert_eq!(tab(&window).get_flatpaks().row_count(), 0);
     assert_eq!(tab(&window).get_checked_count(), 0);
     assert!(tab(&window).get_has_total(), "the badge says the room");
-    assert!(shows(
-        &window,
-        "Rien de coché. Cochez ce que vous voulez retirer."
-    ));
 }
 
 #[test]
 fn nothing_goes_unchecked_and_what_is_checked_goes_once_confirmed_each_in_the_history() {
     // Catches a removal without its yes, identifiers not those checked, the
-    // two rooms not told apart in the question, a version gone without its
-    // history line, and the tab not looked at again.
+    // two rooms swapped in the question, a version gone without its history
+    // line or named by another's rank, boxes left checked after it, and the
+    // tab not looked at again.
     if confined() {
         return;
     }
     let files = snap_files();
-    let asked = Asked::default();
-    let recorded = Arc::new(Mutex::new(Vec::new()));
-    let (window, _) = on_page(
-        seams_of(
-            files.path().to_path_buf(),
-            Arc::clone(&asked),
-            Retired::Removed,
-        ),
-        Arc::clone(&recorded),
-    );
+    let fake = Fake::new(files.path(), Retired::Removed);
+    let recorded = writable();
+    let (window, _) = on_page(fake.seams(), Arc::clone(&recorded));
     tab(&window).invoke_retire();
     assert!(
         !tab(&window).get_confirming(),
@@ -226,24 +270,40 @@ fn nothing_goes_unchecked_and_what_is_checked_goes_once_confirmed_each_in_the_hi
     );
     tab(&window).invoke_toggle(0);
     tab(&window).invoke_toggle(1);
-    assert_eq!(tab(&window).get_checked_count(), 2);
+    tab(&window).invoke_toggle(2);
+    assert_eq!(tab(&window).get_checked_count(), 3);
     tab(&window).invoke_retire();
     assert!(tab(&window).get_confirming());
-    assert_eq!(tab(&window).get_going().row_count(), 2, "each named");
-    assert!(tab(&window).get_checked_snaps());
-    assert!(tab(&window).get_has_later());
-    assert!(tab(&window).get_checked_now().whole > 0);
+    let going: Vec<(String, String)> = tab(&window)
+        .get_going()
+        .iter()
+        .map(|line| (line.name.to_string(), line.version.to_string()))
+        .collect();
+    let named = |name: &str, version: &str| (name.to_owned(), version.to_owned());
+    assert_eq!(
+        going,
+        [
+            named("Android Studio", "v248"),
+            named("Android Studio", "v249"),
+            named("core22", "v2987"),
+        ],
+        "each named"
+    );
+    assert_eq!(tab(&window).get_checked_now(), crate::shown::size(8192));
+    assert_eq!(tab(&window).get_checked_later(), crate::shown::size(16384));
     tab(&window).invoke_cancel();
     assert!(!tab(&window).get_confirming());
-    assert!(asked.lock().unwrap().is_empty(), "cancelled: nothing asked");
-    tab(&window).invoke_retire();
-    tab(&window).invoke_confirm();
-    settled(&window);
-    let asked = asked.lock().unwrap().clone();
+    assert!(
+        fake.asked.lock().unwrap().is_empty(),
+        "cancelled: nothing asked"
+    );
+    let searches = fake.searches();
+    remove(&window);
+    let asked = fake.asked.lock().unwrap().clone();
     assert_eq!(asked.len(), 1);
-    assert_eq!(asked[0].len(), 2);
-    let recorded = recorded.lock().unwrap().clone();
-    let [alone, cached] = recorded.as_slice() else {
+    assert_eq!(asked[0].len(), 3);
+    let recorded = recorded.lock().unwrap().clone().unwrap();
+    let [alone, cached, unknown] = recorded.as_slice() else {
         panic!("one line each: {recorded:?}");
     };
     assert_eq!(alone.name, "Android Studio v248");
@@ -260,9 +320,67 @@ fn nothing_goes_unchecked_and_what_is_checked_goes_once_confirmed_each_in_the_hi
         "the cache holds it: nothing freed yet"
     );
     assert!(cached.later_bytes.is_some(), "given back later");
+    assert_eq!(unknown.name, "core22 v2987");
+    assert_eq!(unknown.freed_bytes, None, "its room unknown");
     assert_eq!(tab(&window).get_outcome(), ui::OldOutcome::Done);
-    assert_eq!(tab(&window).get_removed(), 2);
-    assert!(shows(&window, "2 anciennes versions retirées."));
+    assert_eq!(tab(&window).get_removed(), 3);
+    assert!(shows(&window, "3 éléments retirés."));
+    assert_eq!(tab(&window).get_checked_count(), 0, "nothing checked after");
+    assert!(
+        tab(&window).get_snaps().iter().all(|line| !line.checked),
+        "no line checked after"
+    );
+    assert!(fake.searches() > searches, "the tab looked at again");
+}
+
+#[test]
+fn a_search_never_comes_under_what_is_checked() {
+    // Catches a new report put under the boxes the user ticked: they would
+    // name other versions, or be lost.
+    if confined() {
+        return;
+    }
+    let files = snap_files();
+    let fake = Fake::new(files.path(), Retired::Removed);
+    let (window, _) = on_page(fake.seams(), writable());
+    tab(&window).invoke_toggle(1);
+    let searches = fake.searches();
+    window.global::<ui::Apps>().invoke_refresh();
+    for _ in 0..10 {
+        read_once();
+    }
+    assert_eq!(fake.searches(), searches, "held while a box is checked");
+    assert_eq!(tab(&window).get_checked_count(), 1);
+    assert!(tab(&window).get_snaps().row_data(1).unwrap().checked);
+    tab(&window).invoke_toggle(1);
+    read_until(&window, |_| fake.searches() > searches);
+}
+
+#[test]
+fn while_old_versions_go_nothing_else_on_the_screen_starts() {
+    // Catches a removal of old versions beside a move of leftovers, a
+    // forgetting or an uninstallation: two windows of polkit, two daemons
+    // asked at once.
+    if confined() {
+        return;
+    }
+    let files = snap_files();
+    let (release, waiting) = mpsc::channel();
+    let fake = Fake {
+        held: Some(Arc::new(Mutex::new(waiting))),
+        ..Fake::new(files.path(), Retired::Removed)
+    };
+    let (window, _) = on_page(fake.seams(), writable());
+    tab(&window).invoke_toggle(0);
+    tab(&window).invoke_retire();
+    tab(&window).invoke_confirm();
+    read_until(&window, |window| tab(window).get_retiring());
+    assert!(window.global::<ui::Leftovers>().get_busy());
+    assert!(window.global::<ui::Apps>().get_busy());
+    assert!(tab(&window).get_busy());
+    release.send(()).unwrap();
+    settled(&window);
+    assert!(!window.global::<ui::Leftovers>().get_busy());
 }
 
 #[test]
@@ -271,21 +389,15 @@ fn the_rights_refused_say_so_and_write_nothing() {
         return;
     }
     let files = snap_files();
-    let recorded = Arc::new(Mutex::new(Vec::new()));
+    let recorded = writable();
     let (window, _) = on_page(
-        seams_of(
-            files.path().to_path_buf(),
-            Arc::default(),
-            Retired::Failed(Why::NotAuthorized),
-        ),
+        Fake::new(files.path(), Retired::Failed(Why::NotAuthorized)).seams(),
         Arc::clone(&recorded),
     );
     tab(&window).invoke_toggle(0);
-    tab(&window).invoke_retire();
-    tab(&window).invoke_confirm();
-    settled(&window);
+    remove(&window);
     assert_eq!(tab(&window).get_outcome(), ui::OldOutcome::Refused);
-    assert!(recorded.lock().unwrap().is_empty());
+    assert_eq!(recorded.lock().unwrap().as_deref(), Some(&[][..]));
     assert!(shows(
         &window,
         "Rien n'a été retiré : les droits n'ont pas été donnés."
@@ -293,8 +405,32 @@ fn the_rights_refused_say_so_and_write_nothing() {
 }
 
 #[test]
+fn a_history_line_lost_or_a_room_withheld_is_said() {
+    // Catches a removal said whole when its history line could not be
+    // written, and runtimes' room said given back when flatpak did not
+    // prune its repository.
+    if confined() {
+        return;
+    }
+    let files = snap_files();
+    let fake = Fake {
+        withheld: true,
+        ..Fake::new(files.path(), Retired::Removed)
+    };
+    let (window, _) = on_page(fake.seams(), Arc::new(Mutex::new(None)));
+    tab(&window).invoke_toggle(0);
+    remove(&window);
+    assert!(tab(&window).get_unrecorded());
+    assert!(tab(&window).get_unpruned());
+    assert!(shows(
+        &window,
+        "Un élément retiré. Flatpak n'a pas encore rendu la place des environnements. L'historique n'a pas pu tout garder."
+    ));
+}
+
+#[test]
 fn nothing_found_says_so() {
-    let (window, _) = on_page(inert(), Arc::default());
+    let (window, _) = on_page(inert(), writable());
     assert!(tab(&window).get_searched());
     assert!(shows(&window, "Aucune ancienne version à retirer"));
     assert!(!tab(&window).get_has_total());

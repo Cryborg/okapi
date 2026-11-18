@@ -1698,7 +1698,7 @@ mod tests {
     #[test]
     fn an_old_version_removed_says_what_it_was_and_what_comes_back_later() {
         // Catches the part or the bytes given back later lost on the way to
-        // the file or back, and an application's line that would change.
+        // the file or back.
         let directory = tempfile::tempdir().unwrap();
         let entry = UninstallEntry {
             time: 7,

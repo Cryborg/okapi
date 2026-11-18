@@ -10,20 +10,20 @@ import { DashboardWords } from "dashboard-widgets.slint";
 import { AppSource, OldOutcome, OldRoom, OldVersionLine, OldVersions } from "apps-model.slint";
 
 export global OldWords {
-    // What a line says under its name.
+    // What a line says under its name: a snap's version in use, since when.
     pure public function detail(line: OldVersionLine) -> string {
         line.source == AppSource.snap
-            ? (line.has-since ? @tr("Révision {} · version actuelle installée {}", line.revision, DashboardWords.moment(line.since))
+            ? (line.has-since ? @tr("Révision {} · version actuelle depuis le {}", line.revision, DashboardWords.date(line.since))
                 : @tr("Révision {}", line.revision))
-            + (line.room == OldRoom.later ? @tr(" · rendue plus tard par snapd")
-                : line.room == OldRoom.shared ? @tr(" · fichier partagé avec un autre snap : ne libère rien")
-                : line.room == OldRoom.unknown ? @tr(" · place inconnue") : "")
             : @tr("Branche {}", line.version)
     }
 
-    // What its size column says.
+    // What its size column says: what it gives back, when known.
     pure public function size(line: OldVersionLine) -> string {
-        line.room == OldRoom.unknown ? "" : line.room == OldRoom.about ? @tr("environ {}", Words.size(line.size)) : Words.size(line.size)
+        line.room == OldRoom.unknown ? @tr("inconnue")
+            : line.room == OldRoom.shared ? @tr("partagée")
+            : line.room == OldRoom.about ? @tr("environ {}", Words.size(line.size))
+            : Words.size(line.size)
     }
 
     pure public function title(line: OldVersionLine) -> string {
@@ -110,12 +110,12 @@ component OldRow inherits Rectangle {
     }
 }
 
-// A card: its title, what it says, then its lines, a few high, scrolled.
+// A card: its title, what it says if anything, then its lines, a few high,
+// scrolled.
 component OldCard inherits Card {
     in property <string> title;
     in property <string> explained;
     in property <[OldVersionLine]> lines;
-    in property <string> note;
     VerticalLayout {
         alignment: start;
         VerticalLayout {
@@ -127,13 +127,8 @@ component OldCard inherits Card {
                 font-weight: Theme.weight-semibold;
                 wrap: word-wrap;
             }
-            Detail {
+            if root.explained != "": Detail {
                 text: root.explained;
-                wrap: word-wrap;
-            }
-            if root.note != "": Detail {
-                text: root.note;
-                color: Theme.warning;
                 wrap: word-wrap;
             }
         }
@@ -156,17 +151,13 @@ component OldCard inherits Card {
 
 export component OldVersionsView inherits VerticalLayout {
     spacing: Theme.spacing-l;
-    Detail {
-        text: @tr("Les versions qu'un snap garde après une mise à jour, et les environnements flatpak que plus aucune appli n'utilise. Rien n'est retiré sans votre accord.");
-        wrap: word-wrap;
-    }
     if OldVersions.snaps-unread: Banner {
         warning: true;
-        text: @tr("Les anciennes versions des snaps n'ont pas pu être lues : aucune n'est proposée. Le détail est dans le journal.");
+        text: @tr("Les anciennes versions des snaps n'ont pas pu être lues. Le détail est dans le journal.");
     }
     if OldVersions.flatpaks-unread: Banner {
         warning: true;
-        text: @tr("Les environnements flatpak n'ont pas pu être vérifiés en entier : aucun n'est proposé. Le détail est dans le journal.");
+        text: @tr("Les environnements flatpak n'ont pas pu être vérifiés. Le détail est dans le journal.");
     }
     if OldVersions.analysis-failed: Banner {
         warning: true;
@@ -175,11 +166,12 @@ export component OldVersionsView inherits VerticalLayout {
     if OldVersions.outcome != OldOutcome.none: Banner {
         warning: OldVersions.outcome != OldOutcome.done || OldVersions.unrecorded;
         text: (OldVersions.outcome == OldOutcome.done
-                ? (OldVersions.removed == 1 ? @tr("Une ancienne version retirée.") : @tr("{} anciennes versions retirées.", OldVersions.removed))
+                ? (OldVersions.removed == 1 ? @tr("Un élément retiré.") : @tr("{} éléments retirés.", OldVersions.removed))
             : OldVersions.outcome == OldOutcome.partly ? @tr("Retirées : {}. Gardées : {}. Le détail est dans le journal.", OldVersions.removed, OldVersions.kept)
             : OldVersions.outcome == OldOutcome.refused ? @tr("Rien n'a été retiré : les droits n'ont pas été donnés.")
             : OldVersions.outcome == OldOutcome.interrupted ? @tr("Le retrait s'est interrompu : la liste relue montre ce qui reste. Le détail est dans le journal.")
             : @tr("Rien n'a été retiré. Le détail est dans le journal."))
+            + (OldVersions.unpruned ? @tr(" Flatpak n'a pas encore rendu la place des environnements.") : "")
             + (OldVersions.unrecorded ? @tr(" L'historique n'a pas pu tout garder.") : "");
         ActionButton {
             kind: ButtonKind.ghost;
@@ -201,45 +193,30 @@ export component OldVersionsView inherits VerticalLayout {
     }
     if OldVersions.snaps.length > 0: OldCard {
         title: @tr("Anciennes versions des snaps");
-        explained: @tr("À chaque mise à jour, snapd garde la version d'avant pour pouvoir y revenir. La retirer rend la place, mais il ne sera plus possible d'y revenir ; snapd en gardera une nouvelle à la prochaine mise à jour.");
+        explained: @tr("snapd garde la version d'avant à chaque mise à jour, pour pouvoir y revenir.");
         lines: OldVersions.snaps;
     }
     if OldVersions.flatpaks.length > 0: OldCard {
         title: @tr("Environnements flatpak inutilisés");
-        explained: @tr("Ce dont des applis flatpak désinstallées avaient besoin, et que plus aucune appli installée n'utilise.");
-        note: OldVersions.other-accounts ? @tr("D'autres comptes utilisent cet ordinateur : Okapi ne voit pas les applis installées pour eux seuls, et l'une d'elles pourrait avoir besoin de ces environnements.") : "";
         lines: OldVersions.flatpaks;
     }
     if OldVersions.for-account-only > 0: Detail {
-        text: OldVersions.for-account-only == 1 ? @tr("Un environnement installé pour votre compte seulement n'est pas proposé : Okapi ne sait pas modifier cette installation.")
-            : @tr("{} environnements installés pour votre compte seulement ne sont pas proposés : Okapi ne sait pas modifier cette installation.", OldVersions.for-account-only);
+        text: OldVersions.for-account-only == 1 ? @tr("Un environnement installé pour votre compte seulement n'est pas proposé.")
+            : @tr("{} environnements installés pour votre compte seulement ne sont pas proposés.", OldVersions.for-account-only);
         wrap: word-wrap;
     }
-    if OldVersions.snaps.length + OldVersions.flatpaks.length > 0: Card {
-        background: Theme.surface-2;
-        HorizontalLayout {
-            padding: Theme.spacing-m;
-            padding-left: Theme.spacing-l;
-            spacing: Theme.spacing-m;
-            Detail {
-                horizontal-stretch: 1;
-                accessible-role: text;
-                text: OldVersions.checked-count == 0 ? @tr("Rien de coché. Cochez ce que vous voulez retirer.")
-                    : OldVersions.checked-count == 1 ? @tr("Un élément coché : {}.", Words.size(OldVersions.checked-size))
-                    : @tr("{} éléments cochés : {}.", OldVersions.checked-count, Words.size(OldVersions.checked-size));
-                vertical-alignment: center;
-            }
-            ActionButton {
-                text: @tr("Retirer la sélection");
-                kind: ButtonKind.danger;
-                enabled: OldVersions.checked-count > 0 && !OldVersions.busy;
-                clicked => {
-                    OldVersions.retire();
-                }
+    if OldVersions.snaps.length + OldVersions.flatpaks.length > 0: HorizontalLayout {
+        alignment: end;
+        ActionButton {
+            text: @tr("Retirer la sélection");
+            kind: ButtonKind.danger;
+            enabled: OldVersions.checked-count > 0 && !OldVersions.busy;
+            clicked => {
+                OldVersions.retire();
             }
         }
     }
-    if OldVersions.searched && !OldVersions.finding && !OldVersions.snaps-unread && !OldVersions.flatpaks-unread && OldVersions.snaps.length == 0 && OldVersions.flatpaks.length == 0: Card {
+    if OldVersions.searched && !OldVersions.finding && !OldVersions.analysis-failed && !OldVersions.snaps-unread && !OldVersions.flatpaks-unread && OldVersions.snaps.length == 0 && OldVersions.flatpaks.length == 0: Card {
         vertical-stretch: 1;
         VerticalLayout {
             alignment: center;
@@ -251,11 +228,6 @@ export component OldVersionsView inherits VerticalLayout {
                 font-size: Theme.font-title;
                 font-weight: Theme.weight-semibold;
                 horizontal-alignment: center;
-            }
-            Detail {
-                text: @tr("Les snaps ne gardent aucune ancienne version, et aucun environnement flatpak n'est inutilisé.");
-                horizontal-alignment: center;
-                wrap: word-wrap;
             }
         }
     }
@@ -273,8 +245,8 @@ export component OldVersionsConfirm inherits ModalFrame {
         OldVersions.cancel();
     }
     question := Text {
-        text: OldVersions.checked-count == 1 ? @tr("Retirer une ancienne version ?")
-            : @tr("Retirer {} anciennes versions ?", OldVersions.checked-count);
+        text: OldVersions.checked-count == 1 ? @tr("Retirer un élément ?")
+            : @tr("Retirer {} éléments ?", OldVersions.checked-count);
         accessible-role: none;
         color: Theme.text;
         font-size: Theme.font-title;
@@ -301,27 +273,28 @@ export component OldVersionsConfirm inherits ModalFrame {
         }
     }
     if OldVersions.checked-snaps: Detail {
-        text: @tr("Vous ne pourrez plus revenir à ces versions des snaps. Leurs données (celles de ces versions, pour tous les comptes) partent avec elles.");
+        text: @tr("Vous ne pourrez plus revenir à ces versions. Leurs données partent aussi, pour tous les comptes.");
         wrap: word-wrap;
     }
-    if OldVersions.checked-snaps: Detail {
-        text: (OldVersions.has-now ? @tr("Libéré tout de suite : {}. ", Words.size(OldVersions.checked-now)) : "")
-            + (OldVersions.has-later ? @tr("Rendu plus tard par snapd, quand il vide son cache de téléchargements (sous un jour pour une version de plus de 30 jours, au plus 30 jours sinon) : {}. La ligne « Cache de Snap » du Nettoyeur le rend aussi.", Words.size(OldVersions.checked-later)) : "")
-            + (OldVersions.has-shared ? @tr(" Un fichier partagé avec un autre snap ne libère rien.") : "")
-            + (OldVersions.has-unknown ? @tr(" La place de certaines est inconnue.") : "");
+    if OldVersions.has-now: Detail {
+        text: @tr("Libéré tout de suite : {}.", Words.size(OldVersions.checked-now));
+        wrap: word-wrap;
+    }
+    if OldVersions.has-later: Detail {
+        text: @tr("Rendu par snapd dans les 30 jours, ou par la ligne « Cache de Snap » du Nettoyeur : {}.", Words.size(OldVersions.checked-later));
         wrap: word-wrap;
     }
     if OldVersions.checked-runtimes: Detail {
-        text: @tr("Environnements flatpak : environ {}, rendus une fois que flatpak a élagué son dépôt.", Words.size(OldVersions.checked-about));
+        text: @tr("Environnements flatpak : environ {}.", Words.size(OldVersions.checked-about));
         wrap: word-wrap;
     }
     if OldVersions.checked-runtimes && OldVersions.other-accounts: Detail {
-        text: @tr("D'autres comptes utilisent cet ordinateur : Okapi ne voit pas les applis installées pour eux seuls, et l'une d'elles pourrait avoir besoin de ces environnements.");
+        text: @tr("D'autres comptes de cet ordinateur peuvent en avoir besoin.");
         color: Theme.warning;
         wrap: word-wrap;
     }
     Detail {
-        text: @tr("Votre mot de passe peut vous être demandé, parfois plusieurs fois.");
+        text: @tr("Votre mot de passe peut vous être demandé.");
         wrap: word-wrap;
     }
     HorizontalLayout {

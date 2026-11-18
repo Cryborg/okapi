@@ -293,7 +293,7 @@ fn results(window: &ui::AppWindow, folded: bool, language: Language) {
         category: ui::CategoryKind::Custom,
         label: "~/Projets/okapi/target".into(),
         description: slint::SharedString::new(),
-        note: ui::RowNote::Yours,
+        note: ui::RowNote::None,
         ..row(Apps, "pip Cache", ToChoose, false, language)
     });
     let cleaner = window.global::<ui::Cleaner>();

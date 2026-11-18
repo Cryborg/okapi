@@ -64,20 +64,20 @@ export enum RowKind { category, browser, group }
 // (`crates/app/src/sorting.rs`).
 export enum ResultsSort { name, entries, size }
 
-// What the note under a group says. Left to the user: a cache reset; a
-// maintenance of the system; a folder of the user's; the trash, whose
-// entries go for good; one of the administrator's that root's scan
-// unlocked; or a temporary folder outside /tmp. Out of reach without the
-// administrator: waiting for the rights; waiting for them, unreadable to
-// the user, or a maintenance measured by root only, what it holds
-// unknown; never the helper's to clean; nothing for root to clean.
-// Docker's prune, left to the user, or out of reach when Docker refuses
-// them. A maintenance the user runs by hand. None for a group preselected.
+// What the note under a group says. Left to the user: a cache reset; the
+// trash, whose entries go for good; or one of the administrator's that
+// root's scan unlocked. Out of reach without the administrator: waiting
+// for the rights; waiting for them, unreadable to the user, or a
+// maintenance measured by root only, what it holds unknown; never the
+// helper's to clean; nothing for root to clean. Docker's prune, left to
+// the user (unmeasured, no note), or out of reach when Docker refuses
+// them. A maintenance the user runs by hand. None for a group preselected
+// or any other left to the user: its unchecked box says it.
 // Waiting for the rights, or measured by root only, the line shows no note:
 // its badge and the banner above say it. Unlocked, or unreadable to the
 // user, a padlock beside its name says it, open or closed.
 export enum RowNote {
-    none, cache-reset, operation, yours, trash, rights-obtained, to-choose,
+    none, cache-reset, trash, rights-obtained,
     locked, unseen, unmeasured, unreachable, nothing, daemon, daemon-refused, by-hand,
 }
 

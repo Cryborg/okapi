@@ -827,8 +827,9 @@ fn badge_of(group: &GroupFacts) -> ui::ResultBadge {
     }
 }
 
-/// What the note under a group says: why it is left to the user, or where
-/// it stands while out of reach; nothing for a group preselected.
+/// What the note of a group says: the risk of one left to the user, or
+/// where it stands while out of reach; nothing for a group preselected or
+/// left to the user without risk.
 fn note_of(group: &GroupFacts) -> ui::RowNote {
     match &group.run_by {
         Some(RunBy::Docker(daemon)) => {
@@ -841,18 +842,15 @@ fn note_of(group: &GroupFacts) -> ui::RowNote {
         None => {}
     }
     match badge_of(group) {
-        ui::ResultBadge::Preselected => ui::RowNote::None,
-        // Its own folder, whatever a rule it joins says.
-        ui::ResultBadge::ToChoose if group.custom => ui::RowNote::Yours,
         ui::ResultBadge::ToChoose if group.preselection == Preselection::GoneForGood => {
             ui::RowNote::Trash
         }
         ui::ResultBadge::ToChoose if group.preselection == Preselection::CacheReset => {
             ui::RowNote::CacheReset
         }
-        ui::ResultBadge::ToChoose if group.seen == Seen::Operation => ui::RowNote::Operation,
         ui::ResultBadge::ToChoose if group.needs_admin => ui::RowNote::RightsObtained,
-        ui::ResultBadge::ToChoose => ui::RowNote::ToChoose,
+        // Left to the user, its unchecked box says it.
+        ui::ResultBadge::Preselected | ui::ResultBadge::ToChoose => ui::RowNote::None,
         ui::ResultBadge::Admin => match (group.admin, &group.targets, group.seen) {
             (AdminState::NothingToClean, ..) => ui::RowNote::Nothing,
             (_, None, _) => ui::RowNote::Unreachable,
@@ -2098,7 +2096,6 @@ pub mod tests {
             targets: Some(BTreeSet::from(["/var/crash".to_owned()])),
             admin: AdminState::Locked,
             checked_by_default: false,
-            custom: false,
             keys: BTreeSet::new(),
             seen: Seen::Counted {
                 entries: 1,
@@ -2171,7 +2168,7 @@ pub mod tests {
                     group.checked_by_default = false;
                 }),
                 ui::ResultBadge::ToChoose,
-                ui::RowNote::ToChoose,
+                ui::RowNote::None,
             ),
             // The trash, said gone for good.
             (
@@ -2194,10 +2191,11 @@ pub mod tests {
                 ui::ResultBadge::ToChoose,
                 ui::RowNote::CacheReset,
             ),
+            // The journal's vacuum, as any group root's scan unlocked.
             (
                 with(journal(), unlocked),
                 ui::ResultBadge::ToChoose,
-                ui::RowNote::Operation,
+                ui::RowNote::RightsObtained,
             ),
         ]);
     }
@@ -3999,7 +3997,7 @@ pub mod tests {
             .expect("the folder's group");
         assert_eq!(row.label, "~/build", "its path, never translated");
         assert_eq!(row.badge, ui::ResultBadge::ToChoose);
-        assert_eq!(row.note, ui::RowNote::Yours);
+        assert_eq!(row.note, ui::RowNote::None, "its category says whose it is");
         assert_eq!(
             row.state,
             ui::CheckState::Unchecked,

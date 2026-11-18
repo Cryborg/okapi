@@ -3602,7 +3602,7 @@ mod tests {
             Some(false),
             "never checked for the user (invariant 5)"
         );
-        assert!(shows(&window, "Opération du système : à cocher vous-même."));
+        padlock(&window, "Droits obtenus");
         unlocked.invoke_accessible_default_action();
         confirm(&window);
         watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);
@@ -4682,7 +4682,6 @@ mod tests {
             description.contains("7 jours") && !description.contains('{'),
             "its limits filled: {description}"
         );
-        assert!(shows(&window, "Élagué par Docker : à cocher vous-même."));
         let cleaner = window.global::<ui::Cleaner>();
         assert_eq!(cleaner.get_selected_operations(), 0);
         assert_eq!(

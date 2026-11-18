@@ -559,12 +559,6 @@ impl ScanGroup {
         }
     }
 
-    /// Whether one of its rules is a folder the user chose.
-    #[must_use]
-    pub fn holds_a_custom_folder(&self) -> bool {
-        self.attributes.holds_a_custom_folder()
-    }
-
     /// The folder the user chose whose contents the group is, when its label
     /// is that folder's: that of its first rule, which gives the label. Its
     /// label is then a path, never translated.

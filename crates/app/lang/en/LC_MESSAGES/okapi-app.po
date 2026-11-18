@@ -549,14 +549,6 @@ msgid "Illisible sans les droits administrateur"
 msgstr "Unreadable without administrator rights"
 
 msgctxt "ResultLine"
-msgid "Opération du système : à cocher vous-même."
-msgstr "A system operation: check it yourself."
-
-msgctxt "ResultLine"
-msgid "Élagué par Docker : à cocher vous-même."
-msgstr "Pruned by Docker: check it yourself."
-
-msgctxt "ResultLine"
 msgid "Docker refuse votre compte : il faut être dans le groupe docker, puis rouvrir la session."
 msgstr "Docker refuses your account: add it to the docker group, then log in again."
 
@@ -571,10 +563,6 @@ msgstr "Command to copy"
 msgctxt "ResultLine"
 msgid "Copier"
 msgstr "Copy"
-
-msgctxt "ResultLine"
-msgid "Dossier temporaire hors de /tmp et /var/tmp : à cocher vous-même."
-msgstr "A temporary folder outside /tmp and /var/tmp: check it yourself."
 
 msgctxt "Words"
 msgid "L'assistant administrateur s'est interrompu : des éléments ont pu être supprimés. Le détail est dans le journal."
@@ -4165,10 +4153,6 @@ msgstr "The folders added in Settings."
 msgctxt "ProblemBanner"
 msgid "Un dossier à nettoyer des réglages n'est pas un chemin absolu sans .. : rien ne peut démarrer. Corrigez-le ou retirez-le dans Réglages."
 msgstr "A folder to clean in the settings is not an absolute path without ..: nothing can start. Fix it or remove it in Settings."
-
-msgctxt "ResultLine"
-msgid "Votre dossier : à cocher vous-même à chaque nettoyage."
-msgstr "Your folder: check it yourself at each cleaning."
 
 msgctxt "ResultLine"
 msgid "Supprimé définitivement, sans retour possible : à cocher vous-même."

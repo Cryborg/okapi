@@ -89,10 +89,6 @@ pub struct GroupFacts {
     pub admin: AdminState,
     /// Checked before the user chooses: the engine's one rule.
     pub checked_by_default: bool,
-    /// It holds a folder the user chose: left to the user each time, said
-    /// so. One that shares a rule's root keeps the rule's name (the
-    /// folder's own, never translated, only when it names the group).
-    pub custom: bool,
     /// The keys of all its rules. The user's choice of it is kept by them
     /// only when it is checked by default: a group left to choose or the
     /// administrator's always starts unchecked (D-13).
@@ -254,7 +250,6 @@ impl GroupFacts {
                 }),
             admin: AdminState::Locked,
             checked_by_default,
-            custom: group.holds_a_custom_folder(),
             keys: group.origins().iter().map(Origin::key).collect(),
             seen: Seen::Counted {
                 entries: group.items().len(),
@@ -423,7 +418,6 @@ impl GroupFacts {
                 preselection.is_preselected(),
                 needs_admin,
             ),
-            custom: false,
             keys: BTreeSet::from([origin.key()]),
             seen,
             run_by: None,
@@ -1145,7 +1139,6 @@ mod tests {
             targets: None,
             admin: AdminState::Locked,
             checked_by_default: okapi_engine::checked_by_default(preselected, needs_admin),
-            custom: false,
             keys: BTreeSet::new(),
             seen: Seen::Counted {
                 entries: 2,

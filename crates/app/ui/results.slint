@@ -140,8 +140,7 @@ component ResultLine inherits VerticalLayout {
     // Where the focused line sits, for the list to bring it into view.
     callback focused(length, length);
 
-    // A group left to the user has no badge: its note says why (a warning
-    // for a cache reset).
+    // A group left to the user has no badge: its unchecked box says it.
     property <string> badge-text: line.badge == ResultBadge.preselected ? @tr("Présélectionné")
         : @tr("Administrateur");
     property <bool> is-group: line.kind == RowKind.group;
@@ -152,12 +151,6 @@ component ResultLine inherits VerticalLayout {
     // scan unlocked or only root may read, what its padlock says.
     property <string> note: line.note == RowNote.cache-reset
         ? @tr("Le prochain démarrage sera plus lent, le temps de recréer ce cache.")
-        : line.note == RowNote.operation
-        ? @tr("Opération du système : à cocher vous-même.")
-        : line.note == RowNote.yours
-        ? @tr("Votre dossier : à cocher vous-même à chaque nettoyage.")
-        : line.note == RowNote.daemon
-        ? @tr("Élagué par Docker : à cocher vous-même.")
         : line.note == RowNote.daemon-refused
         ? @tr("Docker refuse votre compte : il faut être dans le groupe docker, puis rouvrir la session.")
         : line.note == RowNote.by-hand
@@ -166,8 +159,6 @@ component ResultLine inherits VerticalLayout {
         ? @tr("Supprimé définitivement, sans retour possible : à cocher vous-même.")
         : line.note == RowNote.rights-obtained
         ? @tr("Droits obtenus")
-        : line.note == RowNote.to-choose
-        ? @tr("Dossier temporaire hors de /tmp et /var/tmp : à cocher vous-même.")
         : line.note == RowNote.nothing
         ? @tr("Rien à nettoyer avec les droits administrateur.")
         : line.note == RowNote.unreachable
@@ -339,15 +330,10 @@ component ResultLine inherits VerticalLayout {
                     padding-left: Theme.spacing-xs + Theme.checkbox + Theme.spacing-m;
                     VerticalLayout {
                         spacing: Theme.spacing-xxs;
-                        if line.badge == ResultBadge.to-choose && line.note != RowNote.yours && root.noted: IconNote {
+                        if line.badge == ResultBadge.to-choose && root.noted: IconNote {
                             text: root.note;
                             icon: @image-url("../assets/icons/triangle-alert.svg");
                             tone: Theme.warning;
-                        }
-                        if line.note == RowNote.yours: IconNote {
-                            text: root.note;
-                            icon: @image-url("../assets/icons/folder.svg");
-                            tone: Theme.text-2;
                         }
                         if line.badge == ResultBadge.admin && root.noted: Detail {
                             text: root.note;

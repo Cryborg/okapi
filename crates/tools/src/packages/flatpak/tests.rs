@@ -433,15 +433,17 @@ fn runtimes_are_removed_in_their_order_then_the_repository_pruned_once_without_t
     assert_eq!(ends(&removed), ["removed", "removed"]);
     assert!(removed.pruned);
     let calls: Vec<Heard> = heard.try_iter().collect();
-    assert!(calls.iter().all(|call| call.flags == 0 && call.strings.last().is_some_and(String::is_empty)), "{calls:?}");
+    assert!(
+        calls
+            .iter()
+            .all(|call| call.flags == 0 && call.strings.last().is_some_and(String::is_empty)),
+        "{calls:?}"
+    );
     let said: Vec<(&str, &str)> = calls
         .iter()
         .map(|call| (call.member.as_str(), call.strings[0].as_str()))
         .collect();
-    assert_eq!(
-        said,
-        [(UNINSTALL, PLATFORM), (UNINSTALL, SDK), (PRUNE, "")]
-    );
+    assert_eq!(said, [(UNINSTALL, PLATFORM), (UNINSTALL, SDK), (PRUNE, "")]);
 }
 
 #[test]
@@ -464,7 +466,10 @@ fn the_rights_refused_ask_no_other_runtime_and_a_runtime_kept_asks_the_next() {
     assert_eq!(ends(&removed), ["failed", "gone", "failed", "not asked"]);
     assert_eq!(told.into_inner(), [0, 1, 2, 3]);
     assert!(!removed.pruned, "nothing went: nothing pruned");
-    let asked: Vec<String> = heard.try_iter().map(|heard| heard.strings[0].clone()).collect();
+    let asked: Vec<String> = heard
+        .try_iter()
+        .map(|heard| heard.strings[0].clone())
+        .collect();
     assert_eq!(asked, strings(&[PLATFORM, SDK, CODECS]));
 
     // One went, the prune refused: the space is not known free.

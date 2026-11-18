@@ -116,7 +116,10 @@ struct Read {
 pub fn unused_runtimes(installations: &[Installation]) -> Result<Unused, String> {
     let _span = tracing::info_span!("flatpak_unused").entered();
     let read = read_all(installations).inspect_err(|why| {
-        tracing::warn!(why, "a flatpak installation not read whole: no runtime told unused");
+        tracing::warn!(
+            why,
+            "a flatpak installation not read whole: no runtime told unused"
+        );
     })?;
     let is_app = |deployed: &Deployed| deployed.reference.kind == RefKind::App;
     let pinned = |deployed: &Deployed| {
@@ -322,8 +325,7 @@ fn uses_of(reference: &FlatpakRef, deployment: &Path) -> Result<Uses, String> {
     let path = deployment.join(METADATA);
     let bytes = okapi_platform::read_regular_capped(&path, METADATA_LIMIT)
         .map_err(|error| format!("{}: {error}", path.display()))?;
-    let text =
-        String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8", path.display()))?;
+    let text = String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8", path.display()))?;
     let groups = key_file_groups(&text);
     let runtime = |value: &str| {
         FlatpakRef::runtime_of(value)
@@ -407,9 +409,8 @@ fn glob_matches(glob: &str, value: &str) -> bool {
     let Some(after) = value.strip_prefix(head) else {
         return false;
     };
-    let name_like = |character: char| {
-        character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
-    };
+    let name_like =
+        |character: char| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.');
     // Each place the star may stop, as long as it ran over a name's
     // characters only.
     after
@@ -433,8 +434,7 @@ fn pins(installation: &Path) -> Result<Vec<Pattern>, String> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(format!("{}: {error}", path.display())),
     };
-    let text =
-        String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8", path.display()))?;
+    let text = String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8", path.display()))?;
     let groups = key_file_groups(&text);
     values(&groups, CORE_GROUP, KEY_PINNED)
         .flat_map(|value| value.split(PATTERN_SEPARATOR))

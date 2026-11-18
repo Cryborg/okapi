@@ -125,7 +125,10 @@ fn another_person_is_one_who_logs_in_and_is_not_okapi_s_user() {
     let shared = format!("{accounts}lea:x:1002:1002::/home/lea:/usr/bin/zsh\n");
     assert!(others_in(&shared, Some(1000)));
     assert!(others_in(accounts, Some(1002)), "Okapi run by another");
-    assert!(other_accounts(Path::new("/nonexistent/passwd")), "unread: they may");
+    assert!(
+        other_accounts(Path::new("/nonexistent/passwd")),
+        "unread: they may"
+    );
 }
 
 #[test]
@@ -136,7 +139,12 @@ fn okapi_confined_or_without_snapd_proposes_nothing_and_says_why() {
         revision("gimp", "2", "app", "active"),
     ]);
     let go = AtomicBool::new(false);
-    let found = find(Ok(listed.clone()), places(root.path()), Path::new(ACCOUNTS), &go);
+    let found = find(
+        Ok(listed.clone()),
+        places(root.path()),
+        Path::new(ACCOUNTS),
+        &go,
+    );
     assert_eq!(found.report.versions().len(), 1);
     assert_eq!(found.snaps, OldReading::Read);
     assert_eq!(found.flatpaks, OldReading::Absent, "no installation there");
@@ -188,7 +196,11 @@ fn report_of_two(snap_files: &Path) -> (OldVersionReport, Vec<Value>) {
 }
 
 /// What [`retire`] told, by revision, asking `snapd`.
-fn retired(report: &OldVersionReport, ids: &[OldVersionId], snapd: &Snapd) -> Vec<(String, Retired)> {
+fn retired(
+    report: &OldVersionReport,
+    ids: &[OldVersionId],
+    snapd: &Snapd,
+) -> Vec<(String, Retired)> {
     let told = RefCell::new(Vec::new());
     retire(
         report,
@@ -235,10 +247,22 @@ fn a_revision_still_old_is_asked_alone_and_followed() {
         ]
     );
     let asked: Vec<String> = requests.try_iter().collect();
-    assert!(asked[0].starts_with("GET /v2/snaps?select=all "), "{}", asked[0]);
+    assert!(
+        asked[0].starts_with("GET /v2/snaps?select=all "),
+        "{}",
+        asked[0]
+    );
     assert!(asked[1].starts_with("POST /v2/snaps/gimp "), "{}", asked[1]);
-    assert!(asked[1].ends_with(r#"{"action":"remove","revision":"1"}"#), "{}", asked[1]);
-    assert!(asked[4].ends_with(r#"{"action":"remove","revision":"2"}"#), "{}", asked[4]);
+    assert!(
+        asked[1].ends_with(r#"{"action":"remove","revision":"1"}"#),
+        "{}",
+        asked[1]
+    );
+    assert!(
+        asked[4].ends_with(r#"{"action":"remove","revision":"2"}"#),
+        "{}",
+        asked[4]
+    );
 }
 
 #[test]
@@ -251,7 +275,10 @@ fn a_revision_gone_or_in_use_again_is_never_asked() {
     let gone: Vec<Value> = revisions[1..].to_vec();
     let (_directory, snapd, requests) =
         crate::packages::snapd::fake::scripted(vec![Some(listing(&gone))]);
-    assert_eq!(retired(&report, first, &snapd), [("1".to_owned(), Retired::Gone)]);
+    assert_eq!(
+        retired(&report, first, &snapd),
+        [("1".to_owned(), Retired::Gone)]
+    );
     assert_eq!(requests.try_iter().count(), 1);
 
     let in_use_again = vec![
@@ -261,7 +288,10 @@ fn a_revision_gone_or_in_use_again_is_never_asked() {
     ];
     let (_directory, snapd, requests) =
         crate::packages::snapd::fake::scripted(vec![Some(listing(&in_use_again))]);
-    assert_eq!(retired(&report, first, &snapd), [("1".to_owned(), Retired::Changed)]);
+    assert_eq!(
+        retired(&report, first, &snapd),
+        [("1".to_owned(), Retired::Changed)]
+    );
     assert_eq!(requests.try_iter().count(), 1);
 
     let disabled: Vec<Value> = revisions
@@ -353,7 +383,11 @@ fn a_runtime_still_unused_goes_and_one_used_since_stays() {
     let app = system.join("app/org.gnome.Maps/x86_64/stable");
     std::fs::create_dir_all(app.join("def")).unwrap();
     std::os::unix::fs::symlink("def", app.join("active")).unwrap();
-    std::fs::write(app.join("def/metadata"), "[Application]\nruntime=org.gnome.Platform/x86_64/45\n").unwrap();
+    std::fs::write(
+        app.join("def/metadata"),
+        "[Application]\nruntime=org.gnome.Platform/x86_64/45\n",
+    )
+    .unwrap();
     let (helper, heard) = fake_helper(|_, _| Answer::Done);
     let told = RefCell::new(Vec::new());
     retire(
@@ -364,15 +398,22 @@ fn a_runtime_still_unused_goes_and_one_used_since_stays() {
         Duration::from_mins(1),
         &|version, retired| {
             if let OldKind::Runtime(runtime) = version.kind() {
-                told.borrow_mut().push((runtime.reference.to_string(), retired.clone()));
+                told.borrow_mut()
+                    .push((runtime.reference.to_string(), retired.clone()));
             }
         },
     );
     assert_eq!(
         told.into_inner(),
         [
-            ("runtime/org.gnome.Platform/x86_64/45".to_owned(), Retired::Changed),
-            ("runtime/org.kde.Platform/x86_64/45".to_owned(), Retired::Removed),
+            (
+                "runtime/org.gnome.Platform/x86_64/45".to_owned(),
+                Retired::Changed
+            ),
+            (
+                "runtime/org.kde.Platform/x86_64/45".to_owned(),
+                Retired::Removed
+            ),
         ]
     );
     let asked: Vec<(String, Vec<String>)> = heard

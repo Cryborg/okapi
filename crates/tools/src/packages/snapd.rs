@@ -425,9 +425,7 @@ impl Snapd {
         let envelope = self.request(&Request {
             method: "POST",
             path: &format!("/v2/snaps/{name}"),
-            body: Some(
-                serde_json::json!({ "action": "remove", "revision": revision }).to_string(),
-            ),
+            body: Some(serde_json::json!({ "action": "remove", "revision": revision }).to_string()),
             interactive: true,
             wait: ASKING_WAIT,
         })?;

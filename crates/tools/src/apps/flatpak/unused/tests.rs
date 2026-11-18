@@ -23,7 +23,12 @@ fn deploy(
     branch: &str,
     metadata: &str,
 ) -> PathBuf {
-    let branch_folder = installation.path.join(kind).join(id).join(arch).join(branch);
+    let branch_folder = installation
+        .path
+        .join(kind)
+        .join(id)
+        .join(arch)
+        .join(branch);
     let deployment = branch_folder.join("abc");
     std::fs::create_dir_all(&deployment).unwrap();
     std::os::unix::fs::symlink("abc", branch_folder.join("active")).unwrap();
@@ -68,19 +73,36 @@ fn a_runtime_no_application_reaches_is_unused_with_its_own_extensions() {
     app(
         &system,
         "org.gimp.GIMP",
-        &format!("[Application]\nname=org.gimp.GIMP\nruntime={PLATFORM}/{X86}/45\nsdk={SDK}/{X86}/45\n"),
+        &format!(
+            "[Application]\nname=org.gimp.GIMP\nruntime={PLATFORM}/{X86}/45\nsdk={SDK}/{X86}/45\n"
+        ),
     );
     runtime(&system, PLATFORM, "45", &platform_metadata("45"));
     runtime(&system, SDK, "45", &format!("[Runtime]\nname={SDK}\n"));
     runtime(&system, &format!("{PLATFORM}.Locale"), "45", "[Runtime]\n");
     runtime(&system, "org.freedesktop.Platform.GL", "1.4", "[Runtime]\n");
-    runtime(&system, "org.freedesktop.Platform.GL.default", "1.4", "[Runtime]\n");
-    runtime(&system, "org.freedesktop.Platform.GL.nvidia-570", "1.4", "[Runtime]\n");
+    runtime(
+        &system,
+        "org.freedesktop.Platform.GL.default",
+        "1.4",
+        "[Runtime]\n",
+    );
+    runtime(
+        &system,
+        "org.freedesktop.Platform.GL.nvidia-570",
+        "1.4",
+        "[Runtime]\n",
+    );
     // An older one, once GIMP's: nothing reaches it, nor its translations.
     runtime(&system, PLATFORM, "44", &platform_metadata("44"));
     runtime(&system, &format!("{PLATFORM}.Locale"), "44", "[Runtime]\n");
     // A driver of a branch no runtime used names.
-    runtime(&system, "org.freedesktop.Platform.GL.default", "1.2", "[Runtime]\n");
+    runtime(
+        &system,
+        "org.freedesktop.Platform.GL.default",
+        "1.2",
+        "[Runtime]\n",
+    );
     assert_eq!(
         unused_of(&[system]),
         [
@@ -100,9 +122,18 @@ fn what_another_installation_uses_or_holds_stays_and_the_user_s_is_only_counted(
     let root = tempfile::tempdir().unwrap();
     let system = installation(root.path(), "system", true);
     let user = installation(root.path(), "user", false);
-    app(&user, "org.mozilla.firefox", &format!("[Application]\nruntime={PLATFORM}/{X86}/46\n"));
+    app(
+        &user,
+        "org.mozilla.firefox",
+        &format!("[Application]\nruntime={PLATFORM}/{X86}/46\n"),
+    );
     runtime(&system, PLATFORM, "46", "[Runtime]\n");
-    runtime(&user, "org.kde.Platform", "6.8", &format!("[Runtime]\nsdk={SDK}/{X86}/46\n"));
+    runtime(
+        &user,
+        "org.kde.Platform",
+        "6.8",
+        &format!("[Runtime]\nsdk={SDK}/{X86}/46\n"),
+    );
     runtime(&system, SDK, "46", "[Runtime]\n");
     runtime(&system, "org.kde.Platform", "6.8", "[Runtime]\n");
     // Two of the user's nothing uses: counted, never proposed.
@@ -139,7 +170,12 @@ fn a_pinned_runtime_stays_with_what_it_uses_and_an_extension_keeps_what_it_exten
         "[core]\nrepo_version=1\nxa.pinned=runtime/org.gnome.Sdk/*/4*;org.kde.*//;\n",
     )
     .unwrap();
-    runtime(&system, SDK, "47", "[Runtime]\nsdk=org.gnome.Sdk.Docs/x86_64/47\n");
+    runtime(
+        &system,
+        SDK,
+        "47",
+        "[Runtime]\nsdk=org.gnome.Sdk.Docs/x86_64/47\n",
+    );
     runtime(&system, "org.gnome.Sdk.Docs", "47", "[Runtime]\n");
     runtime(&system, "org.kde.Sdk", "6.9", "[Runtime]\n");
     // Not matched: another branch, another id.
@@ -159,7 +195,12 @@ fn a_pinned_runtime_stays_with_what_it_uses_and_an_extension_keeps_what_it_exten
         "[Runtime]\n\n[Extra Data]\nname=x\n\n[ExtensionOf]\nruntime=org.freedesktop.Platform/x86_64/23.08\n",
     );
     runtime(&system, "org.freedesktop.Platform", "23.08", "[Runtime]\n");
-    runtime(&system, "org.freedesktop.Platform.Locale", "1", "[ExtensionOf]\nref=runtime/org.freedesktop.Platform/x86_64/24.08\n");
+    runtime(
+        &system,
+        "org.freedesktop.Platform.Locale",
+        "1",
+        "[ExtensionOf]\nref=runtime/org.freedesktop.Platform/x86_64/24.08\n",
+    );
     assert_eq!(
         unused_of(&[system]),
         [
@@ -175,10 +216,20 @@ fn a_runtime_of_another_architecture_is_its_own() {
     // application uses keeping the x86_64 one, or the other way.
     let root = tempfile::tempdir().unwrap();
     let system = installation(root.path(), "system", true);
-    deploy(&system, "app", "com.valvesoftware.Steam", "i386", "stable", &format!("[Application]\nruntime={PLATFORM}/i386/45\n"));
+    deploy(
+        &system,
+        "app",
+        "com.valvesoftware.Steam",
+        "i386",
+        "stable",
+        &format!("[Application]\nruntime={PLATFORM}/i386/45\n"),
+    );
     deploy(&system, "runtime", PLATFORM, "i386", "45", "[Runtime]\n");
     runtime(&system, PLATFORM, "45", "[Runtime]\n");
-    assert_eq!(unused_of(&[system]), ["runtime/org.gnome.Platform/x86_64/45"]);
+    assert_eq!(
+        unused_of(&[system]),
+        ["runtime/org.gnome.Platform/x86_64/45"]
+    );
 }
 
 /// What spoils an installation, and how.
@@ -194,7 +245,11 @@ fn anything_read_in_part_tells_no_runtime_unused() {
             std::fs::remove_file(deployment.join(METADATA)).unwrap();
         }),
         ("a runtime named unreadably", &|system| {
-            app(system, "org.a.A", "[Application]\nruntime=org.gnome.Platform/45\n");
+            app(
+                system,
+                "org.a.A",
+                "[Application]\nruntime=org.gnome.Platform/45\n",
+            );
         }),
         ("a metadata not in UTF-8", &|system| {
             let deployment = deploy(system, "app", "org.a.A", X86, "stable", "");
@@ -227,7 +282,11 @@ fn anything_read_in_part_tells_no_runtime_unused() {
         let root = tempfile::tempdir().unwrap();
         let system = installation(root.path(), "system", true);
         runtime(&system, PLATFORM, "44", "[Runtime]\n");
-        assert_eq!(unused_of(std::slice::from_ref(&system)).len(), 1, "{what}: before");
+        assert_eq!(
+            unused_of(std::slice::from_ref(&system)).len(),
+            1,
+            "{what}: before"
+        );
         spoil(&system);
         assert!(unused_runtimes(&[system]).is_err(), "{what}");
     }
@@ -305,6 +364,14 @@ fn the_room_given_back_is_that_of_the_files_shared_with_the_repository_alone() {
     let expected = blocks(&deployment.join("files/own")) + blocks(&twice);
     let go = AtomicBool::new(false);
     assert_eq!(about_bytes(&deployment, &go), Some(expected));
-    assert_eq!(about_bytes(&deployment, &AtomicBool::new(true)), None, "stopped");
-    assert_eq!(about_bytes(&deployment.join("files/link"), &go), None, "a link");
+    assert_eq!(
+        about_bytes(&deployment, &AtomicBool::new(true)),
+        None,
+        "stopped"
+    );
+    assert_eq!(
+        about_bytes(&deployment.join("files/link"), &go),
+        None,
+        "a link"
+    );
 }

@@ -206,11 +206,19 @@ fn offered(snap: &str, revisions: Vec<Revision>, snap_files: &Path) -> Vec<SnapR
         return Vec::new();
     };
     if !TYPES_OFFERED.contains(&active.kind.as_str()) {
-        tracing::info!(snap, kind = active.kind, "a snap of this type keeps its old revisions");
+        tracing::info!(
+            snap,
+            kind = active.kind,
+            "a snap of this type keeps its old revisions"
+        );
         return Vec::new();
     }
     let Some(in_use) = number(&active.number) else {
-        tracing::warn!(snap, revision = active.number, "the revision in use not a number: none offered");
+        tracing::warn!(
+            snap,
+            revision = active.number,
+            "the revision in use not a number: none offered"
+        );
         return Vec::new();
     };
     let current_since = active
@@ -283,7 +291,10 @@ fn others_in(accounts: &str, me: Option<u32>) -> bool {
 /// them; unreadable, they may.
 fn other_accounts(accounts: &Path) -> bool {
     match okapi_platform::read_regular_capped(accounts, ACCOUNTS_LIMIT) {
-        Ok(bytes) => others_in(&String::from_utf8_lossy(&bytes), okapi_platform::real_user()),
+        Ok(bytes) => others_in(
+            &String::from_utf8_lossy(&bytes),
+            okapi_platform::real_user(),
+        ),
         Err(error) => {
             tracing::warn!(path = %accounts.display(), %error, "the accounts unread: others taken to log in");
             true
@@ -423,7 +434,10 @@ pub fn retire(
         .map(|id| report.find(*id))
         .collect::<Option<Vec<&OldVersion>>>()
     else {
-        tracing::warn!(?ids, "an old version of another report asked for: nothing asked (invariant 1)");
+        tracing::warn!(
+            ?ids,
+            "an old version of another report asked for: nothing asked (invariant 1)"
+        );
         for id in ids {
             if let Some(version) = report.find(*id) {
                 told(version, &Retired::Failed(Why::Unclear));
@@ -458,11 +472,7 @@ pub fn retire(
 
 /// Whether `revision` is still offered as read now: `Err` says what it
 /// became, nothing asked.
-fn still_old(
-    snapd: &Snapd,
-    revision: &SnapRevision,
-    snap_files: &Path,
-) -> Result<(), Retired> {
+fn still_old(snapd: &Snapd, revision: &SnapRevision, snap_files: &Path) -> Result<(), Retired> {
     let listed = snapd.snaps().map_err(|error| {
         tracing::warn!(%error, "snapd's revisions unread again: nothing asked");
         Retired::Failed(Why::Unclear)
@@ -478,7 +488,9 @@ fn still_old(
         return Ok(());
     }
     if listed_still(&listed, revision) {
-        tracing::warn!("the revision no longer offered (in use again, its snap disabled): nothing asked");
+        tracing::warn!(
+            "the revision no longer offered (in use again, its snap disabled): nothing asked"
+        );
         Err(Retired::Changed)
     } else {
         tracing::info!("the revision gone already");
@@ -514,11 +526,7 @@ fn retire_revision(
     if let Err(retired) = still_old(snapd, revision, snap_files) {
         return retired;
     }
-    let gone = || {
-        snapd
-            .snaps()
-            .map(|listed| !listed_still(&listed, revision))
-    };
+    let gone = || snapd.snaps().map(|listed| !listed_still(&listed, revision));
     let change = match snapd.remove_revision(&revision.snap, &revision.revision) {
         Ok(change) => change,
         Err(error) => {

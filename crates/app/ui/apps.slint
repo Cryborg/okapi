@@ -6,7 +6,7 @@ import { LineEdit, ListView } from "std-widgets.slint";
 import { Theme, Screen } from "theme.slint";
 import {
     ActionButton, Banner, ButtonKind, Card, CheckMark, Detail, FocusRing, Icon, IconButton,
-    Badge, ModalFrame, ProgressBar, SortHeader, TitleLine,
+    Badge, ModalFrame, ProgressBar, SortHeader, StateIcon, TitleLine,
 } from "widgets.slint";
 import { Size, Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
@@ -158,17 +158,22 @@ component AppRow inherits Rectangle {
                     color: Theme.text-2;
                     font-size: Theme.font-caption;
                 }
-                if line.system: Icon {
-                    source: @image-url("../assets/icons/lock.svg");
-                    colorize: Theme.text-2;
+                if line.system: StateIcon {
+                    icon: @image-url("../assets/icons/lock.svg");
+                    label: @tr("Fait partie du système");
                     width: Theme.icon-badge;
                     height: Theme.icon-badge;
                     cross-axis-self-alignment: center;
                 }
-                if line.system || line.has-old || line.uninstalling: Text {
-                    text: line.uninstalling ? @tr("· Désinstallation en cours")
-                        : line.system ? @tr("· Fait partie du système")
-                        : @tr("· Anciennes versions : {}", Words.size(line.old-size));
+                if line.uninstalling: StateIcon {
+                    icon: @image-url("../assets/icons/loader.svg");
+                    label: @tr("Désinstallation en cours");
+                    width: Theme.icon-badge;
+                    height: Theme.icon-badge;
+                    cross-axis-self-alignment: center;
+                }
+                if line.has-old && !line.system && !line.uninstalling: Text {
+                    text: @tr("· Anciennes versions : {}", Words.size(line.old-size));
                     accessible-role: none;
                     color: Theme.text-2;
                     font-size: Theme.font-caption;
@@ -442,8 +447,8 @@ component Panel inherits Card {
             }
             if Apps.detail.has-old: Detail {
                 text: Apps.detail.old-versions == 1
-                    ? @tr("Version précédente gardée par le système : elle part avec l'appli.")
-                    : @tr("{} versions précédentes gardées par le système : elles partent avec l'appli.", Apps.detail.old-versions);
+                    ? @tr("Version précédente gardée par le système.")
+                    : @tr("{} versions précédentes gardées par le système.", Apps.detail.old-versions);
                 wrap: word-wrap;
             }
         }
@@ -794,7 +799,7 @@ component LeftoverRow inherits Rectangle {
                 overflow: elide;
             }
             Detail {
-                text: line.checkable ? line.path : @tr("{} : trop de fichiers pour être vérifié, Okapi n'y touche pas.", line.path);
+                text: line.checkable ? line.path : @tr("Trop de fichiers pour être vérifié : {}", line.path);
                 accessible-role: none;
                 overflow: elide;
             }
@@ -928,10 +933,6 @@ component LeftoverLines inherits FocusScope {
 // the packages' settings the system keeps, or nothing.
 component LeftoversView inherits VerticalLayout {
     spacing: Theme.spacing-l;
-    Detail {
-        text: @tr("Ce que des applis désinstallées ont laissé derrière elles.");
-        wrap: word-wrap;
-    }
     if Leftovers.blocked == LeftoversBlock.settings: Banner {
         warning: true;
         text: @tr("Les réglages d'Okapi n'ont pas pu être lus : aucun reste n'est proposé. Le détail est dans le journal.");
@@ -1076,7 +1077,7 @@ component LeftoversView inherits VerticalLayout {
                     wrap: word-wrap;
                 }
                 Detail {
-                    text: @tr("snapd garde 31 jours (sauf réglage) une copie des données d'un snap désinstallé, pour tous les comptes. L'oublier rend la place tout de suite.");
+                    text: @tr("snapd garde 31 jours (sauf réglage) une copie des données d'un snap désinstallé, pour tous les comptes.");
                     wrap: word-wrap;
                 }
             }
@@ -1107,7 +1108,7 @@ component LeftoversView inherits VerticalLayout {
                 wrap: word-wrap;
             }
             Detail {
-                text: @tr("Gardés par le système pour une réinstallation. Ils ne prennent presque pas de place, Okapi n'y touche pas.");
+                text: @tr("Gardés pour une réinstallation. Okapi n'y touche pas.");
                 wrap: word-wrap;
             }
         }

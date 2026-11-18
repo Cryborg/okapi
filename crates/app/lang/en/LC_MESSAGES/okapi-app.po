@@ -4415,8 +4415,8 @@ msgid "Gros fichiers"
 msgstr "Large files"
 
 msgctxt "BigStart"
-msgid "Trouvez les plus gros fichiers de vos dossiers. Rien n'est coché d'avance, et tout passe par la corbeille."
-msgstr "Find the largest files of your folders. Nothing is checked beforehand, and everything goes through the trash."
+msgid "Trouvez les plus gros fichiers de vos dossiers. Tout passe par la corbeille."
+msgstr "Find the largest files of your folders. Everything goes through the trash."
 
 msgctxt "BigStart"
 msgid "Seuls les fichiers de plus de {} sont listés. Les dossiers cachés (réglages et données des applications), les dossiers de projet, ~/snap et vos exclusions ne sont jamais parcourus : pour voir la place qu'ils prennent, passez par Espace disque."

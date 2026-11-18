@@ -604,8 +604,28 @@ fn a_file_written_since_the_search_stays_and_the_receipt_says_why() {
     assert_eq!(stayed[0].folder, "~/Vidéos");
     assert_eq!(stayed[0].why, ui::ReceiptWhy::Changed);
     assert!(shows(&window, "rendu.mkv, A changé depuis la recherche"));
-    // Its folder, left out of its line's label, is read where it is written.
-    assert!(shows(&window, "~/Vidéos"));
+    // Its folder and its size, left out of its line's label, are read where
+    // they are written, once.
+    let kept_line =
+        i_slint_backend_testing::ElementHandle::find_by_element_type_name(&window, "KeptLine")
+            .next()
+            .unwrap();
+    let read: Vec<String> = kept_line
+        .query_descendants()
+        .find_all()
+        .into_iter()
+        .filter_map(|element| element.accessible_label().map(String::from))
+        .collect();
+    assert_eq!(read.len(), 2, "{read:?}");
+    assert_eq!(read[0], "~/Vidéos");
+    assert!(read[1].ends_with(" Mo"), "its size: {}", read[1]);
+    for said in &read {
+        assert_eq!(
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&window, said).count(),
+            1,
+            "{said}"
+        );
+    }
 }
 
 #[test]

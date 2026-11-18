@@ -293,10 +293,10 @@ component KeptLine inherits Rectangle {
                 wrap: word-wrap;
             }
         }
+        // Read, as its folder: the line's label leaves it out.
         Text {
             width: Theme.disk-size-width;
             text: Words.size(root.kept.size);
-            accessible-role: none;
             color: Theme.text;
             horizontal-alignment: right;
             vertical-alignment: center;

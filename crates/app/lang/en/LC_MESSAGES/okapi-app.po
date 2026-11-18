@@ -883,8 +883,8 @@ msgid "{} est ouvert"
 msgstr "{} is open"
 
 msgctxt "BrowserQuestion"
-msgid "{} se sert encore de son cache. Fermez-le pour le nettoyer, ou laissez-le de côté cette fois."
-msgstr "{} still uses its cache. Close it to clean it, or leave it out this time."
+msgid "{} se sert encore de son cache. Fermez-le pour nettoyer son cache, ou laissez-le de côté cette fois."
+msgstr "{} still uses its cache. Close it to clean its cache, or leave it out this time."
 
 msgctxt "BrowserQuestion"
 msgid "Fermeture de {}…"

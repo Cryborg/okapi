@@ -644,7 +644,7 @@ component BrowserQuestion inherits ModalFrame {
         font-weight: Theme.weight-semibold;
     }
     Detail {
-        text: @tr("{} se sert encore de son cache. Fermez-le pour le nettoyer, ou laissez-le de côté cette fois.", Cleaner.browser-name);
+        text: @tr("{} se sert encore de son cache. Fermez-le pour nettoyer son cache, ou laissez-le de côté cette fois.", Cleaner.browser-name);
         wrap: word-wrap;
     }
     if Cleaner.browser-step != BrowserStep.ask: Line {

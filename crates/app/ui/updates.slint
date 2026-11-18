@@ -6,7 +6,7 @@ import { Theme, Screen } from "theme.slint";
 import { Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
 import { DayKind } from "dashboard-model.slint";
-import { ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, Line, ModalFrame, ProgressBar, ReadIconNote, Title } from "widgets.slint";
+import { ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, Line, ModalFrame, ProgressBar, ReadIconNote, TitleLine } from "widgets.slint";
 import { Updates, UpdatesStep, SourceState, SourceFailure, UpdateKind, SystemLine, SnapLine, InstallStep, InstallTarget, InstallPhase, InstallEnd, InstallWhy } from "updates-model.slint";
 
 // What the screen says, the same for the eye and the ear.
@@ -476,17 +476,19 @@ component SourceTitle inherits HorizontalLayout {
         overflow: elide;
     }
     Detail {
-        horizontal-stretch: 1;
         text: root.kind;
         vertical-alignment: center;
         wrap: no-wrap;
     }
-    @children
-    if root.aside != "": Detail {
+    // On the left, by the source's name: never a phrase beside a button.
+    Detail {
+        horizontal-stretch: 1;
         text: root.aside;
         vertical-alignment: center;
         wrap: no-wrap;
+        overflow: elide;
     }
+    @children
 }
 
 // The note that says snapd updates its snaps by itself.
@@ -817,8 +819,12 @@ export component UpdatesPage inherits VerticalLayout {
                 VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: Theme.spacing-xxs;
-                    Title {
+                    TitleLine {
                         text: @tr("Mises à jour");
+                        loading: root.searching && Updates.install-step != InstallStep.verifying;
+                        loading-text: Updates.waiting ? @tr("Recherche en attente d'une autre installation…")
+                            : Updates.refreshing ? @tr("Téléchargement des listes de paquets…")
+                            : @tr("Recherche des mises à jour…");
                     }
                     // The summary stands out, the moment does not: read as one.
                     if root.read: Rectangle {
@@ -844,12 +850,18 @@ export component UpdatesPage inherits VerticalLayout {
                             }
                         }
                     }
-                    if !root.read: Detail {
+                    // The list of before, still shown while a search runs.
+                    if root.searching && Updates.previous-shown: Detail {
+                        text: @tr("Liste d'avant, recherchée {}", UpdatesWords.when());
+                        wrap: no-wrap;
+                        overflow: elide;
+                    }
+                    if !root.read && !(root.searching && Updates.previous-shown): Detail {
                         text: @tr("Ce qui attend une mise à jour sur cet ordinateur.");
                     }
                 }
                 ActionButton {
-                    text: root.searching ? @tr("Recherche…") : @tr("Rechercher maintenant");
+                    text: @tr("Rechercher maintenant");
                     icon: @image-url("../assets/icons/rotate-ccw.svg");
                     kind: ButtonKind.secondary;
                     enabled: !root.searching && Updates.install-step == InstallStep.idle;
@@ -932,36 +944,6 @@ export component UpdatesPage inherits VerticalLayout {
                 }
             }
             if Updates.result-shown: Outcome { }
-
-            if root.searching && Updates.install-step != InstallStep.verifying: Card {
-                VerticalLayout {
-                    padding: Theme.spacing-l;
-                    spacing: Theme.spacing-s;
-                    HorizontalLayout {
-                        spacing: Theme.spacing-s;
-                        Line {
-                            horizontal-stretch: 1;
-                            text: Updates.waiting ? @tr("Une autre installation est en cours : la recherche attend qu'elle finisse.")
-                                : Updates.refreshing ? @tr("Téléchargement des listes de paquets, puis recherche des mises à jour…")
-                                : @tr("Recherche des mises à jour…");
-                            accessible-role: text;
-                            accessible-live-region: polite;
-                        }
-                        Detail {
-                            text: @tr("Rien n'est installé.");
-                            vertical-alignment: center;
-                            wrap: no-wrap;
-                        }
-                    }
-                    ProgressBar {
-                        indeterminate: true;
-                        label: @tr("Recherche en cours, durée inconnue");
-                    }
-                }
-            }
-            if root.searching && Updates.previous-shown: Detail {
-                text: @tr("En attendant, voici la dernière liste, recherchée {}.", UpdatesWords.when());
-            }
 
             if root.settled: Settled {
                 no-source: root.no-source;

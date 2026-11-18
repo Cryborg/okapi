@@ -3,7 +3,7 @@ import { Theme, Screen } from "theme.slint";
 import { Size, Words } from "cleaner-model.slint";
 import { VolumeShown } from "dashboard-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
-import { ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, IconButton, ProgressBar, Title } from "widgets.slint";
+import { ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, IconButton, ProgressBar, Title, TitleLine } from "widgets.slint";
 import {
     DiskUsage, DiskStep, DiskPhase, DiskVolumes, DiskFiles, DiskRefusal, DiskLine, DiskLineKind, DiskLineState, DiskUnreadable,
 } from "disk-usage-model.slint";
@@ -238,8 +238,10 @@ component Start inherits VerticalLayout {
     spacing: Theme.spacing-xl;
     VerticalLayout {
         spacing: Theme.spacing-xs;
-        Title {
+        TitleLine {
             text: @tr("Espace disque");
+            loading: DiskUsage.volumes-state == DiskVolumes.reading;
+            loading-text: @tr("Lecture des disques…");
         }
         Detail {
             text: @tr("Voyez ce qui prend de la place, dossier par dossier. Cet écran ne supprime rien.");
@@ -273,9 +275,6 @@ component Start inherits VerticalLayout {
         text: @tr("Ou un disque entier");
         color: Theme.text-2;
         font-weight: Theme.weight-semibold;
-    }
-    if DiskUsage.volumes-state == DiskVolumes.reading: Detail {
-        text: @tr("Lecture des disques…");
     }
     if DiskUsage.volumes-state == DiskVolumes.unavailable: Detail {
         text: @tr("Les disques ne peuvent pas être lus pour l'instant.");

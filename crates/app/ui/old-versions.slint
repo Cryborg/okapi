@@ -185,10 +185,6 @@ export component OldVersionsView inherits VerticalLayout {
             }
         }
     }
-    if OldVersions.finding: ProgressBar {
-        indeterminate: true;
-        label: @tr("Recherche des anciennes versions… Rien n'est modifié.");
-    }
     if OldVersions.retiring: ProgressBar {
         indeterminate: true;
         label: @tr("Retrait en cours…");

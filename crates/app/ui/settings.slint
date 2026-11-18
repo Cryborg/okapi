@@ -482,12 +482,12 @@ component PathListCard inherits Card {
                     : root.entry-error == EntryError.link ? @tr("C'est un lien : choisissez le dossier vers lequel il mène.")
                     : root.entry-error == EntryError.not-folder ? @tr("Ce n'est pas un dossier.")
                     : root.entry-error == EntryError.protected ? @tr("Okapi ne vide jamais ce dossier : il est ou contient un dossier dont votre session ou vos applis dépendent (dossier utilisateur, réglages, caches...).")
-                    : root.entry-error == EntryError.personal ? @tr("Okapi ne vide jamais un dossier personnel (Documents, Images, Téléchargements...) ni ce qui en contient un : choisissez un dossier à l'intérieur.")
+                    : root.entry-error == EntryError.personal ? @tr("Okapi ne vide jamais Documents, Images, Téléchargements ni vos autres dossiers de ce genre, ni ce qui en contient un : choisissez un dossier à l'intérieur.")
                     : root.entry-error == EntryError.trash ? @tr("Okapi ne vide jamais comme dossier choisi la corbeille, ce qu'elle contient ni ce qui la contient : la ligne « Corbeille » du Nettoyeur vide la corbeille, choisissez un dossier à côté d'elle.")
                     : root.entry-error == EntryError.trash-unknown ? @tr("Okapi ne sait pas lire votre corbeille : il ne peut vérifier aucun dossier à nettoyer.")
                     : root.entry-error == EntryError.not-owned ? @tr("Ce dossier appartient à un autre compte ou au système : Okapi ne le vide pas.")
                     : root.entry-error == EntryError.unsure ? @tr("Sur une clé FAT ou exFAT, un partage réseau ou d'une machine virtuelle, un système FUSE ou superposé, ou un système qu'Okapi ne sait pas dire, l'âge des fichiers n'est pas sûr : Okapi ne les vide pas.")
-                    : root.entry-error == EntryError.unverifiable ? @tr("Okapi ne sait pas lire la liste de vos dossiers personnels (user-dirs.dirs) : il ne peut vérifier aucun dossier à nettoyer.")
+                    : root.entry-error == EntryError.unverifiable ? @tr("Okapi ne sait pas lire la liste de vos dossiers Documents, Images… (user-dirs.dirs) : il ne peut vérifier aucun dossier à nettoyer.")
                     : @tr("Le sélecteur de dossiers n'a pas pu s'ouvrir : écrivez le chemin.");
                 accessible-live-region: polite;
                 color: Theme.danger;

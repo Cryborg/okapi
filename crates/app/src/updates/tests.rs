@@ -465,7 +465,7 @@ fn searching_now_downloads_the_lists_and_retrying_asks_the_same() {
     assert_eq!(updates(&window).get_step(), ui::UpdatesStep::Searching);
     assert!(updates(&window).get_refreshing());
     assert_eq!(
-        button(&window, "Recherche…").accessible_enabled(),
+        button(&window, "Rechercher maintenant").accessible_enabled(),
         Some(false),
         "no second search while one runs"
     );
@@ -583,11 +583,16 @@ fn the_snaps_are_shown_while_the_system_waits_for_another_program() {
     assert_eq!(updates(&window).get_step(), ui::UpdatesStep::Searching);
     assert!(shows(
         &window,
-        "Une autre installation est en cours : la recherche attend qu'elle finisse."
+        "Recherche en attente d'une autre installation…"
     ));
     go.send(()).unwrap();
     read(&window);
     assert!(!updates(&window).get_waiting());
+    // Over, its note goes from beside the title.
+    assert!(!shows(
+        &window,
+        "Recherche en attente d'une autre installation…"
+    ));
     assert_eq!(updates(&window).get_system_count(), 7);
 }
 

@@ -225,6 +225,78 @@ fn kind_rank(kind: FileKind) -> i32 {
     i32::try_from(FileKind::ALL.iter().position(|each| *each == kind).unwrap()).unwrap()
 }
 
+/// Where to search, the box of folder `name`.
+fn folder_box(window: &ui::AppWindow, name: &str) -> i_slint_backend_testing::ElementHandle {
+    i_slint_backend_testing::ElementHandle::find_by_accessible_label(window, name)
+        .find(|element| {
+            element.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Checkbox)
+        })
+        .unwrap_or_else(|| panic!("no folder line {name}"))
+}
+
+/// Where to search, the line of folder `name`: whether its box is checked,
+/// and enabled.
+fn folder_line(window: &ui::AppWindow, name: &str) -> (bool, bool) {
+    let line = folder_box(window, name);
+    (
+        line.accessible_checked().unwrap(),
+        line.accessible_enabled().unwrap(),
+    )
+}
+
+/// Whether the home folder's box is said partly checked.
+fn home_said_partly(window: &ui::AppWindow) -> bool {
+    folder_box(window, "Dossier personnel")
+        .accessible_description()
+        .unwrap()
+        .ends_with("certains de ses dossiers cochés")
+}
+
+/// The personal folders the seams name, made: each is offered.
+fn with_every_folder(sandbox: &Sandbox) {
+    for name in ["Documents", "Vidéos", "Musique", "Téléchargements"] {
+        fs::create_dir_all(sandbox.root().join(name)).unwrap();
+    }
+}
+
+#[test]
+fn the_home_folder_holds_its_folders_and_gives_back_their_choice() {
+    let sandbox = Sandbox::new();
+    with_every_folder(&sandbox);
+    let (window, _screen) = on_large_files(seams(&sandbox, &Rc::default(), &no_exclusion(), None));
+    // One folder left out by hand: the home folder's box partly checked.
+    large(&window).invoke_toggle_folder(2);
+    assert_eq!(folder_line(&window, "Dossier personnel"), (false, true));
+    assert!(home_said_partly(&window));
+    assert_eq!(folder_line(&window, "Musique"), (false, true));
+    assert_eq!(folder_line(&window, "Documents"), (true, true));
+    // Checked, the home folder holds them all: none to choose apart.
+    folder_line_toggled(&window, "Dossier personnel");
+    assert!(large(&window).get_whole_home());
+    assert!(!home_said_partly(&window));
+    assert_eq!(folder_line(&window, "Musique"), (true, false));
+    assert_eq!(folder_line(&window, "Documents"), (true, false));
+    // A folder held cannot change its own choice.
+    folder_line_toggled(&window, "Musique");
+    // Unchecked, each has its own choice back.
+    folder_line_toggled(&window, "Dossier personnel");
+    assert!(!large(&window).get_whole_home());
+    assert_eq!(folder_line(&window, "Musique"), (false, true));
+    assert_eq!(folder_line(&window, "Documents"), (true, true));
+    // None chosen: the box is plainly unchecked.
+    for name in ["Documents", "Vidéos", "Téléchargements"] {
+        folder_line_toggled(&window, name);
+    }
+    assert_eq!(folder_line(&window, "Dossier personnel"), (false, true));
+    assert!(!home_said_partly(&window));
+}
+
+/// Where to search, the box of folder `name` pressed.
+fn folder_line_toggled(window: &ui::AppWindow, name: &str) {
+    folder_box(window, name).invoke_accessible_default_action();
+    slint::platform::update_timers_and_animations();
+}
+
 #[test]
 fn a_result_lists_the_largest_first_and_checks_nothing() {
     let sandbox = Sandbox::new();
@@ -482,9 +554,11 @@ fn the_whole_home_offers_a_file_outside_the_personal_folders_with_its_note() {
     large(&window).set_current(1);
     large(&window).invoke_toggle(1);
     assert!(rows(&window)[1].checked);
+    // The folders named as the disk names them, those of the seams that
+    // exist.
     assert!(shows(
         &window,
-        "Hors de vos dossiers personnels : ce fichier appartient peut-être à une application."
+        "Ce fichier n'est dans aucun de ces dossiers : Documents, Vidéos, Téléchargements. Il appartient peut-être à une application."
     ));
 }
 

@@ -421,6 +421,7 @@ impl DuplicatesScreen {
             return;
         }
         let (whole_home, names) = (asked.whole_home, asked.names.clone());
+        let folder_names = asked.known.said_names();
         {
             let mut state = self.0.borrow_mut();
             state.search = Search::Opening(receiver);
@@ -431,6 +432,7 @@ impl DuplicatesScreen {
             duplicates.set_refused(ui::ToolRefusal::None);
             duplicates.set_searched_home(whole_home);
             duplicates.set_searched_names(names.into());
+            duplicates.set_folder_names(folder_names.into());
             duplicates.set_phase(ui::SearchPhase::Opening);
             duplicates.set_stage(ui::SearchStage::Listing);
             duplicates.set_files_listed(SharedString::from("0"));
@@ -561,7 +563,14 @@ impl DuplicatesScreen {
                     .count()
             })
             .sum();
-        let outside: usize = groups.iter().map(GroupChoice::outside).sum();
+        // Said only when the personal folders are known, as the screen says
+        // it.
+        let personal_known = !known.folders.is_empty();
+        let outside: usize = if personal_known {
+            groups.iter().map(GroupChoice::outside).sum()
+        } else {
+            0
+        };
         let gain = report
             .groups()
             .iter()
@@ -582,6 +591,7 @@ impl DuplicatesScreen {
             engine_gain = report.gain(),
             checked,
             kept = copies - checked,
+            personal_known,
             outside_personal = outside,
             "duplicates shown, checked by the rule"
         );
@@ -603,14 +613,13 @@ impl DuplicatesScreen {
         }
         crate::shown::show(&self.0.borrow().quick_model, names);
         let count = shown(report.groups().len());
-        let rule_said = !known.folders.is_empty();
         self.with_window(|duplicates| {
             duplicates.set_groups(count);
             duplicates.set_duplicated(size(gain));
             duplicates.set_compared(compared.into());
             duplicates.set_minutes(0);
             duplicates.set_current(0);
-            duplicates.set_rule_said(rule_said);
+            duplicates.set_rule_said(personal_known);
             duplicates.set_refused(ui::ToolRefusal::None);
             duplicates.set_step(ui::ToolStep::Result);
         });

@@ -91,12 +91,14 @@ export component RefusalBanner inherits Banner {
         : @tr("Le système n'a pas donné de quoi travailler : rien n'a été fait. Le détail est dans le journal.");
 }
 
-// One folder to search in, checked or not.
+// One folder to search in, checked or not; partly, the home folder when
+// some of its folders are; a child, one of them, under it.
 component PickLine inherits Rectangle {
     in property <bool> checked;
+    in property <bool> partial;
+    in property <bool> child;
     in property <bool> enabled: true;
     in property <string> name;
-    in property <string> note;
     in property <string> path;
     in property <image> icon;
     callback toggled;
@@ -107,7 +109,8 @@ component PickLine inherits Rectangle {
     accessible-checked: root.checked;
     accessible-enabled: root.enabled;
     accessible-label: root.name;
-    accessible-description: root.note != "" ? @tr("{}, {}", root.path, root.note) : root.path;
+    // A box partly checked reads as unchecked: said apart.
+    accessible-description: root.partial ? @tr("{}, certains de ses dossiers cochés", root.path) : root.path;
     accessible-action-default => {
         if root.enabled {
             root.toggled();
@@ -141,13 +144,14 @@ component PickLine inherits Rectangle {
     }
     HorizontalLayout {
         min-height: Theme.results-row-height;
-        padding-left: Theme.spacing-l;
+        padding-left: root.child ? Theme.spacing-l + Theme.picker-child-indent : Theme.spacing-l;
         padding-right: Theme.spacing-l;
         padding-top: Theme.spacing-s;
         padding-bottom: Theme.spacing-s;
         spacing: Theme.spacing-m;
         CheckMark {
             checked: root.checked;
+            partial: root.partial;
             enabled: root.enabled;
             cross-axis-self-alignment: center;
         }
@@ -156,21 +160,14 @@ component PickLine inherits Rectangle {
             colorize: Theme.text-2;
             cross-axis-self-alignment: center;
         }
-        VerticalLayout {
+        Text {
             horizontal-stretch: 1;
-            alignment: center;
-            spacing: Theme.spacing-xxs;
-            Text {
-                text: root.name;
-                accessible-role: none;
-                color: root.enabled ? Theme.text : Theme.text-3;
-                font-weight: Theme.weight-medium;
-                overflow: elide;
-            }
-            if root.note != "": Detail {
-                text: root.note;
-                accessible-role: none;
-            }
+            text: root.name;
+            accessible-role: none;
+            color: root.enabled ? Theme.text : Theme.text-3;
+            font-weight: Theme.weight-medium;
+            vertical-alignment: center;
+            overflow: elide;
         }
         Detail {
             vertical-alignment: center;
@@ -181,7 +178,9 @@ component PickLine inherits Rectangle {
     }
 }
 
-// Where to search: the personal folders, or the whole home folder.
+// Where to search: the whole home folder, or some of its folders shown
+// under it. Checked, the home folder holds them all: they show checked, and
+// get back their own choice when it is unchecked.
 export component FolderPicker inherits VerticalLayout {
     in property <FoldersState> folders-state;
     in property <[PersonalShown]> folders;
@@ -201,40 +200,38 @@ export component FolderPicker inherits VerticalLayout {
         font-size: Theme.font-heading;
         font-weight: Theme.weight-semibold;
     }
-    if root.folders-state == FoldersState.reading: Detail {
-        text: @tr("Lecture de vos dossiers personnels…");
-    }
     if root.folders-state == FoldersState.none: Banner {
-        text: @tr("Aucun dossier personnel trouvé : cochez « Tout le dossier personnel » pour chercher. Rien n'y sera coché d'avance.");
+        text: @tr("Aucun dossier Documents, Images… trouvé : cochez « Dossier personnel » pour chercher. Rien n'y sera coché d'avance.");
     }
     if root.folders-state == FoldersState.homeless: Banner {
         text: @tr("Votre dossier personnel n'a pas pu être lu : rien ne peut être recherché. Le détail est dans le journal.");
         warning: true;
     }
     if root.folders-state == FoldersState.unread: Banner {
-        text: @tr("Vos dossiers personnels n'ont pas pu être lus : seul tout le dossier personnel peut être parcouru, et rien n'y est coché d'avance.");
+        text: @tr("La liste de vos dossiers (Documents, Images…) n'a pas pu être lue : seul le dossier personnel entier peut être parcouru, et rien n'y est coché d'avance.");
         warning: true;
     }
     Card {
         VerticalLayout {
+            PickLine {
+                checked: root.whole-home;
+                partial: !root.whole-home && root.chosen > 0;
+                name: @tr("Dossier personnel");
+                path: root.home-path;
+                icon: @image-url("../assets/icons/home.svg");
+                toggled => {
+                    root.toggle-home();
+                }
+            }
             for folder[index] in root.folders: PickLine {
-                checked: folder.checked && !root.whole-home;
+                checked: folder.checked || root.whole-home;
+                child: true;
                 enabled: !root.whole-home;
                 name: folder.name;
                 path: folder.path;
                 icon: @image-url("../assets/icons/folder.svg");
                 toggled => {
                     root.toggle-folder(index);
-                }
-            }
-            PickLine {
-                checked: root.whole-home;
-                name: @tr("Tout le dossier personnel");
-                note: root.folders.length > 0 ? @tr("Remplace les dossiers ci-dessus") : "";
-                path: root.home-path;
-                icon: @image-url("../assets/icons/home.svg");
-                toggled => {
-                    root.toggle-home();
                 }
             }
         }

@@ -422,6 +422,48 @@ export component ProgressBar inherits Rectangle {
     }
 }
 
+// A screen's title, and what the screen is reading to show itself beside
+// it: the same form and the same place on every screen that reads to show
+// itself. The note keeps its room in the line while hidden, and is lower
+// than the title: neither its coming nor its going moves anything.
+export component TitleLine inherits HorizontalLayout {
+    in property <string> text;
+    // What is being read, said while `loading`.
+    in property <bool> loading;
+    in property <string> loading-text;
+    spacing: Theme.spacing-l;
+    Title {
+        horizontal-stretch: 0;
+        text: root.text;
+    }
+    Rectangle {
+        horizontal-stretch: 1;
+        accessible-role: AccessibleRole.text;
+        accessible-label: root.loading ? root.loading-text : "";
+        accessible-live-region: polite;
+        HorizontalLayout {
+            spacing: Theme.spacing-s;
+            Icon {
+                visible: root.loading;
+                source: @image-url("../assets/icons/loader.svg");
+                colorize: Theme.accent;
+                // Turns only while shown: a hidden tick would redraw for
+                // nothing. The software renderer leaves it still.
+                transform-rotation: root.loading ? 360deg * mod(animation-tick() / 1ms, Theme.loading-turn / 1ms) / (Theme.loading-turn / 1ms) : 0deg;
+                cross-axis-self-alignment: center;
+            }
+            Detail {
+                horizontal-stretch: 1;
+                text: root.loading ? root.loading-text : "";
+                vertical-alignment: center;
+                wrap: no-wrap;
+                overflow: elide;
+                accessible-role: none;
+            }
+        }
+    }
+}
+
 // The bar under a screen, its actions on the right.
 export component Footer inherits Rectangle {
     height: Theme.footer-height;

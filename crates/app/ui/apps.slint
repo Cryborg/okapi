@@ -6,7 +6,7 @@ import { LineEdit, ListView } from "std-widgets.slint";
 import { Theme, Screen } from "theme.slint";
 import {
     ActionButton, Banner, ButtonKind, Card, CheckMark, Detail, FocusRing, Icon, IconButton,
-    Badge, ModalFrame, ProgressBar, SortHeader, Title,
+    Badge, ModalFrame, ProgressBar, SortHeader, TitleLine,
 } from "widgets.slint";
 import { Size, Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
@@ -1003,10 +1003,6 @@ component LeftoversView inherits VerticalLayout {
             }
         }
     }
-    if Leftovers.analysing: ProgressBar {
-        indeterminate: true;
-        label: @tr("Recherche des restes… Rien n'est modifié.");
-    }
     if Leftovers.forgetting: ProgressBar {
         indeterminate: true;
         label: @tr("snapd efface la copie…");
@@ -1047,7 +1043,8 @@ component LeftoversView inherits VerticalLayout {
                     Detail {
                         horizontal-stretch: 1;
                         accessible-role: text;
-                        text: Leftovers.checked-count == 0 ? @tr("Rien de coché. Cochez ce que vous voulez mettre à la corbeille.")
+                        // What is checked, never a phrase beside the button.
+                        text: Leftovers.checked-count == 0 ? ""
                             : Leftovers.checked-count == 1 ? @tr("Un dossier coché : {}.", Words.size(Leftovers.checked-size))
                             : @tr("{} dossiers cochés : {}.", Leftovers.checked-count, Words.size(Leftovers.checked-size));
                         vertical-alignment: center;
@@ -1384,18 +1381,22 @@ export component AppsPage inherits Rectangle {
                 VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: Theme.spacing-xs;
-                    Title {
+                    TitleLine {
                         text: @tr("Applications");
+                        loading: Apps.reading || (Apps.tab == AppsTab.leftovers && Leftovers.analysing)
+                            || (Apps.tab == AppsTab.old-versions && OldVersions.finding);
+                        loading-text: Apps.reading ? @tr("Lecture des applis installées…")
+                            : Apps.tab == AppsTab.leftovers ? @tr("Recherche des restes…")
+                            : @tr("Recherche des anciennes versions…");
                     }
                     Detail {
-                        text: Apps.reading ? @tr("Lecture des applis installées… Rien n'est modifié.")
-                            : Apps.minutes-ago < 0 ? ""
+                        text: Apps.minutes-ago < 0 ? ""
                             : Apps.minutes-ago < 1 ? @tr("Applis : {}, lues à l'instant", Apps.app-count)
                             : @tr("Applis : {}, lues il y a {} min", Apps.app-count, Apps.minutes-ago);
                     }
                 }
                 ActionButton {
-                    text: Apps.reading ? @tr("Lecture…") : @tr("Actualiser");
+                    text: @tr("Actualiser");
                     icon: @image-url("../assets/icons/rotate-ccw.svg");
                     enabled: !Apps.reading && !Apps.busy;
                     cross-axis-self-alignment: center;

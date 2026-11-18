@@ -250,7 +250,7 @@ fn the_start_offers_the_personal_folders_that_exist_and_the_whole_home() {
             .unwrap()
             .checked
     );
-    assert!(shows(&window, "Tout le dossier personnel"));
+    assert!(shows(&window, "Dossier personnel"));
 }
 
 #[test]
@@ -308,6 +308,12 @@ fn the_whole_home_checks_nothing_outside_the_personal_folders_and_never_offers_w
         assert!(!row.checked, "{end}");
         assert_eq!(row.why, ui::KeptWhy::OutsidePersonal, "{end}");
     }
+    // Said by their names on the disk, never « personal folders », read as
+    // the home folder.
+    assert!(shows(
+        &window,
+        "Déjà coché : dans chaque groupe, on garde la copie hors des Téléchargements et du Bureau (sinon celle du Bureau), sinon celle qui a d'autres noms, sinon la plus ancienne, sinon le chemin le plus court. Une copie qui n'est dans aucun de ces dossiers n'est pas cochée d'avance : Documents, Images, Téléchargements."
+    ));
     // The copy of Documents is the only one of personal folders: kept.
     assert!(!copy_row(&window, "Documents/note.pdf").1.checked);
     assert_eq!(duplicates(&window).get_chosen_files(), 0);
@@ -757,6 +763,31 @@ fn no_personal_folder_named_is_said_on_the_start() {
         folders_state(Arc::new(|_| Ok(Vec::new()))),
         ui::FoldersState::None
     );
+}
+
+#[test]
+fn with_no_folder_known_no_copy_is_said_outside_one() {
+    let sandbox = Sandbox::new();
+    sandbox.write("Documents/note.pdf", 4, 1);
+    sandbox.write("Android/note.pdf", 4, 2);
+    let mut seams = seams(&sandbox, &Rc::default(), &no_exclusion(), None);
+    seams.duplicates.search.folders = Arc::new(|_| Ok(Vec::new()));
+    let window = on_duplicates(seams);
+    assert!(shows(
+        &window,
+        "Aucun dossier Documents, Images… trouvé : cochez « Dossier personnel » pour chercher. Rien n'y sera coché d'avance."
+    ));
+    duplicates(&window).set_whole_home(true);
+    searched(&window);
+    assert!(shows(
+        &window,
+        "Aucun dossier Documents, Images… connu : rien n'est coché d'avance."
+    ));
+    assert_eq!(duplicates(&window).get_chosen_files(), 0);
+    // The copy of Documents is not said to belong to an application.
+    let (_, row) = copy_row(&window, "Documents/note.pdf");
+    assert!(!row.checked);
+    assert_eq!(row.why, ui::KeptWhy::None);
 }
 
 #[test]

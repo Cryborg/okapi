@@ -72,6 +72,9 @@ export global LargeFiles {
     // and as numbers for their plural).
     in property <bool> searched-home;
     in property <string> searched-names;
+    // The names of the personal folders it knows, as on the disk:
+    // what a file outside them is said to be outside.
+    in property <string> folder-names;
     in property <SearchPhase> phase;
     in property <string> files-listed;
     in property <int> files-count;

@@ -98,6 +98,9 @@ export global Theme {
     out property <length> icon-large: 48px;
     out property <length> icon-box: 40px;
     out property <length> checkbox: 18px;
+    // Where to search, the indent of a folder under the home folder: its
+    // box lands under the home folder's icon.
+    out property <length> picker-child-indent: checkbox + spacing-m;
     out property <length> empty-icon-box: 88px;
     out property <length> radius-empty-icon: 24px;
     out property <length> empty-width: 560px;
@@ -126,6 +129,8 @@ export global Theme {
     // One sweep of an indeterminate bar, and the part of the track it covers.
     out property <duration> indeterminate-sweep: 1400ms;
     out property <float> indeterminate-part: 0.3;
+    // One turn of the spinner beside a screen's title while it reads.
+    out property <duration> loading-turn: 1000ms;
     out property <length> mark-small: 32px;
     out property <length> mark-large: 96px;
 

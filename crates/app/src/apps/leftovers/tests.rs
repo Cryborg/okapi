@@ -285,10 +285,11 @@ fn nothing_goes_unchecked_and_what_is_checked_goes_once_confirmed() {
     let (window, _) = on_page(seams, crate::apps::tests::arrivals, settings(true));
     window.global::<ui::Apps>().set_tab(ui::AppsTab::Leftovers);
     assert_eq!(tab(&window).get_checked_count(), 0);
-    assert!(shows(
-        &window,
-        "Rien de coché. Cochez ce que vous voulez mettre à la corbeille."
-    ));
+    // Nothing checked, the button is only disabled.
+    assert_eq!(
+        button(&window, "Mettre à la corbeille").accessible_enabled(),
+        Some(false)
+    );
     tab(&window).invoke_trash();
     assert!(
         !tab(&window).get_confirming(),
@@ -296,6 +297,10 @@ fn nothing_goes_unchecked_and_what_is_checked_goes_once_confirmed() {
     );
     tab(&window).invoke_toggle(0);
     assert_eq!(tab(&window).get_checked_count(), 1);
+    assert_eq!(
+        button(&window, "Mettre à la corbeille").accessible_enabled(),
+        Some(true)
+    );
     tab(&window).invoke_trash();
     assert!(tab(&window).get_confirming());
     assert!(

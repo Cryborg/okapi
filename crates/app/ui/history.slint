@@ -3,7 +3,7 @@
 // docs/design/maquette/project/History.dc.html.
 import { ListView, ScrollView } from "std-widgets.slint";
 import { Theme, Screen } from "theme.slint";
-import { Badge, Banner, Card, Detail, FocusRing, Icon, Line, Title } from "widgets.slint";
+import { Badge, Banner, Card, Detail, FocusRing, Icon, Line, TitleLine } from "widgets.slint";
 import { OperationEnd, Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
 import { DayKind, Moment } from "dashboard-model.slint";
@@ -574,8 +574,11 @@ export component HistoryPage inherits VerticalLayout {
     VerticalLayout {
         vertical-stretch: 0;
         spacing: Theme.spacing-xs;
-        Title {
+        TitleLine {
             text: @tr("Historique");
+            // Read again under a list shown, it would only flash.
+            loading: History.reading == HistoryReading.reading && History.rows.length == 0;
+            loading-text: @tr("Lecture de l'historique…");
         }
         Detail {
             text: @tr("Ce qu'Okapi a nettoyé, désinstallé et mis à jour sur cet ordinateur, le plus récent d'abord. Les plus anciennes opérations partent au-delà de la taille gardée.");
@@ -587,10 +590,6 @@ export component HistoryPage inherits VerticalLayout {
     }
     if History.reading != HistoryReading.unreadable && History.skipped > 0: Banner {
         text: @tr("{n} ligne de l'historique, illisible ou incomplète, est ignorée." | "{n} lignes de l'historique, illisibles ou incomplètes, sont ignorées." % History.skipped);
-    }
-    if History.reading == HistoryReading.reading && History.rows.length == 0: Detail {
-        text: @tr("Lecture de l'historique…");
-        accessible-live-region: polite;
     }
     if History.reading == HistoryReading.read && History.rows.length == 0: Card {
         VerticalLayout {

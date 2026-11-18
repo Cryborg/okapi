@@ -8,10 +8,10 @@ import { DashboardWords } from "dashboard-widgets.slint";
 import { DayKind, Moment } from "dashboard-model.slint";
 import {
     ActionButton, Badge, Banner, ButtonKind, Card, CheckMark, Detail, Footer, FocusRing, Icon,
-    ModalFrame, ProgressBar, SortHeader, Title,
+    ModalFrame, ProgressBar, SortHeader, Title, TitleLine,
 } from "widgets.slint";
 import { AgeShown, ChosenFile, FileKindShown, LargeFileRow, LargeFiles, LargeSort, LargeWhy } from "large-files-model.slint";
-import { SearchPhase, ToolRefusal, ToolStep } from "user-files-model.slint";
+import { FoldersState, SearchPhase, ToolRefusal, ToolStep } from "user-files-model.slint";
 import { FolderPicker, KeptCard, RefusalBanner, ResultState } from "user-files.slint";
 
 // What the screen says, the same for the eye and the ear.
@@ -150,7 +150,7 @@ global BigWords {
             return @tr("Ce fichier est sur un autre disque que votre corbeille. Okapi ne supprime jamais sans corbeille : pour le retirer, montrez-le dans son dossier.");
         }
         if row.outside {
-            return @tr("Hors de vos dossiers personnels : ce fichier appartient peut-être à une application.");
+            return @tr("Ce fichier n'est dans aucun de ces dossiers : {}. Il appartient peut-être à une application.", LargeFiles.folder-names);
         }
         if row.checked {
             return @tr("Coché : il ira à la corbeille. Vous pourrez l'y reprendre tant que la corbeille n'est pas vidée.");
@@ -202,14 +202,16 @@ global BigWords {
     }
 }
 
-// Where to search: the personal folders, or the whole home folder.
+// Where to search: the whole home folder, or some of its folders.
 component BigStart inherits VerticalLayout {
     padding: Screen.page-margin;
     spacing: Theme.spacing-xl;
     VerticalLayout {
         spacing: Theme.spacing-xs;
-        Title {
+        TitleLine {
             text: @tr("Gros fichiers");
+            loading: LargeFiles.folders-state == FoldersState.reading;
+            loading-text: @tr("Lecture de vos dossiers…");
         }
         Detail {
             text: @tr("Trouvez les plus gros fichiers de vos dossiers, où qu'ils soient rangés, et choisissez vous-même ceux qui peuvent partir. Rien n'est coché d'avance, et tout passe par la corbeille.");
@@ -251,7 +253,6 @@ component BigStart inherits VerticalLayout {
         vertical-stretch: 1;
     }
     HorizontalLayout {
-        spacing: Theme.spacing-m;
         alignment: start;
         ActionButton {
             text: @tr("Rechercher");
@@ -262,10 +263,6 @@ component BigStart inherits VerticalLayout {
             clicked => {
                 LargeFiles.search();
             }
-        }
-        Detail {
-            vertical-alignment: center;
-            text: LargeFiles.whole-home ? @tr("Tout le dossier personnel") : @tr("{n} dossier choisi" | "{n} dossiers choisis" % LargeFiles.chosen-folders);
         }
     }
 }

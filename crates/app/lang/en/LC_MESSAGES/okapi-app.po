@@ -2221,10 +2221,6 @@ msgid "Ce qui attend une mise à jour sur cet ordinateur."
 msgstr "What waits for an update on this computer."
 
 msgctxt "UpdatesPage"
-msgid "Recherche…"
-msgstr "Searching…"
-
-msgctxt "UpdatesPage"
 msgid "Rechercher maintenant"
 msgstr "Search now"
 
@@ -2249,28 +2245,20 @@ msgid "Okapi ne redémarre rien lui-même."
 msgstr "Okapi restarts nothing by itself."
 
 msgctxt "UpdatesPage"
-msgid "Une autre installation est en cours : la recherche attend qu'elle finisse."
-msgstr "Another installation is running: the search waits for it to end."
+msgid "Recherche en attente d'une autre installation…"
+msgstr "Search waiting for another installation…"
 
 msgctxt "UpdatesPage"
-msgid "Téléchargement des listes de paquets, puis recherche des mises à jour…"
-msgstr "Downloading the package lists, then searching for updates…"
+msgid "Téléchargement des listes de paquets…"
+msgstr "Downloading the package lists…"
 
 msgctxt "UpdatesPage"
 msgid "Recherche des mises à jour…"
 msgstr "Searching for updates…"
 
 msgctxt "UpdatesPage"
-msgid "Rien n'est installé."
-msgstr "Nothing is installed."
-
-msgctxt "UpdatesPage"
-msgid "Recherche en cours, durée inconnue"
-msgstr "Searching, time unknown"
-
-msgctxt "UpdatesPage"
-msgid "En attendant, voici la dernière liste, recherchée {}."
-msgstr "Meanwhile, here is the last list, searched {}."
+msgid "Liste d'avant, recherchée {}"
+msgstr "Previous list, searched {}"
 
 msgctxt "UpdatesPage"
 msgid "paquets apt"
@@ -2681,12 +2669,16 @@ msgid "Applications"
 msgstr "Applications"
 
 msgctxt "AppsPage"
-msgid "Lecture des applis installées… Rien n'est modifié."
-msgstr "Reading the installed apps… Nothing is changed."
+msgid "Lecture des applis installées…"
+msgstr "Reading the installed apps…"
 
 msgctxt "AppsPage"
-msgid "Lecture…"
-msgstr "Reading…"
+msgid "Recherche des restes…"
+msgstr "Looking for leftovers…"
+
+msgctxt "AppsPage"
+msgid "Recherche des anciennes versions…"
+msgstr "Looking for old versions…"
 
 msgctxt "AppsPage"
 msgid "Actualiser"
@@ -2869,8 +2861,8 @@ msgid "Gardée : dans {}"
 msgstr "Kept: in {}"
 
 msgctxt "DuplicateWords"
-msgid "Gardée : hors de vos dossiers personnels"
-msgstr "Kept: outside your personal folders"
+msgid "Gardée : peut-être à une application"
+msgstr "Kept: may belong to an application"
 
 msgctxt "DuplicateWords"
 msgid "Gardée"
@@ -2948,10 +2940,6 @@ msgctxt "RefusalBanner"
 msgid "Le système n'a pas donné de quoi travailler : rien n'a été fait. Le détail est dans le journal."
 msgstr "The system gave nothing to work with: nothing was done. The details are in the log."
 
-msgctxt "PickLine"
-msgid "{}, {}"
-msgstr "{}, {}"
-
 msgctxt "DuplicateStart"
 msgid "Doublons"
 msgstr "Duplicates"
@@ -2961,16 +2949,12 @@ msgid "Trouvez les fichiers identiques, contenu compris, et gardez-en une seule 
 msgstr "Find identical files, content included, and keep a single copy. Nothing goes without your consent, and everything goes through the trash."
 
 msgctxt "DuplicateStart"
-msgid "Tout le dossier personnel"
-msgstr "The whole home folder"
+msgid "Lecture de vos dossiers…"
+msgstr "Reading your folders…"
 
 msgctxt "DuplicateStart"
 msgid "Rechercher"
 msgstr "Search"
-
-msgctxt "DuplicateStart"
-msgid "Dossiers choisis : {}"
-msgstr "Folders chosen: {}"
 
 msgctxt "DuplicateSearching"
 msgid "Doublons"
@@ -3145,12 +3129,12 @@ msgid "Sélection rapide"
 msgstr "Quick selection"
 
 msgctxt "DuplicateResult"
-msgid "Déjà coché : dans chaque groupe, on garde la copie hors des Téléchargements et du Bureau (sinon celle du Bureau), sinon celle qui a d'autres noms, sinon la plus ancienne, sinon le chemin le plus court. Hors de vos dossiers personnels, rien n'est coché."
-msgstr "Already checked: in each group, the copy outside Downloads and the Desktop is kept (else the one on the Desktop), else the one with other names, else the oldest, else the shortest path. Outside your personal folders, nothing is checked."
+msgid "Déjà coché : dans chaque groupe, on garde la copie hors des Téléchargements et du Bureau (sinon celle du Bureau), sinon celle qui a d'autres noms, sinon la plus ancienne, sinon le chemin le plus court. Une copie qui n'est dans aucun de ces dossiers n'est pas cochée d'avance : {}."
+msgstr "Already checked: in each group, the copy outside Downloads and the Desktop is kept (else the one on the Desktop), else the one with other names, else the oldest, else the shortest path. A copy in none of these folders is not checked beforehand: {}."
 
 msgctxt "DuplicateResult"
-msgid "Aucun dossier personnel connu : rien n'est coché d'avance."
-msgstr "No personal folder known: nothing is checked beforehand."
+msgid "Aucun dossier Documents, Images… connu : rien n'est coché d'avance."
+msgstr "No Documents, Pictures… folder known: nothing is checked beforehand."
 
 msgctxt "DuplicateResult"
 msgid "Tout désélectionner"
@@ -3617,16 +3601,8 @@ msgid "Mise à la corbeille…"
 msgstr "Moving to the trash…"
 
 msgctxt "LeftoversView"
-msgid "Recherche des restes… Rien n'est modifié."
-msgstr "Looking for leftovers… Nothing is changed."
-
-msgctxt "LeftoversView"
 msgid "Données laissées dans votre dossier personnel"
 msgstr "Data left in your home folder"
-
-msgctxt "LeftoversView"
-msgid "Rien de coché. Cochez ce que vous voulez mettre à la corbeille."
-msgstr "Nothing checked. Check what you want to move to the trash."
 
 msgctxt "LeftoversView"
 msgid "Un dossier coché : {}."
@@ -4171,8 +4147,8 @@ msgid "Okapi ne vide jamais ce dossier : il est ou contient un dossier dont votr
 msgstr "Okapi never empties this folder: it is or holds a folder your session or your apps rely on (user folder, settings, caches...)."
 
 msgctxt "PathListCard"
-msgid "Okapi ne vide jamais un dossier personnel (Documents, Images, Téléchargements...) ni ce qui en contient un : choisissez un dossier à l'intérieur."
-msgstr "Okapi never empties a personal folder (Documents, Pictures, Downloads...) nor what holds one: choose a folder inside it."
+msgid "Okapi ne vide jamais Documents, Images, Téléchargements ni vos autres dossiers de ce genre, ni ce qui en contient un : choisissez un dossier à l'intérieur."
+msgstr "Okapi never empties Documents, Pictures, Downloads nor your other folders of that kind, nor what holds one: choose a folder inside."
 
 msgctxt "PathListCard"
 msgid "Okapi ne vide jamais comme dossier choisi la corbeille, ce qu'elle contient ni ce qui la contient : la ligne « Corbeille » du Nettoyeur vide la corbeille, choisissez un dossier à côté d'elle."
@@ -4295,8 +4271,8 @@ msgid "Invérifiable"
 msgstr "Unverifiable"
 
 msgctxt "PathListCard"
-msgid "Okapi ne sait pas lire la liste de vos dossiers personnels (user-dirs.dirs) : il ne peut vérifier aucun dossier à nettoyer."
-msgstr "Okapi cannot read the list of your personal folders (user-dirs.dirs): it cannot check any folder to clean."
+msgid "Okapi ne sait pas lire la liste de vos dossiers Documents, Images… (user-dirs.dirs) : il ne peut vérifier aucun dossier à nettoyer."
+msgstr "Okapi cannot read the list of your Documents, Pictures… folders (user-dirs.dirs): it cannot check any folder to clean."
 
 msgctxt "DuplicateWords"
 msgid "La mise à la corbeille s'est interrompue : certains fichiers y sont peut-être déjà. Recherchez à nouveau pour voir où en sont les doublons."
@@ -4383,28 +4359,20 @@ msgid "Où chercher ?"
 msgstr "Where to search?"
 
 msgctxt "FolderPicker"
-msgid "Lecture de vos dossiers personnels…"
-msgstr "Reading your personal folders…"
-
-msgctxt "FolderPicker"
-msgid "Aucun dossier personnel trouvé : cochez « Tout le dossier personnel » pour chercher. Rien n'y sera coché d'avance."
-msgstr "No personal folder found: check “The whole home folder” to search. Nothing will be checked beforehand."
+msgid "Aucun dossier Documents, Images… trouvé : cochez « Dossier personnel » pour chercher. Rien n'y sera coché d'avance."
+msgstr "No Documents, Pictures… folder found: check “Home folder” to search. Nothing will be checked beforehand."
 
 msgctxt "FolderPicker"
 msgid "Votre dossier personnel n'a pas pu être lu : rien ne peut être recherché. Le détail est dans le journal."
 msgstr "Your home folder could not be read: nothing can be searched. The details are in the log."
 
 msgctxt "FolderPicker"
-msgid "Vos dossiers personnels n'ont pas pu être lus : seul tout le dossier personnel peut être parcouru, et rien n'y est coché d'avance."
-msgstr "Your personal folders could not be read: only the whole home folder can be searched, and nothing is checked beforehand."
+msgid "La liste de vos dossiers (Documents, Images…) n'a pas pu être lue : seul le dossier personnel entier peut être parcouru, et rien n'y est coché d'avance."
+msgstr "The list of your folders (Documents, Pictures…) could not be read: only the whole home folder can be searched, and nothing is checked beforehand."
 
 msgctxt "FolderPicker"
-msgid "Tout le dossier personnel"
-msgstr "The whole home folder"
-
-msgctxt "FolderPicker"
-msgid "Remplace les dossiers ci-dessus"
-msgstr "Replaces the folders above"
+msgid "Dossier personnel"
+msgstr "Home folder"
 
 msgctxt "BigWords"
 msgid "Vidéo"
@@ -4517,8 +4485,8 @@ msgid "Ce fichier est sur un autre disque que votre corbeille. Okapi ne supprime
 msgstr "This file is on another disk than your trash. Okapi never deletes without a trash: to remove it, show it in its folder."
 
 msgctxt "BigWords"
-msgid "Hors de vos dossiers personnels : ce fichier appartient peut-être à une application."
-msgstr "Outside your personal folders: this file may belong to an application."
+msgid "Ce fichier n'est dans aucun de ces dossiers : {}. Il appartient peut-être à une application."
+msgstr "This file is in none of these folders: {}. It may belong to an application."
 
 msgctxt "BigWords"
 msgid "Coché : il ira à la corbeille. Vous pourrez l'y reprendre tant que la corbeille n'est pas vidée."
@@ -4591,14 +4559,8 @@ msgid "Rechercher"
 msgstr "Search"
 
 msgctxt "BigStart"
-msgid "Tout le dossier personnel"
-msgstr "The whole home folder"
-
-msgctxt "BigStart"
-msgid "{n} dossier choisi"
-msgid_plural "{n} dossiers choisis"
-msgstr[0] "{n} folder chosen"
-msgstr[1] "{n} folders chosen"
+msgid "Lecture de vos dossiers…"
+msgstr "Reading your folders…"
 
 msgctxt "BigSearching"
 msgid "Gros fichiers"
@@ -5049,10 +5011,6 @@ msgid "Fermer le message"
 msgstr "Close the message"
 
 msgctxt "OldVersionsView"
-msgid "Recherche des anciennes versions… Rien n'est modifié."
-msgstr "Looking for old versions… Nothing is changed."
-
-msgctxt "OldVersionsView"
 msgid "Retrait en cours…"
 msgstr "Removing…"
 
@@ -5147,3 +5105,8 @@ msgstr "Given back later by snapd: {}."
 msgctxt "UninstallDetail"
 msgid "Les données de cette version ont été supprimées, pour tous les comptes."
 msgstr "The data of this version was deleted, for every account."
+
+msgctxt "PickLine"
+msgid "{}, certains de ses dossiers cochés"
+msgstr "{}, some of its folders checked"
+

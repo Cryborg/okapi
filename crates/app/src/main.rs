@@ -1371,4 +1371,94 @@ mod tests {
             }
         }
     }
+
+    /// The interface alone, on `page`: no screen's reading changes it.
+    fn bare_on(page: Page) -> AppWindow {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = AppWindow::new().unwrap();
+        window.set_page(page);
+        window
+    }
+
+    /// What `window` says beside its title, once drawn again.
+    fn reads(window: &AppWindow, text: &str) -> bool {
+        slint::platform::update_timers_and_animations();
+        shows(window, text)
+    }
+
+    #[test]
+    fn a_screen_says_beside_its_title_what_it_reads_and_only_then() {
+        let window = bare_on(Page::History);
+        let history = window.global::<ui::History>();
+        history.set_reading(ui::HistoryReading::Reading);
+        assert!(reads(&window, "Lecture de l'historique…"));
+        // Read again under a list shown: nothing said.
+        history.set_rows(slint::ModelRc::new(slint::VecModel::from(vec![
+            ui::HistoryRow::default(),
+        ])));
+        assert!(!reads(&window, "Lecture de l'historique…"));
+
+        window.set_page(Page::DiskUsage);
+        let disk = window.global::<ui::DiskUsage>();
+        disk.set_volumes_state(ui::DiskVolumes::Reading);
+        assert!(reads(&window, "Lecture des disques…"));
+        disk.set_volumes_state(ui::DiskVolumes::Ready);
+        assert!(!reads(&window, "Lecture des disques…"));
+
+        // Each screen its own folders' reading, never the other's.
+        let large = window.global::<ui::LargeFiles>();
+        let duplicates = window.global::<ui::Duplicates>();
+        large.set_folders_state(ui::FoldersState::Reading);
+        duplicates.set_folders_state(ui::FoldersState::Read);
+        window.set_page(Page::LargeFiles);
+        assert!(reads(&window, "Lecture de vos dossiers…"));
+        window.set_page(Page::Duplicates);
+        assert!(!reads(&window, "Lecture de vos dossiers…"));
+        large.set_folders_state(ui::FoldersState::None);
+        duplicates.set_folders_state(ui::FoldersState::Reading);
+        assert!(reads(&window, "Lecture de vos dossiers…"));
+        window.set_page(Page::LargeFiles);
+        assert!(!reads(&window, "Lecture de vos dossiers…"));
+    }
+
+    #[test]
+    fn the_applications_say_the_reading_of_the_tab_shown() {
+        let window = bare_on(Page::Apps);
+        let apps = window.global::<ui::Apps>();
+        apps.set_reading(true);
+        assert!(reads(&window, "Lecture des applis installées…"));
+        apps.set_reading(false);
+        // Each tab its own reading, never another's, nor any.
+        window.global::<ui::Leftovers>().set_analysing(true);
+        assert!(!reads(&window, "Recherche des restes…"));
+        assert!(!reads(&window, "Recherche des anciennes versions…"));
+        apps.set_tab(ui::AppsTab::Leftovers);
+        assert!(reads(&window, "Recherche des restes…"));
+        window.global::<ui::OldVersions>().set_finding(true);
+        assert!(!reads(&window, "Recherche des anciennes versions…"));
+        apps.set_tab(ui::AppsTab::OldVersions);
+        assert!(reads(&window, "Recherche des anciennes versions…"));
+        // The installed apps' reading comes first, on every tab.
+        apps.set_reading(true);
+        assert!(reads(&window, "Lecture des applis installées…"));
+    }
+
+    #[test]
+    fn the_updates_say_their_search_but_never_over_a_check_of_what_was_installed() {
+        let window = bare_on(Page::Updates);
+        let updates = window.global::<ui::Updates>();
+        updates.set_step(ui::UpdatesStep::Searching);
+        assert!(reads(&window, "Recherche des mises à jour…"));
+        updates.set_refreshing(true);
+        assert!(reads(&window, "Téléchargement des listes de paquets…"));
+        updates.set_waiting(true);
+        assert!(reads(
+            &window,
+            "Recherche en attente d'une autre installation…"
+        ));
+        updates.set_waiting(false);
+        // The check after an installation searches too: its own card says it.
+        updates.set_install_step(ui::InstallStep::Verifying);
+        assert!(!reads(&window, "Téléchargement des listes de paquets…"));
+    }
 }

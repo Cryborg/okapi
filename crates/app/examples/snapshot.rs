@@ -1254,6 +1254,8 @@ fn updates(window: &ui::AppWindow, state: &str, language: Language) {
     } else {
         ui::UpdatesStep::Read
     });
+    // Searching again: the list of before stays until the new one comes.
+    updates.set_previous_shown(state == "searching");
     updates.set_system_state(if state == "locked" {
         ui::SourceState::Failed
     } else {
@@ -2000,9 +2002,12 @@ fn large_result(large: &ui::LargeFiles<'_>, scene: LargeScene, language: Languag
 }
 
 /// What the duplicates screen shows in a scene: its groups, none, or the
-/// confirmation open over them.
+/// confirmation open over them, or where to search.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DuplicateScene {
+    Start,
+    // Where to search, the whole home folder chosen.
+    StartHome,
     Result,
     Empty,
     Confirm,
@@ -2011,6 +2016,8 @@ enum DuplicateScene {
 impl DuplicateScene {
     fn named(name: &str) -> Option<Self> {
         Some(match name {
+            "duplicates-start" => Self::Start,
+            "duplicates-start-home" => Self::StartHome,
             "duplicates-result" => Self::Result,
             "duplicates-empty" => Self::Empty,
             "duplicates-confirm" => Self::Confirm,
@@ -2071,7 +2078,27 @@ fn duplicate_head(
     }
 }
 
-/// The duplicates screen at `scene`, its result shown.
+/// The personal folders' names, in French and English.
+const PERSONAL_NAMES: (&str, &str) = (
+    "Documents, Images, Musique, Vidéos, Téléchargements, Bureau",
+    "Documents, Pictures, Music, Videos, Downloads, Desktop",
+);
+
+/// The personal folders a start offers, all checked but those at
+/// `unchecked`.
+fn personal_folders(language: Language, unchecked: &[usize]) -> Vec<ui::PersonalShown> {
+    said(language, PERSONAL_NAMES.0, PERSONAL_NAMES.1)
+        .split(", ")
+        .enumerate()
+        .map(|(index, name)| ui::PersonalShown {
+            name: name.into(),
+            path: format!("~/{name}").into(),
+            checked: !unchecked.contains(&index),
+        })
+        .collect()
+}
+
+/// The duplicates screen at `scene`.
 fn duplicates(window: &ui::AppWindow, scene: DuplicateScene, language: Language) {
     use ui::SizeUnit::Gigabyte;
     window.set_page(ui::Page::Duplicates);
@@ -2088,6 +2115,19 @@ fn duplicates(window: &ui::AppWindow, scene: DuplicateScene, language: Language)
     duplicates.set_compared(said(language, "12\u{202F}840", "12,840").into());
     duplicates.set_minutes(2);
     duplicates.set_rule_said(true);
+    duplicates.set_folder_names(said(language, PERSONAL_NAMES.0, PERSONAL_NAMES.1).into());
+    if matches!(scene, DuplicateScene::Start | DuplicateScene::StartHome) {
+        // Two of the folders left out: the home folder's box is partly
+        // checked.
+        let folders = personal_folders(language, &[2, 5]);
+        duplicates.set_chosen_folders(4);
+        duplicates.set_folders_state(ui::FoldersState::Read);
+        duplicates.set_folders(ModelRc::new(VecModel::from(folders)));
+        duplicates.set_home_path("/home/franck".into());
+        duplicates.set_whole_home(scene == DuplicateScene::StartHome);
+        duplicates.set_step(ui::ToolStep::Start);
+        return;
+    }
     duplicates.set_step(ui::ToolStep::Result);
     if scene == DuplicateScene::Empty {
         return;
@@ -2127,26 +2167,18 @@ fn large_files(window: &ui::AppWindow, scene: LargeScene, language: Language) {
     use ui::SizeUnit::{Gigabyte, Megabyte};
     window.set_page(ui::Page::LargeFiles);
     let large = window.global::<ui::LargeFiles>();
-    let names = said(
-        language,
-        "Documents, Images, Musique, Vidéos, Téléchargements, Bureau",
-        "Documents, Pictures, Music, Videos, Downloads, Desktop",
-    );
-    let folders: Vec<ui::PersonalShown> = names
-        .split(", ")
-        .map(|name| ui::PersonalShown {
-            name: name.into(),
-            path: format!("~/{name}").into(),
-            checked: true,
-        })
-        .collect();
+    let names = said(language, PERSONAL_NAMES.0, PERSONAL_NAMES.1);
     large.set_folders_state(ui::FoldersState::Read);
-    large.set_folders(ModelRc::new(VecModel::from(folders)));
+    large.set_folders(ModelRc::new(VecModel::from(personal_folders(
+        language,
+        &[],
+    ))));
     large.set_chosen_folders(6);
     large.set_home_path("/home/franck".into());
     large.set_min_size(size(50, 0, Megabyte));
     large.set_searched_home(scene == LargeScene::Outside);
     large.set_searched_names(names.into());
+    large.set_folder_names(names.into());
     let floors = vec![
         size(100, 0, Megabyte),
         size(500, 0, Megabyte),
@@ -2173,6 +2205,57 @@ fn large_files(window: &ui::AppWindow, scene: LargeScene, language: Language) {
         }
         LargeScene::Receipt => large_receipt(&large, language),
         _ => large_result(&large, scene, language),
+    }
+}
+
+/// The screen `screen` reading what it shows (the note beside its title):
+/// the last screens `main` looks for, a name unknown said with them all.
+fn reading_scene(app: &ui::AppWindow, screen: &str, language: Language) {
+    match screen {
+        "history-reading" => {
+            history(app, true, language);
+            app.global::<ui::History>()
+                .set_reading(ui::HistoryReading::Reading);
+        }
+        "disk-start-reading" => {
+            disk(app, ui::DiskStep::Start, language);
+            let disk = app.global::<ui::DiskUsage>();
+            disk.set_volumes_state(ui::DiskVolumes::Reading);
+            disk.set_volumes(ModelRc::default());
+        }
+        "large-start-reading" => {
+            large_files(app, LargeScene::Start, language);
+            let large = app.global::<ui::LargeFiles>();
+            large.set_folders_state(ui::FoldersState::Reading);
+            large.set_folders(ModelRc::default());
+            large.set_chosen_folders(0);
+        }
+        "duplicates-start-reading" => {
+            duplicates(app, DuplicateScene::Start, language);
+            let duplicates = app.global::<ui::Duplicates>();
+            duplicates.set_folders_state(ui::FoldersState::Reading);
+            duplicates.set_folders(ModelRc::default());
+            duplicates.set_chosen_folders(0);
+        }
+        "apps-reading" => {
+            apps(app, false, false, language);
+            // As a reading leaves it: nothing listed, nothing dated yet.
+            let apps = app.global::<ui::Apps>();
+            apps.set_reading(true);
+            apps.set_lines(ModelRc::default());
+            apps.set_minutes_ago(-1);
+        }
+        "apps-leftovers-reading" => {
+            apps_leftovers(app, false, language);
+            app.global::<ui::Leftovers>().set_analysing(true);
+        }
+        "apps-old-versions-reading" => {
+            apps_old_versions(app, "apps-old-versions", language);
+            app.global::<ui::OldVersions>().set_finding(true);
+        }
+        other => panic!(
+            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, results-sorted, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, groups-closed, groups-closed-small, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-start-reading, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-reading, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, apps-leftovers-reading, apps-old-versions, apps-old-versions-confirm, apps-old-versions-reading, settings, settings-trash, history, history-small, history-update, history-empty, history-reading, large-start, large-start-reading, large-searching, large-stopped, large-result, large-smallest, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-start, duplicates-start-reading, duplicates-start-home, duplicates-result, duplicates-empty, duplicates-confirm (each also -small)"
+        ),
     }
 }
 
@@ -2252,7 +2335,9 @@ fn main() {
         "apps-uninstall-flatpak" => apps_flatpak(&app, language),
         "apps-leftovers" => apps_leftovers(&app, false, language),
         "apps-leftovers-empty" => apps_leftovers(&app, true, language),
-        old if old.starts_with("apps-old-versions") => apps_old_versions(&app, old, language),
+        old if old.starts_with("apps-old-versions") && !old.ends_with("-reading") => {
+            apps_old_versions(&app, old, language);
+        }
         "settings" => settings(&app),
         "settings-trash" => settings_trash(&app),
         "history" | "history-small" => history(&app, false, language),
@@ -2264,9 +2349,8 @@ fn main() {
         other if let Some(scene) = DuplicateScene::named(other.trim_end_matches("-small")) => {
             duplicates(&app, scene, language);
         }
-        other => panic!(
-            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, results-sorted, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, groups-closed, groups-closed-small, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, apps-old-versions, apps-old-versions-confirm, settings, settings-trash, history, history-small, history-update, history-empty, large-start, large-searching, large-stopped, large-result, large-smallest, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-result, duplicates-empty, duplicates-confirm (each also -small)"
-        ),
+        // Else a screen reading what it shows, or none.
+        other => reading_scene(&app, other, language),
     }
     window.set_size(PhysicalSize::new(width, height));
     app.show().unwrap();

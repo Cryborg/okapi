@@ -434,6 +434,7 @@ impl LargeFilesScreen {
             return;
         }
         let (whole_home, names) = (asked.whole_home, asked.names.clone());
+        let folder_names = asked.known.said_names();
         {
             let mut state = self.0.borrow_mut();
             state.search = Search::Opening(receiver);
@@ -443,6 +444,7 @@ impl LargeFilesScreen {
             large.set_refused(ui::ToolRefusal::None);
             large.set_searched_home(whole_home);
             large.set_searched_names(names.into());
+            large.set_folder_names(folder_names.into());
             large.set_phase(ui::SearchPhase::Opening);
             large.set_files_listed("0".into());
             large.set_files_count(0);

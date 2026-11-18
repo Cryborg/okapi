@@ -141,6 +141,21 @@ impl Known {
             .map(|folder| name_of(&folder.path))
             .collect()
     }
+
+    /// The names of the personal folders as a screen says them.
+    pub(crate) fn said_names(&self) -> String {
+        said_names(&self.folders)
+    }
+}
+
+/// Names of `folders` as a screen says them: as on the disk, the same in
+/// both languages, as the separator.
+fn said_names<'a>(folders: impl IntoIterator<Item = &'a Folder>) -> String {
+    folders
+        .into_iter()
+        .map(|folder| name_of(&folder.path))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Reads what the start knows.
@@ -402,13 +417,7 @@ impl Folders {
         Ok(Some(Asked {
             roots: chosen.iter().map(|folder| folder.path.clone()).collect(),
             whole_home: false,
-            // Names of folders, as on the disk: the same in both
-            // languages, as the separator.
-            names: chosen
-                .iter()
-                .map(|folder| name_of(&folder.path))
-                .collect::<Vec<_>>()
-                .join(", "),
+            names: said_names(chosen),
             known: known.clone(),
         }))
     }

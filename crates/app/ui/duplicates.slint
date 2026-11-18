@@ -7,10 +7,10 @@ import { Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
 import {
     ActionButton, Badge, Banner, ButtonKind, Card, CheckMark, Detail, Footer, FocusRing, Icon,
-    ModalFrame, ProgressBar, Title,
+    ModalFrame, ProgressBar, Title, TitleLine,
 } from "widgets.slint";
 import { DuplicateRow, Duplicates, KeptWhy, QuickRule, SearchStage } from "duplicates-model.slint";
-import { SearchPhase, ToolRefusal, ToolStep } from "user-files-model.slint";
+import { FoldersState, SearchPhase, ToolRefusal, ToolStep } from "user-files-model.slint";
 import { FolderPicker, KeptCard, RefusalBanner, ResultState } from "user-files.slint";
 
 // What the screen says, the same for the eye and the ear.
@@ -42,7 +42,7 @@ global DuplicateWords {
             return @tr("Gardée : dans {}", row.why-first);
         }
         if row.why == KeptWhy.outside-personal {
-            return @tr("Gardée : hors de vos dossiers personnels");
+            return @tr("Gardée : peut-être à une application");
         }
         return @tr("Gardée");
     }
@@ -139,14 +139,16 @@ component SearchStep inherits HorizontalLayout {
     }
 }
 
-// Where to search: the personal folders, or the whole home folder.
+// Where to search: the whole home folder, or some of its folders.
 component DuplicateStart inherits VerticalLayout {
     padding: Screen.page-margin;
     spacing: Theme.spacing-xl;
     VerticalLayout {
         spacing: Theme.spacing-xs;
-        Title {
+        TitleLine {
             text: @tr("Doublons");
+            loading: Duplicates.folders-state == FoldersState.reading;
+            loading-text: @tr("Lecture de vos dossiers…");
         }
         Detail {
             text: @tr("Trouvez les fichiers identiques, contenu compris, et gardez-en une seule copie. Rien ne part sans votre accord, et tout passe par la corbeille.");
@@ -187,7 +189,6 @@ component DuplicateStart inherits VerticalLayout {
         vertical-stretch: 1;
     }
     HorizontalLayout {
-        spacing: Theme.spacing-m;
         alignment: start;
         ActionButton {
             text: @tr("Rechercher");
@@ -198,10 +199,6 @@ component DuplicateStart inherits VerticalLayout {
             clicked => {
                 Duplicates.search();
             }
-        }
-        Detail {
-            vertical-alignment: center;
-            text: Duplicates.whole-home ? @tr("Tout le dossier personnel") : @tr("Dossiers choisis : {}", Duplicates.chosen-folders);
         }
     }
 }
@@ -927,8 +924,8 @@ component DuplicateResult inherits VerticalLayout {
             Detail {
                 horizontal-stretch: 1;
                 vertical-alignment: center;
-                text: Duplicates.rule-said ? @tr("Déjà coché : dans chaque groupe, on garde la copie hors des Téléchargements et du Bureau (sinon celle du Bureau), sinon celle qui a d'autres noms, sinon la plus ancienne, sinon le chemin le plus court. Hors de vos dossiers personnels, rien n'est coché.")
-                    : @tr("Aucun dossier personnel connu : rien n'est coché d'avance.");
+                text: Duplicates.rule-said ? @tr("Déjà coché : dans chaque groupe, on garde la copie hors des Téléchargements et du Bureau (sinon celle du Bureau), sinon celle qui a d'autres noms, sinon la plus ancienne, sinon le chemin le plus court. Une copie qui n'est dans aucun de ces dossiers n'est pas cochée d'avance : {}.", Duplicates.folder-names)
+                    : @tr("Aucun dossier Documents, Images… connu : rien n'est coché d'avance.");
                 wrap: word-wrap;
             }
             ActionButton {

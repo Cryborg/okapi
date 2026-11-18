@@ -492,6 +492,8 @@ fn the_system_is_one_line_that_unfolds_security_first_and_says_each_package() {
         &window,
         "7 mises à jour, dont 3 de sécurité, recherché à l'instant"
     ));
+    // Read as one: the moment written apart, silent.
+    assert!(!shows(&window, "recherché à l'instant"));
     let head = button(
         &window,
         "Système Ubuntu 26.04, 7 mises à jour, dont 3 de sécurité, replié",

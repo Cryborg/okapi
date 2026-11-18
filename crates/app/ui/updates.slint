@@ -6,7 +6,7 @@ import { Theme, Screen } from "theme.slint";
 import { Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
 import { DayKind } from "dashboard-model.slint";
-import { ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, Line, ModalFrame, ProgressBar, ReadIconNote, StateIcon, TitleLine } from "widgets.slint";
+import { ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, Line, ModalFrame, ProgressBar, ReadIconNote, SilentDetail, StateIcon, TitleLine } from "widgets.slint";
 import { Updates, UpdatesStep, SourceState, SourceFailure, UpdateKind, SystemLine, SnapLine, InstallStep, InstallTarget, InstallPhase, InstallEnd, InstallWhy } from "updates-model.slint";
 
 // What the screen says, the same for the eye and the ear.
@@ -834,10 +834,9 @@ export component UpdatesPage inherits VerticalLayout {
                                 font-weight: Theme.weight-semibold;
                                 overflow: elide;
                             }
-                            Detail {
+                            SilentDetail {
                                 text: UpdatesWords.summary() == "" ? @tr("Recherché {}", UpdatesWords.when())
                                     : @tr("recherché {}", UpdatesWords.when());
-                                accessible-role: none;
                                 wrap: no-wrap;
                                 overflow: elide;
                             }
@@ -850,8 +849,7 @@ export component UpdatesPage inherits VerticalLayout {
                         overflow: elide;
                     }
                     // Nothing to say yet: the line keeps its room.
-                    if !root.read && !(root.searching && Updates.previous-shown): Detail {
-                        accessible-role: none;
+                    if !root.read && !(root.searching && Updates.previous-shown): SilentDetail {
                     }
                 }
                 ActionButton {

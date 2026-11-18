@@ -3755,7 +3755,7 @@ mod tests {
             "the crash reports and the core dumps wait for the rights"
         );
         let_the_screen_settle();
-        button(&window, "Retour").invoke_accessible_default_action();
+        button(&window, "Retour au choix des catégories").invoke_accessible_default_action();
         let_the_screen_settle();
         checkbox(&window, "Système").invoke_accessible_default_action();
         button(&window, "Analyser").invoke_accessible_default_action();

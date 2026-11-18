@@ -827,6 +827,10 @@ msgid "Retour"
 msgstr "Back"
 
 msgctxt "ResultsPage"
+msgid "Retour au choix des catégories"
+msgstr "Back to choosing the categories"
+
+msgctxt "ResultsPage"
 msgid "Nettoyer"
 msgstr "Clean"
 

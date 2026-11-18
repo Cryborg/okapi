@@ -889,9 +889,10 @@ export component ResultsPage inherits VerticalLayout {
                 Cleaner.deselect-all();
             }
         }
-        // Back to choosing the categories.
+        // Back to choosing the categories: a screen reader says where to.
         ActionButton {
             text: @tr("Retour");
+            spoken: @tr("Retour au choix des catégories");
             icon: @image-url("../assets/icons/arrow-left.svg");
             kind: ButtonKind.secondary;
             large: true;

@@ -340,7 +340,7 @@ fn results_of(window: &ui::AppWindow, language: Language, notes: &[ui::RowNote])
     cleaner.set_results(ModelRc::new(VecModel::from(rows)));
 }
 
-/// The results, a line of each kind, folded: preselected, left to choose,
+/// The results, a line of each kind, descriptions folded: preselected, left to choose,
 /// the trash, unlocked by root's scan, locked, only root may read, measured
 /// by root only, Docker's prune (accepted, refused), the user's by hand, a
 /// folder of the user's. The browsers' category, with none, is hidden.

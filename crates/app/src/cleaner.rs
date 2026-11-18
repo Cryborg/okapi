@@ -826,8 +826,9 @@ fn badge_of(group: &GroupFacts) -> ui::ResultBadge {
     }
 }
 
-/// What the note of a group says: where it stands while out of reach, or
-/// unlocked; nothing for any other group, preselected or left to the user.
+/// What the note of a group says: who runs a maintenance Okapi does not
+/// (Docker, the user), where a group stands while out of reach, or that it
+/// is unlocked; nothing for any other, preselected or left to the user.
 fn note_of(group: &GroupFacts) -> ui::RowNote {
     match &group.run_by {
         Some(RunBy::Docker(daemon)) => {
@@ -3991,7 +3992,7 @@ pub mod tests {
             .expect("the folder's group");
         assert_eq!(row.label, "~/build", "its path, never translated");
         assert_eq!(row.badge, ui::ResultBadge::ToChoose);
-        assert_eq!(row.note, ui::RowNote::None, "its category says whose it is");
+        assert_eq!(row.note, ui::RowNote::None, "nothing said under its line");
         assert_eq!(
             row.state,
             ui::CheckState::Unchecked,

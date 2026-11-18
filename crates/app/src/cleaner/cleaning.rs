@@ -2210,8 +2210,8 @@ mod tests {
         sandbox.file("home/.cache/pip/old");
         settle_files();
         let (window, _screen) = on_results(sandbox.read(&sandbox.root.join("state")));
-        // The sidebar, "Nouvelle analyse",
-        // the three headers that sort, then the fold of Applications.
+        // The sidebar, "Nouvelle analyse", the three headers that sort,
+        // then the fold of Applications.
         for _ in 0..SIDEBAR_STOPS + 5 {
             press(&window, Key::Tab);
         }
@@ -4482,6 +4482,25 @@ mod tests {
         let asked = asked.lock().unwrap();
         assert_eq!(asked.len(), 2);
         assert_eq!(asked[1].0, okapi_helper::Operation::Clean);
+    }
+
+    /// "Nouvelle analyse", an icon on the results, says when it is greyed.
+    #[test]
+    fn a_new_analysis_refused_greys_its_icon_on_the_results() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let (window, _screen) = on_results(sandbox.read(&sandbox.root.join("state")));
+        let cleaner = window.global::<ui::Cleaner>();
+        assert_eq!(
+            button(&window, "Nouvelle analyse").accessible_enabled(),
+            Some(true)
+        );
+        cleaner.set_problem(ui::SetupProblem::MinAge);
+        assert_eq!(
+            button(&window, "Nouvelle analyse").accessible_enabled(),
+            Some(false)
+        );
     }
 
     /// Root's part of a cleaning ends with `code` and `output`: the user's

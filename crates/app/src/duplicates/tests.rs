@@ -18,7 +18,7 @@ use okapi_platform::PersonalKind;
 use slint::Model as _;
 
 use super::*;
-use crate::cleaner::tests::{button, defaults, press, seams_never_scanning, shows};
+use crate::cleaner::tests::{button, defaults, labels_read, press, seams_never_scanning, shows};
 use crate::cleaner::{Problem, Seams};
 use crate::dashboard::tests::inert;
 use crate::user_files::ReadFolders;
@@ -483,6 +483,20 @@ fn a_group_folds_and_unfolds() {
     let window = on_duplicates(seams(&sandbox, &Rc::default(), &no_exclusion(), None));
     searched(&window);
     assert_eq!(rows(&window).len(), 3);
+    // Its copies counted by its line, and a copy's date by its own: the
+    // words written beside their names silent.
+    let read = labels_read(&window);
+    assert!(
+        read.iter()
+            .any(|label| label.starts_with("d.zip, 2 copies de "))
+    );
+    assert!(!read.iter().any(|label| label.starts_with("2 copies de ")));
+    let copy = read
+        .iter()
+        .find(|label| label.starts_with("~/Documents/d.zip, "))
+        .unwrap();
+    let date = copy.split(", ").nth(1).unwrap();
+    assert!(!shows(&window, date), "{date}");
     duplicates(&window).invoke_fold(0, false);
     assert_eq!(rows(&window).len(), 1);
     assert!(!rows(&window)[0].open);

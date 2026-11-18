@@ -7,7 +7,7 @@ import { Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
 import {
     ActionButton, Badge, Banner, ButtonKind, Card, CheckMark, Detail, Footer, FocusRing, Icon,
-    ModalFrame, ProgressBar, StateIcon, Title, TitleLine,
+    ModalFrame, ProgressBar, SilentDetail, StateIcon, Title, TitleLine,
 } from "widgets.slint";
 import { DuplicateRow, Duplicates, KeptWhy, QuickRule, SearchStage } from "duplicates-model.slint";
 import { FoldersState, SearchPhase, ToolRefusal, ToolStep } from "user-files-model.slint";
@@ -419,9 +419,8 @@ component TreeLine inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
         }
-        Detail {
+        SilentDetail {
             text: DuplicateWords.copies(line);
-            accessible-role: none;
             vertical-alignment: center;
         }
         Text {
@@ -468,9 +467,8 @@ component TreeLine inherits Rectangle {
             HorizontalLayout {
                 alignment: start;
                 spacing: Theme.spacing-s;
-                Detail {
+                SilentDetail {
                     text: DashboardWords.moment-first(line.modified);
-                    accessible-role: none;
                     wrap: no-wrap;
                 }
                 if line.other-names: StateIcon {

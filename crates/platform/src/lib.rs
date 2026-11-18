@@ -21,8 +21,8 @@ pub use browser::{Holder, RunningBrowser, UnknownHolder, holder};
 pub use directory::open_path;
 pub use directory::{
     DESCRIPTOR_REMOVAL_SUPPORTED, Directory, EntryStatus, EntryType, Ownership, ROOT_USER, Reached,
-    Unreached, gone_or_failed, mount_root, out_of_descriptors, reach, reach_path, reach_with,
-    sticky_allows, tells_mount_roots,
+    Unreached, enter, gone_or_failed, mount_root, out_of_descriptors, reach, reach_path,
+    reach_with, sticky_allows, tells_mount_roots,
 };
 #[cfg(target_os = "linux")]
 pub use elevation::{HELPER_PATH, PKEXEC_PATH};

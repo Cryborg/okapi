@@ -68,13 +68,16 @@ pub struct EntryStatus {
 /// Where every absolute path starts.
 const FILESYSTEM_ROOT: &str = "/";
 
-/// Why a folder was not reached ([`reach`], [`reach_with`], [`reach_path`]).
+/// Why a folder was not reached ([`reach`], [`reach_with`], [`reach_path`])
+/// or entered ([`enter`]).
 #[derive(Debug, thiserror::Error)]
 pub enum Unreached {
     /// Something on the way is no longer what it was: a link or a file in a
-    /// folder's place, another folder, another filesystem; for [`reach`] and
-    /// [`gone_or_failed`], also a folder gone ([`reach_with`] and
-    /// [`reach_path`] tell it apart).
+    /// folder's place, another folder, another filesystem; for [`enter`] and
+    /// the folders below the root of [`reach_with`], also a mount put on a
+    /// folder since it was read; for [`reach`] and [`gone_or_failed`], also a
+    /// folder gone ([`enter`], [`reach_with`] and [`reach_path`] tell it
+    /// apart).
     #[error("a folder on the way changed")]
     Changed,
     #[error(transparent)]
@@ -96,7 +99,8 @@ pub struct Reached {
 /// filesystem root one name at a time and must still be `root_identity`;
 /// each folder below it must be a plain folder of its mount
 /// ([`EntryStatus::other_mount`]). Each folder opened is checked to be the
-/// one read before opening.
+/// one read before opening, and one below the root is entered as [`enter`]
+/// does (never a mount put on it since).
 ///
 /// # Errors
 ///
@@ -131,7 +135,10 @@ pub fn reach_with(
     let Some(mut directory) = reach_path(root)? else {
         return Ok(None);
     };
-    let root_status = directory.status().map_err(|error| failed(root, error))?;
+    let root_status = directory.status().map_err(|error| {
+        let name = root.file_name().unwrap_or(root.as_os_str());
+        failed(name, Some(root), error)
+    })?;
     if root_status.identity != root_identity {
         tracing::debug!(
             path = ?root,
@@ -146,7 +153,10 @@ pub fn reach_with(
     for (index, name) in below.iter().enumerate() {
         path.push(name);
         let allowed = |status: &EntryStatus| !status.other_mount(device) && accepts(index, status);
-        let Some(entered) = enter(&directory, name, &path, allowed)? else {
+        let Some(status) = judged(&directory, name, &path, allowed)? else {
+            return Ok(None);
+        };
+        let Some((entered, _)) = entered(&directory, name, status.identity, Some(&path))? else {
             return Ok(None);
         };
         directory = entered;
@@ -174,8 +184,8 @@ pub fn reach_path(path: &Path) -> Result<Option<Directory>, Unreached> {
         return Err(Unreached::Changed);
     }
     let filesystem_root = Path::new(FILESYSTEM_ROOT);
-    let mut directory =
-        Directory::open(filesystem_root).map_err(|error| failed(filesystem_root, error))?;
+    let mut directory = Directory::open(filesystem_root)
+        .map_err(|error| failed(filesystem_root.as_os_str(), Some(filesystem_root), error))?;
     let mut walked = PathBuf::from(FILESYSTEM_ROOT);
     for component in components {
         // A canonical path holds no `..` (`components` drops a `.`).
@@ -184,7 +194,11 @@ pub fn reach_path(path: &Path) -> Result<Option<Directory>, Unreached> {
             return Err(Unreached::Changed);
         };
         walked.push(name);
-        let Some(entered) = enter(&directory, name, &walked, |_| true)? else {
+        let Some(status) = judged(&directory, name, &walked, |_| true)? else {
+            return Ok(None);
+        };
+        // From `/`, a folder on the way may well be a mount (`/home`, `/tmp`).
+        let Some((entered, _)) = opened(&directory, name, status.identity, Some(&walked))? else {
             return Ok(None);
         };
         directory = entered;
@@ -192,21 +206,71 @@ pub fn reach_path(path: &Path) -> Result<Option<Directory>, Unreached> {
     Ok(Some(directory))
 }
 
-/// Opens the folder `name` of `parent`, at `path`, read first and accepted by
-/// `allowed`, and checked to be the one read once opened; `None` when it is
-/// gone.
-fn enter(
+/// Opens the folder `name` of `parent`, which must still be the folder
+/// `expected` read there, with its status read once opened: never through a
+/// link (one put in its place fails to open as a folder), checked by its
+/// identity once opened, and refused when it has become the root of a mount
+/// since it was read; `Ok(None)` when it is gone. The one way a walk below its
+/// root enters a folder from its parent ([`reach_path`], which crosses mounts
+/// on its way down from `/`, opens through the same code, mounts allowed).
+///
+/// The caller has read the entry and judged it a folder of its walk's mount
+/// ([`EntryStatus::other_mount`]). This closes the race between that reading
+/// and the opening, but only where the system tells mount roots
+/// ([`EntryStatus::mount_root`] is not `None`).
+///
+/// # Errors
+///
+/// [`Unreached::Changed`] when it is no longer that folder (a link, a file,
+/// another folder, a mount), never for a folder gone; [`Unreached::Io`] for
+/// the system's refusal, or [`io::ErrorKind::InvalidInput`] when `name` is not
+/// a single name.
+pub fn enter(
+    parent: &Directory,
+    name: &OsStr,
+    expected: FileIdentity,
+) -> Result<Option<(Directory, EntryStatus)>, Unreached> {
+    entered(parent, name, expected, None)
+}
+
+/// [`enter`], with the path of the folder for the traces when the caller
+/// knows it.
+fn entered(
+    parent: &Directory,
+    name: &OsStr,
+    expected: FileIdentity,
+    path: Option<&Path>,
+) -> Result<Option<(Directory, EntryStatus)>, Unreached> {
+    let Some((directory, status)) = opened(parent, name, expected, path)? else {
+        return Ok(None);
+    };
+    if status.mount_root == Some(true) {
+        tracing::debug!(
+            name = ?name,
+            path = ?path,
+            identity = ?status.identity,
+            "a mount put on a folder since it was read"
+        );
+        return Err(Unreached::Changed);
+    }
+    Ok(Some((directory, status)))
+}
+
+/// The status of the folder `name` of `parent`, at `path`, read without
+/// following it and accepted by `allowed`; `None` when it is gone.
+fn judged(
     parent: &Directory,
     name: &OsStr,
     path: &Path,
     allowed: impl Fn(&EntryStatus) -> bool,
-) -> Result<Option<Directory>, Unreached> {
+) -> Result<Option<EntryStatus>, Unreached> {
     let status = match parent.status_of(name) {
         Ok(status) => status,
-        Err(error) => return unreached(path, error),
+        Err(error) => return unreached(name, Some(path), error),
     };
     if status.kind != EntryType::Directory || !allowed(&status) {
         tracing::debug!(
+            name = ?name,
             path = ?path,
             kind = ?status.kind,
             identity = ?status.identity,
@@ -215,33 +279,48 @@ fn enter(
         );
         return Err(Unreached::Changed);
     }
+    Ok(Some(status))
+}
+
+/// Opens the folder `name` of `parent`, still `expected` once opened, a
+/// mount or not; `None` when it is gone.
+fn opened(
+    parent: &Directory,
+    name: &OsStr,
+    expected: FileIdentity,
+    path: Option<&Path>,
+) -> Result<Option<(Directory, EntryStatus)>, Unreached> {
     // Swapped for a link meanwhile, it fails to open.
-    let opened = match parent.open_child(name) {
-        Ok(opened) => opened,
-        Err(error) => return unreached(path, error),
+    let directory = match parent.open_child(name) {
+        Ok(directory) => directory,
+        Err(error) => return unreached(name, path, error),
     };
-    let identity = opened
+    let status = directory
         .status()
-        .map_err(|error| failed(path, error))?
-        .identity;
-    if identity == status.identity {
-        Ok(Some(opened))
+        .map_err(|error| failed(name, path, error))?;
+    if status.identity == expected {
+        Ok(Some((directory, status)))
     } else {
         tracing::debug!(
+            name = ?name,
             path = ?path,
-            read = ?status.identity,
-            opened = ?identity,
+            ?expected,
+            found = ?status.identity,
             "a folder on the way changed once opened"
         );
         Err(Unreached::Changed)
     }
 }
 
-/// What failing to read or open the folder at `path` on the way means: gone
-/// (`Ok(None)`), or as [`gone_or_failed`] says; traced.
-fn unreached(path: &Path, error: io::Error) -> Result<Option<Directory>, Unreached> {
+/// What failing to read or open the folder `name`, at `path`, on the way
+/// means: gone (`Ok(None)`), or as [`gone_or_failed`] says; traced.
+fn unreached<T>(
+    name: &OsStr,
+    path: Option<&Path>,
+    error: io::Error,
+) -> Result<Option<T>, Unreached> {
     if error.kind() == io::ErrorKind::NotFound {
-        tracing::debug!(path = ?path, "a folder on the way is gone");
+        tracing::debug!(name = ?name, path = ?path, "a folder on the way is gone");
         return Ok(None);
     }
     let kind = error.kind();
@@ -249,12 +328,14 @@ fn unreached(path: &Path, error: io::Error) -> Result<Option<Directory>, Unreach
     let outcome = gone_or_failed(error);
     match &outcome {
         Unreached::Changed => tracing::debug!(
+            name = ?name,
             path = ?path,
             ?kind,
             ?code,
             "a folder on the way is no longer one"
         ),
         Unreached::Io(error) => tracing::debug!(
+            name = ?name,
             path = ?path,
             ?kind,
             ?code,
@@ -265,10 +346,11 @@ fn unreached(path: &Path, error: io::Error) -> Result<Option<Directory>, Unreach
     Err(outcome)
 }
 
-/// The system's refusal to open or read the folder at `path`, on the way;
-/// traced.
-fn failed(path: &Path, error: io::Error) -> Unreached {
+/// The system's refusal to open or read the folder `name`, at `path`, on the
+/// way; traced.
+fn failed(name: &OsStr, path: Option<&Path>, error: io::Error) -> Unreached {
     tracing::debug!(
+        name = ?name,
         path = ?path,
         kind = ?error.kind(),
         code = ?error.raw_os_error(),
@@ -666,6 +748,82 @@ mod tests {
                 reach_with(dev, identity(dev), &names, |_, _| true),
                 Err(Unreached::Changed)
             ));
+        }
+
+        #[test]
+        fn a_folder_is_entered_only_as_the_one_read() {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = fs::canonicalize(temporary.path()).unwrap();
+            fs::create_dir_all(root.join("a")).unwrap();
+            fs::create_dir_all(root.join("b")).unwrap();
+            let a = identity(&root.join("a"));
+            let b = identity(&root.join("b"));
+            let parent = Directory::open(&root).unwrap();
+            let name = OsStr::new;
+            let (_, status) = enter(&parent, name("a"), a).unwrap().unwrap();
+            assert_eq!(status.identity, a);
+            assert!(matches!(
+                enter(&parent, name("a"), b),
+                Err(Unreached::Changed)
+            ));
+            assert!(matches!(enter(&parent, name("absent"), a), Ok(None)));
+            // A link to the very folder expected: refused all the same.
+            symlink(root.join("b"), root.join("to b")).unwrap();
+            assert!(matches!(
+                enter(&parent, name("to b"), b),
+                Err(Unreached::Changed)
+            ));
+            fs::remove_dir(root.join("a")).unwrap();
+            fs::write(root.join("a"), b"x").unwrap();
+            assert!(matches!(
+                enter(&parent, name("a"), a),
+                Err(Unreached::Changed)
+            ));
+        }
+
+        #[test]
+        fn a_folder_the_system_refuses_is_a_refusal() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let temporary = tempfile::tempdir().unwrap();
+            let root = fs::canonicalize(temporary.path()).unwrap();
+            fs::create_dir_all(root.join("closed")).unwrap();
+            let closed = identity(&root.join("closed"));
+            fs::set_permissions(root.join("closed"), fs::Permissions::from_mode(0o000)).unwrap();
+            let parent = Directory::open(&root).unwrap();
+            let entered = enter(&parent, OsStr::new("closed"), closed);
+            fs::set_permissions(root.join("closed"), fs::Permissions::from_mode(0o700)).unwrap();
+            if entered.is_ok() {
+                eprintln!("skipped: root enters every folder");
+                return;
+            }
+            assert!(
+                matches!(
+                    entered,
+                    Err(Unreached::Io(ref error))
+                        if error.kind() == std::io::ErrorKind::PermissionDenied
+                ),
+                "{entered:?}"
+            );
+        }
+
+        #[test]
+        fn a_mount_is_crossed_on_the_way_down_never_entered_below() {
+            let dev = Path::new("/dev");
+            let Some(mounted) = ["shm", "pts", "mqueue", "hugepages"]
+                .into_iter()
+                .find(|name| crate::mount_root(&dev.join(name)).ok().flatten() == Some(true))
+            else {
+                eprintln!("skipped: no mount under /dev");
+                return;
+            };
+            let parent = Directory::open(dev).unwrap();
+            let read = identity(&dev.join(mounted));
+            assert!(matches!(
+                enter(&parent, OsStr::new(mounted), read),
+                Err(Unreached::Changed)
+            ));
+            assert!(matches!(reach_path(&dev.join(mounted)), Ok(Some(_))));
         }
     }
 }

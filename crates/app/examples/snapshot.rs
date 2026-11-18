@@ -1469,8 +1469,8 @@ fn apps_leftovers(app: &ui::AppWindow, empty: bool, language: Language) {
 
 /// The tab of old versions, as on this machine: two revisions of snaps (one
 /// whose file the download cache shares), a flatpak runtime; the question
-/// asked when `confirming`.
-fn apps_old_versions(app: &ui::AppWindow, confirming: bool, language: Language) {
+/// asked when `screen` ends with `-confirm`.
+fn apps_old_versions(app: &ui::AppWindow, screen: &str, language: Language) {
     apps(app, false, false, language);
     app.global::<ui::Apps>().set_tab(ui::AppsTab::OldVersions);
     let old = app.global::<ui::OldVersions>();
@@ -1556,7 +1556,7 @@ fn apps_old_versions(app: &ui::AppWindow, confirming: bool, language: Language) 
     old.set_has_later(true);
     old.set_checked_runtimes(true);
     old.set_checked_about(size(1, 1, ui::SizeUnit::Gigabyte));
-    old.set_confirming(confirming);
+    old.set_confirming(screen.ends_with("-confirm"));
 }
 
 /// The uninstallation of a flatpak asked, with its translations.
@@ -2224,8 +2224,7 @@ fn main() {
         "apps-uninstall-flatpak" => apps_flatpak(&app, language),
         "apps-leftovers" => apps_leftovers(&app, false, language),
         "apps-leftovers-empty" => apps_leftovers(&app, true, language),
-        "apps-old-versions" => apps_old_versions(&app, false, language),
-        "apps-old-versions-confirm" => apps_old_versions(&app, true, language),
+        old if old.starts_with("apps-old-versions") => apps_old_versions(&app, old, language),
         "settings" => settings(&app),
         "settings-trash" => settings_trash(&app),
         "history" | "history-small" => history(&app, false, language),

@@ -3027,7 +3027,7 @@ pub mod tests {
         }
         let gpu = checkbox(&window, "Caches GPU");
         assert_eq!(gpu.accessible_checked(), Some(false), "invariant 5");
-        // Its consequence is the confirmation's to say, once it is checked.
+        // Its consequence is said with the results, never beside its box.
         assert_eq!(
             gpu.accessible_description().as_deref(),
             Some("Shaders Mesa et NVIDIA.")

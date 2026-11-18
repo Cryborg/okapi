@@ -24,7 +24,8 @@ global DiskWords {
 
     // A line's state in words, or nothing: always read aloud; shown below
     // its name when the line is `tall`, else in the tooltip of its icon
-    // when `iconic`, else not shown. Every new state takes one of the two.
+    // when `iconic`, else not shown. A new state shown takes one of the
+    // two.
     pure public function state(line: DiskLine) -> string {
         if line.kind == DiskLineKind.others {
             return @tr("{n} élément, moins de 1 % chacun" | "{n} éléments, moins de 1 % chacun" % line.count);

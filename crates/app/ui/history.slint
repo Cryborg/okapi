@@ -537,12 +537,15 @@ component UpdateDetail inherits VerticalLayout {
                     tone: update.state == UpdateState.installed ? Theme.success : Theme.warning;
                     cross-axis-self-alignment: center;
                 }
-                // Read by its icon, its state with it: said once.
-                Detail {
+                // Read by its icon, its state with it: said once. A Text of
+                // its own, as a `Detail` set to no role is still read.
+                Text {
                     horizontal-stretch: 1;
                     accessible-role: none;
                     text: HistoryWords.updated-shown(update);
                     color: update.state == UpdateState.installed ? Theme.text : Theme.warning;
+                    font-size: Theme.font-small;
+                    wrap: word-wrap;
                 }
             }
         }

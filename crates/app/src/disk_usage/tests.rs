@@ -922,6 +922,10 @@ fn a_partial_size_is_said_at_least_once_the_analysis_stopped() {
         &window,
         "Taille partielle : l'analyse a été arrêtée"
     ));
+    assert!(shows(
+        &window,
+        "Analyse arrêtée : tailles partielles. Les dossiers pas encore parcourus ne sont pas comptés."
+    ));
     assert!(
         ElementHandle::find_by_element_type_name(&window, "Row")
             .filter_map(|row| row.accessible_label())
@@ -931,7 +935,7 @@ fn a_partial_size_is_said_at_least_once_the_analysis_stopped() {
 }
 
 #[test]
-fn only_a_hard_link_says_its_state_below_its_name() {
+fn of_the_states_a_hard_link_alone_is_said_below_its_name() {
     let home = home();
     fs::hard_link(home.path().join("note"), home.path().join("twin")).unwrap();
     let closed = home.path().join("closed");
@@ -953,8 +957,10 @@ fn only_a_hard_link_says_its_state_below_its_name() {
     ] {
         assert!(shown_lines.iter().any(|line| line.state == state));
     }
-    // Every other state is an icon beside the name: the line stays low.
+    // Every other state is an icon beside the name: the line stays low
+    // (« Autres », tall for its count, none here).
     for line in &shown_lines {
+        assert_ne!(line.kind, ui::DiskLineKind::Others);
         assert_eq!(
             line.tall,
             line.state == ui::DiskLineState::CountedElsewhere,

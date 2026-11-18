@@ -779,10 +779,6 @@ msgid "Trouvé : {}. Éléments : {}."
 msgstr "Found: {}. Entries: {}."
 
 msgctxt "ResultsPage"
-msgid "Choisir d'autres catégories"
-msgstr "Choose other categories"
-
-msgctxt "ResultsPage"
 msgid "Nouvelle analyse"
 msgstr "New analysis"
 
@@ -825,6 +821,10 @@ msgstr "Entries: {} of {}"
 msgctxt "ResultsPage"
 msgid "Tout désélectionner"
 msgstr "Deselect all"
+
+msgctxt "ResultsPage"
+msgid "Retour"
+msgstr "Back"
 
 msgctxt "ResultsPage"
 msgid "Nettoyer"

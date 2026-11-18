@@ -2215,9 +2215,9 @@ mod tests {
         sandbox.file("home/.cache/pip/old");
         settle_files();
         let (window, _screen) = on_results(sandbox.read(&sandbox.root.join("state")));
-        // The sidebar, "Choisir d'autres catégories", "Nouvelle analyse",
+        // The sidebar, "Nouvelle analyse",
         // the three headers that sort, then the fold of Applications.
-        for _ in 0..SIDEBAR_STOPS + 6 {
+        for _ in 0..SIDEBAR_STOPS + 5 {
             press(&window, Key::Tab);
         }
         let fold = || {
@@ -3694,7 +3694,7 @@ mod tests {
             "the crash reports and the core dumps wait for the rights"
         );
         let_the_screen_settle();
-        button(&window, "Choisir d'autres catégories").invoke_accessible_default_action();
+        button(&window, "Retour").invoke_accessible_default_action();
         let_the_screen_settle();
         checkbox(&window, "Système").invoke_accessible_default_action();
         button(&window, "Analyser").invoke_accessible_default_action();

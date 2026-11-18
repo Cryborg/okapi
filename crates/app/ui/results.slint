@@ -753,18 +753,9 @@ export component ResultsPage inherits VerticalLayout {
                     text: @tr("Trouvé : {}. Éléments : {}.", Words.size(Cleaner.found), Cleaner.result-entries);
                 }
             }
-            ActionButton {
-                text: @tr("Choisir d'autres catégories");
-                kind: ButtonKind.ghost;
-                cross-axis-self-alignment: center;
-                clicked => {
-                    Cleaner.choose-again();
-                }
-            }
-            ActionButton {
-                text: @tr("Nouvelle analyse");
-                icon: @image-url("../assets/icons/search.svg");
-                kind: ButtonKind.ghost;
+            IconButton {
+                icon: @image-url("../assets/icons/refresh-cw.svg");
+                label: @tr("Nouvelle analyse");
                 enabled: Cleaner.analysis-allowed;
                 cross-axis-self-alignment: center;
                 clicked => {
@@ -911,6 +902,17 @@ export component ResultsPage inherits VerticalLayout {
             cross-axis-self-alignment: center;
             clicked => {
                 Cleaner.deselect-all();
+            }
+        }
+        // Back to choosing the categories.
+        ActionButton {
+            text: @tr("Retour");
+            icon: @image-url("../assets/icons/arrow-left.svg");
+            kind: ButtonKind.secondary;
+            large: true;
+            cross-axis-self-alignment: center;
+            clicked => {
+                Cleaner.choose-again();
             }
         }
         ActionButton {

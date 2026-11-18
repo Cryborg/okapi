@@ -109,26 +109,32 @@ export component FocusRing inherits Rectangle {
 
 // A square button that shows only an icon: its label is read, and shown in
 // a tooltip. Reached with Tab, pressed with Enter or Space, its focus ring
-// visible.
+// visible; disabled, it is skipped and says so, as an `ActionButton`.
 export component IconButton inherits Rectangle {
     in property <image> icon;
     in property <string> label;
+    in property <bool> enabled: true;
     callback clicked;
 
     width: Theme.icon-box;
     height: Theme.icon-box;
     border-radius: Theme.radius-medium;
-    background: touch.has-hover ? Theme.surface-hover : transparent;
+    opacity: enabled ? 1 : Theme.disabled-opacity;
+    background: enabled && touch.has-hover ? Theme.surface-hover : transparent;
     accessible-role: button;
     accessible-label: label;
+    accessible-enabled: enabled;
     accessible-action-default => {
-        root.clicked();
+        if enabled {
+            root.clicked();
+        }
     }
     forward-focus: keys;
 
     keys := FocusScope {
+        focus-on-tab-navigation: root.enabled;
         key-pressed(event) => {
-            if !event.repeat && (event.text == Key.Return || event.text == Key.Space) {
+            if root.enabled && !event.repeat && (event.text == Key.Return || event.text == Key.Space) {
                 root.clicked();
                 return accept;
             }
@@ -137,6 +143,7 @@ export component IconButton inherits Rectangle {
     }
 
     touch := TouchArea {
+        enabled: root.enabled;
         clicked => {
             root.clicked();
         }

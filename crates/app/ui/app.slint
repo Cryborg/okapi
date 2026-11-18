@@ -7,7 +7,7 @@ import { DiskUsagePage } from "disk-usage.slint";
 import { SettingsPage } from "settings.slint";
 import { EntryError, LanguageChoice, PathKind, PathList, PathRow, Preferences, SaveRefusal, SettingsState, ThemeChoice } from "settings-model.slint";
 import { AppsPage } from "apps.slint";
-import { AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, AppsTab, CopyLine, ForgetOutcome, LeftoverLine, Leftovers, LeftoversBlock, SourceShown, UninstallStep, UninstallWhy } from "apps-model.slint";
+import { AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, AppsTab, CopyLine, ForgetOutcome, LeftoverLine, Leftovers, LeftoversBlock, OldOutcome, OldRoom, OldVersionLine, OldVersions, SourceShown, UninstallStep, UninstallWhy } from "apps-model.slint";
 import { DuplicatesPage } from "duplicates.slint";
 import { DuplicateRow, Duplicates, KeptWhy, QuickRule, SearchStage } from "duplicates-model.slint";
 import { FoldersState, KeptShown, PersonalShown, ReceiptWhy, SearchPhase, ToolRefusal, ToolStep } from "user-files-model.slint";
@@ -18,7 +18,7 @@ import {
 } from "disk-usage-model.slint";
 import { UpdatesPage } from "updates.slint";
 import { HistoryPage } from "history.slint";
-import { DeletionLog, History, HistoryAdmin, HistoryKind, HistoryReading, HistoryRow, HistoryStop } from "history-model.slint";
+import { DeletionLog, History, HistoryAdmin, HistoryKind, HistoryReading, HistoryRow, HistoryStop, RemovedPart } from "history-model.slint";
 import { SnapLine, SourceFailure, SourceState, SystemLine, UpdateKind, Updates, UpdatesStep } from "updates-model.slint";
 import {
     AddableWidget, CellPlace, Dashboard, DayKind, FocusPart, FocusRequest, Moment, ReadingState, Reclaimable, ReclaimableState, SystemShown, Toast,
@@ -45,8 +45,8 @@ export {
     // Read by the tests, to see the theme applied.
     Theme,
     SnapLine, SourceFailure, SourceState, SystemLine, UpdateKind, Updates, UpdatesStep,
-    DeletionLog, History, HistoryAdmin, HistoryKind, HistoryReading, HistoryRow, HistoryStop,
-    AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, AppsTab, CopyLine, ForgetOutcome, LeftoverLine, Leftovers, LeftoversBlock, SourceShown, UninstallStep, UninstallWhy,
+    DeletionLog, History, HistoryAdmin, HistoryKind, HistoryReading, HistoryRow, HistoryStop, RemovedPart,
+    AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, AppsTab, CopyLine, ForgetOutcome, LeftoverLine, Leftovers, LeftoversBlock, OldOutcome, OldRoom, OldVersionLine, OldVersions, SourceShown, UninstallStep, UninstallWhy,
 }
 
 export component AppWindow inherits Window {

@@ -10,7 +10,8 @@ import {
 } from "widgets.slint";
 import { Size, Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
-import { AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, AppsTab, CopyLine, ForgetOutcome, LeftoverLine, Leftovers, LeftoversBlock, SourceShown, UninstallStep, UninstallWhy } from "apps-model.slint";
+import { AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, AppsTab, CopyLine, ForgetOutcome, LeftoverLine, Leftovers, LeftoversBlock, OldVersions, SourceShown, UninstallStep, UninstallWhy } from "apps-model.slint";
+import { OldVersionsConfirm, OldVersionsView } from "old-versions.slint";
 
 export global AppWords {
     pure public function source(source: AppSource) -> string {
@@ -1295,6 +1296,9 @@ export component AppsPage inherits Rectangle {
         if self.forget-asking {
             forget.show();
         }
+        if self.retire-asking {
+            retire.show();
+        }
     }
     changed asking => {
         if self.asking {
@@ -1337,6 +1341,20 @@ export component AppsPage inherits Rectangle {
     forget := ForgetConfirm {
         x: (root.width - Theme.modal-width) / 2;
         y: root.height / 4;
+        width: Theme.modal-width;
+    }
+
+    property <bool> retire-asking: OldVersions.confirming;
+    changed retire-asking => {
+        if self.retire-asking {
+            retire.show();
+        } else {
+            retire.close();
+        }
+    }
+    retire := OldVersionsConfirm {
+        x: (root.width - Theme.modal-width) / 2;
+        y: root.height / 6;
         width: Theme.modal-width;
     }
 
@@ -1394,6 +1412,11 @@ export component AppsPage inherits Rectangle {
                         tab: AppsTab.leftovers;
                         badge: Leftovers.has-total ? Words.size(Leftovers.total) : "";
                     }
+                    Tab {
+                        text: @tr("Anciennes versions");
+                        tab: AppsTab.old-versions;
+                        badge: OldVersions.has-total ? Words.size(OldVersions.total) : "";
+                    }
                 }
                 Rectangle {
                     height: Theme.border-width;
@@ -1407,6 +1430,9 @@ export component AppsPage inherits Rectangle {
                 vertical-stretch: 1;
                 LeftoversView {
                     visible: Apps.tab == AppsTab.leftovers;
+                }
+                OldVersionsView {
+                    visible: Apps.tab == AppsTab.old-versions;
                 }
                 VerticalLayout {
                     visible: Apps.tab == AppsTab.installed;

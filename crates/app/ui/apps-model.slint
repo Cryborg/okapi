@@ -74,8 +74,91 @@ export enum UninstallStep { closed, checking, confirm, refused, running, failed 
 // Why an uninstallation did not happen.
 export enum UninstallWhy { none, absent, not-authorized, busy, unanswered, timed-out, not-found, unclear, service }
 
-// The tab shown: what is installed, or what applications uninstalled left.
-export enum AppsTab { installed, leftovers }
+// The tab shown: what is installed, what applications uninstalled left, or
+// the old versions the package managers keep.
+export enum AppsTab { installed, leftovers, old-versions }
+
+// When the room of an old version comes back.
+export enum OldRoom {
+    // As soon as it goes.
+    now,
+    // Once snapd's download cache lets its file go.
+    later,
+    // Another snap shares its file: nothing.
+    shared,
+    unknown,
+    // About this, once flatpak prunes its repository.
+    about,
+}
+
+// An old revision of a snap, or a flatpak runtime no application uses.
+export struct OldVersionLine {
+    // Its rank in the report: what a tick names.
+    index: int,
+    source: AppSource,
+    // The application's name as Okapi saw it, else the snap's or the
+    // runtime's own.
+    name: string,
+    // A snap's version, a runtime's branch.
+    version: string,
+    // A snap's revision.
+    revision: string,
+    room: OldRoom,
+    size: Size,
+    has-since: bool,
+    // Since when the snap's version in use is.
+    since: Moment,
+    checked: bool,
+}
+
+// What the last removal did.
+export enum OldOutcome { none, done, partly, refused, nothing, interrupted }
+
+export global OldVersions {
+    in property <bool> finding;
+    in property <[OldVersionLine]> snaps;
+    in property <[OldVersionLine]> flatpaks;
+    // What they take: the tab's badge, when there is any.
+    in property <Size> total;
+    in property <bool> has-total;
+    in property <bool> searched;
+    in property <bool> analysis-failed;
+    in property <bool> snaps-unread;
+    in property <bool> flatpaks-unread;
+    // The user's own runtimes no application uses, never proposed.
+    in property <int> for-account-only;
+    // Other persons log in here: what they installed is not seen.
+    in property <bool> other-accounts;
+    in property <int> checked-count;
+    in property <Size> checked-size;
+    // Of what is checked: snaps, and when their room comes back; runtimes.
+    in property <bool> checked-snaps;
+    in property <Size> checked-now;
+    in property <bool> has-now;
+    in property <Size> checked-later;
+    in property <bool> has-later;
+    in property <bool> has-shared;
+    in property <bool> has-unknown;
+    in property <bool> checked-runtimes;
+    in property <Size> checked-about;
+    // What would go.
+    in property <[OldVersionLine]> going;
+    in property <bool> confirming;
+    in property <bool> retiring;
+    // A search or a removal runs, here or elsewhere on the screen.
+    in property <bool> busy;
+    in property <OldOutcome> outcome;
+    in property <int> removed;
+    in property <int> kept;
+    // A history line could not be written.
+    in property <bool> unrecorded;
+
+    callback toggle(int);
+    callback retire();
+    callback confirm();
+    callback cancel();
+    callback close-outcome();
+}
 
 // A folder an application uninstalled left.
 export struct LeftoverLine {

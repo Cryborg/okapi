@@ -277,6 +277,8 @@ mod tests {
                 packages: vec!["gimp".to_owned()],
                 freed_bytes: Some(1),
                 data_removed: false,
+                part: crate::UninstallPart::App,
+                later_bytes: None,
             })
             .unwrap();
         assert!(analysis.outdated(directory.path()).unwrap());

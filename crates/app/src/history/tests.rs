@@ -3,7 +3,8 @@ use std::path::Path;
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use okapi_rules::Language;
 use okapi_store::{
-    AdminRecord, HistoryEntry, HistoryOutcome, UninstallEntry, UpdateEntry, UpdatedPackage,
+    AdminRecord, HistoryEntry, HistoryOutcome, UninstallEntry, UninstallPart, UpdateEntry,
+    UpdatedPackage,
 };
 use slint::Model as _;
 
@@ -81,6 +82,8 @@ fn uninstall(directory: &Path, time: i64) {
             packages: vec!["org.gimp.GIMP".to_owned()],
             freed_bytes: Some(300_000_000),
             data_removed: true,
+            part: UninstallPart::App,
+            later_bytes: None,
         })
         .unwrap();
 }
@@ -610,6 +613,8 @@ fn what_cannot_be_read_back_is_said() {
             packages: vec!["spotify".to_owned()],
             freed_bytes: None,
             data_removed: false,
+            part: UninstallPart::App,
+            later_bytes: None,
         })
         .unwrap();
     let (window, _screen) = shown_history(seams(directory.path()));
@@ -641,6 +646,39 @@ fn what_cannot_be_read_back_is_said() {
         !shows_a_text_starting(&window, "1 ligne de l'historique"),
         "nothing skipped: no banner"
     );
+}
+
+#[test]
+fn an_old_version_removed_is_named_so_with_what_snapd_gives_back_later() {
+    // Catches an old version told an uninstallation, what its source gives
+    // back later lost, and the sentence on an application's data said of a
+    // version's.
+    i_slint_backend_testing::init_no_event_loop();
+    let directory = tempfile::tempdir().unwrap();
+    History::open(directory.path())
+        .unwrap()
+        .record_uninstall(&UninstallEntry {
+            time: before(3),
+            source: PackageSource::Snap,
+            name: "Android Studio 2026.2.2.8".to_owned(),
+            packages: vec!["android-studio 248".to_owned()],
+            freed_bytes: Some(0),
+            data_removed: true,
+            part: UninstallPart::OldVersion,
+            later_bytes: Some(1_600_000_000),
+        })
+        .unwrap();
+    let (window, _screen) = shown_history(seams(directory.path()));
+    let rows = rows(&window);
+    assert_eq!(rows[0].removed_part, ui::RemovedPart::OldVersion);
+    assert!(rows[0].later_known);
+    window.global::<ui::History>().invoke_choose(0);
+    assert!(shows(&window, "Ancienne version retirée"));
+    assert!(shows(
+        &window,
+        "Les données de cette version ont été supprimées, pour tous les comptes."
+    ));
+    assert!(!shows(&window, "Ses données ont été supprimées avec elle."));
 }
 
 /// Newest first by their time, whatever the file's order (a clock set

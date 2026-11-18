@@ -1467,6 +1467,99 @@ fn apps_leftovers(app: &ui::AppWindow, empty: bool, language: Language) {
     leftovers.set_residual(9);
 }
 
+/// The tab of old versions, as on this machine: two revisions of snaps (one
+/// whose file the download cache shares), a flatpak runtime; the question
+/// asked when `confirming`.
+fn apps_old_versions(app: &ui::AppWindow, confirming: bool, language: Language) {
+    apps(app, false, false, language);
+    app.global::<ui::Apps>().set_tab(ui::AppsTab::OldVersions);
+    let old = app.global::<ui::OldVersions>();
+    old.set_searched(true);
+    let since = ui::Moment {
+        day: ui::DayKind::Other,
+        day_of_month: 6,
+        month: 11,
+        year: 0,
+        hour: 15,
+        minute: 46,
+    };
+    let snap = |index, name: &str, version: &str, revision: &str, room, size, checked| {
+        ui::OldVersionLine {
+            index,
+            source: ui::AppSource::Snap,
+            name: name.into(),
+            version: version.into(),
+            revision: revision.into(),
+            room,
+            size,
+            has_since: true,
+            since: since.clone(),
+            checked,
+        }
+    };
+    let snaps = vec![
+        snap(
+            0,
+            "Android Studio",
+            "2026.2.2.8-rabbit2",
+            "248",
+            ui::OldRoom::Later,
+            size(1, 6, ui::SizeUnit::Gigabyte),
+            true,
+        ),
+        snap(
+            1,
+            "gnome-46-2404",
+            "0+git.b31ceab",
+            "168",
+            ui::OldRoom::Later,
+            size(645, 0, ui::SizeUnit::Megabyte),
+            false,
+        ),
+        snap(
+            2,
+            "core22",
+            "20260909",
+            "2987",
+            ui::OldRoom::Now,
+            size(77, 0, ui::SizeUnit::Megabyte),
+            false,
+        ),
+    ];
+    let runtime = ui::OldVersionLine {
+        index: 3,
+        source: ui::AppSource::Flatpak,
+        name: "org.gnome.Platform".into(),
+        version: "45".into(),
+        revision: "".into(),
+        room: ui::OldRoom::About,
+        size: size(1, 1, ui::SizeUnit::Gigabyte),
+        has_since: false,
+        since: ui::Moment::default(),
+        checked: true,
+    };
+    old.set_going(ModelRc::new(VecModel::from(vec![
+        snaps[0].clone(),
+        runtime.clone(),
+    ])));
+    old.set_snaps(ModelRc::new(VecModel::from(snaps)));
+    old.set_flatpaks(ModelRc::new(VecModel::from(vec![runtime])));
+    old.set_for_account_only(2);
+    old.set_other_accounts(true);
+    old.set_total(size(3, 4, ui::SizeUnit::Gigabyte));
+    old.set_has_total(true);
+    old.set_checked_count(2);
+    old.set_checked_size(size(2, 7, ui::SizeUnit::Gigabyte));
+    old.set_checked_snaps(true);
+    old.set_checked_now(size(0, 0, ui::SizeUnit::Byte));
+    old.set_has_now(false);
+    old.set_checked_later(size(1, 6, ui::SizeUnit::Gigabyte));
+    old.set_has_later(true);
+    old.set_checked_runtimes(true);
+    old.set_checked_about(size(1, 1, ui::SizeUnit::Gigabyte));
+    old.set_confirming(confirming);
+}
+
 /// The uninstallation of a flatpak asked, with its translations.
 fn apps_flatpak(app: &ui::AppWindow, language: Language) {
     apps(app, false, false, language);
@@ -2132,6 +2225,8 @@ fn main() {
         "apps-uninstall-flatpak" => apps_flatpak(&app, language),
         "apps-leftovers" => apps_leftovers(&app, false, language),
         "apps-leftovers-empty" => apps_leftovers(&app, true, language),
+        "apps-old-versions" => apps_old_versions(&app, false, language),
+        "apps-old-versions-confirm" => apps_old_versions(&app, true, language),
         "settings" => settings(&app),
         "settings-trash" => settings_trash(&app),
         "history" | "history-small" => history(&app, false, language),
@@ -2147,7 +2242,7 @@ fn main() {
             duplicates(&app, scene, language);
         }
         other => panic!(
-            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, groups-closed, groups-closed-small, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings, settings-trash, history, history-small, history-update, history-empty, large-start, large-searching, large-stopped, large-result, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-result, duplicates-empty, duplicates-confirm (each also -small)"
+            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, groups-closed, groups-closed-small, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, apps-old-versions, apps-old-versions-confirm, settings, settings-trash, history, history-small, history-update, history-empty, large-start, large-searching, large-stopped, large-result, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-result, duplicates-empty, duplicates-confirm (each also -small)"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

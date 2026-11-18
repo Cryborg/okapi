@@ -124,7 +124,7 @@ enum Said {
 #[derive(Default)]
 pub(super) struct LeftoversState {
     report: Option<Arc<LeftoverReport>>,
-    seen: SeenApps,
+    pub(super) seen: SeenApps,
     residual: Option<usize>,
     blocked: Option<Blocked>,
     /// The last analysis ended without a word, or could not start.
@@ -148,6 +148,12 @@ impl LeftoversState {
 
     pub(super) const fn busy(&self) -> bool {
         self.analysing.is_some() || self.moving.is_some() || self.copies.forgetting.is_some()
+    }
+
+    /// Whether a move or a forgetting runs or waits for its yes: nothing
+    /// else on the screen asks a daemon meanwhile.
+    pub(super) const fn acting(&self) -> bool {
+        self.busy() || self.confirming || self.copies.asked.is_some()
     }
 }
 
@@ -357,10 +363,11 @@ impl AppsScreen {
     fn ask_trash(&self) {
         {
             let mut state = self.0.borrow_mut();
+            let retiring = state.old_versions.retiring();
             let leftovers = &mut state.leftovers;
             if leftovers.checked.is_empty() {
                 tracing::warn!("a move to the trash with nothing checked refused");
-            } else if leftovers.busy() || leftovers.copies.asked.is_some() {
+            } else if leftovers.busy() || leftovers.copies.asked.is_some() || retiring {
                 tracing::warn!("a move to the trash while another action runs refused");
             } else {
                 leftovers.confirming = true;
@@ -548,7 +555,7 @@ impl AppsScreen {
             (state.seams.now)(),
             &state.seams.zone,
         );
-        leftovers.set_busy(tab.busy());
+        leftovers.set_busy(tab.busy() || state.old_versions.retiring());
     }
 
     /// The window closes: a move of leftovers is waited for a little (each
@@ -579,7 +586,7 @@ impl AppsScreen {
 
 /// The name a snap or flatpak `name` of `source` is shown by: the one Okapi
 /// saw it installed with, else its own; and whether Okapi saw it.
-fn shown_name(seen: &SeenApps, source: Source, name: &str) -> (String, bool) {
+pub(super) fn shown_name(seen: &SeenApps, source: Source, name: &str) -> (String, bool) {
     let card = seen.find(source_key(source), name);
     let shown = card
         .map(|card| card.shown.as_str())

@@ -508,6 +508,8 @@ mod tests {
                 packages: Vec::new(),
                 freed_bytes: None,
                 data_removed: false,
+                part: super::super::UninstallPart::App,
+                later_bytes: None,
             })
             .unwrap();
         assert_eq!(last().unwrap(), None, "beyond the bound");

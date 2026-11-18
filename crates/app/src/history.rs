@@ -19,7 +19,7 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use okapi_store::{
     Deletions, History, HistoryEntry, HistoryOutcome, HistoryRead, HistoryRecord,
-    HistoryUnavailable, PackageSource, StoreError, UninstallEntry, UpdateEntry,
+    HistoryUnavailable, PackageSource, StoreError, UninstallEntry, UninstallPart, UpdateEntry,
 };
 use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 
@@ -446,6 +446,13 @@ fn uninstall_row(line: &UninstallEntry) -> ui::HistoryRow {
                 .collect(),
         ),
         data_removed: line.data_removed,
+        removed_part: match line.part {
+            UninstallPart::App => ui::RemovedPart::App,
+            UninstallPart::OldVersion => ui::RemovedPart::OldVersion,
+            UninstallPart::UnusedRuntime => ui::RemovedPart::UnusedRuntime,
+        },
+        later_known: line.later_bytes.is_some(),
+        later: size(line.later_bytes.unwrap_or_default()),
         ..ui::HistoryRow::default()
     }
 }

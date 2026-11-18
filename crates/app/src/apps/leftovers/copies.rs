@@ -128,6 +128,7 @@ impl AppsScreen {
     pub(super) fn ask_forget(&self, index: usize) {
         {
             let mut state = self.0.borrow_mut();
+            let retiring = state.old_versions.retiring();
             let leftovers = &mut state.leftovers;
             let shown = leftovers.copies.report.as_ref().and_then(|report| {
                 let copy = report.copies().get(index)?;
@@ -141,6 +142,7 @@ impl AppsScreen {
             if shown.is_none() {
                 tracing::info!(index, "a copy out of the list refused");
             } else if leftovers.busy()
+                || retiring
                 || leftovers.confirming
                 || leftovers.copies.asked.is_some()
                 || !leftovers.checked.is_empty()

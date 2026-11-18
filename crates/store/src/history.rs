@@ -408,6 +408,37 @@ pub struct UninstallEntry {
     pub freed_bytes: Option<u64>,
     /// Its data went with it.
     pub data_removed: bool,
+    /// What of it went: the application, or what it no longer uses; absent
+    /// for an application, so its line is unchanged.
+    #[serde(default, skip_serializing_if = "UninstallPart::is_app")]
+    pub part: UninstallPart,
+    /// What its source gives back later, beside `freed_bytes`: an old
+    /// version of a snap whose file snapd's download cache still holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub later_bytes: Option<u64>,
+}
+
+/// What an uninstallation removed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UninstallPart {
+    /// An application, and what goes with it.
+    #[default]
+    App,
+    /// An old version a snap kept to go back to.
+    OldVersion,
+    /// A flatpak runtime or extension no application uses.
+    UnusedRuntime,
+}
+
+impl UninstallPart {
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "serde's skip_serializing_if passes a reference"
+    )]
+    const fn is_app(&self) -> bool {
+        matches!(self, Self::App)
+    }
 }
 
 /// Who removed an application, or updated packages.
@@ -1658,8 +1689,42 @@ mod tests {
                 packages: vec!["android-studio".to_owned()],
                 freed_bytes: Some(3),
                 data_removed: false,
+                part: UninstallPart::App,
+                later_bytes: None,
             })
             .unwrap();
+    }
+
+    #[test]
+    fn an_old_version_removed_says_what_it_was_and_what_comes_back_later() {
+        // Catches the part or the bytes given back later lost on the way to
+        // the file or back, and an application's line that would change.
+        let directory = tempfile::tempdir().unwrap();
+        let entry = UninstallEntry {
+            time: 7,
+            source: PackageSource::Snap,
+            name: "Android Studio".to_owned(),
+            packages: vec!["android-studio 248".to_owned()],
+            freed_bytes: Some(0),
+            data_removed: true,
+            part: UninstallPart::OldVersion,
+            later_bytes: Some(1_674_694_656),
+        };
+        History::open(directory.path())
+            .unwrap()
+            .record_uninstall(&entry)
+            .unwrap();
+        let line = lines(directory.path()).remove(0);
+        assert_eq!(line["part"], "oldVersion");
+        assert_eq!(line["laterBytes"], 1_674_694_656);
+        assert_eq!(
+            serde_json::from_value::<UninstallEntry>(line).unwrap(),
+            entry
+        );
+        assert_eq!(
+            serde_json::to_value(UninstallPart::UnusedRuntime).unwrap(),
+            "unusedRuntime"
+        );
     }
 
     #[test]

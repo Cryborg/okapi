@@ -28,6 +28,7 @@ pub(crate) fn inert() -> AppsSeams {
         record: Arc::new(|_| Ok(())),
         now: Timestamp::now,
         leftovers: super::leftovers::tests::inert(),
+        old_versions: super::old_versions::tests::inert(),
         home: None,
         zone: jiff::tz::TimeZone::UTC,
     }
@@ -251,6 +252,7 @@ fn on_apps_reading(
             }),
             now: Timestamp::now,
             leftovers: super::leftovers::tests::inert(),
+            old_versions: super::old_versions::tests::inert(),
             home: None,
             zone: jiff::tz::TimeZone::UTC,
         },

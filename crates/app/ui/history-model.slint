@@ -8,6 +8,9 @@ export enum HistoryReading { reading, read, unreadable }
 
 export enum HistoryKind { cleaning, uninstall, update }
 
+// What an uninstallation removed.
+export enum RemovedPart { app, old-version, unused-runtime }
+
 // How an installation of updates ended: every update asked installed, some,
 // cancelled before anything, none, or not known (dpkg stopped, the daemon
 // fell silent).
@@ -69,6 +72,11 @@ export struct HistoryRow {
     source: AppSource,
     packages: [string],
     data-removed: bool,
+    // What of it went: the application, an old version, a runtime.
+    removed-part: RemovedPart,
+    // What its source gives back later (a snap's download cache).
+    later-known: bool,
+    later: Size,
     // An installation of updates: how it ended and why, the updates asked
     // installed and not, each of them, and the restart the system asked for.
     update-end: UpdateEnd,

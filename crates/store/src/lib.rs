@@ -31,7 +31,7 @@ pub use dashboard::{DashboardLayout, DashboardWidget, LoadedLayout, WidgetSize};
 pub use history::{
     AdminRecord, Deletions, History, HistoryEntry, HistoryOutcome, HistoryRead, HistoryRecord,
     HistoryUnavailable, LastCleaning, Opened, OperationEnd, OperationReason, OperationRecord,
-    PackageSource, UninstallEntry, UpdateEntry, UpdatedPackage, seconds,
+    PackageSource, UninstallEntry, UninstallPart, UpdateEntry, UpdatedPackage, seconds,
 };
 pub use interface_state::{InterfaceState, SidebarGroup};
 pub use last_analysis::LastAnalysis;

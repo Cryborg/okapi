@@ -12,7 +12,7 @@ import { ReceiptLine, Stat } from "receipt.slint";
 import { InstallWhy } from "updates-model.slint";
 import { AppSource } from "apps-model.slint";
 import {
-    DeletionLog, History, HistoryAdmin, HistoryKind, HistoryReading, HistoryRow, HistoryStop, UpdatedShown, UpdateEnd,
+    DeletionLog, History, HistoryAdmin, HistoryKind, HistoryReading, HistoryRow, HistoryStop, RemovedPart, UpdatedShown, UpdateEnd,
     UpdateState,
 } from "history-model.slint";
 
@@ -30,7 +30,9 @@ global HistoryWords {
 
     pure public function name(operation: HistoryRow) -> string {
         if operation.kind == HistoryKind.uninstall {
-            return @tr("Désinstallation");
+            return operation.removed-part == RemovedPart.old-version ? @tr("Ancienne version retirée")
+                : operation.removed-part == RemovedPart.unused-runtime ? @tr("Environnement retiré")
+                : @tr("Désinstallation");
         }
         if operation.kind == HistoryKind.update {
             return @tr("Mise à jour");
@@ -142,6 +144,10 @@ global HistoryWords {
     // What a line says under its name.
     pure public function summary(operation: HistoryRow) -> string {
         if operation.kind == HistoryKind.uninstall {
+            // Nothing freed yet, what snapd's cache gives back later said.
+            if operation.later-known && operation.freed.whole == 0 && operation.freed.tenths == 0 {
+                return @tr("{} · {} rendus plus tard", operation.name, Words.size(operation.later));
+            }
             return operation.freed-known ? @tr("{} · {}", operation.name, freed(operation)) : operation.name;
         }
         if operation.kind == HistoryKind.update {
@@ -444,8 +450,16 @@ component UninstallDetail inherits VerticalLayout {
     Detail {
         text: operation.freed-known ? HistoryWords.freed(operation) : @tr("Espace libéré inconnu.");
     }
-    Detail {
+    if operation.later-known: Detail {
+        text: @tr("Rendu plus tard par snapd, quand il vide son cache de téléchargements : {}.", Words.size(operation.later));
+        wrap: word-wrap;
+    }
+    if operation.removed-part == RemovedPart.app: Detail {
         text: operation.data-removed ? @tr("Ses données ont été supprimées avec elle.") : @tr("Ses données ont été gardées.");
+    }
+    if operation.removed-part == RemovedPart.old-version: Detail {
+        text: @tr("Les données de cette version ont été supprimées, pour tous les comptes.");
+        wrap: word-wrap;
     }
     if operation.packages.length > 0: Detail {
         text: @tr("Retiré :");

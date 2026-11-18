@@ -6,6 +6,7 @@
 //! command nor removes a file.
 
 pub mod leftovers;
+pub mod old_versions;
 mod rows;
 
 use std::cell::RefCell;
@@ -19,7 +20,7 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use okapi_rules::Language;
-use okapi_store::{HistoryUnavailable, PackageSource, UninstallEntry};
+use okapi_store::{HistoryUnavailable, PackageSource, UninstallEntry, UninstallPart};
 use okapi_tools::apps::icons::IconPixels;
 use okapi_tools::apps::uninstall::{
     Checked, Ended, Going, Gone, Removal, Step, Target, Uninstaller, Why, check, remove_as_shown,
@@ -55,6 +56,7 @@ pub struct AppsSeams {
     pub record: Record,
     pub now: fn() -> Timestamp,
     pub leftovers: leftovers::LeftoverSeams,
+    pub old_versions: old_versions::OldVersionSeams,
     /// The home folder, as a leftover's path is shown under it.
     pub home: Option<PathBuf>,
     /// Where a copy's date is said.
@@ -114,6 +116,7 @@ impl AppsSeams {
             record: Arc::new(record_system),
             now: Timestamp::now,
             leftovers: leftovers::LeftoverSeams::system(),
+            old_versions: old_versions::OldVersionSeams::system(),
             home,
             zone: crate::dashboard::system_zone(),
         }
@@ -370,6 +373,7 @@ struct State {
     /// The exclusions of the settings: never a leftover there.
     exclusions: ReadExclusions,
     leftovers: leftovers::LeftoversState,
+    old_versions: old_versions::OldVersionsState,
 }
 
 /// The applications screen.
@@ -392,6 +396,7 @@ impl AppsScreen {
         let state = State {
             exclusions,
             leftovers: leftovers::LeftoversState::default(),
+            old_versions: old_versions::OldVersionsState::default(),
             window: window.as_weak(),
             seams,
             language,
@@ -426,6 +431,7 @@ impl AppsScreen {
         apps.set_flatpaks(ui::SourceShown::Reading);
         let screen = Self(Rc::new(RefCell::new(state)));
         screen.attach_leftovers(window);
+        screen.attach_old_versions(window);
         let weak = Rc::downgrade(&screen.0);
         let on = move |action: fn(&Self)| {
             let weak = weak.clone();
@@ -507,6 +513,8 @@ impl AppsScreen {
                 tracing::info!("page left: measuring stopped");
                 reading.stop.store(true, Ordering::Relaxed);
             }
+            drop(state);
+            self.stop_old_versions();
             return;
         }
         let (reading, stale, running) = {
@@ -605,8 +613,9 @@ impl AppsScreen {
         // The screen keeps no sender: the reading ends when its threads do.
         read(language, &sink, &stop);
         drop(sink);
-        // It reads its own sources: it never waits for the list's measures.
+        // They read their own sources: never waiting for the list's measures.
         self.analyse_leftovers();
+        self.find_old_versions();
         self.show_lines_now();
         self.watch();
     }
@@ -617,13 +626,17 @@ impl AppsScreen {
         self.take_arrivals();
         self.take_said();
         self.take_leftovers();
+        self.take_old_versions();
         let (owed, on_page, busy) = {
             let mut state = self.0.borrow_mut();
             state.readings_since_sort = state.readings_since_sort.saturating_add(1);
             (
                 state.sort_owed,
                 state.on_page,
-                state.reading.is_some() || state.operation.is_some() || state.leftovers.busy(),
+                state.reading.is_some()
+                    || state.operation.is_some()
+                    || state.leftovers.busy()
+                    || state.old_versions.busy(),
             )
         };
         if owed {
@@ -839,7 +852,7 @@ impl AppsScreen {
                 uninstalling.as_ref() == Some(&key),
             ));
         }
-        apps.set_busy(uninstalling.is_some());
+        apps.set_busy(uninstalling.is_some() || state.old_versions.retiring());
         apps.set_reading(state.reading.is_some());
         drop(state);
         self.show_minutes();
@@ -911,6 +924,10 @@ impl AppsScreen {
     /// Opens the uninstallation of the application chosen, or shows the one
     /// running.
     fn uninstall(&self) {
+        if self.0.borrow().old_versions.retiring() {
+            tracing::info!("an uninstallation refused: old versions are being removed");
+            return;
+        }
         let running = {
             let mut state = self.0.borrow_mut();
             let chosen = state.chosen.clone();
@@ -1056,6 +1073,8 @@ impl AppsScreen {
                 packages: Vec::new(),
                 freed_bytes: operation.freed_now(),
                 data_removed: operation.purges(),
+                part: UninstallPart::App,
+                later_bytes: None,
             };
             let cancel = Arc::clone(&operation.cancel);
             std::thread::Builder::new()
@@ -1328,6 +1347,8 @@ impl AppsScreen {
 
     /// Shows the uninstallation as it stands.
     fn show_operation(&self) {
+        // An uninstallation holds the old versions' removal back.
+        self.show_old_versions();
         let window = self.0.borrow().window.upgrade();
         let Some(window) = window else { return };
         let apps = window.global::<ui::Apps>();
@@ -1407,6 +1428,7 @@ impl AppsScreen {
     /// left to its service, never waited for.
     pub fn shut_down(&self) {
         self.wait_for_leftovers();
+        self.leave_old_versions();
         let state = self.0.borrow();
         if let Some(reading) = &state.reading {
             reading.stop.store(true, Ordering::Relaxed);

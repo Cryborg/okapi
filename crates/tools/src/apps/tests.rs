@@ -710,12 +710,26 @@ fn a_link_among_the_architectures_or_branches_is_never_read() {
         branches.join("stable"),
     )
     .unwrap();
-    let (found, _) = apps(read_flatpaks(
-        &[user_installation(&user)],
-        None,
-        &reading(root.path()),
-    ));
+    let read = read_flatpaks(&[user_installation(&user)], None, &reading(root.path()));
+    // The link among the branches hides what may be there: said partial,
+    // `current` among the architectures is flatpak's own and hides nothing.
+    assert!(
+        matches!(read, SourceReading::Read { partial: true, .. }),
+        "{read:?}"
+    );
+    let (found, _) = apps(read);
     assert_eq!(found, Vec::new());
+    fs::remove_file(branches.join("stable")).unwrap();
+    assert!(matches!(
+        read_flatpaks(&[user_installation(&user)], None, &reading(root.path())),
+        SourceReading::Read { partial: false, .. }
+    ));
+    // A name refused among the applications hides one too.
+    fs::create_dir_all(user.join("app/org a")).unwrap();
+    assert!(matches!(
+        read_flatpaks(&[user_installation(&user)], None, &reading(root.path())),
+        SourceReading::Read { partial: true, .. }
+    ));
 }
 
 /// The metadata of an extension that says it extends `reference`, as

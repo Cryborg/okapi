@@ -722,7 +722,7 @@ fn read_installation(
     let app_folder = installation.path.join(RefKind::App.folder());
     let ids = match subfolders(&app_folder) {
         Ok(listed) => {
-            found.partial |= !listed.whole;
+            found.partial |= !listed.whole || listed.refused;
             listed.names
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),

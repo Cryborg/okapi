@@ -109,8 +109,8 @@ msgid "Steam, Heroic, Lutris et itch.io : journaux et caches."
 msgstr "Steam, Heroic, Lutris and itch.io: logs and caches."
 
 msgctxt "Words"
-msgid "Shaders Mesa et NVIDIA. Recréés ensuite : le prochain lancement des jeux sera plus lent."
-msgstr "Mesa and NVIDIA shaders. Built again afterwards: games will start more slowly the next time."
+msgid "Shaders Mesa et NVIDIA."
+msgstr "Mesa and NVIDIA shaders."
 
 msgctxt "Words"
 msgid "o"

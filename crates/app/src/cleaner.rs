@@ -3027,10 +3027,10 @@ pub mod tests {
         }
         let gpu = checkbox(&window, "Caches GPU");
         assert_eq!(gpu.accessible_checked(), Some(false), "invariant 5");
-        assert!(
-            gpu.accessible_description()
-                .is_some_and(|description| description.ends_with("sera plus lent.")),
-            "the warning is read"
+        // Its consequence is the confirmation's to say, once it is checked.
+        assert_eq!(
+            gpu.accessible_description().as_deref(),
+            Some("Shaders Mesa et NVIDIA.")
         );
         assert!(shows(
             &window,

@@ -1408,6 +1408,7 @@ mod tests {
     use std::time::Duration;
 
     use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+    use okapi_engine::ScanOptions;
     use okapi_rules::{Os, RuleSet, TemplateVariables};
     use slint::ComponentHandle as _;
 
@@ -1418,7 +1419,7 @@ mod tests {
         on_cleaner, press, refused_for_an_exclusion, refused_when, resize, seams_never_scanning,
         settle_files, shows, shows_a_text_starting, start_of, step, watch_until,
     };
-    use super::super::{Inputs, Seams};
+    use super::super::{Inputs, Job, Seams};
     use crate::ui;
 
     /// The window on the results of an analysis of Applications alone.
@@ -1570,35 +1571,103 @@ mod tests {
         assert_eq!(found(&window, fonts).accessible_checked(), Some(false));
     }
 
-    /// A cache reset checked is said once, at the confirmation, never when
-    /// none is.
-    #[test]
-    fn the_confirmation_says_a_cache_reset_checked_is_built_again() {
-        const BUILT_AGAIN: &str = "Les caches retirés seront recréés : ce qui s'en sert démarrera un peu plus lentement la prochaine fois.";
-        let sandbox = Sandbox::new();
+    /// On the results of the default categories in `sandbox`, scanned with
+    /// `seams`, pip's cache preselected and `group` left to choose: the
+    /// confirmation says `sentence` only once `group` is checked. Gives the
+    /// window, the confirmation open over `group` checked.
+    fn confirmation_says_once_checked(
+        sandbox: &Sandbox,
+        seams: Seams,
+        group: &str,
+        sentence: &str,
+    ) -> ui::AppWindow {
         sandbox.file("home/.cache/pip/old");
-        sandbox.file("home/.cache/fontconfig/old");
         settle_files();
-        // The default categories: the system's fonts and pip's.
-        let (window, _screen) = on_cleaner(sandbox.read(&sandbox.root.join("state")));
+        let (window, _screen) = on_cleaner(seams);
         button(&window, "Analyser").invoke_accessible_default_action();
         watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
         let_the_screen_settle();
-        let cleaner = window.global::<ui::Cleaner>();
         button(&window, "Nettoyer").invoke_accessible_default_action();
         // `changed` handlers run on the next turn of the event loop.
         slint::platform::update_timers_and_animations();
         assert!(shows_a_text_starting(&window, "Taille : "), "confirming");
-        assert!(!shows(&window, BUILT_AGAIN), "pip's cache alone");
+        assert!(!shows(&window, sentence), "pip's cache alone");
         let_the_screen_settle();
         button(&window, "Annuler").invoke_accessible_default_action();
         let_the_screen_settle();
 
-        found(&window, "Cache des polices").invoke_accessible_default_action();
+        found(&window, group).invoke_accessible_default_action();
         button(&window, "Nettoyer").invoke_accessible_default_action();
         slint::platform::update_timers_and_animations();
-        assert!(shows(&window, BUILT_AGAIN));
-        assert!(!cleaner.get_confirm_trash(), "no trash checked");
+        assert!(shows(&window, sentence));
+        window
+    }
+
+    /// A cache reset checked is said once, at the confirmation, never when
+    /// none is.
+    #[test]
+    fn the_confirmation_says_a_cache_reset_checked_is_built_again() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/fontconfig/old");
+        let window = confirmation_says_once_checked(
+            &sandbox,
+            sandbox.read(&sandbox.root.join("state")),
+            "Cache des polices",
+            "Les caches retirés seront recréés : ce qui s'en sert démarrera un peu plus lentement la prochaine fois.",
+        );
+        assert!(
+            !window.global::<ui::Cleaner>().get_confirm_trash(),
+            "no trash checked"
+        );
+    }
+
+    /// The trash checked is said once, at the confirmation: what leaves it
+    /// is gone for good. Never when it is not checked.
+    #[test]
+    fn the_confirmation_says_the_trash_checked_is_gone_for_good() {
+        // Past the trash's minimum age: its entry just written changed now,
+        // which keeps it until then (as the engine's own tests of the trash).
+        const LATER: Duration = Duration::from_hours(24 * 40);
+        let sandbox = Sandbox::new();
+        // Put in the trash long before its rule's minimum age.
+        sandbox.file("home/.local/share/Trash/files/old");
+        let information = sandbox.file("home/.local/share/Trash/info/old.trashinfo");
+        fs::write(
+            information,
+            "[Trash Info]\nPath=/home/a/old\nDeletionDate=2020-01-01T00:00:00\n",
+        )
+        .unwrap();
+        let seams = sandbox.read(&sandbox.root.join("state"));
+        let work = Arc::clone(&seams.work);
+        let seams = Seams {
+            work: Arc::new(move |job, cancel, progress| {
+                let options = &job.options;
+                let later = ScanOptions::new(
+                    options.now() + LATER,
+                    options.min_age(),
+                    options.exclusions().clone(),
+                )
+                .with_categories(options.categories().clone());
+                work(
+                    Job {
+                        options: later,
+                        ..job
+                    },
+                    cancel,
+                    progress,
+                )
+            }),
+            ..seams
+        };
+        let window = confirmation_says_once_checked(
+            &sandbox,
+            seams,
+            "Corbeille",
+            "Ce qui part de la corbeille ne pourra plus être restauré.",
+        );
+        let cleaner = window.global::<ui::Cleaner>();
+        assert!(cleaner.get_confirm_trash());
+        assert!(!cleaner.get_confirm_cache_reset(), "no cache reset checked");
     }
 
     #[test]

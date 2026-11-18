@@ -6,11 +6,11 @@ import { LineEdit, ListView } from "std-widgets.slint";
 import { Theme, Screen } from "theme.slint";
 import {
     ActionButton, Banner, ButtonKind, Card, CheckMark, Detail, FocusRing, Icon, IconButton,
-    Badge, ModalFrame, ProgressBar, Title,
+    Badge, ModalFrame, ProgressBar, SortHeader, Title,
 } from "widgets.slint";
 import { Size, Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
-import { AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, AppsTab, CopyLine, ForgetOutcome, LeftoverLine, Leftovers, LeftoversBlock, OldVersions, SourceShown, UninstallStep, UninstallWhy } from "apps-model.slint";
+import { AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, AppsSort, AppsTab, CopyLine, ForgetOutcome, LeftoverLine, Leftovers, LeftoversBlock, OldVersions, SourceShown, UninstallStep, UninstallWhy } from "apps-model.slint";
 import { OldVersionsConfirm, OldVersionsView } from "old-versions.slint";
 
 export global AppWords {
@@ -241,6 +241,11 @@ component Lines inherits FocusScope {
         } else if place + Theme.app-row-height > -view.content-y + view.visible-height {
             view.content-y = view.visible-height - place - Theme.app-row-height;
         }
+    }
+
+    // The line of the keyboard brought into view, after a sort moved it.
+    public function reveal() {
+        root.show(Apps.current);
     }
 
     function move(index: int) {
@@ -1499,8 +1504,13 @@ export component AppsPage inherits Rectangle {
                     HorizontalLayout {
                         vertical-stretch: 1;
                         spacing: Theme.spacing-l;
-                        if !(Screen.narrow && root.detail-shown): Card {
+                        if !(Screen.narrow && root.detail-shown): card := Card {
                             horizontal-stretch: 1;
+                            // Sorted by `column`, the line of the keyboard kept in view.
+                            function sort-by(column: AppsSort) {
+                                Apps.sort-by(column);
+                                lines.reveal();
+                            }
                             VerticalLayout {
                                 padding-top: Theme.spacing-xs;
                                 HorizontalLayout {
@@ -1508,32 +1518,44 @@ export component AppsPage inherits Rectangle {
                                     padding-right: Theme.spacing-l;
                                     spacing: Theme.spacing-m;
                                     height: Theme.control-height;
-                                    Detail {
+                                    SortHeader {
                                         horizontal-stretch: 1;
                                         text: @tr("Nom");
-                                        vertical-alignment: center;
-                                        accessible-role: none;
+                                        applied: Apps.sort == AppsSort.name;
+                                        descending: Apps.descending;
+                                        sorted => {
+                                            card.sort-by(AppsSort.name);
+                                        }
                                     }
-                                    Detail {
+                                    SortHeader {
                                         width: Theme.app-col-size;
                                         text: @tr("Appli");
-                                        horizontal-alignment: right;
-                                        vertical-alignment: center;
-                                        accessible-role: none;
+                                        applied: Apps.sort == AppsSort.app;
+                                        descending: Apps.descending;
+                                        trailing: true;
+                                        sorted => {
+                                            card.sort-by(AppsSort.app);
+                                        }
                                     }
-                                    Detail {
+                                    SortHeader {
                                         width: Theme.app-col-data;
                                         text: @tr("Données");
-                                        horizontal-alignment: right;
-                                        vertical-alignment: center;
-                                        accessible-role: none;
+                                        applied: Apps.sort == AppsSort.data;
+                                        descending: Apps.descending;
+                                        trailing: true;
+                                        sorted => {
+                                            card.sort-by(AppsSort.data);
+                                        }
                                     }
-                                    Detail {
+                                    SortHeader {
                                         width: Screen.narrow ? Theme.app-bar-width-narrow : Theme.app-bar-width;
                                         text: @tr("Place prise");
-                                        horizontal-alignment: right;
-                                        vertical-alignment: center;
-                                        accessible-role: none;
+                                        applied: Apps.sort == AppsSort.total;
+                                        descending: Apps.descending;
+                                        trailing: true;
+                                        sorted => {
+                                            card.sort-by(AppsSort.total);
+                                        }
                                     }
                                 }
                                 Rectangle {
@@ -1544,7 +1566,7 @@ export component AppsPage inherits Rectangle {
                                 // the keyboard from the search.
                                 Rectangle {
                                     vertical-stretch: 1;
-                                    Lines {
+                                    lines := Lines {
                                         visible: Apps.lines.length > 0 || Apps.search == "";
                                     }
                                     if Apps.lines.length == 0 && Apps.search != "": VerticalLayout {

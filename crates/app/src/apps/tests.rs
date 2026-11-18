@@ -352,6 +352,42 @@ fn the_list_is_read_when_shown_and_sorted_by_all_each_takes() {
 }
 
 #[test]
+fn a_header_sorts_the_list_and_the_detail_and_the_keyboard_follow_their_application() {
+    let (window, ..) = on_apps(inert().uninstaller);
+    open(&window, "GIMP");
+    apps(&window).invoke_move_to(1);
+    // Under the pointer, a sort asked is made at once all the same.
+    apps(&window).invoke_point(2);
+    button(&window, "Nom").invoke_accessible_default_action();
+    assert_eq!(
+        names(&window),
+        ["Android Studio", "Builder", "Fichiers", "GIMP"]
+    );
+    assert_eq!(
+        (apps(&window).get_sort(), apps(&window).get_descending()),
+        (ui::AppsSort::Name, false)
+    );
+    assert_eq!(apps(&window).get_chosen(), 3);
+    assert_eq!(apps(&window).get_current(), 3);
+    assert_eq!(apps(&window).get_detail().name, "GIMP");
+    // Said sorted; again, the other way.
+    button(&window, "Nom, trié par ordre croissant").invoke_accessible_default_action();
+    assert_eq!(
+        names(&window),
+        ["GIMP", "Fichiers", "Builder", "Android Studio"]
+    );
+    assert_eq!(apps(&window).get_chosen(), 0);
+    assert_eq!(buttons(&window, "Nom, trié par ordre décroissant"), 1);
+    // Another column: its own way first, the largest.
+    button(&window, "Place prise").invoke_accessible_default_action();
+    assert_eq!(
+        names(&window),
+        ["Android Studio", "GIMP", "Builder", "Fichiers"]
+    );
+    assert!(apps(&window).get_descending());
+}
+
+#[test]
 fn a_reading_stopped_by_leaving_the_page_is_read_again_on_return() {
     let stopped = Rc::new(RefCell::new(Vec::new()));
     let seen = Rc::clone(&stopped);

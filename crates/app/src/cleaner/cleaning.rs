@@ -2166,8 +2166,8 @@ mod tests {
         settle_files();
         let (window, _screen) = on_results(sandbox.read(&sandbox.root.join("state")));
         // The sidebar, "Choisir d'autres catégories", "Nouvelle analyse",
-        // then the fold of Applications.
-        for _ in 0..SIDEBAR_STOPS + 3 {
+        // the three headers that sort, then the fold of Applications.
+        for _ in 0..SIDEBAR_STOPS + 6 {
             press(&window, Key::Tab);
         }
         let fold = || {
@@ -5129,6 +5129,52 @@ mod tests {
             Some(false),
             "nothing to clean"
         );
+    }
+
+    /// A paste refused in uv's field, then a sort that puts pnpm's line in
+    /// its place: each field shows its own line's command.
+    #[test]
+    fn a_command_follows_its_line_through_a_paste_and_a_sort() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/uv/archive-v0/old");
+        sandbox.file("home/.local/share/pnpm/store/v10/files/old");
+        settle_files();
+        let (window, _screen) = on_results(sandbox_seams(&sandbox));
+        let commands = || -> Vec<(String, String)> {
+            ElementHandle::find_by_accessible_label(&window, "Commande à copier")
+                .map(|field| {
+                    (
+                        field.accessible_description().unwrap().to_string(),
+                        field.accessible_value().unwrap().to_string(),
+                    )
+                })
+                .collect()
+        };
+        let uv = ElementHandle::find_by_accessible_label(&window, "Commande à copier")
+            .find(|field| {
+                field.accessible_description().as_deref() == Some("Paquets uv inutilisés")
+            })
+            .unwrap();
+        uv.set_accessible_value("rm -rf ~");
+        let cleaner = window.global::<ui::Cleaner>();
+        let before = commands();
+        let_the_screen_settle();
+        cleaner.invoke_sort_by(ui::ResultsSort::Name);
+        cleaner.invoke_sort_by(ui::ResultsSort::Name);
+        // `changed` handlers run on the next turn of the event loop.
+        slint::platform::update_timers_and_animations();
+        let after = commands();
+        assert_ne!(before, after, "the two lines swapped");
+        for shown in [before, after] {
+            for (label, command) in shown {
+                let expected = if label.contains("uv") {
+                    "uv cache prune"
+                } else {
+                    "pnpm store prune"
+                };
+                assert_eq!(command, expected, "{label}");
+            }
+        }
     }
 
     /// No cache of uv, and a folder of pnpm without its versioned store: no

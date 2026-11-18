@@ -1,11 +1,13 @@
 //! What each line of the applications screen says, and their order: by the
-//! space each takes in all (the application, its data, its old versions),
-//! the largest first; filtered by source and by what is searched.
+//! column its header sorts by, at first the space each takes in all (the
+//! application, its data, its old versions), the largest first; filtered by
+//! source and by what is searched.
 
 use okapi_tools::apps::measure::Measured;
 use okapi_tools::apps::{App, AppKey, AppSize, Source};
 
 use crate::shown::size;
+use crate::sorting::{self, Column, Sorting};
 use crate::ui;
 
 /// An application and what was measured of it so far.
@@ -75,12 +77,30 @@ impl Entry {
         }
     }
 
+    /// What its data takes, once known: unknown when it has no data folder,
+    /// is being measured or could not be; zero when its folder is absent; a
+    /// partial measure as shown.
+    fn data_known(&self) -> Option<u64> {
+        match self.data() {
+            ui::AppData::Measured | ui::AppData::Partial => Some(self.data_bytes()),
+            ui::AppData::None => Some(0),
+            ui::AppData::Unknown | ui::AppData::Measuring | ui::AppData::NotMeasured => None,
+        }
+    }
+
     /// All it takes, as known so far.
     pub(crate) fn total(&self) -> u64 {
         self.app_bytes()
             .unwrap_or(0)
             .saturating_add(self.data_bytes())
             .saturating_add(self.app.old_bytes)
+    }
+
+    /// All it takes, once anything of it is known: nothing measured yet, its
+    /// total is neither zero nor anything else.
+    fn total_known(&self) -> Option<u64> {
+        let total = self.total();
+        (self.app_bytes().is_some() || total > 0).then_some(total)
     }
 
     /// Whether it is shown with `search` (its name or its package's, in any
@@ -100,21 +120,36 @@ impl Entry {
     }
 }
 
-/// The keys of `entries`, the largest in all first, then by name.
-pub(crate) fn ordered<'a>(entries: impl Iterator<Item = &'a Entry>) -> Vec<AppKey> {
+/// How the list is sorted.
+pub(crate) type Sort = Sorting<ui::AppsSort>;
+
+impl Column for ui::AppsSort {
+    /// The largest first; names from A.
+    fn descending_first(self) -> bool {
+        self != Self::Name
+    }
+}
+
+/// The order the list shows first: the largest in all first.
+pub(crate) fn first_sort() -> Sort {
+    Sorting::by(ui::AppsSort::Total)
+}
+
+/// The keys of `entries` in `sort`'s order, a size not known yet after the
+/// known whichever way; by name between equals, then by source.
+pub(crate) fn ordered<'a>(entries: impl Iterator<Item = &'a Entry>, sort: Sort) -> Vec<AppKey> {
     let mut sorted: Vec<&Entry> = entries.collect();
     sorted.sort_by(|left, right| {
-        right
-            .total()
-            .cmp(&left.total())
-            .then_with(|| {
-                left.app
-                    .name
-                    .to_lowercase()
-                    .cmp(&right.app.name.to_lowercase())
-            })
-            // The same name in two sources: always in the same order.
-            .then_with(|| left.app.key().cmp(&right.app.key()))
+        let by_name = || sorting::by_name(&left.app.name, &right.app.name);
+        match sort.column {
+            ui::AppsSort::Name => sort.directed(by_name()),
+            ui::AppsSort::App => sort.known_first(left.app_bytes(), right.app_bytes()),
+            ui::AppsSort::Data => sort.known_first(left.data_known(), right.data_known()),
+            ui::AppsSort::Total => sort.known_first(left.total_known(), right.total_known()),
+        }
+        .then_with(by_name)
+        // The same name in two sources: always in the same order.
+        .then_with(|| left.app.key().cmp(&right.app.key()))
     });
     sorted.iter().map(|entry| entry.app.key()).collect()
 }
@@ -199,9 +234,105 @@ mod tests {
             old_bytes: 25,
             ..app(Source::Snap, "Old", 11, false)
         });
-        let order = ordered([&big_app, &small_app_big_data, &old].into_iter());
+        let order = ordered(
+            [&big_app, &small_app_big_data, &old].into_iter(),
+            first_sort(),
+        );
         let names: Vec<&str> = order.iter().map(|key| key.id.as_str()).collect();
         assert_eq!(names, ["data", "old", "big"]);
+    }
+
+    #[test]
+    fn each_column_sorts_either_way_what_is_not_known_last() {
+        let measured = |bytes| {
+            Some(Measured::Bytes {
+                bytes,
+                partial: false,
+            })
+        };
+        // By name: Big, data, Measuring, Old. By application: Big 35, Old
+        // 11, data 10, Measuring unknown. By data: data 30, Old none (0),
+        // Big and Measuring unknown. In all: data 40, Old 36, Big 35,
+        // Measuring unknown.
+        let data = Entry {
+            data: measured(30),
+            ..Entry::new(app(Source::Snap, "data", 10, true))
+        };
+        let big = Entry::new(app(Source::Deb, "Big", 35, false));
+        let old = Entry {
+            data: Some(Measured::Absent),
+            ..Entry::new(App {
+                old_bytes: 25,
+                ..app(Source::Snap, "Old", 11, true)
+            })
+        };
+        let measuring = Entry::new(App {
+            size: AppSize::ToMeasure(std::path::PathBuf::from("/deployment")),
+            ..app(Source::Flatpak, "Measuring", 0, true)
+        });
+        let names = |sort: Sort| -> Vec<String> {
+            ordered([&big, &measuring, &data, &old].into_iter(), sort)
+                .into_iter()
+                .map(|key| key.id)
+                .collect()
+        };
+        // Its application unknown, its old versions are known.
+        let ghost = Entry::new(App {
+            size: AppSize::Unknown,
+            old_bytes: 5,
+            ..app(Source::Deb, "Ghost", 0, false)
+        });
+        assert_eq!(ghost.total_known(), Some(5));
+        assert_eq!(measuring.total_known(), None);
+        // Measured empty: known, nothing.
+        let empty = Entry::new(app(Source::Deb, "Empty", 0, false));
+        assert_eq!(empty.total_known(), Some(0));
+        // A partial measure counts as shown; one never made, unknown.
+        let data_of = |data| Entry {
+            data: Some(data),
+            ..Entry::new(app(Source::Snap, "X", 1, true))
+        };
+        assert_eq!(
+            data_of(Measured::Bytes {
+                bytes: 20,
+                partial: true
+            })
+            .data_known(),
+            Some(20)
+        );
+        assert_eq!(data_of(Measured::NotMeasured).data_known(), None);
+        let by = Sorting::by;
+        let turned = |column| by(column).clicked(column);
+        assert_eq!(names(first_sort()), ["data", "old", "big", "measuring"]);
+        assert_eq!(
+            names(turned(ui::AppsSort::Total)),
+            ["big", "old", "data", "measuring"]
+        );
+        assert_eq!(
+            names(by(ui::AppsSort::Name)),
+            ["big", "data", "measuring", "old"]
+        );
+        assert_eq!(
+            names(turned(ui::AppsSort::Name)),
+            ["old", "measuring", "data", "big"]
+        );
+        assert_eq!(
+            names(by(ui::AppsSort::App)),
+            ["big", "old", "data", "measuring"]
+        );
+        assert_eq!(
+            names(turned(ui::AppsSort::App)),
+            ["data", "old", "big", "measuring"]
+        );
+        // Unknown between them: by name.
+        assert_eq!(
+            names(by(ui::AppsSort::Data)),
+            ["data", "old", "big", "measuring"]
+        );
+        assert_eq!(
+            names(turned(ui::AppsSort::Data)),
+            ["old", "data", "big", "measuring"]
+        );
     }
 
     #[test]
@@ -277,8 +408,8 @@ mod tests {
         let snap = Entry::new(app(Source::Snap, "Firefox", 5, false));
         let deb = Entry::new(app(Source::Deb, "Firefox", 5, false));
         assert_eq!(
-            ordered([&snap, &deb].into_iter()),
-            ordered([&deb, &snap].into_iter())
+            ordered([&snap, &deb].into_iter(), first_sort()),
+            ordered([&deb, &snap].into_iter(), first_sort())
         );
         let line = line(&snap, None, 20, false);
         assert!((line.bar - 0.25).abs() < f32::EPSILON, "{}", line.bar);
@@ -318,7 +449,7 @@ mod tests {
             id: "z".to_owned(),
             ..app(Source::Deb, "Alpha", 5, false)
         });
-        let order = ordered([&beta, &alpha].into_iter());
+        let order = ordered([&beta, &alpha].into_iter(), first_sort());
         assert_eq!(order[0].id, "z", "Alpha before beta");
     }
 

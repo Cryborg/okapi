@@ -4648,17 +4648,17 @@ msgctxt "BigAgeMenu"
 msgid "Modifiés n'importe quand"
 msgstr "Modified any time"
 
-msgctxt "BigSortButton"
-msgid "{}, appliqué"
-msgstr "{}, applied"
+msgctxt "SortHeader"
+msgid "{}, trié par ordre décroissant"
+msgstr "{}, sorted descending"
+
+msgctxt "SortHeader"
+msgid "{}, trié par ordre croissant"
+msgstr "{}, sorted ascending"
 
 msgctxt "BigList"
-msgid "Gros fichiers, triés par taille"
-msgstr "Large files, by size"
-
-msgctxt "BigList"
-msgid "Gros fichiers, les plus anciens d'abord"
-msgstr "Large files, oldest first"
+msgid "Gros fichiers"
+msgstr "Large files"
 
 msgctxt "BigList"
 msgid "{n} fichier sur {}"
@@ -4677,16 +4677,8 @@ msgid "Modifié"
 msgstr "Modified"
 
 msgctxt "BigList"
-msgid "Trier par date de modification, les plus anciens d'abord"
-msgstr "Sort by date modified, oldest first"
-
-msgctxt "BigList"
 msgid "Taille"
 msgstr "Size"
-
-msgctxt "BigList"
-msgid "Trier par taille, les plus gros d'abord"
-msgstr "Sort by size, largest first"
 
 msgctxt "BigList"
 msgid "↑ ↓ se déplacer. Espace : cocher. Entrée : montrer dans le dossier."

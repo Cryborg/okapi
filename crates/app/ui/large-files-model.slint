@@ -9,8 +9,8 @@ export enum FileKindShown { video, image, music, document, archive, disk-image, 
 // another disk than the trash.
 export enum LargeWhy { none, other-names, other-device }
 
-// How the list is ordered: the largest first, or the oldest modified first.
-export enum LargeSort { size, oldest }
+// The column the list is sorted by (`crates/app/src/sorting.rs`).
+export enum LargeSort { size, modified }
 
 // One line of the list: a file, all of one height.
 export struct LargeFileRow {
@@ -98,6 +98,7 @@ export global LargeFiles {
     in property <[AgeShown]> ages;
     in property <int> age: -1;
     in property <LargeSort> sort;
+    in property <bool> descending;
     in property <[LargeFileRow]> rows;
     in-out property <int> current: 0;
     in property <Size> chosen-size;
@@ -137,6 +138,7 @@ export global LargeFiles {
     callback filter-kind(int);
     callback filter-age(int);
     callback clear-filters();
+    // A column's header clicked: sorted by it, or the other way.
     callback sort-by(LargeSort);
     callback trash();
     callback cancel-confirmation();

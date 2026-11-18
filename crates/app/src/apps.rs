@@ -350,6 +350,8 @@ struct State {
     rests: HashMap<Source, Rest>,
     /// The keys in their order, sorted again when owed (`show_lines`).
     order: Vec<AppKey>,
+    /// How they are sorted: kept until the window closes.
+    sort: rows::Sort,
     sort_owed: bool,
     readings_since_sort: u32,
     /// The lines shown, in their order.
@@ -405,6 +407,7 @@ impl AppsScreen {
             sources: HashMap::new(),
             rests: HashMap::new(),
             order: Vec::new(),
+            sort: rows::first_sort(),
             sort_owed: false,
             readings_since_sort: 0,
             shown: Vec::new(),
@@ -444,6 +447,12 @@ impl AppsScreen {
         apps.on_refresh(on(Self::refresh));
         apps.on_searched(on(Self::show_lines_now));
         apps.on_filtered(on(Self::show_lines_now));
+        let weak = Rc::downgrade(&screen.0);
+        apps.on_sort_by(move |column| {
+            if let Some(state) = weak.upgrade() {
+                Self(state).sort_by(column);
+            }
+        });
         apps.on_close_detail(on(Self::close_detail));
         apps.on_uninstall(on(Self::uninstall));
         apps.on_confirm(on(Self::confirm));
@@ -776,6 +785,24 @@ impl AppsScreen {
         self.show_lines(true);
     }
 
+    /// Sorts by `column`, or the other way: at once, even under the pointer,
+    /// which still holds the next sorts owed (a sort by the keyboard leaves
+    /// it where it is).
+    fn sort_by(&self, column: ui::AppsSort) {
+        let sort = {
+            let mut state = self.0.borrow_mut();
+            state.sort = state.sort.clicked(column);
+            state.sort_owed = true;
+            state.sort
+        };
+        self.show_lines(true);
+        tracing::info!(
+            ?sort,
+            shown = self.0.borrow().shown.len(),
+            "applications sorted"
+        );
+    }
+
     /// Sorts again when owed: now if `now`, else when nothing is held under
     /// the pointer or the keyboard and the last sort is old enough.
     fn sort_if_owed(state: &mut State, now: bool) {
@@ -783,7 +810,7 @@ impl AppsScreen {
         let every =
             u32::try_from(SORT_EVERY.as_millis() / READ_EVERY.as_millis()).unwrap_or(u32::MAX);
         if state.sort_owed && (now || (!held && state.readings_since_sort >= every)) {
-            state.order = rows::ordered(state.entries.values());
+            state.order = rows::ordered(state.entries.values(), state.sort);
             state.sort_owed = false;
             state.readings_since_sort = 0;
         }
@@ -834,6 +861,8 @@ impl AppsScreen {
             .collect();
         crate::shown::show(&state.line_model, lines);
         state.shown = visible;
+        apps.set_sort(state.sort.column);
+        apps.set_descending(state.sort.descending);
         Self::show_sources(&state, &apps);
         let position = |key: Option<&AppKey>| {
             key.and_then(|key| state.shown.iter().position(|shown| shown == key))

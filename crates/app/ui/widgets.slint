@@ -234,6 +234,100 @@ export component ActionButton inherits Rectangle {
     }
 }
 
+// The arrow of a sorted column, down the largest first: hidden, it keeps
+// its room.
+component SortArrow inherits Icon {
+    in property <bool> shown;
+    in property <bool> descending;
+    source: root.descending ? @image-url("../assets/icons/arrow-down.svg") : @image-url("../assets/icons/arrow-up.svg");
+    visible: root.shown;
+    colorize: Theme.text;
+    width: Theme.icon-small;
+    height: Theme.icon-small;
+}
+
+// A column's header that sorts its list (`crates/app/src/sorting.rs`): a
+// click, Space or Enter sorts by it, again the other way. The arrow shows
+// only on the column sorted (on none for a list in its own order), down the
+// largest first; its room is kept, so the words never move. Over numbers
+// (`trailing`), the header ends where they end, its arrow before its words.
+// The pointer turns to a hand over it alone: a column that does not sort
+// has a plain `Detail` instead, nothing to point at.
+export component SortHeader inherits Rectangle {
+    in property <string> text;
+    in property <bool> applied;
+    in property <bool> descending;
+    in property <bool> trailing;
+    in property <bool> enabled: true;
+    callback sorted;
+
+    forward-focus: keys;
+    accessible-role: button;
+    accessible-label: !root.applied ? root.text
+        : root.descending ? @tr("{}, trié par ordre décroissant", root.text)
+        : @tr("{}, trié par ordre croissant", root.text);
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.sorted();
+        }
+    }
+
+    // Always enabled: a disabled scope would also miss losing the focus,
+    // and keep its ring. Tab skips it while disabled.
+    keys := FocusScope {
+        focus-on-tab-navigation: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                if root.enabled && !event.repeat {
+                    root.sorted();
+                }
+                return accept;
+            }
+            // A list's keys move its lines from the list alone.
+            if event.text == Key.UpArrow || event.text == Key.DownArrow || event.text == Key.Home || event.text == Key.End {
+                return accept;
+            }
+            reject
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        // No focus on a click: the ring shows only for the keyboard.
+        clicked => {
+            root.sorted();
+        }
+    }
+    FocusRing {
+        shown: keys.has-focus;
+        border-radius: Theme.radius-small;
+    }
+    HorizontalLayout {
+        spacing: Theme.spacing-xs;
+        alignment: root.trailing ? end : start;
+        if root.trailing: SortArrow {
+            shown: root.applied;
+            descending: root.descending;
+            cross-axis-self-alignment: center;
+        }
+        Text {
+            text: root.text;
+            accessible-role: none;
+            color: root.applied || touch.has-hover ? Theme.text : Theme.text-2;
+            font-size: Theme.font-small;
+            font-weight: root.applied ? Theme.weight-semibold : Theme.weight-regular;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if !root.trailing: SortArrow {
+            shown: root.applied;
+            descending: root.descending;
+            cross-axis-self-alignment: center;
+        }
+    }
+}
+
 // The box of a checkbox: its state drawn, read by the control around it.
 // Partial: some of what it stands for is checked.
 export component CheckMark inherits Rectangle {

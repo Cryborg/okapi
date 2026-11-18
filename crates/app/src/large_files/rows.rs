@@ -16,6 +16,7 @@ use okapi_tools::large_files::{
 use slint::SharedString;
 
 use crate::shown::{folder_shown, name_of, part, size, truncated};
+use crate::sorting::{Column, Sorting};
 use crate::ui;
 use crate::user_files::{Folder, folder_of, trashable};
 
@@ -90,14 +91,21 @@ pub(crate) struct Filters {
     pub age: Option<usize>,
 }
 
-/// How the list is ordered.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) enum Sort {
-    /// The largest on disk first: the report's own order.
-    #[default]
-    Size,
-    /// The oldest modified first, by path between equals.
-    Oldest,
+/// How the list is ordered: by size on disk or by date of modification,
+/// by path between equals whichever way.
+pub(crate) type Sort = Sorting<ui::LargeSort>;
+
+impl Column for ui::LargeSort {
+    /// The largest first; the oldest first, the files this screen looks
+    /// for.
+    fn descending_first(self) -> bool {
+        self == Self::Size
+    }
+}
+
+/// The order a search shows first: the largest first, the report's own.
+pub(crate) fn first_sort() -> Sort {
+    Sorting::by(ui::LargeSort::Size)
 }
 
 /// The floors a filter offers above `min_size`, the smallest file a search
@@ -171,14 +179,15 @@ pub(crate) fn visible(files: &[Facts], limits: &Limits, sort: Sort) -> Visible {
     let mut ranks: Vec<usize> = (0..files.len())
         .filter(|&rank| limits.admits(&files[rank]))
         .collect();
-    if sort == Sort::Oldest {
-        ranks.sort_by(|&left, &right| {
-            let (left, right) = (&files[left], &files[right]);
-            left.modified
-                .cmp(&right.modified)
-                .then_with(|| left.path.cmp(&right.path))
-        });
-    }
+    ranks.sort_by(|&left, &right| {
+        let (left, right) = (&files[left], &files[right]);
+        let ascending = match sort.column {
+            ui::LargeSort::Size => left.on_disk.cmp(&right.on_disk),
+            ui::LargeSort::Modified => left.modified.cmp(&right.modified),
+        };
+        sort.directed(ascending)
+            .then_with(|| left.path.cmp(&right.path))
+    });
     Visible {
         ranks,
         kinds,
@@ -480,15 +489,30 @@ mod tests {
     }
 
     #[test]
-    fn the_list_comes_by_size_or_oldest_first_and_back() {
+    fn the_list_comes_by_size_or_date_either_way_and_back() {
         let files = files();
         let all = limits(Filters::default(), 40);
-        assert_eq!(visible(&files, &all, Sort::Size).ranks, [0, 1, 2]);
-        assert_eq!(visible(&files, &all, Sort::Oldest).ranks, [1, 0, 2]);
-        // Between equal dates, by path.
+        let size = first_sort();
+        let oldest = size.clicked(ui::LargeSort::Modified);
+        assert_eq!(visible(&files, &all, size).ranks, [0, 1, 2]);
+        assert_eq!(
+            visible(&files, &all, size.clicked(ui::LargeSort::Size)).ranks,
+            [2, 1, 0]
+        );
+        assert_eq!(visible(&files, &all, oldest).ranks, [1, 0, 2]);
+        let newest = oldest.clicked(ui::LargeSort::Modified);
+        assert_eq!(visible(&files, &all, newest).ranks, [2, 0, 1]);
+        // Between equals, by path whichever way.
         let mut alike = files;
         alike[0].modified = alike[2].modified;
-        assert_eq!(visible(&alike, &all, Sort::Oldest).ranks, [1, 2, 0]);
+        alike[1].on_disk = alike[2].on_disk;
+        assert_eq!(visible(&alike, &all, oldest).ranks, [1, 2, 0]);
+        assert_eq!(visible(&alike, &all, newest).ranks, [2, 0, 1]);
+        assert_eq!(visible(&alike, &all, size).ranks, [0, 2, 1]);
+        assert_eq!(
+            visible(&alike, &all, size.clicked(ui::LargeSort::Size)).ranks,
+            [2, 1, 0]
+        );
     }
 
     #[test]
@@ -507,7 +531,7 @@ mod tests {
                     },
                     40,
                 ),
-                Sort::Size,
+                first_sort(),
             )
             .ranks
         };
@@ -542,7 +566,7 @@ mod tests {
                     },
                     211,
                 ),
-                Sort::Size,
+                first_sort(),
             )
             .ranks
         };
@@ -558,9 +582,9 @@ mod tests {
         );
         let mut limit = files.clone();
         limit[0].modified = at_limit.before.unwrap();
-        assert_eq!(visible(&limit, &at_limit, Sort::Size).ranks, [0, 1, 2]);
+        assert_eq!(visible(&limit, &at_limit, first_sort()).ranks, [0, 1, 2]);
         limit[0].modified += Duration::from_secs(1);
-        assert_eq!(visible(&limit, &at_limit, Sort::Size).ranks, [1, 2]);
+        assert_eq!(visible(&limit, &at_limit, first_sort()).ranks, [1, 2]);
     }
 
     #[test]
@@ -576,7 +600,7 @@ mod tests {
             kind: Some(FileKind::Video),
             age: Some(0),
         };
-        let shown = visible(&files, &limits(set, 1001), Sort::Size);
+        let shown = visible(&files, &limits(set, 1001), first_sort());
         assert_eq!(shown.ranks, [3]);
         // The kinds counted under the size and the age only.
         assert_eq!(shown.all_kinds, 2);

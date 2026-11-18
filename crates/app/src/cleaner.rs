@@ -29,6 +29,7 @@ use crate::elevation::{ElevationFailure, ElevationStep, Launcher};
 use crate::kept_selections::{KeptSelections, Unkept};
 use crate::results::{
     AdminState, CheckState, DaemonOperation, GroupFacts, Line, Preselection, Results, RunBy, Seen,
+    SortColumn,
 };
 use crate::shown::{show, shown, size};
 use crate::ui;
@@ -692,6 +693,24 @@ fn stop_shown(stop: &Stop) -> Option<ui::StopShown> {
     })
 }
 
+/// The column of the results a header names.
+const fn column_of(column: ui::ResultsSort) -> SortColumn {
+    match column {
+        ui::ResultsSort::Name => SortColumn::Name,
+        ui::ResultsSort::Entries => SortColumn::Entries,
+        ui::ResultsSort::Size => SortColumn::Size,
+    }
+}
+
+/// The header of a column of the results: [`column_of`] the other way.
+const fn column_shown(column: SortColumn) -> ui::ResultsSort {
+    match column {
+        SortColumn::Name => ui::ResultsSort::Name,
+        SortColumn::Entries => ui::ResultsSort::Entries,
+        SortColumn::Size => ui::ResultsSort::Size,
+    }
+}
+
 /// A line of the results as the window shows it.
 fn result_row(results: &Results, row: &Line) -> ui::ResultRow {
     let state = |state: CheckState| match state {
@@ -1109,19 +1128,19 @@ impl CleanerScreen {
         cleaner.on_analyze(on(Self::analyze));
         cleaner.on_cancel(on(Self::cancel));
         cleaner.on_choose_again(on(Self::back_to_choosing));
-        let weak = Rc::downgrade(&screen.0);
-        cleaner.on_toggle_result(move |row| {
-            if let Some(state) = weak.upgrade() {
-                Self(state).change_results(row, Results::toggle_row);
-            }
-        });
-        let weak = Rc::downgrade(&screen.0);
-        cleaner.on_fold(move |row| {
-            if let Some(state) = weak.upgrade() {
-                Self(state).change_results(row, Results::fold_row);
-            }
-        });
+        cleaner.on_toggle_result(on_row(|screen, row| {
+            screen.change_results(row, Results::toggle_row);
+        }));
+        cleaner.on_fold(on_row(|screen, row| {
+            screen.change_results(row, Results::fold_row);
+        }));
         cleaner.on_explain(on_row(Self::explain));
+        let weak = Rc::downgrade(&screen.0);
+        cleaner.on_sort_by(move |column| {
+            if let Some(state) = weak.upgrade() {
+                Self(state).sort_by(column);
+            }
+        });
         cleaner.on_command_copied(on_row(Self::command_copied));
         cleaner.on_deselect_all(on(Self::deselect_all));
         cleaner.on_clean(on(Self::clean));
@@ -1822,6 +1841,29 @@ impl CleanerScreen {
         self.show_results();
     }
 
+    /// Sorts the groups by `column` within their category, or the other
+    /// way. Allowed while the results are frozen, as a description is.
+    fn sort_by(&self, column: ui::ResultsSort) {
+        if self.is_settling("sort of the results") {
+            return;
+        }
+        let column = column_of(column);
+        {
+            let mut state = self.0.borrow_mut();
+            let Some(held) = state.held.as_mut() else {
+                tracing::warn!(?column, "no results held to sort");
+                return;
+            };
+            held.results.sort_by(column);
+            tracing::info!(
+                sorting = ?held.results.sorting(),
+                entries = held.results.entries(),
+                "results sorted"
+            );
+        }
+        self.show_results();
+    }
+
     /// Shows the results, and whether the last choice among them was kept:
     /// looked at again a little later while its write is not done.
     fn check_write(&self) {
@@ -1893,6 +1935,12 @@ impl CleanerScreen {
             show(&state.result_model, rows);
             let (entries, bytes) = results.selected();
             let cleaner = window.global::<ui::Cleaner>();
+            let sorting = results.sorting();
+            cleaner.set_sorted(sorting.is_some());
+            if let Some(sorting) = sorting {
+                cleaner.set_sort(column_shown(sorting.column));
+                cleaner.set_descending(sorting.descending);
+            }
             cleaner.set_selected_entries(shown(entries));
             cleaner.set_selected_operations(shown(usize::from(results.docker_checked().is_some())));
             cleaner.set_selected_size(size(bytes));
@@ -2668,6 +2716,83 @@ pub mod tests {
         });
         button(&window, "Analyser").invoke_accessible_default_action();
         watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
+    }
+
+    /// The entries of the groups found something in, in their order.
+    fn entries_shown(window: &ui::AppWindow) -> Vec<i32> {
+        window
+            .global::<ui::Cleaner>()
+            .get_results()
+            .iter()
+            .filter(|row| row.kind == ui::RowKind::Group && row.entries > 0)
+            .map(|row| row.entries)
+            .collect()
+    }
+
+    #[test]
+    fn a_header_sorts_the_groups_and_a_line_checks_the_group_it_shows() {
+        // Yarn's two files, pip's one: « Cache de pip » before « Cache de
+        // Yarn » by name, after it by entries and by size.
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/yarn/old");
+        sandbox.file("home/.cache/yarn/older");
+        sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let inputs = sandbox.inputs(None);
+        let (window, _screen) = on_cleaner(Seams {
+            read: Rc::new(move || Ok(inputs.clone())),
+            ..seams_never_scanning()
+        });
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
+        let cleaner = window.global::<ui::Cleaner>();
+        assert!(!cleaner.get_sorted(), "in the order of the rules");
+        let_the_screen_settle();
+        let sorted = |column| {
+            cleaner.invoke_sort_by(column);
+            (
+                cleaner.get_sort(),
+                cleaner.get_descending(),
+                entries_shown(&window),
+            )
+        };
+        assert_eq!(
+            sorted(ui::ResultsSort::Name),
+            (ui::ResultsSort::Name, false, vec![1, 2])
+        );
+        assert!(cleaner.get_sorted());
+        assert_eq!(
+            sorted(ui::ResultsSort::Name),
+            (ui::ResultsSort::Name, true, vec![2, 1])
+        );
+        assert_eq!(
+            sorted(ui::ResultsSort::Entries),
+            (ui::ResultsSort::Entries, true, vec![2, 1])
+        );
+        assert_eq!(
+            sorted(ui::ResultsSort::Size),
+            (ui::ResultsSort::Size, true, vec![2, 1])
+        );
+        assert_eq!(
+            sorted(ui::ResultsSort::Size),
+            (ui::ResultsSort::Size, false, vec![1, 2])
+        );
+        // The line checked is the group it shows, sorted.
+        let pip = cleaner
+            .get_results()
+            .iter()
+            .position(|row| row.kind == ui::RowKind::Group && row.entries == 1)
+            .unwrap();
+        let before = cleaner.get_results().row_data(pip).unwrap().state;
+        cleaner.invoke_toggle_result(i32::try_from(pip).unwrap());
+        let after = cleaner.get_results().row_data(pip).unwrap();
+        assert_eq!(after.entries, 1);
+        assert_ne!(after.state, before);
+        // A new analysis: in the order of the rules again.
+        cleaner.invoke_analyze();
+        watch_until(&window, |window| {
+            step(window) == ui::CleanerStep::Results && !window.global::<ui::Cleaner>().get_sorted()
+        });
     }
 
     #[test]

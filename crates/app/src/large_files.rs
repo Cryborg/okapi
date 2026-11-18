@@ -202,7 +202,7 @@ impl LargeFilesScreen {
             files: Vec::new(),
             checked: Vec::new(),
             filters: Filters::default(),
-            sort: Sort::default(),
+            sort: rows::first_sort(),
             lines: Vec::new(),
             confirming: None,
             room: DEFAULT_ROOM,
@@ -585,7 +585,7 @@ impl LargeFilesScreen {
             state.checked = vec![false; files.len()];
             state.files = files;
             state.filters = Filters::default();
-            state.sort = Sort::default();
+            state.sort = rows::first_sort();
             state.lines.clear();
             state.ended_at = Some(now);
         }
@@ -691,17 +691,15 @@ impl LargeFilesScreen {
                 .and_then(|floor| state.floors.iter().position(|&each| each == floor))
         };
         let rank = |rank: Option<usize>| rank.map_or(-1, shown);
-        let sort = match self.0.borrow().sort {
-            Sort::Size => ui::LargeSort::Size,
-            Sort::Oldest => ui::LargeSort::Oldest,
-        };
+        let sort = self.0.borrow().sort;
         self.0.borrow_mut().lines = lines;
         self.with_window(|large| {
             large.set_all_kinds(shown(kinds.1));
             large.set_floor(rank(floor));
             large.set_kind(rank(rank_of(filters.kind)));
             large.set_age(rank(filters.age));
-            large.set_sort(sort);
+            large.set_sort(sort.column);
+            large.set_descending(sort.descending);
             large.set_current(shown(at));
             // A refusal of the file manager speaks of the file it was asked
             // for: another on the line, it is no more.
@@ -821,12 +819,8 @@ impl LargeFilesScreen {
         self.filter(|filters, _, _| *filters = Filters::default());
     }
 
-    fn sort_by(&self, sort: ui::LargeSort) {
-        let sort = match sort {
-            ui::LargeSort::Size => Sort::Size,
-            ui::LargeSort::Oldest => Sort::Oldest,
-        };
-        self.filter(|_, order, _| *order = sort);
+    fn sort_by(&self, column: ui::LargeSort) {
+        self.filter(|_, order, _| *order = order.clicked(column));
     }
 
     fn path_room(&self, room: usize) {

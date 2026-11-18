@@ -11,6 +11,7 @@ use okapi_rules::{BrowserKind, CleanupAction, Effect, Label, Language, RuleSet, 
 use okapi_tools::docker::Access;
 
 use crate::shown::from_home;
+use crate::sorting::{self, Column, Sorting};
 
 /// What sets the description of one rule apart from the next, in a group
 /// that joins several.
@@ -511,6 +512,32 @@ pub enum Line {
     },
 }
 
+/// What the groups may be sorted by within their category, and the caches
+/// within their browser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortColumn {
+    /// The label shown, from A.
+    Name,
+    /// The entries found, the most first.
+    Entries,
+    /// The size found, the largest first.
+    Size,
+}
+
+impl Column for SortColumn {
+    fn descending_first(self) -> bool {
+        self != Self::Name
+    }
+}
+
+/// What a category shows under its line: a group, or a browser over the
+/// groups of its caches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Shown {
+    Group(usize),
+    Browser(BrowserKind, Vec<usize>),
+}
+
 /// The groups of an analysis, by category chosen, and the user's choice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Results {
@@ -521,6 +548,9 @@ pub struct Results {
     folded_browsers: BTreeSet<BrowserKind>,
     /// The groups whose description is unfolded, by their index.
     explained: BTreeSet<usize>,
+    /// How the groups are sorted in their category; none, in the order of
+    /// the rules.
+    sorting: Option<Sorting<SortColumn>>,
 }
 
 impl Results {
@@ -546,7 +576,23 @@ impl Results {
             folded: BTreeSet::new(),
             folded_browsers: BTreeSet::new(),
             explained: BTreeSet::new(),
+            sorting: None,
         }
+    }
+
+    /// How the groups are sorted; none, in the order of the rules.
+    #[must_use]
+    pub const fn sorting(&self) -> Option<Sorting<SortColumn>> {
+        self.sorting
+    }
+
+    /// Sorts the groups by `column` within their category, or the other way
+    /// when they are sorted by it already; what is checked never changes.
+    pub fn sort_by(&mut self, column: SortColumn) {
+        self.sorting = Some(
+            self.sorting
+                .map_or_else(|| Sorting::by(column), |sorting| sorting.clicked(column)),
+        );
     }
 
     /// Unchecks, right after [`Self::new`] (then only the groups checked by
@@ -701,39 +747,101 @@ impl Results {
                 entries,
                 bytes,
             });
-            let mut browsers_shown = BTreeSet::new();
-            for &index in &groups {
-                let Some(browser) = self.browser_of(index) else {
-                    rows.push(self.group_line(index, folded, false));
-                    continue;
-                };
-                if !browsers_shown.insert(browser) {
-                    continue;
+            for shown in self.arranged(&groups) {
+                match shown {
+                    Shown::Group(index) => rows.push(self.group_line(index, folded, false)),
+                    Shown::Browser(browser, caches) => {
+                        let browser_folded = self.folded_browsers.contains(&browser);
+                        let (entries, bytes) = self.sizes(&caches);
+                        rows.push(Line::Browser {
+                            browser,
+                            state: self.state(&caches),
+                            enabled: self.does_something(&caches),
+                            folded: browser_folded,
+                            hidden: folded,
+                            entries,
+                            bytes,
+                        });
+                        rows.extend(
+                            caches.into_iter().map(|cache| {
+                                self.group_line(cache, folded || browser_folded, true)
+                            }),
+                        );
+                    }
                 }
-                let caches: Vec<usize> = groups
+            }
+        }
+        rows
+    }
+
+    /// What a category's `groups` show under its line: a browser in place
+    /// of its first cache, its caches under it; sorted as asked, the order
+    /// of the rules kept between equals.
+    fn arranged(&self, groups: &[usize]) -> Vec<Shown> {
+        let mut shown = Vec::new();
+        let mut browsers_shown = BTreeSet::new();
+        for &index in groups {
+            let Some(browser) = self.browser_of(index) else {
+                shown.push(Shown::Group(index));
+                continue;
+            };
+            if browsers_shown.insert(browser) {
+                let caches = groups
                     .iter()
                     .copied()
                     .filter(|other| self.browser_of(*other) == Some(browser))
                     .collect();
-                let browser_folded = self.folded_browsers.contains(&browser);
-                let (entries, bytes) = self.sizes(&caches);
-                rows.push(Line::Browser {
-                    browser,
-                    state: self.state(&caches),
-                    enabled: self.does_something(&caches),
-                    folded: browser_folded,
-                    hidden: folded,
-                    entries,
-                    bytes,
-                });
-                rows.extend(
-                    caches
-                        .into_iter()
-                        .map(|cache| self.group_line(cache, folded || browser_folded, true)),
-                );
+                shown.push(Shown::Browser(browser, caches));
             }
         }
-        rows
+        if let Some(sorting) = self.sorting {
+            for each in &mut shown {
+                if let Shown::Browser(_, caches) = each {
+                    caches.sort_by(|left, right| {
+                        self.compare(sorting, &Shown::Group(*left), &Shown::Group(*right), true)
+                    });
+                }
+            }
+            shown.sort_by(|left, right| self.compare(sorting, left, right, false));
+        }
+        shown
+    }
+
+    /// How two lines compare as `sorting` asks; `nested`, caches under
+    /// their browser, named as they show there.
+    fn compare(
+        &self,
+        sorting: Sorting<SortColumn>,
+        left: &Shown,
+        right: &Shown,
+        nested: bool,
+    ) -> std::cmp::Ordering {
+        let ascending = match sorting.column {
+            SortColumn::Name => {
+                sorting::by_name(self.name_of(left, nested), self.name_of(right, nested))
+            }
+            SortColumn::Entries => self.numbers_of(left).0.cmp(&self.numbers_of(right).0),
+            SortColumn::Size => self.numbers_of(left).1.cmp(&self.numbers_of(right).1),
+        };
+        sorting.directed(ascending)
+    }
+
+    /// The label a line shows.
+    fn name_of(&self, shown: &Shown, nested: bool) -> &str {
+        match shown {
+            Shown::Group(index) if nested => &self.groups[*index].label,
+            Shown::Group(index) => &self.groups[*index].label_alone,
+            Shown::Browser(browser, _) => browser.name(),
+        }
+    }
+
+    /// The entries and the size a line shows (a line without numbers, as
+    /// none).
+    fn numbers_of(&self, shown: &Shown) -> (usize, u64) {
+        match shown {
+            Shown::Group(index) => self.groups[*index].numbers(),
+            Shown::Browser(_, caches) => self.sizes(caches),
+        }
     }
 
     fn group_line(&self, index: usize, hidden: bool, nested: bool) -> Line {
@@ -1841,5 +1949,179 @@ mod tests {
         );
         assert_eq!(*results.checked(), BTreeSet::from([0, 1]));
         assert_eq!(unchecked, keys(&["gone"]));
+    }
+
+    /// A group of `category` labelled `label`, of `entries` and `bytes`,
+    /// left to choose.
+    fn counted(category: Category, label: &str, entries: usize, bytes: u64) -> GroupFacts {
+        GroupFacts {
+            label: label.to_owned(),
+            label_alone: label.to_owned(),
+            seen: Seen::Counted { entries, bytes },
+            ..group(&[category], false, false)
+        }
+    }
+
+    const CHROME: BrowserKind = BrowserKind::Chromium(okapi_rules::ChromiumBrowserKind::Chrome);
+    const EDGE: BrowserKind = BrowserKind::Chromium(okapi_rules::ChromiumBrowserKind::Edge);
+
+    /// Groups whose orders by label, entries and size all differ, two of
+    /// the system's of equal entries, and uv's line; the caches of two
+    /// browsers and a group of their own under the browsers; one of the
+    /// applications'.
+    fn to_sort() -> Results {
+        // Under its browser a cache is named by `label`, elsewhere by
+        // `label_alone`: in another order.
+        let cache = |browser, label: &str, alone: &str, entries, bytes| GroupFacts {
+            browser: Some(browser),
+            label_alone: alone.to_owned(),
+            ..counted(Category::Browsers, label, entries, bytes)
+        };
+        Results::new(
+            vec![
+                counted(Category::System, "Beta", 5, 30),
+                counted(Category::System, "alpha", 9, 10),
+                counted(Category::System, "gamma", 5, 20),
+                cache(CHROME, "Code cache", "a", 2, 10),
+                cache(CHROME, "Cache", "b", 4, 40),
+                cache(EDGE, "Cache", "c", 1, 5),
+                counted(Category::Browsers, "Zoom", 3, 45),
+                counted(Category::Apps, "app", 1, 1),
+                GroupFacts {
+                    categories: BTreeSet::from([Category::System]),
+                    ..by_hand_line()
+                },
+            ],
+            BTreeSet::from([Category::System, Category::Browsers, Category::Apps]),
+        )
+    }
+
+    /// Each line, shortly: a category by its name, a browser `chrome` or
+    /// `edge`, a group by its index.
+    fn order(results: &Results) -> Vec<String> {
+        results
+            .rows()
+            .iter()
+            .map(|row| match row {
+                Line::Category { category, .. } => format!("{category:?}"),
+                Line::Browser { browser, .. } if *browser == CHROME => "chrome".to_owned(),
+                Line::Browser { .. } => "edge".to_owned(),
+                Line::Group { index, .. } => index.to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_groups_sort_within_their_category_and_caches_within_their_browser() {
+        let mut results = to_sort();
+        let rules = [
+            "System", "0", "1", "2", "8", "Browsers", "chrome", "3", "4", "edge", "5", "6", "Apps",
+            "7",
+        ];
+        assert_eq!(order(&results), rules, "in the order of the rules");
+        assert_eq!(results.sorting(), None);
+        results.sort_by(SortColumn::Size);
+        assert_eq!(
+            order(&results),
+            [
+                "System", "0", "2", "1", "8", "Browsers", "chrome", "4", "3", "6", "edge", "5",
+                "Apps", "7"
+            ],
+            "the largest first, a browser by its caches together"
+        );
+        results.sort_by(SortColumn::Size);
+        assert_eq!(
+            order(&results),
+            [
+                "System", "8", "1", "2", "0", "Browsers", "edge", "5", "6", "chrome", "3", "4",
+                "Apps", "7"
+            ],
+            "the smallest first"
+        );
+        // Between equal entries, the order of the rules whichever way.
+        results.sort_by(SortColumn::Entries);
+        assert_eq!(
+            order(&results)[..5],
+            ["System", "1", "0", "2", "8"],
+            "the most first"
+        );
+        results.sort_by(SortColumn::Entries);
+        assert_eq!(order(&results)[..5], ["System", "8", "0", "2", "1"]);
+        results.sort_by(SortColumn::Name);
+        assert_eq!(
+            results.sorting(),
+            Some(Sorting {
+                column: SortColumn::Name,
+                descending: false
+            })
+        );
+        // From A whatever the case; the browsers by their name among the
+        // groups, their caches by their label under them.
+        let mut browsers = [
+            ("chrome", CHROME.name()),
+            ("edge", EDGE.name()),
+            ("6", "Zoom"),
+        ];
+        browsers.sort_by(|left, right| sorting::by_name(left.1, right.1));
+        let under_browsers = |by_name: &[String]| -> Vec<String> {
+            by_name
+                .iter()
+                .filter(|line| ["chrome", "edge", "6"].contains(&line.as_str()))
+                .cloned()
+                .collect()
+        };
+        let by_name = order(&results);
+        assert_eq!(by_name[1..5], ["1", "0", "2", "8"]);
+        assert_eq!(under_browsers(&by_name), browsers.map(|(line, _)| line));
+        let chrome = by_name.iter().position(|line| line == "chrome").unwrap();
+        assert_eq!(by_name[chrome + 1..chrome + 3], ["4", "3"]);
+        results.sort_by(SortColumn::Name);
+        let from_z = order(&results);
+        assert_eq!(from_z[1..5], ["8", "2", "0", "1"]);
+        browsers.reverse();
+        assert_eq!(under_browsers(&from_z), browsers.map(|(line, _)| line));
+        let chrome = from_z.iter().position(|line| line == "chrome").unwrap();
+        assert_eq!(from_z[chrome + 1..chrome + 3], ["3", "4"]);
+    }
+
+    #[test]
+    fn a_cache_shown_out_of_the_browsers_sorts_by_the_label_it_shows_there() {
+        let alone = GroupFacts {
+            browser: Some(CHROME),
+            label_alone: "zz".to_owned(),
+            ..counted(Category::System, "aa", 1, 1)
+        };
+        let mut results = Results::new(
+            vec![alone, counted(Category::System, "mm", 1, 1)],
+            BTreeSet::from([Category::System]),
+        );
+        results.sort_by(SortColumn::Name);
+        assert_eq!(order(&results), ["System", "1", "0"]);
+        results.sort_by(SortColumn::Name);
+        assert_eq!(order(&results), ["System", "0", "1"]);
+    }
+
+    #[test]
+    fn a_line_sorted_names_the_group_it_shows() {
+        let mut results = to_sort();
+        results.toggle_row(1);
+        let checked = results.checked().clone();
+        // Sorting checks nothing, nor unchecks (invariant 5).
+        for column in [SortColumn::Name, SortColumn::Entries, SortColumn::Size] {
+            results.sort_by(column);
+            results.sort_by(column);
+            assert_eq!(*results.checked(), checked, "{column:?}");
+        }
+        // The smallest first: line 1 shows uv's line (8), line 4 Beta (0),
+        // line 6 Edge; in the order of the rules, Beta, uv's line, Chrome.
+        assert_eq!(checked, BTreeSet::from([0]));
+        assert_eq!(results.command_at(1), Some(UV_PRUNE));
+        assert_eq!(results.command_at(4), None);
+        results.toggle_row(4);
+        assert!(results.checked().is_empty(), "Beta unchecked");
+        results.explain_row(1);
+        assert_eq!(results.explained, BTreeSet::from([8]));
+        results.fold_row(6);
+        assert_eq!(results.folded_browsers, BTreeSet::from([EDGE]));
     }
 }

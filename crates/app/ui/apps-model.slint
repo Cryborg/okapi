@@ -20,6 +20,10 @@ export enum AppData {
 
 export enum AppsFilter { all, deb, snap, flatpak }
 
+// The column the list is sorted by (`crates/app/src/sorting.rs`): the
+// space taken in all, the name, the application, its data.
+export enum AppsSort { total, name, app, data }
+
 // How a source stands; `partial`: read, but a part of it could not be (a
 // flatpak installation).
 export enum SourceShown { reading, read, partial, absent, busy, failed }
@@ -276,6 +280,8 @@ export global Apps {
     in property <[AppLine]> lines;
     in-out property <string> search;
     in-out property <AppsFilter> filter;
+    in property <AppsSort> sort;
+    in property <bool> descending;
     in property <bool> has-flatpak;
     in property <SourceShown> debs;
     in property <SourceShown> snaps;
@@ -325,6 +331,8 @@ export global Apps {
     callback refresh();
     callback searched();
     callback filtered();
+    // A column's header clicked: sorted by it, or the other way.
+    callback sort-by(AppsSort);
     callback choose(int);
     // The keyboard moved to a line.
     callback move-to(int);

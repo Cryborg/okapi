@@ -305,6 +305,16 @@ fn results(window: &ui::AppWindow, folded: bool, language: Language) {
     window.set_page(ui::Page::Cleaner);
 }
 
+/// The results' headers said sorted by name, from A: the arrow after its
+/// words. Only the headers: the lines are those of `results`, not sorted.
+fn results_sorted(window: &ui::AppWindow, language: Language) {
+    results(window, false, language);
+    let cleaner = window.global::<ui::Cleaner>();
+    cleaner.set_sorted(true);
+    cleaner.set_sort(ui::ResultsSort::Name);
+    cleaner.set_descending(false);
+}
+
 /// The results, every category folded but the lines of `notes` (Docker's,
 /// or the user's by hand).
 fn results_of(window: &ui::AppWindow, language: Language, notes: &[ui::RowNote]) {
@@ -1369,6 +1379,8 @@ fn apps(app: &ui::AppWindow, detail: bool, asking: bool, language: Language) {
     app.set_page(ui::Page::Apps);
     let apps = app.global::<ui::Apps>();
     apps.set_lines(ModelRc::new(VecModel::from(app_lines(language))));
+    // The largest in all first, as the list is shown first.
+    apps.set_descending(true);
     apps.set_app_count(12);
     apps.set_minutes_ago(1);
     apps.set_debs(ui::SourceShown::Read);
@@ -1663,6 +1675,8 @@ enum LargeScene {
     Searching,
     Stopped,
     Result,
+    /// The result sorted the smallest first.
+    Smallest,
     Blocked,
     Outside,
     Filtered,
@@ -1680,6 +1694,7 @@ impl LargeScene {
             "large-searching" => Self::Searching,
             "large-stopped" => Self::Stopped,
             "large-result" => Self::Result,
+            "large-smallest" => Self::Smallest,
             "large-blocked" => Self::Blocked,
             "large-outside" => Self::Outside,
             "large-filtered" => Self::Filtered,
@@ -1932,11 +1947,17 @@ fn large_result(large: &ui::LargeFiles<'_>, scene: LargeScene, language: Languag
         large.set_kind(0);
         large.set_age(2);
     }
-    let rows = if empty || scene == LargeScene::NoMatch {
+    let mut rows = if empty || scene == LargeScene::NoMatch {
         Vec::new()
     } else {
         large_rows(scene, language)
     };
+    // The largest first, as a search shows them; or the other way.
+    let smallest = scene == LargeScene::Smallest;
+    if smallest {
+        rows.reverse();
+    }
+    large.set_descending(!smallest);
     large.set_rows(ModelRc::new(VecModel::from(rows)));
     large.set_current(match scene {
         LargeScene::Blocked => 5,
@@ -2180,6 +2201,7 @@ fn main() {
     }
     match screen {
         "results" | "results-small" => results(&app, false, language),
+        "results-sorted" => results_sorted(&app, language),
         "folded" => results(&app, true, language),
         "results-docker" => results_of(
             &app,
@@ -2240,7 +2262,7 @@ fn main() {
             duplicates(&app, scene, language);
         }
         other => panic!(
-            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, groups-closed, groups-closed-small, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, apps-old-versions, apps-old-versions-confirm, settings, settings-trash, history, history-small, history-update, history-empty, large-start, large-searching, large-stopped, large-result, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-result, duplicates-empty, duplicates-confirm (each also -small)"
+            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, results-sorted, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, groups-closed, groups-closed-small, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, apps-old-versions, apps-old-versions-confirm, settings, settings-trash, history, history-small, history-update, history-empty, large-start, large-searching, large-stopped, large-result, large-smallest, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-result, duplicates-empty, duplicates-confirm (each also -small)"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

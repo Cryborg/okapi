@@ -8,7 +8,7 @@ import { DashboardWords } from "dashboard-widgets.slint";
 import { DayKind, Moment } from "dashboard-model.slint";
 import {
     ActionButton, Badge, Banner, ButtonKind, Card, CheckMark, Detail, Footer, FocusRing, Icon,
-    ModalFrame, ProgressBar, Title,
+    ModalFrame, ProgressBar, SortHeader, Title,
 } from "widgets.slint";
 import { AgeShown, ChosenFile, FileKindShown, LargeFileRow, LargeFiles, LargeSort, LargeWhy } from "large-files-model.slint";
 import { SearchPhase, ToolRefusal, ToolStep } from "user-files-model.slint";
@@ -677,71 +677,6 @@ component BigAgeMenu inherits BigMenu {
     }
 }
 
-// A column's header that orders the list: an arrow on the order applied.
-component BigSortButton inherits Rectangle {
-    in property <string> text;
-    in property <bool> applied;
-    in property <image> arrow;
-    in property <string> label;
-    callback sorted;
-
-    height: Theme.big-filter-height;
-    accessible-role: button;
-    accessible-label: root.applied ? @tr("{}, appliqué", root.label) : root.label;
-    accessible-enabled: !LargeFiles.trashing;
-    accessible-action-default => {
-        if !LargeFiles.trashing {
-            root.sorted();
-        }
-    }
-    forward-focus: keys;
-    keys := FocusScope {
-        focus-on-tab-navigation: !LargeFiles.trashing;
-        key-pressed(event) => {
-            if event.text == Key.Space || event.text == Key.Return {
-                if !LargeFiles.trashing && !event.repeat {
-                    root.sorted();
-                }
-                return accept;
-            }
-            // The list's keys move its lines from the list alone.
-            if event.text == Key.UpArrow || event.text == Key.DownArrow || event.text == Key.Home || event.text == Key.End {
-                return accept;
-            }
-            reject
-        }
-    }
-    touch := TouchArea {
-        enabled: !LargeFiles.trashing;
-        clicked => {
-            root.sorted();
-        }
-    }
-    FocusRing {
-        shown: keys.has-focus;
-        border-radius: Theme.radius-small;
-    }
-    HorizontalLayout {
-        spacing: Theme.spacing-xs;
-        alignment: start;
-        Text {
-            text: root.text;
-            accessible-role: none;
-            color: root.applied || touch.has-hover ? Theme.text : Theme.text-2;
-            font-size: Theme.font-caption;
-            font-weight: root.applied ? Theme.weight-semibold : Theme.weight-medium;
-            vertical-alignment: center;
-        }
-        if root.applied: Icon {
-            source: root.arrow;
-            colorize: Theme.text;
-            width: Theme.icon-small;
-            height: Theme.icon-small;
-            cross-axis-self-alignment: center;
-        }
-    }
-}
-
 // One line of the list: a file.
 component BigLine inherits Rectangle {
     in property <LargeFileRow> line;
@@ -884,7 +819,7 @@ component BigLine inherits Rectangle {
 // Enter shows it in its folder.
 component BigList inherits FocusScope {
     accessible-role: list;
-    accessible-label: LargeFiles.sort == LargeSort.size ? @tr("Gros fichiers, triés par taille") : @tr("Gros fichiers, les plus anciens d'abord");
+    accessible-label: @tr("Gros fichiers");
     // The characters a folder may take, as the list is wide: its box, icon,
     // date, bar, size and their gaps aside.
     property <int> room: max(1, floor((self.width - Theme.icon-box - Theme.big-kind-icon - (Screen.narrow ? Theme.big-date-width-narrow : Theme.big-date-width)
@@ -969,25 +904,28 @@ component BigList inherits FocusScope {
                     : @tr("{n} fichier" | "{n} fichiers" % LargeFiles.files);
                 vertical-alignment: center;
             }
-            BigSortButton {
+            SortHeader {
                 width: Screen.narrow ? Theme.big-date-width-narrow : Theme.big-date-width;
+                height: Theme.big-filter-height;
                 text: @tr("Modifié");
-                label: @tr("Trier par date de modification, les plus anciens d'abord");
-                applied: LargeFiles.sort == LargeSort.oldest;
-                arrow: @image-url("../assets/icons/arrow-up.svg");
+                applied: LargeFiles.sort == LargeSort.modified;
+                descending: LargeFiles.descending;
+                enabled: !LargeFiles.trashing;
                 sorted => {
-                    LargeFiles.sort-by(LargeSort.oldest);
+                    LargeFiles.sort-by(LargeSort.modified);
                 }
             }
             Rectangle {
                 width: Screen.narrow ? Theme.big-bar-width-narrow : Theme.big-bar-width;
             }
-            BigSortButton {
+            SortHeader {
                 width: Theme.disk-size-width;
+                height: Theme.big-filter-height;
                 text: @tr("Taille");
-                label: @tr("Trier par taille, les plus gros d'abord");
                 applied: LargeFiles.sort == LargeSort.size;
-                arrow: @image-url("../assets/icons/arrow-down.svg");
+                descending: LargeFiles.descending;
+                trailing: true;
+                enabled: !LargeFiles.trashing;
                 sorted => {
                     LargeFiles.sort-by(LargeSort.size);
                 }

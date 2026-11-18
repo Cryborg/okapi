@@ -264,7 +264,7 @@ fn the_boxes_follow_their_files_whatever_the_filters_and_the_order() {
     assert_eq!(large(&window).get_chosen_files(), 2);
     // The focus on d, then the lines move under it.
     large(&window).set_current(line_of(&window, "d.zip"));
-    large(&window).invoke_sort_by(ui::LargeSort::Oldest);
+    large(&window).invoke_sort_by(ui::LargeSort::Modified);
     assert_eq!(names(&window), ["c.mkv", "a.mkv", "d.zip", "b.pdf"]);
     assert_eq!(large(&window).get_current(), line_of(&window, "d.zip"));
     assert!(rows(&window)[1].checked && rows(&window)[2].checked);
@@ -272,7 +272,25 @@ fn the_boxes_follow_their_files_whatever_the_filters_and_the_order() {
     large(&window).invoke_sort_by(ui::LargeSort::Size);
     assert_eq!(names(&window), ["a.mkv", "b.pdf", "c.mkv", "d.zip"]);
     assert_eq!(large(&window).get_current(), 3);
-    large(&window).invoke_sort_by(ui::LargeSort::Oldest);
+    assert_eq!(
+        (large(&window).get_sort(), large(&window).get_descending()),
+        (ui::LargeSort::Size, true)
+    );
+    // Again: the smallest first, the boxes and the focus with their files.
+    large(&window).invoke_sort_by(ui::LargeSort::Size);
+    assert_eq!(names(&window), ["d.zip", "c.mkv", "b.pdf", "a.mkv"]);
+    assert!(!large(&window).get_descending());
+    assert_eq!(large(&window).get_current(), 0);
+    assert!(rows(&window)[0].checked && rows(&window)[3].checked);
+    assert!(!rows(&window)[1].checked && !rows(&window)[2].checked);
+    // The date, then again: the newest first.
+    large(&window).invoke_sort_by(ui::LargeSort::Modified);
+    assert!(!large(&window).get_descending());
+    large(&window).invoke_sort_by(ui::LargeSort::Modified);
+    assert_eq!(names(&window), ["b.pdf", "d.zip", "a.mkv", "c.mkv"]);
+    assert!(large(&window).get_descending());
+    large(&window).invoke_sort_by(ui::LargeSort::Size);
+    large(&window).invoke_sort_by(ui::LargeSort::Modified);
     // Videos only: d is hidden, still chosen; the focus goes to the first.
     large(&window).invoke_filter_kind(kind_rank(FileKind::Video));
     assert_eq!(names(&window), ["c.mkv", "a.mkv"]);
@@ -546,7 +564,7 @@ fn what_the_confirmation_names_is_what_goes_in_the_report_s_order() {
     sandbox.write("Vidéos/c.mkv", 2, 3, 10);
     let (window, _screen) = on_large_files(seams(&sandbox, &Rc::default(), &no_exclusion(), None));
     searched(&window);
-    large(&window).invoke_sort_by(ui::LargeSort::Oldest);
+    large(&window).invoke_sort_by(ui::LargeSort::Modified);
     large(&window).invoke_toggle(line_of(&window, "a.mkv"));
     large(&window).invoke_toggle(line_of(&window, "c.mkv"));
     large(&window).invoke_trash();
@@ -597,7 +615,7 @@ fn the_file_shown_in_its_folder_is_the_one_on_the_line_whatever_the_order() {
     let opened: Opened = Rc::default();
     let (window, _screen) = on_large_files(seams(&sandbox, &opened, &no_exclusion(), None));
     searched(&window);
-    large(&window).invoke_sort_by(ui::LargeSort::Oldest);
+    large(&window).invoke_sort_by(ui::LargeSort::Modified);
     large(&window).invoke_open(0);
     assert_eq!(opened.borrow()[0].path, oldest);
 }
@@ -616,7 +634,7 @@ fn a_refusal_of_the_file_manager_is_said_on_its_file_only() {
     // Refused late, once another file took the line: not said.
     large(&window).set_current(0);
     large(&window).invoke_open(0);
-    large(&window).invoke_sort_by(ui::LargeSort::Oldest);
+    large(&window).invoke_sort_by(ui::LargeSort::Modified);
     assert_eq!(names(&window), ["b.mkv", "a.mkv"]);
     large(&window).set_current(0);
     answers.borrow_mut().pop().unwrap()(false);
@@ -641,7 +659,7 @@ fn a_refusal_of_the_file_manager_stays_with_its_file_and_goes_with_the_focus() {
     large(&window).invoke_open(1);
     assert!(large(&window).get_open_refused());
     // b moves to the first line, the focus with it: still said.
-    large(&window).invoke_sort_by(ui::LargeSort::Oldest);
+    large(&window).invoke_sort_by(ui::LargeSort::Modified);
     assert_eq!(large(&window).get_current(), 0);
     assert!(large(&window).get_open_refused());
     // The user moves the focus: no more.
@@ -836,7 +854,11 @@ fn nothing_found_says_so_and_a_new_result_clears_the_filters() {
     large(&window).invoke_filter_size(1);
     large(&window).invoke_filter_kind(kind_rank(FileKind::Archive));
     large(&window).invoke_filter_age(2);
-    large(&window).invoke_sort_by(ui::LargeSort::Oldest);
+    large(&window).invoke_sort_by(ui::LargeSort::Modified);
+    assert_eq!(
+        (large(&window).get_sort(), large(&window).get_descending()),
+        (ui::LargeSort::Modified, false)
+    );
     large(&window).invoke_again();
     read_until(&window, |window| {
         large(window).get_step() == ui::ToolStep::Result && large(window).get_kind() == -1
@@ -846,6 +868,7 @@ fn nothing_found_says_so_and_a_new_result_clears_the_filters() {
         (-1, -1)
     );
     assert_eq!(large(&window).get_sort(), ui::LargeSort::Size);
+    assert!(large(&window).get_descending());
     assert_eq!(names(&window), ["a.mkv"]);
     assert_eq!(large(&window).get_chosen_files(), 0);
     assert!(!rows(&window)[0].checked);
@@ -877,7 +900,7 @@ fn while_files_move_nothing_else_can_be_done_and_closing_waits() {
     large(&window).invoke_filter_size(0);
     large(&window).invoke_filter_age(0);
     large(&window).invoke_clear_filters();
-    large(&window).invoke_sort_by(ui::LargeSort::Oldest);
+    large(&window).invoke_sort_by(ui::LargeSort::Size);
     large(&window).invoke_trash();
     large(&window).invoke_again();
     large(&window).invoke_change();
@@ -886,6 +909,7 @@ fn while_files_move_nothing_else_can_be_done_and_closing_waits() {
     assert_eq!(large(&window).get_chosen_files(), 1);
     assert_eq!(large(&window).get_kind(), -1);
     assert_eq!(large(&window).get_sort(), ui::LargeSort::Size);
+    assert!(large(&window).get_descending());
     assert!(!large(&window).get_confirming());
     let later = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(100));

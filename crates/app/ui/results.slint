@@ -4,11 +4,11 @@ import { ScrollView } from "std-widgets.slint";
 import { Theme, Screen } from "theme.slint";
 import {
     ActionButton, Banner, ButtonKind, Badge, Card, CheckMark, Detail, Footer, FocusRing, Icon,
-    IconButton, IconNote, Line, ModalFrame, Title,
+    IconButton, IconNote, Line, ModalFrame, SortHeader, Title,
 } from "widgets.slint";
 import {
     BrowserStep, CheckState, Cleaner, IssueKind, IssueShown, ProblemBanner, ResultBadge,
-    ResultRow, RightsProblem, RightsStep, RowKind, RowNote, SetupProblem, Words,
+    ResultRow, ResultsSort, RightsProblem, RightsStep, RowKind, RowNote, SetupProblem, Words,
 } from "cleaner-model.slint";
 
 // What waits for the administrator's rights, and the button that asks for
@@ -335,7 +335,15 @@ component ResultLine inherits VerticalLayout {
                                     padding-left: Theme.spacing-s;
                                     padding-right: Theme.spacing-s;
                                     command-text := TextInput {
-                                        text: line.command;
+                                        // Set back by `edited`, the text is
+                                        // bound no more: the command follows
+                                        // the line by hand (a sort moves
+                                        // another group onto it).
+                                        property <string> command: line.command;
+                                        changed command => {
+                                            self.text = self.command;
+                                        }
+                                        text: self.command;
                                         read-only: true;
                                         single-line: true;
                                         color: Theme.text;
@@ -349,7 +357,7 @@ component ResultLine inherits VerticalLayout {
                                         // middle click's paste (Slint
                                         // 1.18): the command comes back.
                                         edited => {
-                                            self.text = line.command;
+                                            self.text = self.command;
                                         }
                                         changed has-focus => {
                                             if self.has-focus {
@@ -762,22 +770,34 @@ export component ResultsPage inherits VerticalLayout {
                     padding-top: Theme.spacing-s;
                     padding-bottom: Theme.spacing-s;
                     spacing: Theme.spacing-m;
-                    Detail {
+                    SortHeader {
                         horizontal-stretch: 1;
                         text: @tr("Élément");
-                        accessible-role: none;
+                        applied: Cleaner.sorted && Cleaner.sort == ResultsSort.name;
+                        descending: Cleaner.descending;
+                        sorted => {
+                            Cleaner.sort-by(ResultsSort.name);
+                        }
                     }
-                    Detail {
+                    SortHeader {
                         width: Theme.results-entries-width;
-                        horizontal-alignment: right;
                         text: @tr("Éléments");
-                        accessible-role: none;
+                        applied: Cleaner.sorted && Cleaner.sort == ResultsSort.entries;
+                        descending: Cleaner.descending;
+                        trailing: true;
+                        sorted => {
+                            Cleaner.sort-by(ResultsSort.entries);
+                        }
                     }
-                    Detail {
+                    SortHeader {
                         width: Theme.results-size-width;
-                        horizontal-alignment: right;
                         text: @tr("Taille");
-                        accessible-role: none;
+                        applied: Cleaner.sorted && Cleaner.sort == ResultsSort.size;
+                        descending: Cleaner.descending;
+                        trailing: true;
+                        sorted => {
+                            Cleaner.sort-by(ResultsSort.size);
+                        }
                     }
                 }
                 Rectangle {

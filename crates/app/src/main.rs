@@ -30,6 +30,7 @@ mod saving;
 mod settings;
 mod shown;
 mod sidebar;
+mod sorting;
 mod updates;
 mod user_files;
 
@@ -1297,7 +1298,7 @@ mod tests {
         "BigChoice",
         "BigKindMenu",
         "BigAgeMenu",
-        "BigSortButton",
+        "SortHeader",
         "BigList",
         "BigPanel",
         "BigChosenLine",

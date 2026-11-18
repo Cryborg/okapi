@@ -62,6 +62,10 @@ export enum ResultBadge { preselected, to-choose, admin }
 // category, or a group.
 export enum RowKind { category, browser, group }
 
+// The column the groups of the results may be sorted by
+// (`crates/app/src/sorting.rs`).
+export enum ResultsSort { name, entries, size }
+
 // What the note under a group says. Left to the user: a cache reset; a
 // maintenance of the system; a folder of the user's; the trash, whose
 // entries go for good; one of the administrator's that root's scan
@@ -227,6 +231,11 @@ export global Cleaner {
     in property <[StopShown]> stops;
 
     in property <[ResultRow]> results;
+    // Whether the groups are sorted in their category (else in the order of
+    // the rules), by which column and which way.
+    in property <bool> sorted;
+    in property <ResultsSort> sort;
+    in property <bool> descending;
     in property <[IssueShown]> notes;
     in property <Size> selected-size;
     in property <int> selected-entries;
@@ -301,6 +310,8 @@ export global Cleaner {
     callback toggle-result(int);
     callback fold(int);
     callback explain(int);
+    // A column's header clicked: sorted by it, or the other way.
+    callback sort-by(ResultsSort);
     // The command of the line at this index was copied (asked: the system
     // does not say whether it got it).
     callback command-copied(int);

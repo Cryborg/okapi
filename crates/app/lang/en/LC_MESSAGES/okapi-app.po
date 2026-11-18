@@ -883,12 +883,8 @@ msgid "{} est ouvert"
 msgstr "{} is open"
 
 msgctxt "BrowserQuestion"
-msgid "{} se sert encore de son cache. Fermez-le pour que ce cache soit nettoyé, ou laissez-le de côté cette fois : le reste du nettoyage continue."
-msgstr "{} still uses its cache. Close it to have this cache cleaned, or leave it out this time: the rest of the cleaning goes on."
-
-msgctxt "BrowserQuestion"
-msgid "{} : {}"
-msgstr "{}: {}"
+msgid "{} se sert encore de son cache. Fermez-le pour le nettoyer, ou laissez-le de côté cette fois."
+msgstr "{} still uses its cache. Close it to clean it, or leave it out this time."
 
 msgctxt "BrowserQuestion"
 msgid "Fermeture de {}…"
@@ -901,10 +897,6 @@ msgstr "{} did not close: close it, then start the cleaning again."
 msgctxt "BrowserQuestion"
 msgid "Okapi ne peut pas fermer {} lui-même : fermez-le, puis relancez le nettoyage."
 msgstr "Okapi cannot close {} itself: close it, then start the cleaning again."
-
-msgctxt "BrowserQuestion"
-msgid "Échap annule le nettoyage"
-msgstr "Escape cancels the cleaning"
 
 msgctxt "BrowserQuestion"
 msgid "Ignorer {}"

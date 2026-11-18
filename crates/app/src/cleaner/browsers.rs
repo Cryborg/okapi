@@ -12,7 +12,6 @@ use slint::ComponentHandle as _;
 
 use super::CleanerScreen;
 use super::cleaning::Confirming;
-use crate::shown::size;
 use crate::ui;
 
 /// How often the lock of a browser asked to close is read again.
@@ -157,36 +156,12 @@ impl CleanerScreen {
         }
     }
 
-    /// Shows the question about `lock`'s browser: its caches the cleaning
-    /// takes, and what can be done.
+    /// Shows the question about `lock`'s browser: what can be done.
     fn show_question(&self, lock: &BrowserLock, step: ui::BrowserStep) {
-        let (caches, bytes) = {
-            let state = self.0.borrow();
-            let Some(asking) = &state.asking else {
-                return;
-            };
-            let report = asking.confirmed.report();
-            let mut labels = Vec::new();
-            let mut bytes: u64 = 0;
-            for index in asking.confirmed.groups() {
-                let Some(group) = report.groups().get(*index) else {
-                    continue;
-                };
-                if group.locks().contains(lock) {
-                    labels.push(
-                        okapi_rules::label(state.language, group.label().as_str()).to_owned(),
-                    );
-                    bytes = bytes.saturating_add(group.total_size());
-                }
-            }
-            (labels.join(", "), bytes)
-        };
         self.settle();
         self.with_window(|window, _| {
             let cleaner = window.global::<ui::Cleaner>();
             cleaner.set_browser_name(lock.browser().name().into());
-            cleaner.set_browser_caches(caches.into());
-            cleaner.set_browser_size(size(bytes));
             cleaner.set_browser_step(step);
             cleaner.set_browser_asking(true);
         });

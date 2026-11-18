@@ -265,12 +265,10 @@ export global Cleaner {
     in property <bool> confirm-cache-reset;
     // The trash is confirmed: what it held can no longer be restored.
     in property <bool> confirm-trash;
-    // The question about an open browser, before a cleaning: the browser,
-    // the labels of its caches the cleaning takes, and their size.
+    // The question about an open browser, before a cleaning, and the
+    // browser.
     in property <bool> browser-asking;
     in property <string> browser-name;
-    in property <string> browser-caches;
-    in property <Size> browser-size;
     in property <BrowserStep> browser-step;
 
     // The cleaning under way, step by step; ended, what each came to.

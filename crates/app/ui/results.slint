@@ -644,20 +644,8 @@ component BrowserQuestion inherits ModalFrame {
         font-weight: Theme.weight-semibold;
     }
     Detail {
-        text: @tr("{} se sert encore de son cache. Fermez-le pour que ce cache soit nettoyé, ou laissez-le de côté cette fois : le reste du nettoyage continue.", Cleaner.browser-name);
+        text: @tr("{} se sert encore de son cache. Fermez-le pour le nettoyer, ou laissez-le de côté cette fois.", Cleaner.browser-name);
         wrap: word-wrap;
-    }
-    HorizontalLayout {
-        spacing: Theme.spacing-m;
-        Line {
-            horizontal-stretch: 1;
-            text: @tr("{} : {}", Cleaner.browser-name, Cleaner.browser-caches);
-            wrap: word-wrap;
-        }
-        Line {
-            text: Words.size(Cleaner.browser-size);
-            horizontal-alignment: right;
-        }
     }
     if Cleaner.browser-step != BrowserStep.ask: Line {
         text: Cleaner.browser-step == BrowserStep.closing ? @tr("Fermeture de {}…", Cleaner.browser-name)
@@ -667,9 +655,6 @@ component BrowserQuestion inherits ModalFrame {
         color: Cleaner.browser-step == BrowserStep.closing ? Theme.text-2 : Theme.warning;
         wrap: word-wrap;
         accessible-live-region: polite;
-    }
-    Detail {
-        text: @tr("Échap annule le nettoyage");
     }
     HorizontalLayout {
         alignment: end;

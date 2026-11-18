@@ -167,15 +167,6 @@ fn browser(window: &ui::AppWindow, language: Language) {
     results(window, true, language);
     let cleaner = window.global::<ui::Cleaner>();
     cleaner.set_browser_name("Chrome".into());
-    cleaner.set_browser_caches(
-        format!(
-            "{}, {}",
-            okapi_rules::label(language, "Cache"),
-            okapi_rules::label(language, "Code Cache")
-        )
-        .into(),
-    );
-    cleaner.set_browser_size(size(548, 0, ui::SizeUnit::Megabyte));
     cleaner.set_browser_step(ui::BrowserStep::Ask);
     cleaner.set_browser_asking(true);
 }

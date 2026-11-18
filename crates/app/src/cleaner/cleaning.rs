@@ -358,11 +358,6 @@ impl Confirming {
         &self.report
     }
 
-    /// The user's groups confirmed, by their index in the report.
-    pub(super) const fn groups(&self) -> &BTreeSet<usize> {
-        &self.groups
-    }
-
     /// The identifiers of the entries confirmed.
     pub(super) fn ids(&self) -> Vec<ItemId> {
         let groups = self.report.groups();
@@ -2606,7 +2601,6 @@ mod tests {
         confirm_and_ask(&window);
         assert!(asking(&window));
         assert!(shows(&window, "Chrome est ouvert"));
-        assert!(shows(&window, "Chrome : Cache"));
         assert!(
             no_button(&window, "Fermer Chrome et continuer"),
             "never signalled"
@@ -2790,7 +2784,6 @@ mod tests {
         let (window, _screen) = on_results(sandbox.read(&sandbox.root.join("state")));
         confirm_and_ask(&window);
         assert!(shows(&window, "Firefox est ouvert"));
-        assert!(shows(&window, "Firefox : Cache"));
         assert!(
             no_button(&window, "Fermer Firefox et continuer"),
             "a lock Okapi holds is never Okapi to close"
@@ -2823,7 +2816,6 @@ mod tests {
         let (window, _screen) = on_results(sandbox.read(&sandbox.root.join("state")));
         confirm_and_ask(&window);
         assert!(shows(&window, "Firefox est ouvert"));
-        assert!(shows(&window, "Firefox : Cache"));
         let_the_screen_settle();
         button(&window, "Ignorer Firefox").invoke_accessible_default_action();
         watch_until(&window, |window| step(window) == ui::CleanerStep::Receipt);

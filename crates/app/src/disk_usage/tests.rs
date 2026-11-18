@@ -889,6 +889,75 @@ fn others_says_its_count_in_the_singular_and_the_plural() {
 }
 
 #[test]
+fn a_partial_size_is_said_at_least_once_the_analysis_stopped() {
+    let home = home();
+    let manager = Rc::default();
+    let (window, _sampler) = on_disk(seams(&home, &manager));
+    disk(&window).set_step(ui::DiskStep::Result);
+    let partial = ui::DiskLine {
+        kind: ui::DiskLineKind::Folder,
+        state: ui::DiskLineState::Partial,
+        name: "partiel".into(),
+        has_size: true,
+        size: ui::Size {
+            whole: 1,
+            tenths: 0,
+            has_tenths: true,
+            unit: ui::SizeUnit::Gigabyte,
+        },
+        ..ui::DiskLine::default()
+    };
+    disk(&window).set_lines(ModelRc::new(VecModel::from(vec![partial])));
+    disk(&window).set_phase(ui::DiskPhase::Running);
+    slint::platform::update_timers_and_animations();
+    // Running: its icon says it grows.
+    assert!(shows(&window, "En cours, la taille va encore grandir"));
+    disk(&window).set_phase(ui::DiskPhase::Stopped);
+    slint::platform::update_timers_and_animations();
+    // Stopped: no icon, the banner says it for the screen and « au moins »
+    // by its size, read aloud with its line (the size column, read with its
+    // line, is no element a test reaches: the snapshot shows it).
+    assert!(!shows(&window, "En cours, la taille va encore grandir"));
+    assert!(!shows(
+        &window,
+        "Taille partielle : l'analyse a été arrêtée"
+    ));
+    assert!(
+        ElementHandle::find_by_element_type_name(&window, "Row")
+            .filter_map(|row| row.accessible_label())
+            .any(|label| label.starts_with("partiel, au moins 1,0 Go, "))
+    );
+}
+
+#[test]
+fn only_a_hard_link_says_its_state_below_its_name() {
+    let home = home();
+    fs::hard_link(home.path().join("note"), home.path().join("twin")).unwrap();
+    let closed = home.path().join("closed");
+    fs::create_dir(&closed).unwrap();
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).unwrap();
+    let manager = Rc::default();
+    let (window, _sampler) = on_disk(seams(&home, &manager));
+    analyzed(&window);
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o700)).unwrap();
+    let shown_lines = lines(&window);
+    assert!(
+        shown_lines
+            .iter()
+            .any(|line| line.state == ui::DiskLineState::CountedElsewhere)
+    );
+    // Every other state is an icon beside the name: the line stays low.
+    for line in &shown_lines {
+        assert_eq!(
+            line.tall,
+            line.state == ui::DiskLineState::CountedElsewhere,
+            "{}",
+            line.name
+        );
+    }
+}
+
+#[test]
 fn folders_are_entered_and_left_with_the_keyboard() {
     let home = home();
     let manager = Rc::default();

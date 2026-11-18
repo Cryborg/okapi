@@ -227,8 +227,9 @@ fn examined(screens: &Screens) {
     }
 }
 
-/// The badge of the line `text`, as it is read with it.
-fn badge(window: &ui::AppWindow, text: &str) -> String {
+/// What the line `text` is, as it is read with it (and on its badge, when
+/// not a plain folder, file or extension).
+fn kind(window: &ui::AppWindow, text: &str) -> String {
     ElementHandle::find_by_accessible_label(window, text)
         .find(|element| element.accessible_role() == Some(AccessibleRole::ListItem))
         .and_then(|line| line.accessible_description())
@@ -383,12 +384,12 @@ fn an_exclusion_written_by_hand_is_shown_as_the_engine_takes_it() {
         ]
     );
     // Read with its line, as its badge shows it.
-    assert_eq!(badge(&window, "relatif"), "Invalide");
-    assert_eq!(badge(&window, "*.log"), "Extension");
+    assert_eq!(kind(&window, "relatif"), "Invalide");
+    assert_eq!(kind(&window, "*.log"), "Extension");
     // Another setting changed: shown as read, never read again.
     preferences(&window).invoke_toggle_deletion_log();
     assert!(!screens.settings.reads_lines(), "nothing read again");
-    assert_eq!(badge(&window, "*.log"), "Extension");
+    assert_eq!(kind(&window, "*.log"), "Extension");
     // The one that stops every analysis can be removed here.
     button(&window, "Retirer relatif des exclusions").invoke_accessible_default_action();
     assert_eq!(rows(&window).len(), 4);
@@ -415,13 +416,13 @@ fn a_place_that_never_answers_never_holds_the_window() {
     };
     let (window, screens) = Sandbox::window_from(Rc::new(|| Ok(defaults())), seams);
     let begun = Instant::now();
-    while badge(&window, "*.log") != "Extension" {
+    while kind(&window, "*.log") != "Extension" {
         assert!(begun.elapsed() < Duration::from_secs(10), "never read");
         std::thread::sleep(Duration::from_millis(5));
         i_slint_backend_testing::mock_elapsed_time(EXAMINE_EVERY);
         slint::platform::update_timers_and_animations();
     }
-    assert_eq!(badge(&window, "/mort/a"), "Lecture…", "the other one read");
+    assert_eq!(kind(&window, "/mort/a"), "Lecture…", "the other one read");
     // Added below it: waited for a little, then said unreadable.
     let begun = Instant::now();
     type_and_add(&window, "/mort/b");
@@ -452,7 +453,7 @@ fn a_place_that_never_answers_never_holds_the_window() {
     drop(release);
     preferences(&window).invoke_reload();
     examined(&screens);
-    assert_eq!(badge(&window, "/mort/a"), "Absent");
+    assert_eq!(kind(&window, "/mort/a"), "Absent");
 }
 
 #[test]
@@ -468,8 +469,8 @@ fn a_line_whose_reader_dies_is_shown_invalid() {
     };
     let (window, screens) = Sandbox::window_from(Rc::new(|| Ok(defaults())), seams);
     examined(&screens);
-    assert_eq!(badge(&window, "/boom"), "Invalide");
-    assert_eq!(badge(&window, "*.log"), "Extension");
+    assert_eq!(kind(&window, "/boom"), "Invalide");
+    assert_eq!(kind(&window, "*.log"), "Extension");
 }
 
 #[test]

@@ -4239,8 +4239,8 @@ msgid "Déplacé ou supprimé entre-temps."
 msgstr "Moved or deleted meanwhile."
 
 msgctxt "ReceiptWords"
-msgid "Aucune autre copie sûre de rester (corbeille, autre compte, FAT ou exFAT)."
-msgstr "No other copy sure to stay (trash, other account, FAT or exFAT)."
+msgid "Aucune autre copie sûre de rester (corbeille, autre compte, partage réseau, FAT ou exFAT…)."
+msgstr "No other copy sure to stay (trash, other account, network share, FAT or exFAT…)."
 
 msgctxt "ReceiptWords"
 msgid "Exclu depuis la recherche."

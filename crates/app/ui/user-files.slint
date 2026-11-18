@@ -52,7 +52,7 @@ global ReceiptWords {
             return @tr("Déplacé ou supprimé entre-temps.");
         }
         if kept.why == ReceiptWhy.no-sure-keeper {
-            return @tr("Aucune autre copie sûre de rester (corbeille, autre compte, FAT ou exFAT).");
+            return @tr("Aucune autre copie sûre de rester (corbeille, autre compte, partage réseau, FAT ou exFAT…).");
         }
         if kept.why == ReceiptWhy.excluded {
             return @tr("Exclu depuis la recherche.");

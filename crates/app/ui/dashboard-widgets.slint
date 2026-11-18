@@ -838,7 +838,8 @@ component VolumeLine inherits VerticalLayout {
         : @tr("{} libres", Words.size(volume.free));
     property <string> bar-label: @tr("{} utilisés sur {}, soit {} %", Words.size(volume.used), Words.size(volume.total), volume.percent);
     property <float> part-used: max(volume.percent, 1) / 100;
-    // Why no size: a failure is said aloud only, the missing bar shows it.
+    // Why no size: a failure is said aloud only, its badge and the missing
+    // bar show it.
     property <string> silent: volume.space == SpaceState.failed ? @tr("Sa taille n'a pas pu être lue.")
         : @tr("Sa taille s'affichera dès qu'il répondra.");
 

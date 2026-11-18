@@ -2231,8 +2231,8 @@ fn large_files(window: &ui::AppWindow, scene: LargeScene, language: Language) {
     }
 }
 
-/// The screen `screen` reading what it shows (the note beside its title),
-/// or the disk usage of an analysis stopped: the last screens `main` looks
+/// The screens reading what they show (the note beside their title), and
+/// the disk usage of an analysis stopped: the last screens `main` looks
 /// for, a name unknown said with them all.
 fn reading_scene(app: &ui::AppWindow, screen: &str, language: Language) {
     match screen {

@@ -3283,7 +3283,7 @@ pub mod tests {
     }
 
     #[test]
-    fn the_memory_widget_waits_for_its_list_and_notes_approximate_values_when_large() {
+    fn the_memory_widget_waits_for_its_list_each_line_approximate() {
         let (window, sampler, _directories) = reading_home(
             &[("memory", WidgetSize::Large)],
             Vec::new(),
@@ -3310,7 +3310,7 @@ pub mod tests {
     }
 
     #[test]
-    fn the_wide_memory_widget_has_no_note_and_says_an_unreadable_list() {
+    fn the_wide_memory_widget_says_an_unreadable_list() {
         let failed = Unavailable {
             kind: std::io::ErrorKind::PermissionDenied,
             code: None,
@@ -3321,7 +3321,6 @@ pub mod tests {
             Some(Ok(reading_of(8 * GB, Some(Err(failed))))),
         );
         assert!(shows(&window, "Les applications n'ont pas pu être lues."));
-        assert!(!shows_a_text_starting(&window, "Valeurs approchées"));
         assert!(shows(&window, "22,0 Go disponibles"));
     }
 

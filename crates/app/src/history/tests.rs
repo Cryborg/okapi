@@ -458,9 +458,7 @@ fn each_update_shows_how_it_ended_and_each_package_asked() {
             &[
                 "Toutes les mises à jour demandées ont été installées.",
                 "Le système a demandé un redémarrage pour la terminer.",
-                // Said by its icon, written without its state.
                 "openssl 3.5.1 : installée",
-                "openssl 3.5.1",
                 "bash 5.2.37 : installée",
             ][..],
         ),
@@ -504,6 +502,11 @@ fn each_update_shows_how_it_ended_and_each_package_asked() {
             assert!(shows(&window, text), "{label}: {text}");
         }
     }
+    // The last line chosen: each update said once, by its icon.
+    assert_eq!(
+        ElementHandle::find_by_accessible_label(&window, "deja 1.0 : encore en attente").count(),
+        1
+    );
 }
 
 #[test]

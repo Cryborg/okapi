@@ -22,8 +22,9 @@ global DiskWords {
         DiskUsage.target-is-home ? @tr("Dossier personnel") : DashboardWords.volume-name(DiskUsage.target-volume)
     }
 
-    // A line's state in words, or nothing: read aloud, and shown below its
-    // name or in the tooltip of its icon.
+    // A line's state in words, or nothing: always read aloud; shown below
+    // its name when the line is `tall`, else in the tooltip of its icon
+    // when `iconic`, else not shown. Every new state takes one of the two.
     pure public function state(line: DiskLine) -> string {
         if line.kind == DiskLineKind.others {
             return @tr("{n} élément, moins de 1 % chacun" | "{n} éléments, moins de 1 % chacun" % line.count);
@@ -59,8 +60,9 @@ global DiskWords {
         ""
     }
 
-    // Whether its state is shown by an icon beside its name; an analysis
-    // stopped says so for the whole screen, and « au moins » by the size.
+    // Whether its state is shown by an icon beside its name. Partial once
+    // the analysis was stopped, it has none: the banner says it for the
+    // screen, « au moins » by its size.
     pure public function iconic(line: DiskLine) -> bool {
         line.kind != DiskLineKind.others
             && (line.state == DiskLineState.pending || line.state == DiskLineState.unreadable

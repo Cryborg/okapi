@@ -142,7 +142,8 @@ global HistoryWords {
             : @image-url("../assets/icons/triangle-alert.svg")
     }
 
-    // What a line is read as: its name, its badge, its summary, when.
+    // What a line is read as: its name, its administrator's part, its
+    // summary, when.
     pure public function spoken(operation: HistoryRow) -> string {
         if operation.admin != HistoryAdmin.none {
             return @tr("{}, partie administrateur, {}, {}", name(operation), summary(operation), DashboardWords.moment(operation.at));
@@ -536,8 +537,10 @@ component UpdateDetail inherits VerticalLayout {
                     tone: update.state == UpdateState.installed ? Theme.success : Theme.warning;
                     cross-axis-self-alignment: center;
                 }
+                // Read by its icon, its state with it: said once.
                 Detail {
                     horizontal-stretch: 1;
+                    accessible-role: none;
                     text: HistoryWords.updated-shown(update);
                     color: update.state == UpdateState.installed ? Theme.text : Theme.warning;
                 }

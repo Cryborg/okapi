@@ -222,6 +222,10 @@ impl Trash {
 }
 
 /// The folder `name` of `parent`, created when missing; never a link.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a folder of the trash, maybe created here: no identity read before to check"
+)]
 fn opened_or_created(parent: &Directory, name: &str) -> io::Result<Directory> {
     let name = OsStr::new(name);
     match parent.open_child(name) {

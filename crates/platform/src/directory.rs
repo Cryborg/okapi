@@ -291,6 +291,10 @@ fn opened(
     path: Option<&Path>,
 ) -> Result<Option<(Directory, EntryStatus)>, Unreached> {
     // Swapped for a link meanwhile, it fails to open.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "invariant 3: the opening `enter` stands on"
+    )]
     let directory = match parent.open_child(name) {
         Ok(directory) => directory,
         Err(error) => return unreached(name, path, error),

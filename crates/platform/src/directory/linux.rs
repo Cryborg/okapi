@@ -161,13 +161,15 @@ impl Directory {
         status(&statx(&self.fd, single_name(name)?, ENTRY_FLAGS, WANTED)?)
     }
 
-    /// Opens the subdirectory `name`, refusing a link.
+    /// Opens the subdirectory `name`, refusing a link. A walk enters a folder
+    /// through [`crate::enter`], which also checks its identity: `clippy.toml`
+    /// refuses any other call but a local, justified exception.
     ///
     /// # Errors
     ///
     /// [`io::ErrorKind::InvalidInput`] when `name` is not a single name, or the
     /// system's error: a link, not a directory, absent...
-    pub fn open_child(&self, name: &OsStr) -> io::Result<Self> {
+    pub(crate) fn open_child(&self, name: &OsStr) -> io::Result<Self> {
         Ok(Self {
             fd: openat(&self.fd, single_name(name)?, OPEN_FLAGS, Mode::empty())?,
         })
@@ -387,6 +389,10 @@ fn status(stat: &Statx) -> io::Result<EntryStatus> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the primitive `okapi_platform::enter` stands on, tested alone"
+)]
 mod tests {
     use std::fs;
     use std::os::unix::fs::symlink;

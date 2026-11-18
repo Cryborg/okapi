@@ -58,7 +58,7 @@ impl Directory {
     /// # Errors
     ///
     /// None.
-    pub fn open_child(&self, _name: &OsStr) -> io::Result<Self> {
+    pub(crate) fn open_child(&self, _name: &OsStr) -> io::Result<Self> {
         match *self {}
     }
 

@@ -24,8 +24,8 @@ use crate::watch::{Progress, Watch};
 pub enum KeepReason {
     /// The identifier does not come from this report (invariant 1).
     UnknownItem,
-    /// It is no longer what the scan saw: another object, another type, or a
-    /// link on the way to it.
+    /// It is no longer what the scan saw: another object, another type, a
+    /// link on the way to it, or a directory mounted on since it was read.
     Replaced,
     /// It, or something in it, changed after its cutoff (invariant 2).
     Recent,
@@ -866,32 +866,16 @@ pub(crate) fn is_plain_directory_on(status: &EntryStatus, device: u64) -> bool {
 }
 
 /// Opens the subdirectory `name`, which must still be the one read as
-/// `status`; `None` when it is gone.
+/// `status` ([`okapi_platform::enter`]); `None` when it is gone.
 pub(crate) fn enter(
     parent: &Directory,
     name: &OsStr,
     status: &EntryStatus,
 ) -> Result<Option<Directory>, KeepReason> {
-    let directory = match parent.open_child(name) {
-        Ok(directory) => directory,
-        // Read it again to tell a removal or a swap from a refusal.
-        Err(error) => {
-            return match parent.status_of(name) {
-                Err(again) if again.kind() == io::ErrorKind::NotFound => Ok(None),
-                Ok(again)
-                    if again.kind != EntryType::Directory || again.identity != status.identity =>
-                {
-                    Err(KeepReason::Replaced)
-                }
-                _ => Err(keep(&error)),
-            };
-        }
-    };
-    let opened = directory.status().map_err(|error| keep(&error))?;
-    if opened.identity == status.identity {
-        Ok(Some(directory))
-    } else {
-        Err(KeepReason::Replaced)
+    match okapi_platform::enter(parent, name, status.identity) {
+        Ok(entered) => Ok(entered.map(|(directory, _)| directory)),
+        Err(Unreached::Changed) => Err(KeepReason::Replaced),
+        Err(Unreached::Io(error)) => Err(keep(&error)),
     }
 }
 

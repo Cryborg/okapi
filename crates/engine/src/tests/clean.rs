@@ -1160,6 +1160,31 @@ fn a_directory_swapped_for_a_link_after_being_read_is_not_entered() {
 }
 
 #[test]
+fn a_directory_the_system_refuses_to_enter_is_a_refusal_with_its_code() {
+    let fixture = Fixture::new();
+    if reads_through_permissions(&fixture) {
+        // Root enters through permissions: nothing to observe.
+        return;
+    }
+    fixture.directory("parent/closed");
+    let parent = okapi_platform::Directory::open(&fixture.path("parent")).unwrap();
+    let name = std::ffi::OsStr::new("closed");
+    let status = parent.status_of(name).unwrap();
+    let closed = fixture.path("parent/closed");
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).unwrap();
+    let entered = crate::clean::enter(&parent, name, &status).err();
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        entered,
+        Some(KeepReason::Failed {
+            kind: std::io::ErrorKind::PermissionDenied,
+            // `EACCES`, as the system said it.
+            code: Some(13),
+        })
+    );
+}
+
+#[test]
 fn a_removal_that_stops_halfway_is_partial_and_names_the_entry() {
     let fixture = Fixture::new();
     fixture.file("busy/one", 5, 2 * HOUR);

@@ -560,6 +560,14 @@ msgctxt "ResultLine"
 msgid "Copier"
 msgstr "Copy"
 
+msgctxt "ResultLine"
+msgid "Éléments : {}, {}"
+msgstr "Items: {}, {}"
+
+msgctxt "ResultLine"
+msgid "{}. {}"
+msgstr "{}. {}"
+
 msgctxt "Words"
 msgid "L'assistant administrateur s'est interrompu : des éléments ont pu être supprimés. Le détail est dans le journal."
 msgstr "The administrator's helper was interrupted: items may have been deleted. The detail is in the log."

@@ -1759,6 +1759,24 @@ mod tests {
     }
 
     #[test]
+    fn a_result_s_figures_are_said_once_by_its_box() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        settle_files();
+        let (window, _screen) = on_results(sandbox.read(&sandbox.root.join("state")));
+        let pip = found(&window, "Cache de pip");
+        // Unchecked, so that the size selected below is not its own.
+        pip.invoke_accessible_default_action();
+        let description = pip.accessible_description().unwrap();
+        let (figures, state) = description.split_once(". ").unwrap();
+        assert_eq!(state, "Présélectionné");
+        let size = figures.strip_prefix("Éléments : 1, ").unwrap();
+        // Its columns write them, silent.
+        assert!(!shows(&window, size), "{size}");
+        assert!(!shows(&window, "1"));
+    }
+
+    #[test]
     fn nothing_is_removed_without_the_confirmation() {
         let sandbox = Sandbox::new();
         let old = sandbox.file("home/.cache/pip/old");
@@ -3435,9 +3453,9 @@ mod tests {
             "nothing for root to clean"
         );
         // Said by an open padlock beside its name (none beside the group
-        // still locked), read with its checkbox.
-        let description = unlocked.accessible_description();
-        assert_eq!(description.as_deref(), Some("Droits obtenus"));
+        // still locked), read with its checkbox after what it holds.
+        let said = unlocked.accessible_description();
+        assert!(said.is_some_and(|said| said.ends_with(". Droits obtenus")));
 
         // Its tooltip takes no click: the padlock checks the group, as its
         // name does.

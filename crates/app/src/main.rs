@@ -1161,7 +1161,7 @@ mod tests {
     }
 
     /// Texts the same in both languages.
-    const SAME_IN_ENGLISH: [&str; 29] = [
+    const SAME_IN_ENGLISH: [&str; 30] = [
         "Image",
         "Images",
         "Document",
@@ -1191,6 +1191,7 @@ mod tests {
         "Snap",
         "Flatpak",
         "Source",
+        "{}. {}",
     ];
 
     #[test]

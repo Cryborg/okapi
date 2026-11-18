@@ -3,7 +3,7 @@ import { Theme, Screen } from "theme.slint";
 import { Size, Words } from "cleaner-model.slint";
 import { VolumeShown } from "dashboard-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
-import { ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, IconButton, ProgressBar, StateIcon, Title, TitleLine } from "widgets.slint";
+import { ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, IconButton, ProgressBar, SilentDetail, StateIcon, Title, TitleLine } from "widgets.slint";
 import {
     DiskUsage, DiskStep, DiskPhase, DiskVolumes, DiskFiles, DiskRefusal, DiskLine, DiskLineKind, DiskLineState, DiskUnreadable,
 } from "disk-usage-model.slint";
@@ -251,9 +251,8 @@ component StartChoice inherits Rectangle {
                 progress: root.used;
                 tone: Theme.size-bar;
             }
-            Detail {
+            SilentDetail {
                 text: root.description;
-                accessible-role: none;
                 wrap: word-wrap;
             }
         }

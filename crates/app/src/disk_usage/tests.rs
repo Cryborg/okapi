@@ -210,6 +210,13 @@ fn the_sidebar_leads_to_the_start_and_the_volumes_read() {
     let manager = Rc::default();
     let (window, sampler) = on_disk(seams(&home, &manager));
     assert!(shows(&window, "Dossier personnel"));
+    // Its description read by its choice, written below its name silent.
+    let description = "Vos documents, médias, projets et les données de vos applications.";
+    assert!(
+        ElementHandle::find_by_accessible_label(&window, "Dossier personnel")
+            .any(|choice| choice.accessible_description().as_deref() == Some(description))
+    );
+    assert!(!shows(&window, description));
     assert_eq!(disk(&window).get_volumes_state(), ui::DiskVolumes::Reading);
     assert!(
         sampler.commands.borrow().ends_with(&[

@@ -464,11 +464,11 @@ fn subfolders(folder: &Path) -> io::Result<Listed> {
 }
 
 /// [`subfolders`], none when it is gone; `partial` set when it, or an entry
-/// of it, cannot be read (traced).
+/// of it, cannot be read or is refused (traced).
 fn subfolders_or_none(folder: &Path, partial: &mut bool) -> Vec<String> {
     match subfolders(folder) {
         Ok(listed) => {
-            *partial |= !listed.whole;
+            *partial |= !listed.whole || listed.refused;
             listed.names
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
@@ -554,15 +554,17 @@ pub(crate) fn app_ids(installation: &Installation) -> Result<Vec<String>, String
 /// # Errors
 ///
 /// Why they could not be listed whole: the folder unreadable, an entry of
-/// it, or the folder missing from an installation that holds nothing.
+/// it, a name refused or a link where folders are (what they hold is not
+/// known), or the folder missing from an installation that holds nothing.
 fn kind_ids(installation: &Path, kind: RefKind) -> Result<Listed, String> {
     let folder = installation.join(kind.folder());
     match subfolders(&folder) {
-        Ok(listed) if listed.whole => Ok(listed),
+        Ok(listed) if listed.whole && !listed.refused => Ok(listed),
         Ok(_) => Err(format!("{} not listed whole", folder.display())),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             missing_for_sure(&folder)?;
             if holds_something(installation)? {
+                tracing::debug!(path = %folder.display(), "none there in an installation that holds something: none installed");
                 Ok(Listed {
                     names: Vec::new(),
                     whole: true,
@@ -590,9 +592,12 @@ fn holds_something(installation: &Path) -> Result<bool, String> {
     {
         return Ok(true);
     }
-    std::fs::read_dir(installation)
-        .map(|mut entries| entries.next().is_some())
-        .map_err(|error| format!("{}: {error}", installation.display()))
+    let unread = |error: io::Error| format!("{}: {error}", installation.display());
+    match std::fs::read_dir(installation).map_err(unread)?.next() {
+        None => Ok(false),
+        Some(Ok(_)) => Ok(true),
+        Some(Err(error)) => Err(unread(error)),
+    }
 }
 
 /// The deployments in use of the application `id` in `installation`, of

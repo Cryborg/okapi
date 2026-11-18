@@ -538,3 +538,57 @@ fn what_the_helper_says_of_each_runtime_is_told_and_a_prune_refused_said() {
     );
     assert!(!withheld, "nothing went");
 }
+
+const MALFORMED: &str = r#"{"type":"sync","status-code":200,"result":{}}"#;
+
+#[test]
+fn snapd_silent_or_unreadable_at_a_second_reading_is_never_taken_for_gone() {
+    // Catches, each alone: snapd absent when read again asking the next
+    // revisions anyway (a wait each); a list unreadable read again taken for
+    // a revision gone, before the asking or after a refusal.
+    let root = tempfile::tempdir().unwrap();
+    let (report, revisions) = report_of_two(root.path());
+    let snapd = Snapd::at(&root.path().join("none"), Duration::from_secs(1));
+    assert_eq!(
+        retired(&report, &ids(&report), &snapd),
+        [
+            ("1".to_owned(), Retired::Failed(Why::Absent)),
+            ("2".to_owned(), Retired::NotAsked)
+        ]
+    );
+
+    let first = &ids(&report)[..1];
+    let (_directory, snapd, requests) =
+        crate::packages::snapd::fake::scripted(vec![Some(MALFORMED.to_owned())]);
+    assert_eq!(
+        retired(&report, first, &snapd),
+        [("1".to_owned(), Retired::Failed(Why::Unclear))]
+    );
+    assert_eq!(requests.try_iter().count(), 1, "nothing asked");
+
+    let (_directory, snapd, _) = crate::packages::snapd::fake::scripted(vec![
+        Some(listing(&revisions)),
+        Some(REFUSED.to_owned()),
+        Some(MALFORMED.to_owned()),
+    ]);
+    assert_eq!(
+        retired(&report, first, &snapd),
+        [("1".to_owned(), Retired::Failed(Why::NotAuthorized))]
+    );
+}
+
+#[test]
+fn a_prune_refused_when_nothing_went_withholds_no_room() {
+    // Catches a room said withheld when no runtime went: the rights refused
+    // at the first.
+    let root = tempfile::tempdir().unwrap();
+    let (_system, places) = installation_of(root.path(), &["org.a.First"]);
+    let found = found_in(places);
+    let (helper, _heard) = fake_helper(|member, _| match member {
+        "Uninstall" => Answer::Error("org.freedesktop.DBus.Error.AccessDenied"),
+        _ => Answer::Error("org.freedesktop.Flatpak.Error.Aborted"),
+    });
+    let (told, withheld) = retired_runtimes(&found.report, &|| Ok(helper.clone()));
+    assert_eq!(told.len(), 1);
+    assert!(!withheld);
+}

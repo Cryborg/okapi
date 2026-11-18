@@ -549,7 +549,11 @@ fn retire_revision(
             tracing::warn!(%error, "snapd refused to remove the revision");
             return match gone() {
                 Ok(true) => Retired::Gone,
-                Ok(false) | Err(_) => Retired::Failed(why_snapd(&error)),
+                Ok(false) => Retired::Failed(why_snapd(&error)),
+                Err(reread) => {
+                    tracing::warn!(%reread, "snapd's revisions unread after its refusal");
+                    Retired::Failed(why_snapd(&error))
+                }
             };
         }
     };

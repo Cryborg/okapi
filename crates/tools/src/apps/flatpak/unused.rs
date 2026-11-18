@@ -184,6 +184,9 @@ fn kept(read: &Read, root: &dyn Fn(&Deployed) -> bool) -> BTreeSet<FlatpakRef> {
         if more.is_empty() {
             return reached;
         }
+        for reference in &more {
+            tracing::debug!(%reference, "kept: it extends one in use, or says so unreadably");
+        }
         extending.extend(more);
     }
 }
@@ -287,15 +290,8 @@ fn deployments_of(
     installation: &Path,
     kind: RefKind,
 ) -> Result<Vec<(FlatpakRef, PathBuf)>, String> {
-    let listed = kind_ids(installation, kind)?;
-    if listed.refused {
-        return Err(format!(
-            "a name refused in {}",
-            installation.join(kind.folder()).display()
-        ));
-    }
     let mut found = Vec::new();
-    for id in listed.names {
+    for id in kind_ids(installation, kind)?.names {
         let folder = installation.join(kind.folder()).join(&id);
         for arch in names_in(&folder)? {
             for branch in names_in(&folder.join(&arch))? {

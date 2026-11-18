@@ -40,8 +40,14 @@ fn runtime(installation: &Installation, id: &str, branch: &str, metadata: &str) 
     deploy(installation, "runtime", id, X86, branch, metadata)
 }
 
+/// An application deployed as flatpak deploys one: with its `current`
+/// link beside its architectures, the one link flatpak makes there.
 fn app(installation: &Installation, id: &str, metadata: &str) {
     deploy(installation, "app", id, X86, "stable", metadata);
+    let current = installation.path.join("app").join(id).join("current");
+    if std::fs::symlink_metadata(&current).is_err() {
+        std::os::unix::fs::symlink(format!("{X86}/stable"), current).unwrap();
+    }
 }
 
 /// What `installations` tell unused, by reference.
@@ -356,6 +362,21 @@ fn each_way_a_runtime_is_kept_keeps_it_alone() {
         ),
     );
     runtime(&system, "org.f.Tool", "1", "[Runtime]\n");
+    // Two levels: what extends what extends one used, and what that uses.
+    runtime(
+        &system,
+        "org.g.Outer",
+        "1",
+        "[Runtime]\nsdk=org.g.Deep/x86_64/1\n\n[ExtensionOf]\nref=runtime/org.f.Docs/x86_64/1\n",
+    );
+    runtime(&system, "org.g.Deep", "1", "[Runtime]\n");
+    // One unreadable among readable ones not reached: kept.
+    runtime(
+        &system,
+        "org.h.Mixed",
+        "1",
+        "[ExtensionOf]\nref=nothing readable\n\n[ExtensionOf]\nref=runtime/org.b.Base/x86_64/1\n",
+    );
     // Pinned in the user's installation: kept there, never counted, and
     // the system's copy of another branch not kept by it.
     std::fs::write(
@@ -476,4 +497,23 @@ fn the_room_given_back_is_that_of_the_files_shared_with_the_repository_alone() {
         None,
         "a link"
     );
+}
+
+#[test]
+fn the_applications_of_an_installation_are_unread_past_a_name_refused_or_a_stray_link() {
+    // Catches the leftovers' reading (the same listing) passing over an
+    // application it cannot see whole: its data would be taken for one of
+    // no application. And a desktop where nothing was installed for the
+    // account taken for unread.
+    let root = tempfile::tempdir().unwrap();
+    let portals_only = Installation::at(root.path().join("user"), false, false);
+    std::fs::create_dir_all(portals_only.path.join("db")).unwrap();
+    assert_eq!(crate::apps::flatpak::app_ids(&portals_only), Ok(Vec::new()));
+    let linked = installation(root.path(), "linked", false);
+    std::fs::create_dir_all(linked.path.join("app")).unwrap();
+    std::os::unix::fs::symlink("/elsewhere", linked.path.join("app/org.a.A")).unwrap();
+    assert!(crate::apps::flatpak::app_ids(&linked).is_err());
+    let refused = installation(root.path(), "refused", false);
+    std::fs::create_dir_all(refused.path.join("app/org a")).unwrap();
+    assert!(crate::apps::flatpak::app_ids(&refused).is_err());
 }

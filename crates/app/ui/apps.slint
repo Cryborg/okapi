@@ -442,8 +442,8 @@ component Panel inherits Card {
             }
             if Apps.detail.has-old: Detail {
                 text: Apps.detail.old-versions == 1
-                    ? @tr("Le système garde la version précédente pour pouvoir revenir en arrière. Elle part avec l'appli.")
-                    : @tr("Le système garde {} versions précédentes pour pouvoir revenir en arrière. Elles partent avec l'appli.", Apps.detail.old-versions);
+                    ? @tr("Version précédente gardée par le système : elle part avec l'appli.")
+                    : @tr("{} versions précédentes gardées par le système : elles partent avec l'appli.", Apps.detail.old-versions);
                 wrap: word-wrap;
             }
         }
@@ -929,7 +929,7 @@ component LeftoverLines inherits FocusScope {
 component LeftoversView inherits VerticalLayout {
     spacing: Theme.spacing-l;
     Detail {
-        text: @tr("Ce que des applis déjà désinstallées ont laissé derrière elles. Rien n'est mis à la corbeille sans votre accord.");
+        text: @tr("Ce que des applis désinstallées ont laissé derrière elles.");
         wrap: word-wrap;
     }
     if Leftovers.blocked == LeftoversBlock.settings: Banner {
@@ -1076,7 +1076,7 @@ component LeftoversView inherits VerticalLayout {
                     wrap: word-wrap;
                 }
                 Detail {
-                    text: @tr("Quand on désinstalle un snap, snapd garde une copie de ses données, pour tous les comptes, et l'efface de lui-même après un temps (31 jours, sauf réglage). L'oublier rend la place tout de suite.");
+                    text: @tr("snapd garde 31 jours (sauf réglage) une copie des données d'un snap désinstallé, pour tous les comptes. L'oublier rend la place tout de suite.");
                     wrap: word-wrap;
                 }
             }
@@ -1107,7 +1107,7 @@ component LeftoversView inherits VerticalLayout {
                 wrap: word-wrap;
             }
             Detail {
-                text: @tr("Une désinstallation simple garde les réglages d'un paquet dans les dossiers du système, au cas où vous le réinstalleriez. Ils ne prennent presque pas de place : Okapi les montre pour information et n'y touche pas.");
+                text: @tr("Gardés par le système pour une réinstallation. Ils ne prennent presque pas de place, Okapi n'y touche pas.");
                 wrap: word-wrap;
             }
         }
@@ -1124,11 +1124,6 @@ component LeftoversView inherits VerticalLayout {
                 font-size: Theme.font-title;
                 font-weight: Theme.weight-semibold;
                 horizontal-alignment: center;
-            }
-            Detail {
-                text: @tr("Les applis désinstallées n'ont rien laissé dans votre dossier personnel.");
-                horizontal-alignment: center;
-                wrap: word-wrap;
             }
         }
     }

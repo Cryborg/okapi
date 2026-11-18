@@ -169,8 +169,8 @@ msgid "Nettoyeur"
 msgstr "Cleaner"
 
 msgctxt "Choosing"
-msgid "Choisissez ce qu'Okapi doit regarder. L'analyse ne supprime rien : vous décidez ensuite."
-msgstr "Choose what Okapi should look at. The analysis removes nothing: you decide afterwards."
+msgid "L'analyse ne supprime rien : vous choisissez ensuite."
+msgstr "The analysis deletes nothing: you choose afterwards."
 
 msgctxt "Choosing"
 msgid "Aucune catégorie sélectionnée"
@@ -209,8 +209,8 @@ msgid "Analyse en cours"
 msgstr "Analysis in progress"
 
 msgctxt "Scanning"
-msgid "Catégories terminées : {} sur {}. Rien n'est supprimé pendant l'analyse."
-msgstr "Categories done: {} of {}. Nothing is removed during the analysis."
+msgid "Catégories terminées : {} sur {}."
+msgstr "Categories done: {} of {}."
 
 msgctxt "Scanning"
 msgid "Progression de l'analyse"
@@ -253,8 +253,8 @@ msgid "Okapi a regardé les catégories choisies et n'a rien trouvé de récupé
 msgstr "Okapi looked at the chosen categories and found nothing to reclaim. Recent files and your exclusions were left aside, as always."
 
 msgctxt "Ended"
-msgid "L'analyse s'est arrêtée avant de commencer. Aucun fichier n'a été lu ni modifié : ce n'est pas la même chose que « rien à nettoyer »."
-msgstr "The analysis stopped before it began. No file was read or changed: this is not the same as \"nothing to clean\"."
+msgid "L'analyse s'est arrêtée avant de commencer : aucun fichier n'a été lu ni modifié."
+msgstr "The analysis stopped before it began: no file was read or changed."
 
 msgctxt "Ended"
 msgid "L'analyse s'est interrompue sans résultat. Rien n'a été supprimé. Le détail est dans le journal."
@@ -323,10 +323,6 @@ msgstr "The entry under way finishes; what is not yet removed stays."
 msgctxt "CleaningPage"
 msgid "Docker élague son cache de construction ; ce qui part n'est connu qu'à la fin."
 msgstr "Docker is pruning its build cache; what goes is known only at the end."
-
-msgctxt "CleaningPage"
-msgid "Chaque élément est vérifié, puis revérifié juste avant d'être retiré."
-msgstr "Each entry is checked, then checked again just before it is removed."
 
 msgctxt "CleanStepRow"
 msgid "Nettoyage des éléments administrateur"
@@ -473,10 +469,6 @@ msgid "Ce qui n'était pas encore retiré est resté."
 msgstr "What was not yet removed stayed."
 
 msgctxt "ReceiptPage"
-msgid "Chaque élément a été vérifié juste avant d'être retiré."
-msgstr "Each entry was checked just before it was removed."
-
-msgctxt "ReceiptPage"
 msgid "Le reçu est enregistré dans l'historique."
 msgstr "The receipt is recorded in the history."
 
@@ -557,10 +549,6 @@ msgid "Illisible sans les droits administrateur : « Obtenir les droits » ci-de
 msgstr "Unreadable without administrator rights: “Get the rights” above."
 
 msgctxt "ResultLine"
-msgid "Se mesure avec les droits administrateur : « Obtenir les droits » ci-dessus."
-msgstr "Measured with administrator rights: “Get the rights” above."
-
-msgctxt "ResultLine"
 msgid "Opération du système : à cocher vous-même."
 msgstr "A system operation: check it yourself."
 
@@ -592,10 +580,6 @@ msgctxt "Words"
 msgid "L'assistant administrateur s'est interrompu : des éléments ont pu être supprimés. Le détail est dans le journal."
 msgstr "The administrator's helper was interrupted: items may have been deleted. The detail is in the log."
 
-msgctxt "ResultLine"
-msgid "Demande les droits administrateur : « Obtenir les droits » ci-dessus."
-msgstr "Needs administrator rights: “Get the rights” above."
-
 msgctxt "RightsBanner"
 msgid "Préparation de la demande des droits…"
 msgstr "Preparing the request for the rights…"
@@ -621,8 +605,8 @@ msgid "{} Groupes qui les demandent toujours : {}."
 msgstr "{} Groups that still need them: {}."
 
 msgctxt "RightsBanner"
-msgid "Certaines opérations demandent les droits administrateur. Groupes ci-dessous : {}."
-msgstr "Some operations need administrator rights. Groups below: {}."
+msgid "Groupes qui demandent les droits administrateur : {}."
+msgstr "Groups that need administrator rights: {}."
 
 msgctxt "RightsBanner"
 msgid "Obtenir les droits"
@@ -1107,8 +1091,8 @@ msgid "Le résultat remplacera l'estimation précédente ({})."
 msgstr "The result will replace the previous estimate ({})."
 
 msgctxt "ReclaimableWidget"
-msgid "Lancez une analyse pour savoir combien d'espace vous pouvez récupérer. Rien n'est supprimé sans votre accord."
-msgstr "Start an analysis to know how much space you can reclaim. Nothing is deleted without your consent."
+msgid "Lancez une analyse pour savoir combien d'espace vous pouvez récupérer."
+msgstr "Run an analysis to find out how much space you can reclaim."
 
 msgctxt "ReclaimableWidget"
 msgid "{} Analysez à nouveau pour une estimation à jour."
@@ -1195,12 +1179,8 @@ msgid "{}. Éléments trouvés : {}."
 msgstr "{}. Items found: {}."
 
 msgctxt "ReclaimableWidget"
-msgid "{}. Éléments trouvés : {}. Rien n'a encore été supprimé."
-msgstr "{}. Items found: {}. Nothing has been deleted yet."
-
-msgctxt "ReclaimableWidget"
-msgid "Éléments trouvés : {}. Rien n'a encore été supprimé."
-msgstr "Items found: {}. Nothing deleted yet."
+msgid "Éléments trouvés : {}."
+msgstr "Items found: {}."
 
 msgctxt "KeyValue"
 msgid "{} : {}"
@@ -1701,8 +1681,8 @@ msgid "Conseillé"
 msgstr "Recommended"
 
 msgctxt "Start"
-msgid "Vos documents, médias, projets et les données de vos applications. C'est là que l'espace part le plus souvent."
-msgstr "Your documents, media, projects and your applications' data. That is where space goes most often."
+msgid "Vos documents, médias, projets et les données de vos applications."
+msgstr "Your documents, media, projects and your applications' data."
 
 msgctxt "Start"
 msgid "Ou un disque entier"
@@ -1721,8 +1701,8 @@ msgid "{} libres sur {}"
 msgstr "{} free of {}"
 
 msgctxt "Start"
-msgid "Sur un disque entier, certains dossiers système ne s'ouvrent qu'avec les droits administrateur. Leur place apparaîtra comme « espace non expliqué »."
-msgstr "On a whole disk, some system folders only open with administrator rights. Their space will show as \"unexplained space\"."
+msgid "Sur un disque entier, ce que seuls les droits administrateur ouvrent compte dans « espace non expliqué »."
+msgstr "On a whole disk, what only administrator rights open counts in “unexplained space”."
 
 msgctxt "Start"
 msgid "Analyser"
@@ -1821,16 +1801,16 @@ msgid "Ouverture…"
 msgstr "Opening…"
 
 msgctxt "Browse"
-msgid "Analyse… {} fichiers, {}. Rien n'est supprimé."
-msgstr "Analyzing… {} files, {}. Nothing is deleted."
+msgid "Analyse… {} fichiers, {}"
+msgstr "Analysing… {} files, {}"
 
 msgctxt "Browse"
 msgid "Avancement de l'analyse"
 msgstr "Analysis progress"
 
 msgctxt "Browse"
-msgid "Vous pouvez déjà parcourir ce qui a été vu. Échap arrête l'analyse."
-msgstr "You can already browse what was seen. Escape stops the analysis."
+msgid "Échap arrête l'analyse."
+msgstr "Escape stops the analysis."
 
 msgctxt "Browse"
 msgid "Analyse arrêtée : tailles partielles. Les dossiers pas encore parcourus ne sont pas comptés."
@@ -1925,8 +1905,8 @@ msgid "Aucun historique n'est tenu : ni XDG_STATE_HOME ni HOME ne sont utilisabl
 msgstr "No history is kept: neither XDG_STATE_HOME nor HOME can be used."
 
 msgctxt "General"
-msgid "Garde dans l'historique ({}), pour chaque nettoyage, la liste des chemins retirés. Quand l'historique dépasse la taille gardée, ses plus anciens nettoyages, désinstallations et mises à jour partent, avec leur liste."
-msgstr "Keeps in the history ({}), for each cleaning, the list of the paths removed. When the history grows beyond the size kept, its oldest cleanings, uninstallations and updates go, lists included."
+msgid "Garde dans l'historique la liste des chemins retirés à chaque nettoyage. Les plus anciennes opérations partent quand l'historique dépasse la taille gardée."
+msgstr "Keeps in the history the list of paths removed at each cleaning. The oldest operations go when the history outgrows the size kept."
 
 msgctxt "General"
 msgid "Journal technique"
@@ -1937,8 +1917,8 @@ msgid "Aucun journal technique n'est tenu : ni XDG_STATE_HOME ni HOME ne sont ut
 msgstr "No technical log is kept: neither XDG_STATE_HOME nor HOME can be used."
 
 msgctxt "General"
-msgid "{} et {}, avec leurs copies .1, dans {}, gardent quelques semaines le détail de chaque lancement, dont les chemins analysés, supprimés ou mis à la corbeille, les applis et vos exclusions. Relisez-les avant de les partager. Le réglage « Journal des suppressions » n'y change rien."
-msgstr "{} and {}, with their .1 copies, in {}, keep for a few weeks the detail of each launch, including the paths analysed, deleted or moved to the trash, the apps and your exclusions. Read them before sharing them. The “Deletion log” setting does not change them."
+msgid "Le détail de chaque lancement, gardé quelques semaines dans {} : chemins, applis, exclusions. Relisez-le avant de le partager."
+msgstr "The details of each launch, kept a few weeks in {}: paths, apps, exclusions. Read them again before you share them."
 
 msgctxt "General"
 msgid "Activé"
@@ -1971,10 +1951,6 @@ msgstr "English"
 msgctxt "General"
 msgid "Thème"
 msgstr "Theme"
-
-msgctxt "General"
-msgid "« Système » suit le thème clair ou sombre du bureau."
-msgstr "“System” follows the desktop's light or dark theme."
 
 msgctxt "General"
 msgid "Clair"
@@ -2181,10 +2157,6 @@ msgid "Okapi lit les mises à jour d'apt (PackageKit) et de snap. Aucun des deux
 msgstr "Okapi reads the updates of apt (PackageKit) and snap. Neither was found here."
 
 msgctxt "Settled"
-msgid "Rien à faire pour le moment."
-msgstr "Nothing to do for now."
-
-msgctxt "Settled"
 msgid "{} : aucune mise à jour"
 msgstr "{}: no update"
 
@@ -2217,10 +2189,6 @@ msgid "recherché {}"
 msgstr "searched {}"
 
 msgctxt "UpdatesPage"
-msgid "Ce qui attend une mise à jour sur cet ordinateur."
-msgstr "What waits for an update on this computer."
-
-msgctxt "UpdatesPage"
 msgid "Rechercher maintenant"
 msgstr "Search now"
 
@@ -2229,8 +2197,8 @@ msgid "Redémarrage attendu"
 msgstr "Restart awaited"
 
 msgctxt "UpdatesPage"
-msgid "Un redémarrage termine des mises à jour déjà installées. Redémarrez quand cela vous arrange."
-msgstr "A restart completes updates already installed. Restart when it suits you."
+msgid "Un redémarrage termine des mises à jour déjà installées."
+msgstr "A restart completes updates already installed."
 
 msgctxt "UpdatesPage"
 msgid "1 paquet"
@@ -2529,8 +2497,8 @@ msgid "Au total : {}"
 msgstr "In all: {}"
 
 msgctxt "Panel"
-msgid "Le système garde {} versions précédentes pour pouvoir revenir en arrière. Elles partent avec l'appli."
-msgstr "The system keeps {} previous versions to be able to go back. They go with the app."
+msgid "{} versions précédentes gardées par le système : elles partent avec l'appli."
+msgstr "{} previous versions kept by the system: they go with the app."
 
 msgctxt "Panel"
 msgid "Désinstaller"
@@ -2757,8 +2725,8 @@ msgid "Effacer la recherche"
 msgstr "Clear the search"
 
 msgctxt "Panel"
-msgid "Le système garde la version précédente pour pouvoir revenir en arrière. Elle part avec l'appli."
-msgstr "The system keeps the previous version to be able to go back. It goes with the app."
+msgid "Version précédente gardée par le système : elle part avec l'appli."
+msgstr "Previous version kept by the system: it goes with the app."
 
 msgctxt "AppWords"
 msgid "{}, {}"
@@ -2945,8 +2913,8 @@ msgid "Doublons"
 msgstr "Duplicates"
 
 msgctxt "DuplicateStart"
-msgid "Trouvez les fichiers identiques, contenu compris, et gardez-en une seule copie. Rien ne part sans votre accord, et tout passe par la corbeille."
-msgstr "Find identical files, content included, and keep a single copy. Nothing goes without your consent, and everything goes through the trash."
+msgid "Trouvez les fichiers identiques, contenu compris. Tout passe par la corbeille."
+msgstr "Find identical files, content included. Everything goes through the trash."
 
 msgctxt "DuplicateStart"
 msgid "Lecture de vos dossiers…"
@@ -2993,8 +2961,8 @@ msgid "Comparaison du contenu"
 msgstr "Comparing the content"
 
 msgctxt "DuplicateSearching"
-msgid "Les groupes s'affichent à la fin de la comparaison. Rien n'est mis à la corbeille pendant la recherche. Échap arrête la recherche."
-msgstr "The groups show at the end of the comparison. Nothing is moved to the trash during the search. Escape stops the search."
+msgid "Les groupes s'affichent à la fin de la comparaison. Échap arrête la recherche."
+msgstr "The groups show at the end of the comparison. Escape stops the search."
 
 msgctxt "DuplicateSearching"
 msgid "Recherche arrêtée. Rien n'a été gardé : une nouvelle recherche repart du début."
@@ -3093,8 +3061,8 @@ msgid "Mettre à la corbeille ?"
 msgstr "Move to the trash?"
 
 msgctxt "DuplicateConfirmation"
-msgid "Dans chaque groupe, au moins une copie reste à sa place (groupes : {}). Juste avant, Okapi vérifie que chaque fichier n'a pas changé depuis la recherche."
-msgstr "In each group, at least one copy stays where it is (groups: {}). Just before, Okapi checks that each file has not changed since the search."
+msgid "Dans chaque groupe, au moins une copie reste à sa place."
+msgstr "In each group, at least one copy stays where it is."
 
 msgctxt "DuplicateConfirmation"
 msgid "Annuler"
@@ -3129,14 +3097,6 @@ msgid "Sélection rapide"
 msgstr "Quick selection"
 
 msgctxt "DuplicateResult"
-msgid "Déjà coché : dans chaque groupe, on garde la copie hors des Téléchargements et du Bureau (sinon celle du Bureau), sinon celle qui a d'autres noms, sinon la plus ancienne, sinon le chemin le plus court. Une copie qui n'est dans aucun de ces dossiers n'est pas cochée d'avance : {}."
-msgstr "Already checked: in each group, the copy outside Downloads and the Desktop is kept (else the one on the Desktop), else the one with other names, else the oldest, else the shortest path. A copy in none of these folders is not checked beforehand: {}."
-
-msgctxt "DuplicateResult"
-msgid "Aucun dossier Documents, Images… connu : rien n'est coché d'avance."
-msgstr "No Documents, Pictures… folder known: nothing is checked beforehand."
-
-msgctxt "DuplicateResult"
 msgid "Tout désélectionner"
 msgstr "Deselect all"
 
@@ -3161,8 +3121,8 @@ msgid "Mise à la corbeille…"
 msgstr "Moving to the trash…"
 
 msgctxt "DuplicateResult"
-msgid "Tout va à la corbeille. La place n'est libérée qu'en vidant la corbeille."
-msgstr "Everything goes to the trash. The space is freed only when the trash is emptied."
+msgid "La place n'est libérée qu'en vidant la corbeille."
+msgstr "The space is freed only when the trash is emptied."
 
 msgctxt "DuplicateResult"
 msgid "Mettre à la corbeille"
@@ -3205,8 +3165,8 @@ msgid "Fichiers : {} ({}). La place ne sera libérée qu'en vidant la corbeille.
 msgstr "Files: {} ({}). The space will be freed only when the trash is emptied."
 
 msgctxt "DuplicateResult"
-msgid "Fichiers d'au moins {} examinés : {}. Chacun n'existe qu'une fois : il n'y a rien à faire ici."
-msgstr "Files of at least {} examined: {}. Each exists only once: there is nothing to do here."
+msgid "Fichiers d'au moins {} examinés : {}."
+msgstr "Files of at least {} examined: {}."
 
 msgctxt "DuplicateReceipt"
 msgid "Mis à la corbeille sans vérification : voyez ci-dessous"
@@ -3533,8 +3493,8 @@ msgid "Données laissées dans votre dossier personnel"
 msgstr "Data left in your home folder"
 
 msgctxt "LeftoversView"
-msgid "Ce que des applis déjà désinstallées ont laissé derrière elles. Rien n'est mis à la corbeille sans votre accord."
-msgstr "What apps already uninstalled left behind. Nothing goes to the trash without your consent."
+msgid "Ce que des applis désinstallées ont laissé derrière elles."
+msgstr "What uninstalled apps left behind."
 
 msgctxt "LeftoversView"
 msgid "Les réglages d'Okapi n'ont pas pu être lus : aucun reste n'est proposé. Le détail est dans le journal."
@@ -3625,16 +3585,12 @@ msgid "Réglages système laissés par {} paquets Ubuntu désinstallés"
 msgstr "System settings left by {} uninstalled Ubuntu packages"
 
 msgctxt "LeftoversView"
-msgid "Une désinstallation simple garde les réglages d'un paquet dans les dossiers du système, au cas où vous le réinstalleriez. Ils ne prennent presque pas de place : Okapi les montre pour information et n'y touche pas."
-msgstr "A plain uninstallation keeps a package's settings in the system's folders, in case you install it again. They take almost no space: Okapi shows them for your information and leaves them alone."
+msgid "Gardés par le système pour une réinstallation. Ils ne prennent presque pas de place, Okapi n'y touche pas."
+msgstr "Kept by the system for a reinstallation. They take almost no space, Okapi leaves them alone."
 
 msgctxt "LeftoversView"
 msgid "Aucun reste trouvé"
 msgstr "No leftover found"
-
-msgctxt "LeftoversView"
-msgid "Les applis désinstallées n'ont rien laissé dans votre dossier personnel."
-msgstr "The uninstalled apps left nothing in your home folder."
 
 msgctxt "CopyRow"
 msgid "Copie automatique de {}, faite {}"
@@ -3689,8 +3645,8 @@ msgid "Copies automatiques gardées par le système"
 msgstr "Automatic copies kept by the system"
 
 msgctxt "LeftoversView"
-msgid "Quand on désinstalle un snap, snapd garde une copie de ses données, pour tous les comptes, et l'efface de lui-même après un temps (31 jours, sauf réglage). L'oublier rend la place tout de suite."
-msgstr "When a snap is uninstalled, snapd keeps a copy of its data, for every account, and erases it by itself after a while (31 days unless set otherwise). Forgetting it gives the space back at once."
+msgid "snapd garde 31 jours (sauf réglage) une copie des données d'un snap désinstallé, pour tous les comptes. L'oublier rend la place tout de suite."
+msgstr "snapd keeps for 31 days (unless set otherwise) a copy of an uninstalled snap's data, for every account. Forgetting it gives the space back at once."
 
 msgctxt "ForgetConfirm"
 msgid "Oublier la copie de {} ?"
@@ -3899,8 +3855,8 @@ msgid "Historique"
 msgstr "History"
 
 msgctxt "HistoryPage"
-msgid "Ce qu'Okapi a nettoyé, désinstallé et mis à jour sur cet ordinateur, le plus récent d'abord. Les plus anciennes opérations partent au-delà de la taille gardée."
-msgstr "What Okapi cleaned, uninstalled and updated on this computer, newest first. The oldest operations go beyond the size kept."
+msgid "Ce qu'Okapi a nettoyé, désinstallé et mis à jour sur cet ordinateur."
+msgstr "What Okapi cleaned, uninstalled and updated on this computer."
 
 msgctxt "HistoryPage"
 msgid "L'historique ne peut pas être lu. Le détail est dans le journal."
@@ -3919,10 +3875,6 @@ msgstr "Reading the history…"
 msgctxt "HistoryPage"
 msgid "Aucune opération pour l'instant"
 msgstr "No operation yet"
-
-msgctxt "HistoryPage"
-msgid "Chaque nettoyage, chaque désinstallation et chaque mise à jour s'ajoutent ici, avec leur reçu."
-msgstr "Each cleaning, each uninstallation and each update is added here, with its receipt."
 
 msgctxt "HistoryWords"
 msgid "Mise à jour"
@@ -4175,8 +4127,8 @@ msgid "Exclusions"
 msgstr "Exclusions"
 
 msgctxt "Exclusions"
-msgid "Okapi ne touche jamais à ce qui est listé ici. Un dossier exclut tout ce qu'il contient ; une extension s'écrit *.ext."
-msgstr "Okapi never touches what is listed here. A folder excludes everything in it; an extension is written *.ext."
+msgid "Okapi ne touche jamais à ce qui est listé ici. Une extension s'écrit *.ext."
+msgstr "Okapi never touches what is listed here. An extension is written *.ext."
 
 msgctxt "Exclusions"
 msgid "Aucune exclusion."
@@ -4207,8 +4159,8 @@ msgid "Dossiers à nettoyer"
 msgstr "Folders to clean"
 
 msgctxt "Folders"
-msgid "À chaque analyse de « Mes dossiers », Okapi propose ce qu'ils contiennent depuis plus longtemps que l'âge minimal, jamais le dossier lui-même. Leurs groupes ne sont jamais cochés d'avance, et ce que vous cochez est supprimé définitivement."
-msgstr "Each time \"My folders\" is analyzed, Okapi offers what they have held for longer than the minimum age, never the folder itself. Their groups are never checked beforehand, and what you check is deleted for good."
+msgid "Proposés à l'analyse de « Mes dossiers », jamais cochés d'avance. Ce que vous cochez est supprimé définitivement, le dossier lui-même jamais."
+msgstr "Offered by the analysis of “My folders”, never checked beforehand. What you check is deleted for good, never the folder itself."
 
 msgctxt "Folders"
 msgid "Aucun dossier à nettoyer."
@@ -4243,8 +4195,8 @@ msgid "Mes dossiers"
 msgstr "My folders"
 
 msgctxt "Words"
-msgid "Les dossiers ajoutés dans Réglages. Rien n'y est coché d'avance."
-msgstr "The folders added in Settings. Nothing in them is checked beforehand."
+msgid "Les dossiers ajoutés dans Réglages."
+msgstr "The folders added in Settings."
 
 msgctxt "ProblemBanner"
 msgid "Un dossier à nettoyer des réglages n'est pas un chemin absolu sans .. : rien ne peut démarrer. Corrigez-le ou retirez-le dans Réglages."
@@ -4489,14 +4441,6 @@ msgid "Ce fichier n'est dans aucun de ces dossiers : {}. Il appartient peut-êtr
 msgstr "This file is in none of these folders: {}. It may belong to an application."
 
 msgctxt "BigWords"
-msgid "Coché : il ira à la corbeille. Vous pourrez l'y reprendre tant que la corbeille n'est pas vidée."
-msgstr "Checked: it will go to the trash. You can take it back from there until the trash is emptied."
-
-msgctxt "BigWords"
-msgid "Rien n'est coché d'avance : cochez seulement ce que vous voulez mettre à la corbeille."
-msgstr "Nothing is checked beforehand: check only what you want to move to the trash."
-
-msgctxt "BigWords"
 msgid "Dans tout le dossier personnel"
 msgstr "In the whole home folder"
 
@@ -4547,8 +4491,8 @@ msgid "Gros fichiers"
 msgstr "Large files"
 
 msgctxt "BigStart"
-msgid "Trouvez les plus gros fichiers de vos dossiers, où qu'ils soient rangés, et choisissez vous-même ceux qui peuvent partir. Rien n'est coché d'avance, et tout passe par la corbeille."
-msgstr "Find the largest files of your folders, wherever they are kept, and choose yourself which can go. Nothing is checked beforehand, and everything goes through the trash."
+msgid "Trouvez les plus gros fichiers de vos dossiers. Rien n'est coché d'avance, et tout passe par la corbeille."
+msgstr "Find the largest files of your folders. Nothing is checked beforehand, and everything goes through the trash."
 
 msgctxt "BigStart"
 msgid "Seuls les fichiers de plus de {} sont listés. Les dossiers cachés (réglages et données des applications), les dossiers de projet, ~/snap et vos exclusions ne sont jamais parcourus : pour voir la place qu'ils prennent, passez par Espace disque."
@@ -4583,8 +4527,8 @@ msgid "Liste des fichiers"
 msgstr "Listing the files"
 
 msgctxt "BigSearching"
-msgid "La liste s'affiche à la fin de la recherche. Rien n'est mis à la corbeille pendant la recherche. Échap arrête la recherche."
-msgstr "The list shows when the search ends. Nothing is moved to the trash during the search. Escape stops the search."
+msgid "La liste s'affiche à la fin de la recherche. Échap arrête la recherche."
+msgstr "The list shows at the end of the search. Escape stops the search."
 
 msgctxt "BigSearching"
 msgid "Recherche arrêtée. Rien n'a été gardé : une liste à moitié faite ne dirait pas quels sont les plus gros."
@@ -4711,10 +4655,6 @@ msgstr[0] "and {n} other"
 msgstr[1] "and {n} others"
 
 msgctxt "BigConfirmation"
-msgid "Juste avant, Okapi vérifie que chaque fichier n'a pas changé depuis la recherche. Un fichier qui a changé reste à sa place."
-msgstr "Just before, Okapi checks that each file has not changed since the search. A file that changed stays where it is."
-
-msgctxt "BigConfirmation"
 msgid "Annuler"
 msgstr "Cancel"
 
@@ -4791,8 +4731,8 @@ msgid "Mise à la corbeille…"
 msgstr "Moving to the trash…"
 
 msgctxt "BigResult"
-msgid "Tout va à la corbeille. La place n'est libérée qu'en vidant la corbeille."
-msgstr "Everything goes to the trash. The space is freed only when the trash is emptied."
+msgid "La place n'est libérée qu'en vidant la corbeille."
+msgstr "The space is freed only when the trash is emptied."
 
 msgctxt "BigResult"
 msgid "Mettre à la corbeille"
@@ -4836,10 +4776,6 @@ msgctxt "KeptCard"
 msgid "Fichiers à revoir : {}"
 msgstr "Files to review: {}"
 
-msgctxt "KeptCard"
-msgid "Chacun dit ce qu'il est devenu, et pourquoi."
-msgstr "Each says what became of it, and why."
-
 msgctxt "BigWords"
 msgid "Modifiés il y a plus de {n} mois"
 msgid_plural "Modifiés il y a plus de {n} mois"
@@ -4853,14 +4789,14 @@ msgstr[0] "The large file found is still there: change the size, the type or the
 msgstr[1] "The {n} large files found are still there: change the size, the type or the date to see them again."
 
 msgctxt "BigResult"
-msgid "Aucun fichier n'a été parcouru dans ces dossiers (dossiers cachés, de projet, autres disques et exclusions mis à part) : il n'y a rien à faire ici."
-msgstr "No file was looked through in these folders (hidden, project and excluded folders and other disks aside): there is nothing to do here."
+msgid "Aucun fichier n'a été parcouru dans ces dossiers (dossiers cachés, de projet, autres disques et exclusions mis à part)."
+msgstr "No file was looked through in these folders (hidden, project folders, other disks and exclusions aside)."
 
 msgctxt "BigResult"
-msgid "Le seul fichier parcouru est petit : il n'y a rien à faire ici."
-msgid_plural "Les {} fichiers parcourus sont tous petits : il n'y a rien à faire ici."
-msgstr[0] "The only file looked through is small: there is nothing to do here."
-msgstr[1] "The {} files looked through are all small: there is nothing to do here."
+msgid "Le seul fichier parcouru est petit."
+msgid_plural "Fichiers parcourus : {}, tous petits."
+msgstr[0] "The only file looked through is small."
+msgstr[1] "Files looked through: {}, all small."
 
 msgctxt "BigConfirmation"
 msgid "et {n} autre, hors des filtres"
@@ -4873,10 +4809,10 @@ msgid "Aucun gros fichier à proposer dans ces dossiers"
 msgstr "No large file to offer in these folders"
 
 msgctxt "BigResult"
-msgid "Le seul fichier parcouru est petit, exclu ou à un autre compte : il n'y a rien à faire ici."
-msgid_plural "Les {} fichiers parcourus sont petits, exclus ou à d'autres comptes : il n'y a rien à faire ici."
-msgstr[0] "The only file looked through is small, excluded or another account's: there is nothing to do here."
-msgstr[1] "The {} files looked through are small, excluded or other accounts': there is nothing to do here."
+msgid "Le seul fichier parcouru est petit, exclu ou à un autre compte."
+msgid_plural "Fichiers parcourus : {}, petits, exclus ou à d'autres comptes."
+msgstr[0] "The only file looked through is small, excluded or another account's."
+msgstr[1] "Files looked through: {}, small, excluded or other accounts'."
 
 msgctxt "DashboardWords"
 msgid "Mises à jour"
@@ -5109,4 +5045,12 @@ msgstr "The data of this version was deleted, for every account."
 msgctxt "PickLine"
 msgid "{}, certains de ses dossiers cochés"
 msgstr "{}, some of its folders checked"
+
+msgctxt "QuickMenu"
+msgid "Déjà coché : dans chaque groupe, on garde la copie hors des Téléchargements et du Bureau (sinon celle du Bureau), sinon celle qui a d'autres noms, sinon la plus ancienne, sinon le chemin le plus court. Une copie qui n'est dans aucun de ces dossiers n'est pas cochée d'avance : {}."
+msgstr "Already checked: in each group, the copy outside Downloads and the Desktop is kept (else the one on the Desktop), else the one with other names, else the oldest, else the shortest path. A copy in none of these folders is not checked beforehand: {}."
+
+msgctxt "QuickMenu"
+msgid "Aucun dossier Documents, Images… connu : rien n'est coché d'avance."
+msgstr "No Documents, Pictures… folder known: nothing is checked beforehand."
 

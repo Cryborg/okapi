@@ -227,7 +227,7 @@ component SettingRow inherits HorizontalLayout {
             // The control reads it.
             accessible-role: none;
         }
-        Detail {
+        if root.description != "": Detail {
             text: root.description;
         }
     }
@@ -501,7 +501,7 @@ component PathListCard inherits Card {
 // What Okapi never touches.
 component Exclusions inherits PathListCard {
     heading: @tr("Exclusions");
-    detail: @tr("Okapi ne touche jamais à ce qui est listé ici. Un dossier exclut tout ce qu'il contient ; une extension s'écrit *.ext.");
+    detail: @tr("Okapi ne touche jamais à ce qui est listé ici. Une extension s'écrit *.ext.");
     empty: @tr("Aucune exclusion.");
     add-label: @tr("Ajouter une exclusion");
     placeholder: @tr("Chemin ou *.ext");
@@ -529,7 +529,7 @@ component Exclusions inherits PathListCard {
 component Folders inherits PathListCard {
     heading: @tr("Dossiers à nettoyer");
     folders-only: true;
-    detail: @tr("À chaque analyse de « Mes dossiers », Okapi propose ce qu'ils contiennent depuis plus longtemps que l'âge minimal, jamais le dossier lui-même. Leurs groupes ne sont jamais cochés d'avance, et ce que vous cochez est supprimé définitivement.");
+    detail: @tr("Proposés à l'analyse de « Mes dossiers », jamais cochés d'avance. Ce que vous cochez est supprimé définitivement, le dossier lui-même jamais.");
     empty: @tr("Aucun dossier à nettoyer.");
     add-label: @tr("Ajouter un dossier à nettoyer");
     placeholder: @tr("Chemin d'un dossier");
@@ -577,7 +577,7 @@ component General inherits Card {
             name: @tr("Journal des suppressions");
             description: Preferences.state-directory == ""
                 ? @tr("Aucun historique n'est tenu : ni XDG_STATE_HOME ni HOME ne sont utilisables.")
-                : @tr("Garde dans l'historique ({}), pour chaque nettoyage, la liste des chemins retirés. Quand l'historique dépasse la taille gardée, ses plus anciens nettoyages, désinstallations et mises à jour partent, avec leur liste.", Preferences.state-directory);
+                : @tr("Garde dans l'historique la liste des chemins retirés à chaque nettoyage. Les plus anciennes opérations partent quand l'historique dépasse la taille gardée.");
             HorizontalLayout {
                 spacing: Theme.spacing-m;
                 Detail {
@@ -602,7 +602,7 @@ component General inherits Card {
             name: @tr("Journal technique");
             description: Preferences.state-directory == ""
                 ? @tr("Aucun journal technique n'est tenu : ni XDG_STATE_HOME ni HOME ne sont utilisables.")
-                : @tr("{} et {}, avec leurs copies .1, dans {}, gardent quelques semaines le détail de chaque lancement, dont les chemins analysés, supprimés ou mis à la corbeille, les applis et vos exclusions. Relisez-les avant de les partager. Le réglage « Journal des suppressions » n'y change rien.", Preferences.app-journal, Preferences.cli-journal, Preferences.state-directory);
+                : @tr("Le détail de chaque lancement, gardé quelques semaines dans {} : chemins, applis, exclusions. Relisez-le avant de le partager.", Preferences.state-directory);
         }
         Separator { }
         SettingRow {
@@ -621,7 +621,6 @@ component General inherits Card {
         Separator { }
         SettingRow {
             name: @tr("Thème");
-            description: @tr("« Système » suit le thème clair ou sombre du bureau.");
             Segmented {
                 label: @tr("Thème");
                 options: [@tr("Système"), @tr("Clair"), @tr("Sombre")];

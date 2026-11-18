@@ -265,7 +265,7 @@ component Start inherits VerticalLayout {
         selected: DiskUsage.choice == -1;
         name: @tr("Dossier personnel");
         badge: @tr("Conseillé");
-        description: @tr("Vos documents, médias, projets et les données de vos applications. C'est là que l'espace part le plus souvent.");
+        description: @tr("Vos documents, médias, projets et les données de vos applications.");
         icon: @image-url("../assets/icons/home.svg");
         chosen => {
             DiskUsage.choice = -1;
@@ -290,7 +290,7 @@ component Start inherits VerticalLayout {
         }
     }
     Detail {
-        text: @tr("Sur un disque entier, certains dossiers système ne s'ouvrent qu'avec les droits administrateur. Leur place apparaîtra comme « espace non expliqué ».");
+        text: @tr("Sur un disque entier, ce que seuls les droits administrateur ouvrent compte dans « espace non expliqué ».");
         wrap: word-wrap;
     }
     Rectangle {
@@ -749,7 +749,7 @@ component Browse inherits FocusScope {
             spacing: Theme.spacing-s;
             Detail {
                 text: DiskUsage.step == DiskStep.opening ? @tr("Ouverture…")
-                    : @tr("Analyse… {} fichiers, {}. Rien n'est supprimé.", DiskUsage.files-seen, Words.size(DiskUsage.seen));
+                    : @tr("Analyse… {} fichiers, {}", DiskUsage.files-seen, Words.size(DiskUsage.seen));
             }
             ProgressBar {
                 indeterminate: !DiskUsage.determinate;
@@ -757,7 +757,7 @@ component Browse inherits FocusScope {
                 label: @tr("Avancement de l'analyse");
             }
             Detail {
-                text: @tr("Vous pouvez déjà parcourir ce qui a été vu. Échap arrête l'analyse.");
+                text: @tr("Échap arrête l'analyse.");
             }
         }
         if DiskUsage.phase == DiskPhase.stopped && !root.running: Banner {

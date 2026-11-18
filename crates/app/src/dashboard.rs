@@ -2306,7 +2306,6 @@ pub mod tests {
         let (seams, _sampler) = directories.seams();
         let window = on_home(seams);
         assert!(shows(&window, "2,4 Go"));
-        // Without "Rien n'a encore été supprimé": that is this session's.
         assert!(
             shows(&window, &format!("{estimate}. Éléments trouvés : 18312.")),
             "{estimate}"
@@ -2509,7 +2508,7 @@ pub mod tests {
         assert!(shows(
             &window,
             &format!(
-                "Estimation d'aujourd'hui à {}. Éléments trouvés : 1. Rien n'a encore été supprimé.",
+                "Estimation d'aujourd'hui à {}. Éléments trouvés : 1.",
                 utc_clock(kept.time)
             )
         ));

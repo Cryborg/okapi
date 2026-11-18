@@ -1605,8 +1605,6 @@ fn settings(window: &ui::AppWindow) {
     preferences.set_save_refused(ui::SaveRefusal::ChangedElsewhere);
     preferences.set_state_directory("~/.local/state/okapi".into());
     preferences.set_settings_file("~/.config/okapi/settings.json".into());
-    preferences.set_app_journal(okapi_store::journal::APP_FILE.into());
-    preferences.set_cli_journal(okapi_store::journal::CLI_FILE.into());
     preferences.set_min_age_options(ModelRc::new(VecModel::from(vec![
         "30 min".into(),
         "1 h".into(),
@@ -2011,6 +2009,8 @@ enum DuplicateScene {
     Result,
     Empty,
     Confirm,
+    // The quick selections' menu open over the groups.
+    Quick,
 }
 
 impl DuplicateScene {
@@ -2021,6 +2021,7 @@ impl DuplicateScene {
             "duplicates-result" => Self::Result,
             "duplicates-empty" => Self::Empty,
             "duplicates-confirm" => Self::Confirm,
+            "duplicates-quick" => Self::Quick,
             _ => return None,
         })
     }
@@ -2160,6 +2161,28 @@ fn duplicates(window: &ui::AppWindow, scene: DuplicateScene, language: Language)
     duplicates.set_chosen_files(3);
     duplicates.set_chosen_groups(2);
     duplicates.set_confirming(scene == DuplicateScene::Confirm);
+    if scene == DuplicateScene::Quick {
+        // Opened as by its button, once the page is laid out at its size.
+        window
+            .window()
+            .set_size(PhysicalSize::new(LARGE.0, LARGE.1));
+        window.show().unwrap();
+        slint::platform::update_timers_and_animations();
+        i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+            window,
+            "Sélection rapide",
+        )
+        .chain(
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+                window,
+                "Quick selection",
+            ),
+        )
+        .next()
+        .unwrap()
+        .invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+    }
 }
 
 /// The large files screen at `scene`.
@@ -2254,7 +2277,7 @@ fn reading_scene(app: &ui::AppWindow, screen: &str, language: Language) {
             app.global::<ui::OldVersions>().set_finding(true);
         }
         other => panic!(
-            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, results-sorted, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, groups-closed, groups-closed-small, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-start-reading, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-reading, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, apps-leftovers-reading, apps-old-versions, apps-old-versions-confirm, apps-old-versions-reading, settings, settings-trash, history, history-small, history-update, history-empty, history-reading, large-start, large-start-reading, large-searching, large-stopped, large-result, large-smallest, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-start, duplicates-start-reading, duplicates-start-home, duplicates-result, duplicates-empty, duplicates-confirm (each also -small)"
+            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, results-sorted, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, groups-closed, groups-closed-small, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-start-reading, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-reading, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, apps-leftovers-reading, apps-old-versions, apps-old-versions-confirm, apps-old-versions-reading, settings, settings-trash, history, history-small, history-update, history-empty, history-reading, large-start, large-start-reading, large-searching, large-stopped, large-result, large-smallest, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-start, duplicates-start-reading, duplicates-start-home, duplicates-result, duplicates-empty, duplicates-confirm, duplicates-quick (each also -small)"
         ),
     }
 }

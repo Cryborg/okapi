@@ -519,7 +519,7 @@ fn the_sidebar_leads_to_the_history() {
     slint::platform::update_timers_and_animations();
     assert!(shows(
         &window,
-        "Ce qu'Okapi a nettoyé, désinstallé et mis à jour sur cet ordinateur, le plus récent d'abord. Les plus anciennes opérations partent au-delà de la taille gardée."
+        "Ce qu'Okapi a nettoyé, désinstallé et mis à jour sur cet ordinateur."
     ));
 }
 

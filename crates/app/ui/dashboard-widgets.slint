@@ -677,10 +677,9 @@ export component ReclaimableWidget inherits WidgetCard {
         : shown.state != ReclaimableState.cleaned ? Words.size(shown.size)
         : shown.freed-known ? @tr("{} libérés", Words.size(shown.freed)) : @tr("Estimation à refaire");
     property <string> detail: scanning ? (has-size && Cleaner.replaces-estimate ? @tr("Le résultat remplacera l'estimation précédente ({}).", Words.size(shown.size)) : "")
-        : shown.state == ReclaimableState.none ? @tr("Lancez une analyse pour savoir combien d'espace vous pouvez récupérer. Rien n'est supprimé sans votre accord.")
-        : shown.state == ReclaimableState.estimate ? @tr("{}. Éléments trouvés : {}.", DashboardWords.estimate(shown.at), shown.entries)
-        : shown.state == ReclaimableState.current && full ? @tr("{}. Éléments trouvés : {}. Rien n'a encore été supprimé.", DashboardWords.estimate(shown.at), shown.entries)
-        : shown.state == ReclaimableState.current ? @tr("Éléments trouvés : {}. Rien n'a encore été supprimé.", shown.entries)
+        : shown.state == ReclaimableState.none ? @tr("Lancez une analyse pour savoir combien d'espace vous pouvez récupérer.")
+        : shown.state == ReclaimableState.estimate || (shown.state == ReclaimableState.current && full) ? @tr("{}. Éléments trouvés : {}.", DashboardWords.estimate(shown.at), shown.entries)
+        : shown.state == ReclaimableState.current ? @tr("Éléments trouvés : {}.", shown.entries)
         : shown.cleaned-at-known ? @tr("{} Analysez à nouveau pour une estimation à jour.", DashboardWords.cleaning(shown.cleaned-at))
         : @tr("L'estimation date d'avant un changement sur le système (un nettoyage, une désinstallation, une mise à jour). Analysez à nouveau pour une estimation à jour.");
 

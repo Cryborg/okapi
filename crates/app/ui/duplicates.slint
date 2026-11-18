@@ -151,7 +151,7 @@ component DuplicateStart inherits VerticalLayout {
             loading-text: @tr("Lecture de vos dossiers…");
         }
         Detail {
-            text: @tr("Trouvez les fichiers identiques, contenu compris, et gardez-en une seule copie. Rien ne part sans votre accord, et tout passe par la corbeille.");
+            text: @tr("Trouvez les fichiers identiques, contenu compris. Tout passe par la corbeille.");
         }
     }
     if Duplicates.refused != ToolRefusal.none: RefusalBanner {
@@ -271,7 +271,7 @@ component DuplicateSearching inherits FocusScope {
             }
         }
         if root.running: Detail {
-            text: @tr("Les groupes s'affichent à la fin de la comparaison. Rien n'est mis à la corbeille pendant la recherche. Échap arrête la recherche.");
+            text: @tr("Les groupes s'affichent à la fin de la comparaison. Échap arrête la recherche.");
             wrap: word-wrap;
         }
         // Where the groups will show: shapes, never read.
@@ -707,7 +707,8 @@ component DuplicatePanel inherits Card {
 }
 
 // The quick selections: a rule for every group, or the folder whose copies
-// are kept. A menu, closed by a choice, Escape or a click outside.
+// are kept, under what is checked already; the words on the left, as in a
+// menu. Closed by a choice, Escape or a click outside.
 component QuickMenu inherits PopupWindow {
     property <bool> by-folder;
     // A click within it chooses, or opens the folders: it stays open then.
@@ -722,12 +723,22 @@ component QuickMenu inherits PopupWindow {
         drop-shadow-offset-y: Theme.shadow-1-offset;
         VerticalLayout {
             padding: Theme.spacing-xs;
+            // What the rule checked already, above the other rules.
+            if !root.by-folder: VerticalLayout {
+                padding: Theme.spacing-s;
+                Detail {
+                    width: Theme.quick-menu-note-width;
+                    text: Duplicates.rule-said ? @tr("Déjà coché : dans chaque groupe, on garde la copie hors des Téléchargements et du Bureau (sinon celle du Bureau), sinon celle qui a d'autres noms, sinon la plus ancienne, sinon le chemin le plus court. Une copie qui n'est dans aucun de ces dossiers n'est pas cochée d'avance : {}.", Duplicates.folder-names)
+                        : @tr("Aucun dossier Documents, Images… connu : rien n'est coché d'avance.");
+                }
+            }
             if !root.by-folder: ActionButton {
                 init => {
                     self.focus();
                 }
                 text: @tr("Garder la plus ancienne");
                 kind: ButtonKind.ghost;
+                wrapped: true;
                 clicked => {
                     Duplicates.quick(QuickRule.oldest, -1);
                     root.close();
@@ -736,6 +747,7 @@ component QuickMenu inherits PopupWindow {
             if !root.by-folder: ActionButton {
                 text: @tr("Garder la plus récente");
                 kind: ButtonKind.ghost;
+                wrapped: true;
                 clicked => {
                     Duplicates.quick(QuickRule.newest, -1);
                     root.close();
@@ -744,6 +756,7 @@ component QuickMenu inherits PopupWindow {
             if !root.by-folder: ActionButton {
                 text: @tr("Garder le chemin le plus court");
                 kind: ButtonKind.ghost;
+                wrapped: true;
                 clicked => {
                     Duplicates.quick(QuickRule.shortest, -1);
                     root.close();
@@ -753,6 +766,7 @@ component QuickMenu inherits PopupWindow {
                 text: @tr("Garder celles d'un dossier…");
                 icon: @image-url("../assets/icons/folder.svg");
                 kind: ButtonKind.ghost;
+                wrapped: true;
                 clicked => {
                     root.by-folder = true;
                 }
@@ -766,6 +780,7 @@ component QuickMenu inherits PopupWindow {
                 text: @tr("Garder celles de {}", name);
                 icon: @image-url("../assets/icons/folder.svg");
                 kind: ButtonKind.ghost;
+                wrapped: true;
                 clicked => {
                     Duplicates.quick(QuickRule.folder, index);
                     root.close();
@@ -775,10 +790,9 @@ component QuickMenu inherits PopupWindow {
     }
 }
 
-// The confirmation: what goes, that a copy of each group stays, that each
-// file is checked again. The focus on « Annuler »: two Enter in a row never
-// move hundreds of files. Closed by its buttons or Escape, never by a click
-// outside.
+// The confirmation: what goes, and that a copy of each group stays. The
+// focus on « Annuler »: two Enter in a row never move hundreds of files.
+// Closed by its buttons or Escape, never by a click outside.
 component DuplicateConfirmation inherits ModalFrame {
     label: title.text;
     init => {
@@ -812,7 +826,7 @@ component DuplicateConfirmation inherits ModalFrame {
         color: Theme.text;
     }
     Detail {
-        text: @tr("Dans chaque groupe, au moins une copie reste à sa place (groupes : {}). Juste avant, Okapi vérifie que chaque fichier n'a pas changé depuis la recherche.", Duplicates.chosen-groups);
+        text: @tr("Dans chaque groupe, au moins une copie reste à sa place.");
     }
     HorizontalLayout {
         alignment: end;
@@ -921,12 +935,8 @@ component DuplicateResult inherits VerticalLayout {
                     menu.show();
                 }
             }
-            Detail {
+            Rectangle {
                 horizontal-stretch: 1;
-                vertical-alignment: center;
-                text: Duplicates.rule-said ? @tr("Déjà coché : dans chaque groupe, on garde la copie hors des Téléchargements et du Bureau (sinon celle du Bureau), sinon celle qui a d'autres noms, sinon la plus ancienne, sinon le chemin le plus court. Une copie qui n'est dans aucun de ces dossiers n'est pas cochée d'avance : {}.", Duplicates.folder-names)
-                    : @tr("Aucun dossier Documents, Images… connu : rien n'est coché d'avance.");
-                wrap: word-wrap;
             }
             ActionButton {
                 text: @tr("Tout désélectionner");
@@ -955,7 +965,7 @@ component DuplicateResult inherits VerticalLayout {
             icon: @image-url("../assets/icons/circle-check.svg");
             success: true;
             title: @tr("Aucun doublon dans ces dossiers");
-            text: @tr("Fichiers d'au moins {} examinés : {}. Chacun n'existe qu'une fois : il n'y a rien à faire ici.", Words.size(Duplicates.min-size), Duplicates.compared);
+            text: @tr("Fichiers d'au moins {} examinés : {}.", Words.size(Duplicates.min-size), Duplicates.compared);
             action: @tr("Chercher dans d'autres dossiers");
             action-icon: @image-url("../assets/icons/folder.svg");
             acted => {
@@ -991,7 +1001,7 @@ component DuplicateResult inherits VerticalLayout {
                 }
                 Detail {
                     text: Duplicates.trashing ? @tr("Mise à la corbeille…")
-                        : @tr("Tout va à la corbeille. La place n'est libérée qu'en vidant la corbeille.");
+                        : @tr("La place n'est libérée qu'en vidant la corbeille.");
                     accessible-live-region: polite;
                     overflow: elide;
                 }

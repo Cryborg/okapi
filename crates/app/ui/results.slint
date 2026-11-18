@@ -46,7 +46,7 @@ component RightsBanner inherits Rectangle {
                 ? @tr("Annulation de la demande des droits : elle prend effet une fois la fenêtre du système fermée.")
                 : Cleaner.rights-problem != RightsProblem.none
                 ? @tr("{} Groupes qui les demandent toujours : {}.", Words.rights(Cleaner.rights-problem), Cleaner.rights-waiting)
-                : @tr("Certaines opérations demandent les droits administrateur. Groupes ci-dessous : {}.", Cleaner.rights-waiting);
+                : @tr("Groupes qui demandent les droits administrateur : {}.", Cleaner.rights-waiting);
         }
         if Cleaner.rights-step == RightsStep.idle: ActionButton {
             text: @tr("Obtenir les droits");
@@ -151,9 +151,9 @@ component ResultLine inherits VerticalLayout {
         ? @tr("Hors de portée de l'assistant administrateur.")
         : line.note == RowNote.unseen
         ? @tr("Illisible sans les droits administrateur : « Obtenir les droits » ci-dessus.")
-        : line.note == RowNote.unmeasured
-        ? @tr("Se mesure avec les droits administrateur : « Obtenir les droits » ci-dessus.")
-        : @tr("Demande les droits administrateur : « Obtenir les droits » ci-dessus.");
+        // The badge and the banner above say what an administrator's group
+        // waits for: nothing more beside it.
+        : "";
     // What it holds is unknown until root's scan; never measured for a
     // maintenance Okapi does not run.
     property <bool> unmeasured: line.note == RowNote.unseen || line.note == RowNote.unmeasured
@@ -211,6 +211,7 @@ component ResultLine inherits VerticalLayout {
                             : !root.is-group ? (line.enabled ? "" : @tr("À choisir groupe par groupe"))
                             : line.badge == ResultBadge.preselected ? root.badge-text
                             : line.badge == ResultBadge.to-choose ? root.note
+                            : root.note == "" ? root.badge-text
                             : @tr("{} : {}", root.badge-text, root.note);
                         accessible-action-default => {
                             if line.enabled {
@@ -315,7 +316,7 @@ component ResultLine inherits VerticalLayout {
                             icon: @image-url("../assets/icons/folder.svg");
                             tone: Theme.text-2;
                         }
-                        if line.badge == ResultBadge.admin: Detail {
+                        if line.badge == ResultBadge.admin && root.note != "": Detail {
                             text: root.note;
                             accessible-role: none;
                         }

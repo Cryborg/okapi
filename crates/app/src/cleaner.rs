@@ -3292,10 +3292,7 @@ pub mod tests {
                 (ui::CategoryKind::Gaming, ui::RowState::Done),
             ]
         );
-        assert!(shows(
-            &window,
-            "Catégories terminées : 3 sur 4. Rien n'est supprimé pendant l'analyse."
-        ));
+        assert!(shows(&window, "Catégories terminées : 3 sur 4."));
         assert!(window.global::<ui::Cleaner>().get_progress().abs() < f32::EPSILON);
 
         scan.go.send(()).unwrap();

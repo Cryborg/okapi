@@ -512,17 +512,17 @@ fn the_minimum_age_is_one_of_four_the_default_among_them() {
 }
 
 #[test]
-fn the_deletion_log_is_switched_and_says_where_it_goes() {
+fn the_deletion_log_is_switched_and_the_journal_says_where_it_is() {
     let sandbox = Sandbox::new();
     let (window, screens) = sandbox.window();
     assert!(shows(
         &window,
-        "Garde dans l'historique (~/.local/state/okapi), pour chaque nettoyage, la liste des chemins retirés. Quand l'historique dépasse la taille gardée, ses plus anciens nettoyages, désinstallations et mises à jour partent, avec leur liste."
+        "Garde dans l'historique la liste des chemins retirés à chaque nettoyage. Les plus anciennes opérations partent quand l'historique dépasse la taille gardée."
     ));
     // The journal is not it, and says what it holds.
     assert!(shows(
         &window,
-        "okapi-app.log et okapi.log, avec leurs copies .1, dans ~/.local/state/okapi, gardent quelques semaines le détail de chaque lancement, dont les chemins analysés, supprimés ou mis à la corbeille, les applis et vos exclusions. Relisez-les avant de les partager. Le réglage « Journal des suppressions » n'y change rien."
+        "Le détail de chaque lancement, gardé quelques semaines dans ~/.local/state/okapi : chemins, applis, exclusions. Relisez-le avant de le partager."
     ));
     let switch = || {
         ElementHandle::find_by_accessible_label(&window, "Journal des suppressions")

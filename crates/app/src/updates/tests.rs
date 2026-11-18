@@ -874,7 +874,7 @@ fn a_restart_awaited_is_said_with_its_packages() {
     read(&window);
     assert!(shows(
         &window,
-        "Un redémarrage termine des mises à jour déjà installées. Redémarrez quand cela vous arrange."
+        "Un redémarrage termine des mises à jour déjà installées."
     ));
     let fold = button(&window, "2 paquets");
     assert!(!shows(&window, "libc6"), "folded");

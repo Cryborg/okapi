@@ -141,7 +141,8 @@ global BigWords {
         return @tr("{}, {}, modifié {}, {}, {}, {}", row.name, row.full-folder, DashboardWords.moment(row.modified), Words.size(row.size), kind(row.kind), fate);
     }
 
-    // What the panel notes of the file with the focus.
+    // What the panel notes of the file with the focus, beyond its badge:
+    // nothing for a file free to go.
     pure public function note(row: LargeFileRow) -> string {
         if row.why == LargeWhy.other-names {
             return @tr("Ce fichier a d'autres noms : le retirer ne libérerait rien, son contenu reste sous ses autres noms.");
@@ -152,10 +153,7 @@ global BigWords {
         if row.outside {
             return @tr("Ce fichier n'est dans aucun de ces dossiers : {}. Il appartient peut-être à une application.", LargeFiles.folder-names);
         }
-        if row.checked {
-            return @tr("Coché : il ira à la corbeille. Vous pourrez l'y reprendre tant que la corbeille n'est pas vidée.");
-        }
-        return @tr("Rien n'est coché d'avance : cochez seulement ce que vous voulez mettre à la corbeille.");
+        return "";
     }
 
     // Where the search looks.
@@ -214,7 +212,7 @@ component BigStart inherits VerticalLayout {
             loading-text: @tr("Lecture de vos dossiers…");
         }
         Detail {
-            text: @tr("Trouvez les plus gros fichiers de vos dossiers, où qu'ils soient rangés, et choisissez vous-même ceux qui peuvent partir. Rien n'est coché d'avance, et tout passe par la corbeille.");
+            text: @tr("Trouvez les plus gros fichiers de vos dossiers. Rien n'est coché d'avance, et tout passe par la corbeille.");
             wrap: word-wrap;
         }
     }
@@ -355,7 +353,7 @@ component BigSearching inherits FocusScope {
             }
         }
         if root.running: Detail {
-            text: @tr("La liste s'affiche à la fin de la recherche. Rien n'est mis à la corbeille pendant la recherche. Échap arrête la recherche.");
+            text: @tr("La liste s'affiche à la fin de la recherche. Échap arrête la recherche.");
             wrap: word-wrap;
         }
         if root.running: Card {
@@ -1014,7 +1012,8 @@ component BigPanel inherits Card {
                 wrap: word-wrap;
             }
         }
-        Rectangle {
+        // Only when there is more to know than the badge says.
+        if BigWords.note(root.line) != "": Rectangle {
             background: Theme.surface-2;
             border-radius: Theme.radius-medium;
             HorizontalLayout {
@@ -1099,7 +1098,7 @@ component BigChosenLine inherits Rectangle {
     }
 }
 
-// The confirmation: what goes, named, and that each file is checked again.
+// The confirmation: what goes, named.
 // The focus on « Annuler »: two Enter in a row never move what was not
 // meant to. Closed by its buttons or Escape, never by a click outside.
 component BigConfirmation inherits ModalFrame {
@@ -1152,10 +1151,6 @@ component BigConfirmation inherits ModalFrame {
                 }
             }
         }
-    }
-    Detail {
-        text: @tr("Juste avant, Okapi vérifie que chaque fichier n'a pas changé depuis la recherche. Un fichier qui a changé reste à sa place.");
-        wrap: word-wrap;
     }
     HorizontalLayout {
         alignment: end;
@@ -1357,9 +1352,9 @@ component BigResult inherits VerticalLayout {
             success: true;
             title: LargeFiles.all-small ? @tr("Aucun fichier de plus de {} dans ces dossiers", Words.size(LargeFiles.min-size))
                 : @tr("Aucun gros fichier à proposer dans ces dossiers");
-            text: LargeFiles.walked-count == 0 ? @tr("Aucun fichier n'a été parcouru dans ces dossiers (dossiers cachés, de projet, autres disques et exclusions mis à part) : il n'y a rien à faire ici.")
-                : LargeFiles.all-small ? @tr("Le seul fichier parcouru est petit : il n'y a rien à faire ici." | "Les {} fichiers parcourus sont tous petits : il n'y a rien à faire ici." % LargeFiles.walked-count, LargeFiles.walked)
-                : @tr("Le seul fichier parcouru est petit, exclu ou à un autre compte : il n'y a rien à faire ici." | "Les {} fichiers parcourus sont petits, exclus ou à d'autres comptes : il n'y a rien à faire ici." % LargeFiles.walked-count, LargeFiles.walked);
+            text: LargeFiles.walked-count == 0 ? @tr("Aucun fichier n'a été parcouru dans ces dossiers (dossiers cachés, de projet, autres disques et exclusions mis à part).")
+                : LargeFiles.all-small ? @tr("Le seul fichier parcouru est petit." | "Fichiers parcourus : {}, tous petits." % LargeFiles.walked-count, LargeFiles.walked)
+                : @tr("Le seul fichier parcouru est petit, exclu ou à un autre compte." | "Fichiers parcourus : {}, petits, exclus ou à d'autres comptes." % LargeFiles.walked-count, LargeFiles.walked);
             action: @tr("Chercher dans d'autres dossiers");
             action-icon: @image-url("../assets/icons/folder.svg");
             acted => {
@@ -1396,7 +1391,7 @@ component BigResult inherits VerticalLayout {
                 }
                 Detail {
                     text: LargeFiles.trashing ? @tr("Mise à la corbeille…")
-                        : @tr("Tout va à la corbeille. La place n'est libérée qu'en vidant la corbeille.");
+                        : @tr("La place n'est libérée qu'en vidant la corbeille.");
                     accessible-live-region: polite;
                     overflow: elide;
                 }

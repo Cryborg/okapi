@@ -3569,10 +3569,6 @@ mod tests {
                 && !description.contains('{'),
             "the helper's limits shown: {description}"
         );
-        assert!(shows(
-            &window,
-            "Se mesure avec les droits administrateur : « Obtenir les droits » ci-dessus."
-        ));
 
         obtain_rights(&window);
         let (_, request) = asked.lock().unwrap()[0].clone();

@@ -27,7 +27,7 @@ use okapi_engine::{
     CustomFolder, CustomFolderRefusal, DEFAULT_MIN_AGE_MINUTES, ExclusionError, Exclusions,
 };
 use okapi_rules::Language;
-use okapi_store::{Replaced, Settings, Theme, journal};
+use okapi_store::{Replaced, Settings, Theme};
 use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 
 use crate::saving::{LastWrite, Saver, WRITE_CHECK};
@@ -406,8 +406,6 @@ impl SettingsScreen {
         };
         preferences.set_state_directory(path_shown(seams.state_directory.clone()));
         preferences.set_settings_file(path_shown(seams.directory.as_deref().map(Settings::path)));
-        preferences.set_app_journal(journal::APP_FILE.into());
-        preferences.set_cli_journal(journal::CLI_FILE.into());
         let screen = Self(Rc::new(RefCell::new(State {
             window: window.as_weak(),
             seams,

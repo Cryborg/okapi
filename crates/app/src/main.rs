@@ -1461,4 +1461,53 @@ mod tests {
         updates.set_install_step(ui::InstallStep::Verifying);
         assert!(!reads(&window, "Téléchargement des listes de paquets…"));
     }
+
+    #[test]
+    fn a_receipt_adds_a_word_only_when_nothing_or_not_all_went() {
+        let window = bare_on(Page::Cleaner);
+        let cleaner = window.global::<ui::Cleaner>();
+        cleaner.set_step(ui::CleanerStep::Receipt);
+        cleaner.set_ending(ui::CleanEnding::Done);
+        cleaner.set_removed(3);
+        let none = "Rien n'a été retiré : le détail par résultat est ci-dessous.";
+        assert!(!reads(&window, none));
+        cleaner.set_removed(0);
+        assert!(reads(&window, none));
+        // Some removed in part: something went.
+        cleaner.set_partial(2);
+        assert!(!reads(&window, none));
+        cleaner.set_partial(0);
+        cleaner.set_removed(3);
+        cleaner.set_ending(ui::CleanEnding::Cancelled);
+        assert!(reads(
+            &window,
+            "Ce qui n'était pas encore retiré est resté."
+        ));
+    }
+
+    #[test]
+    fn the_large_files_panel_notes_only_what_the_badge_does_not_say() {
+        let window = bare_on(Page::LargeFiles);
+        let large = window.global::<ui::LargeFiles>();
+        large.set_folder_names("Documents, Images".into());
+        let free = ui::LargeFileRow {
+            name: "a.iso".into(),
+            ..ui::LargeFileRow::default()
+        };
+        let outside = ui::LargeFileRow {
+            name: "b.vdi".into(),
+            outside: true,
+            ..ui::LargeFileRow::default()
+        };
+        large.set_rows(slint::ModelRc::new(slint::VecModel::from(vec![
+            free, outside,
+        ])));
+        large.set_files(2);
+        large.set_step(ui::ToolStep::Result);
+        let note = "Ce fichier n'est dans aucun de ces dossiers : Documents, Images. Il appartient peut-être à une application.";
+        large.set_current(1);
+        assert!(reads(&window, note));
+        large.set_current(0);
+        assert!(!reads(&window, note));
+    }
 }

@@ -581,7 +581,7 @@ export component HistoryPage inherits VerticalLayout {
             loading-text: @tr("Lecture de l'historique…");
         }
         Detail {
-            text: @tr("Ce qu'Okapi a nettoyé, désinstallé et mis à jour sur cet ordinateur, le plus récent d'abord. Les plus anciennes opérations partent au-delà de la taille gardée.");
+            text: @tr("Ce qu'Okapi a nettoyé, désinstallé et mis à jour sur cet ordinateur.");
         }
     }
     if History.reading == HistoryReading.unreadable: Banner {
@@ -613,10 +613,6 @@ export component HistoryPage inherits VerticalLayout {
             }
             Line {
                 text: @tr("Aucune opération pour l'instant");
-                horizontal-alignment: center;
-            }
-            Detail {
-                text: @tr("Chaque nettoyage, chaque désinstallation et chaque mise à jour s'ajoutent ici, avec leur reçu.");
                 horizontal-alignment: center;
             }
         }

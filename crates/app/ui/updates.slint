@@ -537,9 +537,8 @@ component Settled inherits Card {
             accessible-role: text;
             accessible-live-region: polite;
         }
-        Detail {
-            text: root.no-source ? @tr("Okapi lit les mises à jour d'apt (PackageKit) et de snap. Aucun des deux n'a été trouvé ici.")
-                : @tr("Rien à faire pour le moment.");
+        if root.no-source: Detail {
+            text: @tr("Okapi lit les mises à jour d'apt (PackageKit) et de snap. Aucun des deux n'a été trouvé ici.");
             horizontal-alignment: center;
         }
         if !root.no-source: VerticalLayout {
@@ -856,8 +855,9 @@ export component UpdatesPage inherits VerticalLayout {
                         wrap: no-wrap;
                         overflow: elide;
                     }
+                    // Nothing to say yet: the line keeps its room.
                     if !root.read && !(root.searching && Updates.previous-shown): Detail {
-                        text: @tr("Ce qui attend une mise à jour sur cet ordinateur.");
+                        accessible-role: none;
                     }
                 }
                 ActionButton {
@@ -891,7 +891,7 @@ export component UpdatesPage inherits VerticalLayout {
                         }
                         Line {
                             horizontal-stretch: 1;
-                            text: @tr("Un redémarrage termine des mises à jour déjà installées. Redémarrez quand cela vous arrange.");
+                            text: @tr("Un redémarrage termine des mises à jour déjà installées.");
                             vertical-alignment: center;
                         }
                         if Updates.reboot-packages.length > 0: FoldHead {

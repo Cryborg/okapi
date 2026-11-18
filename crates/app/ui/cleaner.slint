@@ -142,7 +142,7 @@ component Choosing inherits VerticalLayout {
                 text: @tr("Nettoyeur");
             }
             Detail {
-                text: @tr("Choisissez ce qu'Okapi doit regarder. L'analyse ne supprime rien : vous décidez ensuite.");
+                text: @tr("L'analyse ne supprime rien : vous choisissez ensuite.");
             }
         }
         if Cleaner.problem != SetupProblem.none: ProblemBanner { }
@@ -303,7 +303,7 @@ component Scanning inherits VerticalLayout {
                         : @tr("Analyse en cours");
                 }
                 Detail {
-                    text: @tr("Catégories terminées : {} sur {}. Rien n'est supprimé pendant l'analyse.", Cleaner.rows-done, Cleaner.rows.length);
+                    text: @tr("Catégories terminées : {} sur {}.", Cleaner.rows-done, Cleaner.rows.length);
                     accessible-live-region: polite;
                 }
             }
@@ -433,7 +433,7 @@ component Ended inherits VerticalLayout {
                     : Cleaner.outcome == OutcomeKind.nothing-to-clean
                     ? @tr("Okapi a regardé les catégories choisies et n'a rien trouvé de récupérable. Les fichiers récents et vos exclusions ont été laissés de côté, comme toujours.")
                     : Cleaner.outcome == OutcomeKind.nothing-looked
-                    ? @tr("L'analyse s'est arrêtée avant de commencer. Aucun fichier n'a été lu ni modifié : ce n'est pas la même chose que « rien à nettoyer ».")
+                    ? @tr("L'analyse s'est arrêtée avant de commencer : aucun fichier n'a été lu ni modifié.")
                     : @tr("L'analyse s'est interrompue sans résultat. Rien n'a été supprimé. Le détail est dans le journal.");
             }
             if Cleaner.outcome == OutcomeKind.nothing-to-clean && Cleaner.issues > 0: Detail {

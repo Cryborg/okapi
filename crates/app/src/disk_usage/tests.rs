@@ -910,8 +910,10 @@ fn a_partial_size_is_said_at_least_once_the_analysis_stopped() {
     disk(&window).set_lines(ModelRc::new(VecModel::from(vec![partial])));
     disk(&window).set_phase(ui::DiskPhase::Running);
     slint::platform::update_timers_and_animations();
-    // Running: its icon says it grows.
+    let stopped = "Analyse arrêtée : tailles partielles. Les dossiers pas encore parcourus ne sont pas comptés.";
+    // Running: its icon says it grows, no banner.
     assert!(shows(&window, "En cours, la taille va encore grandir"));
+    assert!(!shows(&window, stopped));
     disk(&window).set_phase(ui::DiskPhase::Stopped);
     slint::platform::update_timers_and_animations();
     // Stopped: no icon, the banner says it for the screen and « au moins »
@@ -922,10 +924,7 @@ fn a_partial_size_is_said_at_least_once_the_analysis_stopped() {
         &window,
         "Taille partielle : l'analyse a été arrêtée"
     ));
-    assert!(shows(
-        &window,
-        "Analyse arrêtée : tailles partielles. Les dossiers pas encore parcourus ne sont pas comptés."
-    ));
+    assert!(shows(&window, stopped));
     assert!(
         ElementHandle::find_by_element_type_name(&window, "Row")
             .filter_map(|row| row.accessible_label())

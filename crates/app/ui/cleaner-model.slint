@@ -8,8 +8,6 @@ export enum CategoryKind { system, browsers, apps, gaming, gpu, custom }
 export struct CategoryChoice {
     kind: CategoryKind,
     checked: bool,
-    // None of its rules is chosen by default: cache resets (invariant 5).
-    to-choose: bool,
 }
 
 // Why an analysis or a cleaning cannot start; the detail is in the journal.

@@ -621,19 +621,15 @@ fn steps(steps: &[(ui::CleanStepKind, ui::RowState, i32, i32)]) -> ModelRc<ui::C
 /// The categories, before the analysis.
 fn choosing(window: &ui::AppWindow) {
     use ui::CategoryKind::{Apps, Browsers, Custom, Gaming, Gpu, System};
-    let choice = |kind, checked, to_choose| ui::CategoryChoice {
-        kind,
-        checked,
-        to_choose,
-    };
+    let choice = |kind, checked| ui::CategoryChoice { kind, checked };
     let cleaner = window.global::<ui::Cleaner>();
     cleaner.set_choices(ModelRc::new(VecModel::from(vec![
-        choice(System, true, false),
-        choice(Browsers, true, false),
-        choice(Apps, true, false),
-        choice(Gaming, true, false),
-        choice(Gpu, false, true),
-        choice(Custom, false, false),
+        choice(System, true),
+        choice(Browsers, true),
+        choice(Apps, true),
+        choice(Gaming, true),
+        choice(Gpu, false),
+        choice(Custom, false),
     ])));
     cleaner.set_chosen_count(4);
     cleaner.set_min_age_minutes(60);

@@ -2,7 +2,7 @@
 // it ended. Rust keeps the state (src/cleaner.rs): this file draws it.
 import { Theme, Screen } from "theme.slint";
 import {
-    ActionButton, ButtonKind, Card, CheckMark, Detail, Footer, FocusRing, Icon, IconNote,
+    ActionButton, ButtonKind, Card, CheckMark, Detail, Footer, FocusRing, Icon,
     Line, ProgressBar, Title,
 } from "widgets.slint";
 import {
@@ -83,13 +83,8 @@ component CategoryCard inherits Rectangle {
                 font-size: Theme.font-heading;
                 font-weight: Theme.weight-semibold;
             }
-            // Left to the user: its description, a warning, says the cost.
-            if choice.to-choose: IconNote {
-                text: Words.description(choice.kind);
-                icon: @image-url("../assets/icons/triangle-alert.svg");
-                tone: Theme.warning;
-            }
-            if !choice.to-choose: Detail {
+            // Its cost, when it has one, is said with the results.
+            Detail {
                 text: Words.description(choice.kind);
                 accessible-role: none;
             }

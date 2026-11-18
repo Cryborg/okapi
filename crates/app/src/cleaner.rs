@@ -285,7 +285,6 @@ fn options(
 struct Choice {
     category: Category,
     checked: bool,
-    to_choose: bool,
 }
 
 /// The categories offered, in the order of the rules, and which are checked.
@@ -302,15 +301,11 @@ impl Choices {
             Category::ALL
                 .iter()
                 .filter(|&&category| category != Category::Custom)
-                .map(|&category| {
-                    let to_choose = rules.is_none_or(|rules| {
-                        category.default_choice(rules) == DefaultChoice::ToChoose
-                    });
-                    Choice {
-                        category,
-                        checked: !to_choose,
-                        to_choose,
-                    }
+                .map(|&category| Choice {
+                    category,
+                    checked: rules.is_some_and(|rules| {
+                        category.default_choice(rules) != DefaultChoice::ToChoose
+                    }),
                 })
                 .collect(),
         )
@@ -328,8 +323,6 @@ impl Choices {
             self.0.push(Choice {
                 category: Category::Custom,
                 checked: false,
-                // Nothing in it is checked beforehand: no cost to warn of.
-                to_choose: false,
             });
         } else if !any && offered {
             let withdrawn = self.0.pop();
@@ -1207,7 +1200,6 @@ impl CleanerScreen {
                 .map(|choice| ui::CategoryChoice {
                     kind: kind(choice.category),
                     checked: choice.checked,
-                    to_choose: choice.to_choose,
                 })
                 .collect();
             show(&state.choice_model, rows);

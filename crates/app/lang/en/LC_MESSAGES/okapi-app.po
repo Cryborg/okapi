@@ -1809,10 +1809,6 @@ msgid "Avancement de l'analyse"
 msgstr "Analysis progress"
 
 msgctxt "Browse"
-msgid "Échap arrête l'analyse."
-msgstr "Escape stops the analysis."
-
-msgctxt "Browse"
 msgid "Analyse arrêtée : tailles partielles. Les dossiers pas encore parcourus ne sont pas comptés."
 msgstr "Analysis stopped: partial sizes. Folders not read yet are not counted."
 

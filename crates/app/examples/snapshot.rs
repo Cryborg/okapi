@@ -940,7 +940,7 @@ fn disk_line(
         percent,
         below_one: false,
         indented: false,
-        tall: state != ui::DiskLineState::Read,
+        tall: state == ui::DiskLineState::CountedElsewhere,
         talls_before: 0,
         detail: if state == ui::DiskLineState::OtherMount {
             "/media/franck/KINGSTON".into()
@@ -2231,14 +2231,21 @@ fn large_files(window: &ui::AppWindow, scene: LargeScene, language: Language) {
     }
 }
 
-/// The screen `screen` reading what it shows (the note beside its title):
-/// the last screens `main` looks for, a name unknown said with them all.
+/// The screen `screen` reading what it shows (the note beside its title),
+/// or the disk usage of an analysis stopped: the last screens `main` looks
+/// for, a name unknown said with them all.
 fn reading_scene(app: &ui::AppWindow, screen: &str, language: Language) {
     match screen {
         "history-reading" => {
             history(app, true, language);
             app.global::<ui::History>()
                 .set_reading(ui::HistoryReading::Reading);
+        }
+        // The result of an analysis stopped: its sizes « au moins ».
+        "disk-stopped" => {
+            disk(app, ui::DiskStep::Result, language);
+            app.global::<ui::DiskUsage>()
+                .set_phase(ui::DiskPhase::Stopped);
         }
         "disk-start-reading" => {
             disk(app, ui::DiskStep::Start, language);
@@ -2277,7 +2284,7 @@ fn reading_scene(app: &ui::AppWindow, screen: &str, language: Language) {
             app.global::<ui::OldVersions>().set_finding(true);
         }
         other => panic!(
-            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, results-sorted, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, groups-closed, groups-closed-small, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-start-reading, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-reading, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, apps-leftovers-reading, apps-old-versions, apps-old-versions-confirm, apps-old-versions-reading, settings, settings-trash, history, history-small, history-update, history-empty, history-reading, large-start, large-start-reading, large-searching, large-stopped, large-result, large-smallest, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-start, duplicates-start-reading, duplicates-start-home, duplicates-result, duplicates-empty, duplicates-confirm, duplicates-quick (each also -small)"
+            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, results-sorted, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, groups-closed, groups-closed-small, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-start-reading, disk-scanning, disk-result, disk-result-small, disk-result-keys, disk-stopped, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-reading, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, apps-leftovers-reading, apps-old-versions, apps-old-versions-confirm, apps-old-versions-reading, settings, settings-trash, history, history-small, history-update, history-empty, history-reading, large-start, large-start-reading, large-searching, large-stopped, large-result, large-smallest, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-start, duplicates-start-reading, duplicates-start-home, duplicates-result, duplicates-empty, duplicates-confirm, duplicates-quick (each also -small)"
         ),
     }
 }
@@ -2372,7 +2379,7 @@ fn main() {
         other if let Some(scene) = DuplicateScene::named(other.trim_end_matches("-small")) => {
             duplicates(&app, scene, language);
         }
-        // Else a screen reading what it shows, or none.
+        // Else a screen reading what it shows, an analysis stopped, or none.
         other => reading_scene(&app, other, language),
     }
     window.set_size(PhysicalSize::new(width, height));

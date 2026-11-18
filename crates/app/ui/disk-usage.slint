@@ -3,7 +3,7 @@ import { Theme, Screen } from "theme.slint";
 import { Size, Words } from "cleaner-model.slint";
 import { VolumeShown } from "dashboard-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
-import { ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, IconButton, ProgressBar, Title, TitleLine } from "widgets.slint";
+import { ActionButton, Badge, Banner, ButtonKind, Card, Detail, FocusRing, Icon, IconButton, ProgressBar, StateIcon, Title, TitleLine } from "widgets.slint";
 import {
     DiskUsage, DiskStep, DiskPhase, DiskVolumes, DiskFiles, DiskRefusal, DiskLine, DiskLineKind, DiskLineState, DiskUnreadable,
 } from "disk-usage-model.slint";
@@ -22,7 +22,8 @@ global DiskWords {
         DiskUsage.target-is-home ? @tr("Dossier personnel") : DashboardWords.volume-name(DiskUsage.target-volume)
     }
 
-    // The state below a name, or nothing.
+    // A line's state in words, or nothing: read aloud, and shown below its
+    // name or in the tooltip of its icon.
     pure public function state(line: DiskLine) -> string {
         if line.kind == DiskLineKind.others {
             return @tr("{n} élément, moins de 1 % chacun" | "{n} éléments, moins de 1 % chacun" % line.count);
@@ -58,7 +59,27 @@ global DiskWords {
         ""
     }
 
-    // Its size as shown.
+    // Whether its state is shown by an icon beside its name; an analysis
+    // stopped says so for the whole screen, and « au moins » by the size.
+    pure public function iconic(line: DiskLine) -> bool {
+        line.kind != DiskLineKind.others
+            && (line.state == DiskLineState.pending || line.state == DiskLineState.unreadable
+                || line.state == DiskLineState.changed || line.state == DiskLineState.other-mount
+                || line.state == DiskLineState.mounted-apart
+                || (line.state == DiskLineState.partial && DiskUsage.phase != DiskPhase.stopped))
+    }
+
+    pure public function state-icon(line: DiskLine) -> image {
+        line.state == DiskLineState.pending ? @image-url("../assets/icons/clock.svg")
+            : line.state == DiskLineState.partial && DiskUsage.phase == DiskPhase.running ? @image-url("../assets/icons/loader.svg")
+            : line.state == DiskLineState.partial ? @image-url("../assets/icons/triangle-alert.svg")
+            : line.state == DiskLineState.unreadable && line.reason == DiskUnreadable.denied ? @image-url("../assets/icons/lock.svg")
+            : line.state == DiskLineState.unreadable ? @image-url("../assets/icons/ban.svg")
+            : line.state == DiskLineState.changed ? @image-url("../assets/icons/rotate-ccw.svg")
+            : @image-url("../assets/icons/hard-drive.svg")
+    }
+
+    // Its size as shown: « au moins » once the analysis was stopped.
     pure public function size(line: DiskLine) -> string {
         // Not read yet: no size, the line greyed.
         if line.state == DiskLineState.pending {
@@ -68,12 +89,16 @@ global DiskWords {
             return line.state == DiskLineState.unreadable || line.state == DiskLineState.changed
                 ? @tr("inconnue") : @tr("non compté");
         }
-        Words.size(line.size)
+        line.state == DiskLineState.partial && DiskUsage.phase == DiskPhase.stopped ? at-least(line) : Words.size(line.size)
     }
 
     // Its size said aloud: « au moins » when partial.
     pure public function spoken-size(line: DiskLine) -> string {
-        line.state == DiskLineState.partial ? @tr("au moins {}", Words.size(line.size)) : DiskWords.size(line)
+        line.state == DiskLineState.partial ? at-least(line) : DiskWords.size(line)
+    }
+
+    pure function at-least(line: DiskLine) -> string {
+        @tr("au moins {}", Words.size(line.size))
     }
 
     // Whether it has a bar and a share: a size of its own, counted here.
@@ -379,12 +404,22 @@ component Row inherits Rectangle {
             horizontal-stretch: 1;
             alignment: center;
             spacing: Theme.spacing-xxs;
-            name := Text {
-                text: DiskWords.name(line);
-                accessible-role: none;
-                color: Theme.text;
-                overflow: elide;
+            HorizontalLayout {
+                alignment: start;
+                spacing: Theme.spacing-s;
+                name := Text {
+                    text: DiskWords.name(line);
+                    accessible-role: none;
+                    color: Theme.text;
+                    overflow: elide;
+                }
+                if DiskWords.iconic(line): StateIcon {
+                    icon: DiskWords.state-icon(line);
+                    label: DiskWords.state(line);
+                    cross-axis-self-alignment: center;
+                }
             }
+            // Tall, its state is what an icon could not say.
             if line.tall: Text {
                 text: DiskWords.state(line);
                 accessible-role: none;
@@ -418,7 +453,8 @@ component Row inherits Rectangle {
             font-size: Theme.font-small;
         }
         Text {
-            width: Theme.disk-size-width;
+            // Wider for « au moins », the same on every line.
+            width: DiskUsage.phase == DiskPhase.stopped ? Theme.disk-size-width-at-least : Theme.disk-size-width;
             horizontal-alignment: right;
             vertical-alignment: center;
             text: DiskWords.size(line);
@@ -755,9 +791,6 @@ component Browse inherits FocusScope {
                 indeterminate: !DiskUsage.determinate;
                 progress: DiskUsage.done;
                 label: @tr("Avancement de l'analyse");
-            }
-            Detail {
-                text: @tr("Échap arrête l'analyse.");
             }
         }
         if DiskUsage.phase == DiskPhase.stopped && !root.running: Banner {

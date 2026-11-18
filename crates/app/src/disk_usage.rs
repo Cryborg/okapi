@@ -1075,7 +1075,8 @@ impl DiskUsageScreen {
             percent: shown(rows::share(line.allocated, total)),
             below_one: sized && rows::share(line.allocated, total) == 0,
             indented,
-            tall: state != ui::DiskLineState::Read,
+            // The other states are said by an icon beside the name.
+            tall: state == ui::DiskLineState::CountedElsewhere,
             talls_before: 0,
             detail: detail.into(),
             count: 0,
@@ -1660,7 +1661,8 @@ fn unexplained_row(unexplained: u64) -> ui::DiskLine {
         percent: 0,
         below_one: false,
         indented: false,
-        tall: true,
+        // What it is said aloud only: its name and size say enough.
+        tall: false,
         talls_before: 0,
         detail: SharedString::new(),
         count: 0,

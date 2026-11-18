@@ -1438,15 +1438,14 @@ mod tests {
             .unwrap_or_else(|| panic!("no line {label} in the results"))
     }
 
-    /// The open padlock beside the one group root's scan unlocked: never
-    /// beside another.
-    fn padlock(window: &ui::AppWindow) -> ElementHandle {
-        let mut padlocks = ElementHandle::find_by_accessible_label(window, "Droits obtenus")
+    /// The padlock that says `label`, beside one group only: never written.
+    fn padlock(window: &ui::AppWindow, label: &str) -> ElementHandle {
+        let mut padlocks = ElementHandle::find_by_accessible_label(window, label)
             .filter(|element| element.accessible_role() == Some(AccessibleRole::Image));
-        let padlock = padlocks.next().expect("an open padlock");
-        assert!(padlocks.next().is_none(), "one open padlock only");
+        let padlock = padlocks.next().expect("a padlock");
+        assert!(padlocks.next().is_none(), "one padlock only");
         assert!(
-            !shows_a_text_starting(window, "Droits obtenus"),
+            !shows_a_text_starting(window, label),
             "said by the padlock, never in words"
         );
         padlock
@@ -3308,7 +3307,7 @@ mod tests {
 
         // Its tooltip takes no click: the padlock checks the group, as its
         // name does.
-        click(&window, &padlock(&window));
+        click(&window, &padlock(&window, "Droits obtenus"));
         assert!(
             shows(&window, "Éléments : 4 sur 4"),
             "root's numbers counted"
@@ -3425,10 +3424,7 @@ mod tests {
             found(&window, "Vidages mémoire").accessible_enabled(),
             Some(false)
         );
-        assert!(shows(
-            &window,
-            "Illisible sans les droits administrateur : « Obtenir les droits » ci-dessus."
-        ));
+        padlock(&window, "Illisible sans les droits administrateur");
         // The notes are folded: their model says what they would show.
         let notes = cleaner.get_notes();
         assert!(

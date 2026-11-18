@@ -545,8 +545,8 @@ msgid "Hors de portée de l'assistant administrateur."
 msgstr "Out of the administrator's helper's reach."
 
 msgctxt "ResultLine"
-msgid "Illisible sans les droits administrateur : « Obtenir les droits » ci-dessus."
-msgstr "Unreadable without administrator rights: “Get the rights” above."
+msgid "Illisible sans les droits administrateur"
+msgstr "Unreadable without administrator rights"
 
 msgctxt "ResultLine"
 msgid "Opération du système : à cocher vous-même."

@@ -74,8 +74,8 @@ export enum ResultsSort { name, entries, size }
 // Docker's prune, left to the user, or out of reach when Docker refuses
 // them. A maintenance the user runs by hand. None for a group preselected.
 // Waiting for the rights, or measured by root only, the line shows no note:
-// its badge and the banner above say it. Unlocked, an open padlock beside
-// its name says it.
+// its badge and the banner above say it. Unlocked, or unreadable to the
+// user, a padlock beside its name says it, open or closed.
 export enum RowNote {
     none, cache-reset, operation, yours, trash, rights-obtained, to-choose,
     locked, unseen, unmeasured, unreachable, nothing, daemon, daemon-refused, by-hand,

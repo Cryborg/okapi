@@ -126,7 +126,8 @@ component ResultLine inherits VerticalLayout {
     // A group whose rules say what they remove.
     property <bool> explainable: is-group && line.description != "";
     property <string> name: line.kind == RowKind.category ? Words.category(line.category) : line.label;
-    // Why a group is left to the user, or out of reach.
+    // Why a group is left to the user, or out of reach; for a group root's
+    // scan unlocked, what its padlock says.
     property <string> note: line.note == RowNote.cache-reset
         ? @tr("Le prochain démarrage sera plus lent, le temps de recréer ce cache.")
         : line.note == RowNote.operation
@@ -142,7 +143,7 @@ component ResultLine inherits VerticalLayout {
         : line.note == RowNote.trash
         ? @tr("Supprimé définitivement, sans retour possible : à cocher vous-même.")
         : line.note == RowNote.rights-obtained
-        ? @tr("Droits obtenus : à cocher vous-même.")
+        ? @tr("Droits obtenus")
         : line.note == RowNote.to-choose
         ? @tr("Dossier temporaire hors de /tmp et /var/tmp : à cocher vous-même.")
         : line.note == RowNote.nothing
@@ -159,6 +160,9 @@ component ResultLine inherits VerticalLayout {
     property <bool> unmeasured: line.note == RowNote.unseen || line.note == RowNote.unmeasured
         || line.note == RowNote.daemon || line.note == RowNote.daemon-refused
         || line.note == RowNote.by-hand;
+    // An administrator's group unlocked: an open padlock beside its name
+    // says it, no line below.
+    property <bool> unlocked: line.note == RowNote.rights-obtained;
 
     if !line.hidden: Rectangle {
         min-height: Theme.results-row-height;
@@ -289,6 +293,26 @@ component ResultLine inherits VerticalLayout {
                                     accessible-role: none;
                                     cross-axis-self-alignment: center;
                                 }
+                                if root.unlocked: Rectangle {
+                                    width: Theme.icon-small;
+                                    height: Theme.icon-small;
+                                    cross-axis-self-alignment: center;
+                                    accessible-role: image;
+                                    accessible-label: root.note;
+                                    Icon {
+                                        source: @image-url("../assets/icons/lock-open.svg");
+                                        colorize: Theme.warning;
+                                        width: parent.width;
+                                        height: parent.height;
+                                    }
+                                    // Watches the pointer without taking its
+                                    // click: the checkbox still gets it.
+                                    // A tooltip's text is styled: the label
+                                    // goes in as it is.
+                                    Tooltip {
+                                        text: @markdown("\{root.note}");
+                                    }
+                                }
                             }
                         }
                     }
@@ -301,12 +325,12 @@ component ResultLine inherits VerticalLayout {
                         }
                     }
                 }
-                if root.is-group && (root.explainable || line.badge != ResultBadge.preselected): HorizontalLayout {
+                if root.is-group && (root.explainable || (line.badge != ResultBadge.preselected && !root.unlocked)): HorizontalLayout {
                     // Below the name, past the checkbox.
                     padding-left: Theme.spacing-xs + Theme.checkbox + Theme.spacing-m;
                     VerticalLayout {
                         spacing: Theme.spacing-xxs;
-                        if line.badge == ResultBadge.to-choose && line.note != RowNote.yours: IconNote {
+                        if line.badge == ResultBadge.to-choose && line.note != RowNote.yours && !root.unlocked: IconNote {
                             text: root.note;
                             icon: @image-url("../assets/icons/triangle-alert.svg");
                             tone: Theme.warning;

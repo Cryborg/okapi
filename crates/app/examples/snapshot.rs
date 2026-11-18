@@ -187,7 +187,7 @@ fn system_rows(folded: bool, language: Language) -> Vec<ui::ResultRow> {
     let system = [
         ("Thumbnail Cache", Preselected, true),
         ("Trash", ToChoose, false),
-        ("Crash Reports", Admin, false),
+        ("Crash Reports", ToChoose, false),
         ("Journal Logs", Admin, false),
         ("APT Package Cache", Admin, false),
         ("Snap Cache", Admin, false),
@@ -205,8 +205,10 @@ fn system_rows(folded: bool, language: Language) -> Vec<ui::ResultRow> {
         let mut line = row(System, label, *badge, *checked, language);
         line.hidden = folded;
         // A target only root may read, what it holds unknown; the trash,
-        // gone for good; the journal's vacuum, measured by root's scan only.
+        // gone for good; the journal's vacuum, measured by root's scan only;
+        // an administrator's group, unlocked by root's scan.
         line.note = match *label {
+            "Crash Reports" => ui::RowNote::RightsObtained,
             "Snap Cache" => ui::RowNote::Unseen,
             "Trash" => ui::RowNote::Trash,
             "Journal Logs" => ui::RowNote::Unmeasured,

@@ -537,8 +537,8 @@ msgid "Rien à nettoyer avec les droits administrateur."
 msgstr "Nothing to clean with administrator rights."
 
 msgctxt "ResultLine"
-msgid "Droits obtenus : à cocher vous-même."
-msgstr "Rights obtained: check it yourself."
+msgid "Droits obtenus"
+msgstr "Rights obtained"
 
 msgctxt "ResultLine"
 msgid "Hors de portée de l'assistant administrateur."

@@ -1438,6 +1438,20 @@ mod tests {
             .unwrap_or_else(|| panic!("no line {label} in the results"))
     }
 
+    /// The open padlock beside the one group root's scan unlocked: never
+    /// beside another.
+    fn padlock(window: &ui::AppWindow) -> ElementHandle {
+        let mut padlocks = ElementHandle::find_by_accessible_label(window, "Droits obtenus")
+            .filter(|element| element.accessible_role() == Some(AccessibleRole::Image));
+        let padlock = padlocks.next().expect("an open padlock");
+        assert!(padlocks.next().is_none(), "one open padlock only");
+        assert!(
+            !shows_a_text_starting(window, "Droits obtenus"),
+            "said by the padlock, never in words"
+        );
+        padlock
+    }
+
     /// A press and release of the pointer at the middle of `element`: through
     /// the touch areas, as a mouse goes, never its accessible action.
     fn click(window: &ui::AppWindow, element: &ElementHandle) {
@@ -3287,8 +3301,14 @@ mod tests {
             Some(false),
             "nothing for root to clean"
         );
+        // Said by an open padlock beside its name (none beside the group
+        // still locked), read with its checkbox.
+        let description = unlocked.accessible_description();
+        assert_eq!(description.as_deref(), Some("Droits obtenus"));
 
-        unlocked.invoke_accessible_default_action();
+        // Its tooltip takes no click: the padlock checks the group, as its
+        // name does.
+        click(&window, &padlock(&window));
         assert!(
             shows(&window, "Éléments : 4 sur 4"),
             "root's numbers counted"

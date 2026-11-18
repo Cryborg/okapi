@@ -3206,7 +3206,10 @@ pub mod tests {
         );
         // Its filesystem only: its badge says it did not answer.
         assert!(shows(&window, "nfs4"));
-        assert!(!shows(&window, "Sa taille n'a pas pu être lue."), "said aloud only");
+        assert!(
+            !shows(&window, "Sa taille n'a pas pu être lue."),
+            "said aloud only"
+        );
         assert!(shows(&window, "Volumes : 6"));
         assert_eq!(
             said(&window, "Disques").as_deref(),

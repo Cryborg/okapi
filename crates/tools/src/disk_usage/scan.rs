@@ -528,42 +528,56 @@ fn work(shared: &Shared) {
 
 /// Why a directory was not read.
 enum Failure {
-    Io(io::Error),
-    /// No longer the directory listed.
+    /// Gone since it was listed.
+    Gone,
+    /// No longer the directory listed: replaced by a file, a link, another
+    /// folder, or mounted on.
     Changed,
+    Io(io::Error),
 }
 
 impl From<io::Error> for Failure {
+    /// What reading a directory listed fails with: absent, it is gone; no
+    /// longer a directory, it has changed.
     fn from(error: io::Error) -> Self {
-        Self::Io(error)
+        match error.kind() {
+            io::ErrorKind::NotFound => Self::Gone,
+            io::ErrorKind::NotADirectory => Self::Changed,
+            _ => Self::Io(error),
+        }
+    }
+}
+
+impl From<Unreached> for Failure {
+    fn from(unreached: Unreached) -> Self {
+        match unreached {
+            Unreached::Changed => Self::Changed,
+            Unreached::Io(error) => error.into(),
+        }
     }
 }
 
 /// Whether a directory below the root, read again as `status`, is still the
-/// one listed as `expected`, and no mount point (the root may be one, as `/`
-/// is: [`reach_with`] judges it by its identity alone).
+/// one listed as `expected` and no mount point: the rule [`UsageScan::open`]
+/// gives the way back down. The root may be one, as `/` is: [`reach_with`]
+/// judges it by its identity alone.
 fn still_listed(status: &EntryStatus, expected: FileIdentity) -> bool {
     status.identity == expected && status.mount_root != Some(true)
 }
 
 /// Opens the task's directory, checked to be the one listed, and reads it.
 fn open(source: Source) -> Result<(Directory, EntryStatus), Failure> {
-    let (directory, expected) = match source {
+    match source {
         Source::Root(directory) => {
             let status = directory.status()?;
-            return Ok((directory, status));
+            Ok((directory, status))
         }
         Source::Child {
             parent,
             name,
             expected,
-        } => (parent.open_child(&name)?, expected),
-    };
-    let status = directory.status()?;
-    if !still_listed(&status, expected) {
-        return Err(Failure::Changed);
+        } => okapi_platform::enter(&parent, &name, expected)?.ok_or(Failure::Gone),
     }
-    Ok((directory, status))
 }
 
 /// What an entry that is not a directory takes.
@@ -664,16 +678,10 @@ fn read_entry(
 /// The state of a directory not read, counted and said.
 fn failed_state(shared: &Shared, path: &Path, failure: Failure) -> NodeState {
     match failure {
-        Failure::Io(error) if error.kind() == io::ErrorKind::NotFound => {
+        Failure::Gone => {
             count(&shared.counts.gone, 1);
             tracing::debug!(path = %path.display(), "directory gone since it was listed");
             NodeState::Gone
-        }
-        // No longer a directory: replaced by a file or a link.
-        Failure::Io(error) if error.kind() == io::ErrorKind::NotADirectory => {
-            count(&shared.counts.changed, 1);
-            tracing::debug!(path = %path.display(), "directory replaced since it was listed");
-            NodeState::Changed
         }
         Failure::Io(error) => {
             count(&shared.counts.unreadable_directories, 1);
@@ -894,6 +902,28 @@ mod tests {
         assert!(!still_listed(
             &status(FileIdentity::new(1, 2), Some(false)),
             listed
+        ));
+    }
+
+    #[test]
+    fn a_directory_read_absent_is_gone_and_one_no_longer_a_directory_changed() {
+        let failure = |kind: io::ErrorKind| Failure::from(io::Error::from(kind));
+        assert!(matches!(failure(io::ErrorKind::NotFound), Failure::Gone));
+        assert!(matches!(
+            failure(io::ErrorKind::NotADirectory),
+            Failure::Changed
+        ));
+        assert!(matches!(
+            failure(io::ErrorKind::PermissionDenied),
+            Failure::Io(error) if error.kind() == io::ErrorKind::PermissionDenied
+        ));
+        assert!(matches!(
+            Failure::from(Unreached::Io(io::ErrorKind::NotFound.into())),
+            Failure::Gone
+        ));
+        assert!(matches!(
+            Failure::from(Unreached::Changed),
+            Failure::Changed
         ));
     }
 }

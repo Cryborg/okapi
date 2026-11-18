@@ -786,3 +786,44 @@ fn every_snap_listed_counts_installed_and_a_list_unreadable_is_no_list() {
     assert!(installed::snap_names(&serde_json::json!({"name": "x"})).is_err());
     assert!(installed::snap_names(&serde_json::json!([{"type": "app"}])).is_err());
 }
+
+#[test]
+fn a_folder_entered_gone_or_replaced_has_changed_and_one_refused_is_a_refusal() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    fs::create_dir(base.join("kept")).unwrap();
+    fs::create_dir(base.join("closed")).unwrap();
+    let identity = |name: &str| {
+        okapi_platform::file_identity(&fs::symlink_metadata(base.join(name)).unwrap()).unwrap()
+    };
+    let parent = Directory::open(base).unwrap();
+    let name = OsStr::new;
+    assert!(entered(&parent, name("kept"), identity("kept")).is_ok());
+    assert!(matches!(
+        entered(&parent, name("absent"), identity("kept")),
+        Err(Unprinted::Changed)
+    ));
+    // Another folder than the one read at that name.
+    assert!(matches!(
+        entered(&parent, name("kept"), identity("closed")),
+        Err(Unprinted::Changed)
+    ));
+    // A link to the very folder read: refused all the same.
+    std::os::unix::fs::symlink(base.join("kept"), base.join("link")).unwrap();
+    assert!(matches!(
+        entered(&parent, name("link"), identity("kept")),
+        Err(Unprinted::Changed)
+    ));
+    let closed = identity("closed");
+    fs::set_permissions(base.join("closed"), fs::Permissions::from_mode(0o000)).unwrap();
+    let refused = entered(&parent, name("closed"), closed);
+    fs::set_permissions(base.join("closed"), fs::Permissions::from_mode(0o700)).unwrap();
+    if refused.is_ok() {
+        eprintln!("skipped: root enters every folder");
+        return;
+    }
+    assert!(
+        matches!(refused, Err(Unprinted::Io(ref error)) if error.kind() == std::io::ErrorKind::PermissionDenied),
+        "{refused:?}"
+    );
+}

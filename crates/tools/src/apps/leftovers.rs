@@ -16,14 +16,13 @@ use std::path::{Path, PathBuf};
 
 use okapi_engine::{Exclusions, ProtectedRoots, report_nonce};
 use okapi_platform::{
-    Directory, EntryStatus, EntryType, FileIdentity, Trash, Unreached, gone_or_failed, reach,
-    tells_mount_roots,
+    Directory, EntryStatus, EntryType, FileIdentity, Trash, Unreached, reach, tells_mount_roots,
 };
 
 pub use crate::trashing::Refusal;
 pub use installed::{Installed, InstalledPlaces, Known};
 pub use walk::MOST_ENTRIES;
-use walk::{Print, Unprinted, Walk};
+use walk::{Print, Unprinted, Walk, entered};
 
 use super::names_a_folder;
 use crate::packages::snapd::is_snap_name;
@@ -422,11 +421,7 @@ fn printed(
     status: &EntryStatus,
     walk: &Walk<'_>,
 ) -> Result<Print, Unprinted> {
-    let folder = parent.open_child(name).map_err(gone_or_failed)?;
-    if folder.status().map_err(Unprinted::Io)?.identity != status.identity {
-        return Err(Unprinted::Changed);
-    }
-    walk.print(folder)
+    walk.print(entered(parent, name, status.identity)?)
 }
 
 /// Why a leftover stayed where it was.

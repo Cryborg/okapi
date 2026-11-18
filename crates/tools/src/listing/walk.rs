@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use okapi_engine::Exclusions;
-use okapi_platform::{Directory, EntryStatus, EntryType, FileIdentity};
+use okapi_platform::{Directory, EntryStatus, EntryType, FileIdentity, Unreached};
 
 // A file in the trash is on its way out, never one to offer.
 use super::{Found, SearchStats, Seen, trash_folder};
@@ -162,26 +162,19 @@ impl Walk<'_, '_> {
     /// Opens the task's folder, checked to be the one listed; `None`, and
     /// counted, when it cannot be.
     fn open(&mut self, task: &Task) -> Option<Directory> {
-        let opened = task.parent.open_child(&task.name).and_then(|directory| {
-            let status = directory.status()?;
-            Ok((directory, status))
-        });
-        match opened {
-            Ok((_, status)) if status.mount_root == Some(true) => {
-                // Mounted on since it was listed.
-                self.stats.other_mounts += 1;
-                tracing::debug!(path = %task.path.display(), "mount not entered");
+        match okapi_platform::enter(&task.parent, &task.name, task.expected) {
+            Ok(Some((directory, _))) => Some(directory),
+            // Removed meanwhile: nothing to search there.
+            Ok(None) => {
+                tracing::debug!(path = %task.path.display(), "folder gone since listed");
                 None
             }
-            Ok((directory, status)) if status.identity == task.expected => Some(directory),
-            Ok(_) => {
+            Err(Unreached::Changed) => {
                 self.stats.changed_directories += 1;
                 tracing::debug!(path = %task.path.display(), "folder changed since listed: not read");
                 None
             }
-            // Removed meanwhile: nothing to search there.
-            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-            Err(error) => {
+            Err(Unreached::Io(error)) => {
                 self.stats.unreadable += 1;
                 tracing::debug!(path = %task.path.display(), %error, "folder unreadable");
                 None
@@ -456,6 +449,84 @@ mod tests {
         assert_eq!(walked, Err(Cancelled));
         assert!(found.is_empty());
         assert_eq!(stats.files, 0);
+    }
+
+    #[test]
+    fn a_folder_refused_is_unreadable_and_one_replaced_changed() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        std::fs::create_dir(root.join("closed")).unwrap();
+        std::fs::create_dir(root.join("other")).unwrap();
+        std::os::unix::fs::symlink(root.join("other"), root.join("link")).unwrap();
+        std::fs::write(root.join("file"), b"x").unwrap();
+        let identity = |name: &str| {
+            okapi_platform::file_identity(&std::fs::symlink_metadata(root.join(name)).unwrap())
+                .unwrap()
+        };
+        let parent = Rc::new(Directory::open(root).unwrap());
+        let task = |name: &str, expected| Task {
+            parent: Rc::clone(&parent),
+            name: OsString::from(name),
+            path: root.join(name),
+            expected,
+        };
+        let refused = task("closed", identity("closed"));
+        // Other folders than the ones listed at those names.
+        let replaced = [
+            task("closed", identity("other")),
+            task("other", identity("closed")),
+            // A link to the folder listed, and a file, in its place.
+            task("link", identity("other")),
+            task("file", identity("other")),
+        ];
+        let exclusions = Exclusions::none();
+        let cancelled = AtomicBool::new(false);
+        let counts = Counts::default();
+        let listing = Listing {
+            min_size: SIZE,
+            measure: Measure::Apparent,
+            owners: Owners::All,
+            exclusions: &exclusions,
+            cancelled: &cancelled,
+            counts: &counts,
+        };
+        let scope = scope(&listing);
+        let mut stats = SearchStats::default();
+        let mut walk = Walk {
+            listing: scope.listing,
+            roots: scope.roots,
+            mounts: scope.mounts,
+            root: 0,
+            device: 1,
+            stats: &mut stats,
+            seen: &mut HashSet::new(),
+            found: &mut Vec::new(),
+        };
+        // Removed meanwhile: nothing counted.
+        assert!(walk.open(&task("absent", identity("other"))).is_none());
+        assert_eq!(
+            (walk.stats.changed_directories, walk.stats.unreadable),
+            (0, 0)
+        );
+        for task in &replaced {
+            assert!(walk.open(task).is_none());
+        }
+        assert_eq!(
+            (walk.stats.changed_directories, walk.stats.unreadable),
+            (4, 0)
+        );
+        std::fs::set_permissions(root.join("closed"), std::fs::Permissions::from_mode(0o000))
+            .unwrap();
+        let opened = walk.open(&refused);
+        std::fs::set_permissions(root.join("closed"), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+        if opened.is_some() {
+            eprintln!("skipped: root enters every folder");
+            return;
+        }
+        assert_eq!((stats.changed_directories, stats.unreadable), (4, 1));
     }
 
     #[test]

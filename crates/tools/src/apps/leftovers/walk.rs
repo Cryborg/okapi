@@ -6,7 +6,7 @@
 //! would hide a write, and every write moves the inode's change anyway.
 
 use std::collections::hash_map::DefaultHasher;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::hash::{Hash as _, Hasher as _};
 use std::io;
 use std::rc::Rc;
@@ -47,7 +47,7 @@ pub(crate) enum Unprinted {
     /// An entry the user excludes: moving the folder would take it along.
     Excluded,
     /// Something on the way changed while walking: an entry gone, swapped
-    /// for a link, a folder for another.
+    /// for a link, a folder for another or mounted on since it was read.
     Changed,
     /// The system refused to read an entry.
     Io(io::Error),
@@ -82,15 +82,22 @@ struct Waiting {
 }
 
 impl Waiting {
-    /// The folder it names, if it is still the one read: a link put in its
-    /// place fails to open as a folder.
+    /// The folder it names, if it is still the one read.
     fn opened(&self) -> Result<Rc<Directory>, Unprinted> {
-        let child = self.parent.open_child(&self.name).map_err(gone_or_failed)?;
-        if child.status().map_err(Unprinted::Io)?.identity != self.identity {
-            return Err(Unprinted::Changed);
-        }
-        Ok(Rc::new(child))
+        entered(&self.parent, &self.name, self.identity).map(Rc::new)
     }
+}
+
+/// The folder `name` of `parent`, if it is still the folder `identity` read
+/// there ([`okapi_platform::enter`]): one gone since is no longer what was
+/// read either.
+pub(crate) fn entered(
+    parent: &Directory,
+    name: &OsStr,
+    identity: FileIdentity,
+) -> Result<Directory, Unprinted> {
+    let (folder, _) = okapi_platform::enter(parent, name, identity)?.ok_or(Unprinted::Changed)?;
+    Ok(folder)
 }
 
 impl Walk<'_> {

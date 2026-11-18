@@ -110,7 +110,8 @@ pub struct SearchStats {
     pub other_names: u64,
     /// Folders, or entries of one, that could not be read.
     pub unreadable: u64,
-    /// Folders replaced, or turned into links, while listed: not read.
+    /// Folders replaced, turned into links or mounted on while listed: not
+    /// read.
     pub changed_directories: u64,
     pub hidden_directories: u64,
     /// Folders holding a `.git` (but a folder the user chose): a project's
@@ -119,7 +120,8 @@ pub struct SearchStats {
     pub dependency_directories: u64,
     /// Trash folders: what lies there is on its way out.
     pub trash_directories: u64,
-    /// Mounts not entered: folders, or files mounted on another.
+    /// Mounts not entered: folders, or files mounted on another (a folder
+    /// mounted on since it was listed is a changed one).
     pub other_mounts: u64,
     pub excluded: u64,
     /// Files of another user, never kept (the large files).

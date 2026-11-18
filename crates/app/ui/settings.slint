@@ -287,7 +287,8 @@ component PathListCard inherits Card {
     callback browse();
     property <bool> refused: entry-error != EntryError.none;
 
-    // What its badge says of a line, read with it.
+    // What a line is, read with it; its badge, unless a plain folder, file
+    // or extension.
     pure function kind-word(kind: PathKind) -> string {
         if kind == PathKind.folder {
             return @tr("Dossier");
@@ -402,7 +403,9 @@ component PathListCard inherits Card {
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
-                            VerticalLayout {
+                            // What a line is, its icon and words say: a
+                            // badge only for what is wrong or under way.
+                            if row.kind != PathKind.folder && row.kind != PathKind.file && row.kind != PathKind.extension: VerticalLayout {
                                 alignment: center;
                                 Badge {
                                     text: root.kind-word(row.kind);
@@ -529,7 +532,7 @@ component Exclusions inherits PathListCard {
 component Folders inherits PathListCard {
     heading: @tr("Dossiers à nettoyer");
     folders-only: true;
-    detail: @tr("Proposés à l'analyse de « Mes dossiers », jamais cochés d'avance. Ce que vous cochez est supprimé définitivement, le dossier lui-même jamais.");
+    detail: @tr("Proposés à l'analyse de « Mes dossiers ». Le dossier lui-même n'est jamais supprimé.");
     empty: @tr("Aucun dossier à nettoyer.");
     add-label: @tr("Ajouter un dossier à nettoyer");
     placeholder: @tr("Chemin d'un dossier");

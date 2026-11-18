@@ -4143,8 +4143,8 @@ msgid "Dossiers à nettoyer"
 msgstr "Folders to clean"
 
 msgctxt "Folders"
-msgid "Proposés à l'analyse de « Mes dossiers », jamais cochés d'avance. Ce que vous cochez est supprimé définitivement, le dossier lui-même jamais."
-msgstr "Offered by the analysis of “My folders”, never checked beforehand. What you check is deleted for good, never the folder itself."
+msgid "Proposés à l'analyse de « Mes dossiers ». Le dossier lui-même n'est jamais supprimé."
+msgstr "Offered by the analysis of “My folders”. The folder itself is never deleted."
 
 msgctxt "Folders"
 msgid "Aucun dossier à nettoyer."

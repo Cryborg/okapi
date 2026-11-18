@@ -690,7 +690,10 @@ fn an_old_version_removed_is_named_so_with_what_snapd_gives_back_later() {
     let history = window.global::<ui::History>();
     history.invoke_choose(0);
     assert!(shows(&window, "Environnement retiré"));
-    assert!(!shows(&window, "Ses données ont été gardées."), "a runtime has none");
+    assert!(
+        !shows(&window, "Ses données ont été gardées."),
+        "a runtime has none"
+    );
     history.invoke_choose(1);
     assert!(shows(&window, "Ancienne version retirée"));
     assert!(shows(&window, "Rendu plus tard par snapd : 1,6 Go."));

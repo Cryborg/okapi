@@ -56,7 +56,8 @@ impl std::fmt::Debug for OldVersionSeams {
 #[derive(Debug, Default)]
 pub(super) struct Ended {
     removed: usize,
-    /// Kept for want of the rights: refused, or not asked after a refusal.
+    /// Kept for want of the rights, or not asked once a daemon stopped
+    /// (refused, absent, silent): what stopped it counts otherwise.
     kept_for_rights: usize,
     /// Kept otherwise: changed since, failed.
     kept_otherwise: usize,
@@ -286,6 +287,7 @@ fn show_checked(global: &ui::OldVersions<'_>, checked: &[&OldVersion]) {
     };
     global.set_checked_runtimes(runtimes().next().is_some());
     global.set_checked_about(size(sum(runtimes())));
+    global.set_has_about(runtimes().any(|version| bytes_of(version).is_some()));
 }
 
 impl AppsScreen {
@@ -550,7 +552,9 @@ impl AppsScreen {
             old.told = Some(ended.map_or(Told::CutShort, Told::Ended));
             old.again = true;
         }
-        self.show_old_versions();
+        // The leftovers' actions free again, whether they are read again
+        // now or wait for their boxes; it shows this tab too.
+        self.show_leftovers();
         // What the daemons keep changed: the list says it too.
         self.refresh();
     }

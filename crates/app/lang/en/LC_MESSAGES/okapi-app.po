@@ -5029,7 +5029,7 @@ msgid "{} éléments retirés."
 msgstr "{} items removed."
 
 msgctxt "OldVersionsView"
-msgid "Retirées : {}. Gardées : {}. Le détail est dans le journal."
+msgid "Retirés : {}. Gardés : {}. Le détail est dans le journal."
 msgstr "Removed: {}. Kept: {}. The details are in the log."
 
 msgctxt "OldVersionsView"
@@ -5061,8 +5061,8 @@ msgid "Recherche des anciennes versions… Rien n'est modifié."
 msgstr "Looking for old versions… Nothing is changed."
 
 msgctxt "OldVersionsView"
-msgid "snapd et flatpak retirent ce qui est coché…"
-msgstr "snapd and flatpak are removing what is checked…"
+msgid "Retrait en cours…"
+msgstr "Removing…"
 
 msgctxt "OldVersionsView"
 msgid "Anciennes versions des snaps"
@@ -5101,8 +5101,8 @@ msgid "Retirer {} éléments ?"
 msgstr "Remove {} items?"
 
 msgctxt "OldVersionsConfirm"
-msgid "Vous ne pourrez plus revenir à ces versions. Leurs données partent aussi, pour tous les comptes."
-msgstr "You will no longer be able to go back to these versions. Their data goes too, for every account."
+msgid "Vous ne pourrez plus revenir à ces versions. Les données de ces versions partent aussi, pour tous les comptes."
+msgstr "You will no longer be able to go back to these versions. The data of these versions goes too, for every account."
 
 msgctxt "OldVersionsConfirm"
 msgid "Libéré tout de suite : {}."
@@ -5121,8 +5121,8 @@ msgid "D'autres comptes de cet ordinateur peuvent en avoir besoin."
 msgstr "Other accounts of this computer may need them."
 
 msgctxt "OldVersionsConfirm"
-msgid "Votre mot de passe peut vous être demandé."
-msgstr "Your password may be asked for."
+msgid "Votre mot de passe peut vous être demandé, parfois plusieurs fois."
+msgstr "Your password may be asked for, sometimes more than once."
 
 msgctxt "OldVersionsConfirm"
 msgid "Annuler"

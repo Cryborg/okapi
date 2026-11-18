@@ -116,6 +116,8 @@ component OldCard inherits Card {
     in property <string> title;
     in property <string> explained;
     in property <[OldVersionLine]> lines;
+    // Its own height: never stretched past its lines.
+    vertical-stretch: 0;
     VerticalLayout {
         alignment: start;
         VerticalLayout {
@@ -164,10 +166,10 @@ export component OldVersionsView inherits VerticalLayout {
         text: @tr("La recherche des anciennes versions n'a pas abouti. Le détail est dans le journal.");
     }
     if OldVersions.outcome != OldOutcome.none: Banner {
-        warning: OldVersions.outcome != OldOutcome.done || OldVersions.unrecorded;
+        warning: OldVersions.outcome != OldOutcome.done || OldVersions.unrecorded || OldVersions.unpruned;
         text: (OldVersions.outcome == OldOutcome.done
                 ? (OldVersions.removed == 1 ? @tr("Un élément retiré.") : @tr("{} éléments retirés.", OldVersions.removed))
-            : OldVersions.outcome == OldOutcome.partly ? @tr("Retirées : {}. Gardées : {}. Le détail est dans le journal.", OldVersions.removed, OldVersions.kept)
+            : OldVersions.outcome == OldOutcome.partly ? @tr("Retirés : {}. Gardés : {}. Le détail est dans le journal.", OldVersions.removed, OldVersions.kept)
             : OldVersions.outcome == OldOutcome.refused ? @tr("Rien n'a été retiré : les droits n'ont pas été donnés.")
             : OldVersions.outcome == OldOutcome.interrupted ? @tr("Le retrait s'est interrompu : la liste relue montre ce qui reste. Le détail est dans le journal.")
             : @tr("Rien n'a été retiré. Le détail est dans le journal."))
@@ -189,7 +191,7 @@ export component OldVersionsView inherits VerticalLayout {
     }
     if OldVersions.retiring: ProgressBar {
         indeterminate: true;
-        label: @tr("snapd et flatpak retirent ce qui est coché…");
+        label: @tr("Retrait en cours…");
     }
     if OldVersions.snaps.length > 0: OldCard {
         title: @tr("Anciennes versions des snaps");
@@ -273,7 +275,7 @@ export component OldVersionsConfirm inherits ModalFrame {
         }
     }
     if OldVersions.checked-snaps: Detail {
-        text: @tr("Vous ne pourrez plus revenir à ces versions. Leurs données partent aussi, pour tous les comptes.");
+        text: @tr("Vous ne pourrez plus revenir à ces versions. Les données de ces versions partent aussi, pour tous les comptes.");
         wrap: word-wrap;
     }
     if OldVersions.has-now: Detail {
@@ -284,7 +286,7 @@ export component OldVersionsConfirm inherits ModalFrame {
         text: @tr("Rendu par snapd dans les 30 jours, ou par la ligne « Cache de Snap » du Nettoyeur : {}.", Words.size(OldVersions.checked-later));
         wrap: word-wrap;
     }
-    if OldVersions.checked-runtimes: Detail {
+    if OldVersions.has-about: Detail {
         text: @tr("Environnements flatpak : environ {}.", Words.size(OldVersions.checked-about));
         wrap: word-wrap;
     }
@@ -294,7 +296,7 @@ export component OldVersionsConfirm inherits ModalFrame {
         wrap: word-wrap;
     }
     Detail {
-        text: @tr("Votre mot de passe peut vous être demandé.");
+        text: @tr("Votre mot de passe peut vous être demandé, parfois plusieurs fois.");
         wrap: word-wrap;
     }
     HorizontalLayout {

@@ -435,3 +435,37 @@ fn nothing_found_says_so() {
     assert!(shows(&window, "Aucune ancienne version à retirer"));
     assert!(!tab(&window).get_has_total());
 }
+
+#[test]
+fn closing_waits_a_little_for_a_removal_under_way() {
+    // Catches a window closed on a removal at once: the version in a
+    // daemon's hands would leave no history line.
+    if confined() {
+        return;
+    }
+    let files = snap_files();
+    let (release, waiting) = mpsc::channel();
+    let fake = Fake {
+        held: Some(Arc::new(Mutex::new(waiting))),
+        ..Fake::new(files.path(), Retired::Removed)
+    };
+    let recorded = writable();
+    let (window, screen) = on_page(fake.seams(), Arc::clone(&recorded));
+    tab(&window).invoke_toggle(0);
+    tab(&window).invoke_retire();
+    tab(&window).invoke_confirm();
+    assert!(tab(&window).get_retiring());
+    let later = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        release.send(()).unwrap();
+    });
+    let started = Instant::now();
+    screen.shut_down();
+    assert!(started.elapsed() >= Duration::from_millis(100));
+    assert_eq!(
+        recorded.lock().unwrap().as_ref().map(Vec::len),
+        Some(1),
+        "its history line written"
+    );
+    later.join().unwrap();
+}

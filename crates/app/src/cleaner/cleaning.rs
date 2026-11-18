@@ -26,6 +26,7 @@ use super::{
 };
 use crate::elevation::{ElevationFailure, ElevationStep};
 use crate::receipt::{Ending, Kept, LineKind, OutcomeFacts, Receipt, ReceiptLine};
+use crate::results::Preselection;
 use crate::shown::{show, shown, size};
 use crate::ui;
 
@@ -693,18 +694,23 @@ impl CleanerScreen {
                 bytes,
                 !confirming.admin.is_empty(),
                 confirming.docker.is_some(),
+                results.checks_any(Preselection::CacheReset),
+                results.checks_any(Preselection::GoneForGood),
             );
             state.confirming = Some(confirming);
             opened
         };
+        let (entries, bytes, admin, docker, cache_reset, trash) = opened;
         self.settle();
         self.with_window(|window, _| {
             let cleaner = window.global::<ui::Cleaner>();
             cleaner.set_understood(false);
-            cleaner.set_confirm_entries(shown(opened.0));
-            cleaner.set_confirm_size(size(opened.1));
-            cleaner.set_confirm_admin(opened.2);
-            cleaner.set_confirm_docker(opened.3);
+            cleaner.set_confirm_entries(shown(entries));
+            cleaner.set_confirm_size(size(bytes));
+            cleaner.set_confirm_admin(admin);
+            cleaner.set_confirm_docker(docker);
+            cleaner.set_confirm_cache_reset(cache_reset);
+            cleaner.set_confirm_trash(trash);
             cleaner.set_confirming(true);
         });
     }
@@ -1567,6 +1573,37 @@ mod tests {
             "Cache de rendu des polices de Fontconfig : recréé tout seul quand il manque."
         ));
         assert_eq!(found(&window, fonts).accessible_checked(), Some(false));
+    }
+
+    /// A cache reset checked is said once, at the confirmation, never when
+    /// none is.
+    #[test]
+    fn the_confirmation_says_a_cache_reset_checked_is_built_again() {
+        const BUILT_AGAIN: &str = "Les caches retirés seront recréés : ce qui s'en sert démarrera un peu plus lentement la prochaine fois.";
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        sandbox.file("home/.cache/fontconfig/old");
+        settle_files();
+        // The default categories: the system's fonts and pip's.
+        let (window, _screen) = on_cleaner(sandbox.read(&sandbox.root.join("state")));
+        button(&window, "Analyser").invoke_accessible_default_action();
+        watch_until(&window, |window| step(window) == ui::CleanerStep::Results);
+        let_the_screen_settle();
+        let cleaner = window.global::<ui::Cleaner>();
+        button(&window, "Nettoyer").invoke_accessible_default_action();
+        // `changed` handlers run on the next turn of the event loop.
+        slint::platform::update_timers_and_animations();
+        assert!(shows_a_text_starting(&window, "Taille : "), "confirming");
+        assert!(!shows(&window, BUILT_AGAIN), "pip's cache alone");
+        let_the_screen_settle();
+        button(&window, "Annuler").invoke_accessible_default_action();
+        let_the_screen_settle();
+
+        found(&window, "Cache des polices").invoke_accessible_default_action();
+        button(&window, "Nettoyer").invoke_accessible_default_action();
+        slint::platform::update_timers_and_animations();
+        assert!(shows(&window, BUILT_AGAIN));
+        assert!(!cleaner.get_confirm_trash(), "no trash checked");
     }
 
     #[test]

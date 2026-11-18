@@ -147,16 +147,13 @@ component ResultLine inherits VerticalLayout {
     // A group whose rules say what they remove.
     property <bool> explainable: is-group && line.description != "";
     property <string> name: line.kind == RowKind.category ? Words.category(line.category) : line.label;
-    // Why a group is left to the user, or out of reach; for a group root's
-    // scan unlocked or only root may read, what its padlock says.
-    property <string> note: line.note == RowNote.cache-reset
-        ? @tr("Le prochain démarrage sera plus lent, le temps de recréer ce cache.")
-        : line.note == RowNote.daemon-refused
+    // What the user has to do for a group, or why it is out of reach; for a
+    // group root's scan unlocked or only root may read, what its padlock
+    // says.
+    property <string> note: line.note == RowNote.daemon-refused
         ? @tr("Docker refuse votre compte : il faut être dans le groupe docker, puis rouvrir la session.")
         : line.note == RowNote.by-hand
         ? @tr("À faire vous-même : la commande ci-dessous, dans un terminal.")
-        : line.note == RowNote.trash
-        ? @tr("Supprimé définitivement, sans retour possible : à cocher vous-même.")
         : line.note == RowNote.rights-obtained
         ? @tr("Droits obtenus")
         : line.note == RowNote.nothing
@@ -529,6 +526,12 @@ component Confirmation inherits ModalFrame {
     }
     Detail {
         text: @tr("Taille : {}. Éléments : {}. Rien ne passe par la corbeille : cette action est irréversible.", Words.size(Cleaner.confirm-size), Cleaner.confirm-entries);
+    }
+    if Cleaner.confirm-trash: Detail {
+        text: @tr("Ce qui part de la corbeille ne pourra plus être restauré.");
+    }
+    if Cleaner.confirm-cache-reset: Detail {
+        text: @tr("Les caches retirés seront recréés : ce qui s'en sert démarrera un peu plus lentement la prochaine fois.");
     }
     if Cleaner.confirm-docker: Detail {
         text: @tr("Docker élaguera son cache de construction : ce qui part n'est connu qu'après.");

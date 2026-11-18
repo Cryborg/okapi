@@ -1112,6 +1112,16 @@ impl Results {
         (groups, targets)
     }
 
+    /// Whether a group checked is a `preselection` one: what the
+    /// confirmation warns of (a cache rebuilt, the trash gone for good).
+    #[must_use]
+    pub fn checks_any(&self, preselection: Preselection) -> bool {
+        self.checked
+            .iter()
+            .filter_map(|index| self.groups.get(*index))
+            .any(|group| group.preselection == preselection)
+    }
+
     /// The entries of the groups `indices`.
     #[must_use]
     pub fn entries_of(&self, indices: &BTreeSet<usize>) -> usize {
@@ -1619,6 +1629,31 @@ mod tests {
         let mut results = mixed();
         results.toggle_group(2);
         assert!(!results.checked().contains(&2));
+    }
+
+    /// The confirmation warns of a cache reset or of the trash only once
+    /// one is checked, whatever else is.
+    #[test]
+    fn a_risk_is_told_only_of_a_group_checked() {
+        let trash = GroupFacts {
+            preselection: Preselection::GoneForGood,
+            ..group(&[Category::System], false, false)
+        };
+        let mut results = Results::new(
+            vec![
+                group(&[Category::System], true, false),
+                group(&[Category::Gpu], false, false),
+                trash,
+            ],
+            BTreeSet::from([Category::System, Category::Gpu]),
+        );
+        assert!(!results.checks_any(Preselection::CacheReset));
+        assert!(!results.checks_any(Preselection::GoneForGood));
+        results.toggle_group(1);
+        assert!(results.checks_any(Preselection::CacheReset));
+        assert!(!results.checks_any(Preselection::GoneForGood));
+        results.toggle_group(2);
+        assert!(results.checks_any(Preselection::GoneForGood));
     }
 
     #[test]

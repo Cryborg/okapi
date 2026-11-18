@@ -64,9 +64,10 @@ export enum RowKind { category, browser, group }
 // (`crates/app/src/sorting.rs`).
 export enum ResultsSort { name, entries, size }
 
-// What the note under a group says. Left to the user: a cache reset; the
-// trash, whose entries go for good; or one of the administrator's that
-// root's scan unlocked. Out of reach without the administrator: waiting
+// What the note under a group says. Left to the user: one of the
+// administrator's that root's scan unlocked (the confirmation, not the
+// line, warns of a cache reset or the trash). Out of reach without the
+// administrator: waiting
 // for the rights; waiting for them, unreadable to the user, or a
 // maintenance measured by root only, what it holds unknown; never the
 // helper's to clean; nothing for root to clean. Docker's prune, left to
@@ -77,7 +78,7 @@ export enum ResultsSort { name, entries, size }
 // its badge and the banner above say it. Unlocked, or unreadable to the
 // user, a padlock beside its name says it, open or closed.
 export enum RowNote {
-    none, cache-reset, trash, rights-obtained,
+    none, rights-obtained,
     locked, unseen, unmeasured, unreachable, nothing, daemon, daemon-refused, by-hand,
 }
 
@@ -260,6 +261,10 @@ export global Cleaner {
     in property <bool> confirm-admin;
     // Docker's prune is confirmed: what it removes is known only after.
     in property <bool> confirm-docker;
+    // A cache reset is confirmed: what uses it starts slower next time.
+    in property <bool> confirm-cache-reset;
+    // The trash is confirmed: what it held can no longer be restored.
+    in property <bool> confirm-trash;
     // The question about an open browser, before a cleaning: the browser,
     // the labels of its caches the cleaning takes, and their size.
     in property <bool> browser-asking;

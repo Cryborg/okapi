@@ -28,8 +28,7 @@ use okapi_helper::{Operation, Reply};
 use crate::elevation::{ElevationFailure, ElevationStep, Launcher};
 use crate::kept_selections::{KeptSelections, Unkept};
 use crate::results::{
-    AdminState, CheckState, DaemonOperation, GroupFacts, Line, Preselection, Results, RunBy, Seen,
-    SortColumn,
+    AdminState, CheckState, DaemonOperation, GroupFacts, Line, Results, RunBy, Seen, SortColumn,
 };
 use crate::shown::{show, shown, size};
 use crate::ui;
@@ -827,9 +826,8 @@ fn badge_of(group: &GroupFacts) -> ui::ResultBadge {
     }
 }
 
-/// What the note of a group says: the risk of one left to the user, or
-/// where it stands while out of reach; nothing for a group preselected or
-/// left to the user without risk.
+/// What the note of a group says: where it stands while out of reach, or
+/// unlocked; nothing for any other group, preselected or left to the user.
 fn note_of(group: &GroupFacts) -> ui::RowNote {
     match &group.run_by {
         Some(RunBy::Docker(daemon)) => {
@@ -842,14 +840,9 @@ fn note_of(group: &GroupFacts) -> ui::RowNote {
         None => {}
     }
     match badge_of(group) {
-        ui::ResultBadge::ToChoose if group.preselection == Preselection::GoneForGood => {
-            ui::RowNote::Trash
-        }
-        ui::ResultBadge::ToChoose if group.preselection == Preselection::CacheReset => {
-            ui::RowNote::CacheReset
-        }
         ui::ResultBadge::ToChoose if group.needs_admin => ui::RowNote::RightsObtained,
-        // Left to the user, its unchecked box says it.
+        // Left to the user, its unchecked box says it; the confirmation
+        // warns of a cache reset or the trash.
         ui::ResultBadge::Preselected | ui::ResultBadge::ToChoose => ui::RowNote::None,
         ui::ResultBadge::Admin => match (group.admin, &group.targets, group.seen) {
             (AdminState::NothingToClean, ..) => ui::RowNote::Nothing,
@@ -2081,6 +2074,7 @@ pub mod tests {
     use slint::Model as _;
 
     use super::*;
+    use crate::results::Preselection;
 
     /// A group of the administrator's, locked, its rule preselected, which
     /// the user's own scan counted.
@@ -2131,9 +2125,9 @@ pub mod tests {
         }
     }
 
-    /// Why a group is left to the user, unlocked ones included: never
-    /// preselected (invariant 5), and a preselected rule says nothing of a
-    /// cache.
+    /// What a group left to the user says, unlocked ones included: never
+    /// preselected (invariant 5); a cache reset or the trash is said at the
+    /// confirmation alone.
     #[test]
     fn a_note_says_why_a_group_is_left_to_the_user() {
         let ordinary = GroupFacts {
@@ -2160,7 +2154,7 @@ pub mod tests {
                     group.checked_by_default = false;
                 }),
                 ui::ResultBadge::ToChoose,
-                ui::RowNote::CacheReset,
+                ui::RowNote::None,
             ),
             (
                 with(ordinary.clone(), |group| {
@@ -2170,14 +2164,14 @@ pub mod tests {
                 ui::ResultBadge::ToChoose,
                 ui::RowNote::None,
             ),
-            // The trash, said gone for good.
+            // The trash: the confirmation, not the line, says it goes for good.
             (
                 with(ordinary, |group| {
                     group.checked_by_default = false;
                     group.preselection = Preselection::GoneForGood;
                 }),
                 ui::ResultBadge::ToChoose,
-                ui::RowNote::Trash,
+                ui::RowNote::None,
             ),
             (
                 with(locked(), unlocked),
@@ -2189,7 +2183,7 @@ pub mod tests {
                     group.preselection = Preselection::CacheReset;
                 }),
                 ui::ResultBadge::ToChoose,
-                ui::RowNote::CacheReset,
+                ui::RowNote::RightsObtained,
             ),
             // The journal's vacuum, as any group root's scan unlocked.
             (

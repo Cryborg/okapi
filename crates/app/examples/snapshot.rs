@@ -130,10 +130,10 @@ fn row(
         folded: false,
         hidden: false,
         badge,
-        note: match badge {
-            ui::ResultBadge::Admin => ui::RowNote::Locked,
-            ui::ResultBadge::ToChoose => ui::RowNote::CacheReset,
-            ui::ResultBadge::Preselected => ui::RowNote::None,
+        note: if badge == ui::ResultBadge::Admin {
+            ui::RowNote::Locked
+        } else {
+            ui::RowNote::None
         },
         command: slint::SharedString::new(),
         entries: 1528,
@@ -180,6 +180,18 @@ fn browser(window: &ui::AppWindow, language: Language) {
     cleaner.set_browser_asking(true);
 }
 
+/// The results, and the confirmation of a cleaning open: of the trash and
+/// a cache reset too, when `risky`.
+fn confirmation(window: &ui::AppWindow, risky: bool, language: Language) {
+    results(window, true, language);
+    let cleaner = window.global::<ui::Cleaner>();
+    cleaner.set_confirm_entries(4);
+    cleaner.set_confirm_size(size(2, 1, ui::SizeUnit::Gigabyte));
+    cleaner.set_confirm_trash(risky);
+    cleaner.set_confirm_cache_reset(risky);
+    cleaner.set_confirming(true);
+}
+
 /// The rows of the system category, hidden when `folded`.
 fn system_rows(folded: bool, language: Language) -> Vec<ui::ResultRow> {
     use ui::CategoryKind::System;
@@ -204,13 +216,12 @@ fn system_rows(folded: bool, language: Language) -> Vec<ui::ResultRow> {
     rows.extend(system.iter().map(|(label, badge, checked)| {
         let mut line = row(System, label, *badge, *checked, language);
         line.hidden = folded;
-        // A target only root may read, what it holds unknown; the trash,
-        // gone for good; the journal's vacuum, measured by root's scan only;
-        // an administrator's group, unlocked by root's scan.
+        // A target only root may read, what it holds unknown; the journal's
+        // vacuum, measured by root's scan only; an administrator's group,
+        // unlocked by root's scan.
         line.note = match *label {
             "Crash Reports" => ui::RowNote::RightsObtained,
             "Snap Cache" => ui::RowNote::Unseen,
-            "Trash" => ui::RowNote::Trash,
             "Journal Logs" => ui::RowNote::Unmeasured,
             _ => line.note,
         };
@@ -2282,7 +2293,7 @@ fn reading_scene(app: &ui::AppWindow, screen: &str, language: Language) {
             app.global::<ui::OldVersions>().set_finding(true);
         }
         other => panic!(
-            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, results-sorted, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, groups-closed, groups-closed-small, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-start-reading, disk-scanning, disk-result, disk-result-small, disk-result-keys, disk-stopped, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-reading, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, apps-leftovers-reading, apps-old-versions, apps-old-versions-confirm, apps-old-versions-reading, settings, settings-trash, history, history-small, history-update, history-empty, history-reading, large-start, large-start-reading, large-searching, large-stopped, large-result, large-smallest, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-start, duplicates-start-reading, duplicates-start-home, duplicates-result, duplicates-empty, duplicates-confirm, duplicates-quick (each also -small)"
+            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, results-sorted, folded, results-docker, results-by-hand, browser, confirm, confirm-risks, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, groups-closed, groups-closed-small, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-start-reading, disk-scanning, disk-result, disk-result-small, disk-result-keys, disk-stopped, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-reading, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, apps-leftovers-reading, apps-old-versions, apps-old-versions-confirm, apps-old-versions-reading, settings, settings-trash, history, history-small, history-update, history-empty, history-reading, large-start, large-start-reading, large-searching, large-stopped, large-result, large-smallest, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-start, duplicates-start-reading, duplicates-start-home, duplicates-result, duplicates-empty, duplicates-confirm, duplicates-quick (each also -small)"
         ),
     }
 }
@@ -2327,6 +2338,7 @@ fn main() {
         ),
         "results-by-hand" => results_of(&app, language, &[ui::RowNote::ByHand]),
         "browser" => browser(&app, language),
+        "confirm" | "confirm-risks" => confirmation(&app, screen == "confirm-risks", language),
         "receipt" => receipt(&app),
         "choosing" => choosing(&app),
         "scanning" => scanning(&app),

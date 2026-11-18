@@ -520,10 +520,6 @@ msgctxt "Fold"
 msgid "Replier {}"
 msgstr "Collapse {}"
 
-msgctxt "ResultLine"
-msgid "Le prochain démarrage sera plus lent, le temps de recréer ce cache."
-msgstr "The next start will be slower, while this cache is built again."
-
 msgctxt "WhyButton"
 msgid "Pourquoi c'est sans risque"
 msgstr "Why it's safe"
@@ -603,6 +599,14 @@ msgstr "Get the rights"
 msgctxt "RightsBanner"
 msgid "Annuler"
 msgstr "Cancel"
+
+msgctxt "Confirmation"
+msgid "Ce qui part de la corbeille ne pourra plus être restauré."
+msgstr "What leaves the trash can no longer be restored."
+
+msgctxt "Confirmation"
+msgid "Les caches retirés seront recréés : ce qui s'en sert démarrera un peu plus lentement la prochaine fois."
+msgstr "The caches removed will be built again: what uses them will start a little slower next time."
 
 msgctxt "Confirmation"
 msgid "Docker élaguera son cache de construction : ce qui part n'est connu qu'après."
@@ -4153,10 +4157,6 @@ msgstr "The folders added in Settings."
 msgctxt "ProblemBanner"
 msgid "Un dossier à nettoyer des réglages n'est pas un chemin absolu sans .. : rien ne peut démarrer. Corrigez-le ou retirez-le dans Réglages."
 msgstr "A folder to clean in the settings is not an absolute path without ..: nothing can start. Fix it or remove it in Settings."
-
-msgctxt "ResultLine"
-msgid "Supprimé définitivement, sans retour possible : à cocher vous-même."
-msgstr "Deleted for good, with no way back: check it yourself."
 
 msgctxt "NoteLine"
 msgid "Dossier à nettoyer refusé, Réglages dit pourquoi : {}"

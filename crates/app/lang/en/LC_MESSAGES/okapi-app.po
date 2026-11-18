@@ -903,6 +903,10 @@ msgid "Okapi ne peut pas fermer {} lui-même : fermez-le, puis relancez le netto
 msgstr "Okapi cannot close {} itself: close it, then start the cleaning again."
 
 msgctxt "BrowserQuestion"
+msgid "Annuler"
+msgstr "Cancel"
+
+msgctxt "BrowserQuestion"
 msgid "Ignorer {}"
 msgstr "Ignore {}"
 

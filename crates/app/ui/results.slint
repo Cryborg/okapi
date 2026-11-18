@@ -659,6 +659,14 @@ component BrowserQuestion inherits ModalFrame {
     HorizontalLayout {
         alignment: end;
         spacing: Theme.spacing-s;
+        // As Escape: the whole cleaning is cancelled.
+        ActionButton {
+            text: @tr("Annuler");
+            kind: ButtonKind.ghost;
+            clicked => {
+                Cleaner.cancel-browser();
+            }
+        }
         ignore := ActionButton {
             text: @tr("Ignorer {}", Cleaner.browser-name);
             kind: ButtonKind.ghost;
@@ -710,9 +718,9 @@ export component ResultsPage inherits VerticalLayout {
     }
 
     question := BrowserQuestion {
-        x: (root.width - Theme.modal-width) / 2;
+        x: (root.width - Theme.browser-question-width) / 2;
         y: root.height / 4;
-        width: Theme.modal-width;
+        width: Theme.browser-question-width;
     }
 
     confirmation := Confirmation {

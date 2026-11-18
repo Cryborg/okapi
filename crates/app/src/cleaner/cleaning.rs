@@ -2784,6 +2784,23 @@ mod tests {
         assert_eq!(sandbox.history(), Vec::<serde_json::Value>::new());
     }
 
+    /// "Annuler" at an open browser does what Escape does: the whole
+    /// cleaning is cancelled.
+    #[test]
+    fn annuler_at_an_open_browser_cancels_the_cleaning() {
+        let sandbox = Sandbox::new();
+        let (chrome, pip, _) = chrome_open(&sandbox, true);
+        let (window, _screen) = on_results(sandbox.read(&sandbox.root.join("state")));
+        confirm_and_ask(&window);
+        let_the_screen_settle();
+        button(&window, "Annuler").invoke_accessible_default_action();
+        assert!(!asking(&window));
+        assert_eq!(step(&window), ui::CleanerStep::Results);
+        assert!(chrome.exists());
+        assert!(pip.unwrap().exists(), "nothing removed");
+        assert_eq!(sandbox.history(), Vec::<serde_json::Value>::new());
+    }
+
     /// A browser's cache in the sandbox, the browser open (see
     /// [`chrome_open`]).
     fn open_browser(sandbox: &Sandbox, base: &str, files: usize) -> PathBuf {

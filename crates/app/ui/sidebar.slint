@@ -4,27 +4,46 @@ import { IconButton } from "widgets.slint";
 // The screens the sidebar leads to: only those that exist.
 export enum Page { home, cleaner, disk-usage, duplicates, large-files, apps, updates, history, settings, about }
 
+// The families of screens the sidebar groups under a title the user may
+// close (Rust keeps which are closed).
+export enum SidebarGroup { cleaning, software, storage }
+
 // One entry of the sidebar: its icon and words carry it, never colour alone.
 // Reached with Tab, chosen with Enter or Space, its focus ring visible.
 // Folded, its words go to a tooltip, and the current one keeps a mark on
 // its edge: its background alone would be colour only.
+// A screen of a group (`sub`) shows no icon unfolded, its words under the
+// title's. A group's title (`expandable`) opens or closes the group, its
+// chevron says which; closed over the page shown, it shows it as current.
 component NavItem inherits Rectangle {
     in property <image> icon;
     in property <string> label;
+    // An entry or a screen of a group: it is the page shown.
     in property <bool> active;
     in property <bool> folded;
+    in property <bool> sub;
+    in property <bool> expandable;
+    in property <bool> expanded;
+    // A group's title: the page shown is one of its screens.
+    in property <bool> holds-current;
     callback clicked;
 
-    height: Theme.control-height;
+    property <bool> shows-icon: !root.sub || root.folded;
+    // Set apart as the page shown: a closed title stands for its screens.
+    property <bool> marked: root.expandable ? root.holds-current && !root.expanded : root.active;
+
+    height: root.sub && !root.folded ? Theme.sidebar-sub-height : Theme.control-height;
     border-radius: Theme.radius-medium;
-    background: active ? Theme.accent-soft : touch.has-hover ? Theme.surface-hover : transparent;
+    background: root.marked ? Theme.accent-soft : touch.has-hover ? Theme.surface-hover : transparent;
     accessible-role: button;
     accessible-label: label;
-    accessible-item-selectable: true;
-    accessible-item-selected: active;
+    accessible-item-selectable: !root.expandable;
+    accessible-item-selected: root.marked && !root.expandable;
+    accessible-expandable: root.expandable;
+    accessible-expanded: root.expandable && root.expanded;
     // What a screen reader says of the current entry (Orca ignores the
     // selected state of a button).
-    accessible-description: active ? @tr("page affichée") : "";
+    accessible-description: !root.marked ? "" : root.expandable ? @tr("contient la page affichée") : @tr("page affichée");
     accessible-action-default => {
         root.clicked();
     }
@@ -32,7 +51,10 @@ component NavItem inherits Rectangle {
     keys := FocusScope {
         key-pressed(event) => {
             if event.text == Key.Return || event.text == Key.Space {
-                root.clicked();
+                // A key held would open and close a group over and over.
+                if !(root.expandable && event.repeat) {
+                    root.clicked();
+                }
                 return accept;
             }
             reject
@@ -56,7 +78,7 @@ component NavItem inherits Rectangle {
         border-color: Theme.focus;
     }
 
-    if root.folded && root.active: current := Rectangle {
+    if root.folded && root.marked: current := Rectangle {
         x: 0;
         y: (parent.height - self.height) / 2;
         width: Theme.sidebar-mark-width;
@@ -66,12 +88,13 @@ component NavItem inherits Rectangle {
     }
 
     HorizontalLayout {
-        padding-left: root.folded ? 0 : Theme.spacing-m;
+        padding-left: root.folded ? 0 : root.shows-icon ? Theme.spacing-m : Theme.sidebar-sub-indent;
+        padding-right: root.folded ? 0 : Theme.spacing-m;
         spacing: Theme.spacing-m;
-        alignment: root.folded ? center : start;
-        Image {
+        alignment: root.folded ? center : stretch;
+        if root.shows-icon: Image {
             source: icon;
-            colorize: active ? Theme.text : Theme.text-2;
+            colorize: root.marked || root.holds-current ? Theme.text : Theme.text-2;
             width: Theme.icon;
             height: Theme.icon;
             cross-axis-self-alignment: center;
@@ -80,26 +103,54 @@ component NavItem inherits Rectangle {
         if !root.folded: Text {
             text: label;
             accessible-role: none;
-            color: active ? Theme.text : Theme.text-2;
+            horizontal-stretch: 1;
+            color: root.marked || root.holds-current ? Theme.text : Theme.text-2;
             font-size: Theme.font-label;
-            font-weight: active ? Theme.weight-semibold : Theme.weight-medium;
+            font-weight: root.marked ? Theme.weight-semibold : root.sub ? Theme.weight-regular : Theme.weight-medium;
             vertical-alignment: center;
+        }
+        if root.expandable && !root.folded: Image {
+            source: root.expanded ? @image-url("../assets/icons/chevron-down.svg") : @image-url("../assets/icons/chevron-right.svg");
+            colorize: Theme.text-3;
+            width: Theme.icon-small;
+            height: Theme.icon-small;
+            cross-axis-self-alignment: center;
+            accessible-role: none;
         }
     }
 }
 
+// A line of the folded sidebar where a group's title is not: around each
+// group's screens.
+component FamilyDivider inherits VerticalLayout {
+    padding-top: Theme.spacing-xs;
+    padding-bottom: Theme.spacing-xs;
+    Rectangle {
+        height: Theme.border-width;
+        background: Theme.border;
+    }
+}
+
 // Folded, by the user's choice or because the window is narrow, it shows
-// its icons only. Narrow, it has no button: the window folds it whatever
-// the choice, the button would do nothing.
+// its icons only: every screen, its groups' titles gone whether they are
+// open or not, a line around each group's screens. Narrow, it has no button:
+// the window folds it whatever the choice, the button would do nothing.
 export component Sidebar inherits Rectangle {
     in property <Page> page;
     // The user's choice, kept while the window is narrow.
     in-out property <bool> chosen-folded;
     in property <bool> narrow;
+    // Each group open, as the user left it.
+    in-out property <bool> cleaning-open: true;
+    in-out property <bool> software-open: true;
+    in-out property <bool> storage-open: true;
     callback navigate(Page);
     // The user chose to fold it or not (never said for a value set from
     // outside).
     callback fold-chosen(folded: bool);
+    // The user opened or closed a group (never said for a value set from
+    // outside).
+    callback group-chosen(group: SidebarGroup, open: bool);
 
     property <bool> folded: chosen-folded || narrow;
 
@@ -156,9 +207,24 @@ export component Sidebar inherits Rectangle {
             }
         }
 
-        NavItem {
+        if root.folded: FamilyDivider { }
+
+        if !root.folded: NavItem {
+            icon: @image-url("../assets/icons/sparkles.svg");
+            label: @tr("Nettoyage");
+            expandable: true;
+            expanded: root.cleaning-open;
+            holds-current: root.page == Page.cleaner || root.page == Page.disk-usage;
+            clicked => {
+                root.cleaning-open = !root.cleaning-open;
+                root.group-chosen(SidebarGroup.cleaning, root.cleaning-open);
+            }
+        }
+
+        if root.folded || root.cleaning-open: NavItem {
             icon: @image-url("../assets/icons/sparkles.svg");
             label: @tr("Nettoyeur");
+            sub: true;
             folded: root.folded;
             active: root.page == Page.cleaner;
             clicked => {
@@ -166,9 +232,10 @@ export component Sidebar inherits Rectangle {
             }
         }
 
-        NavItem {
+        if root.folded || root.cleaning-open: NavItem {
             icon: @image-url("../assets/icons/hard-drive.svg");
             label: @tr("Espace disque");
+            sub: true;
             folded: root.folded;
             active: root.page == Page.disk-usage;
             clicked => {
@@ -176,29 +243,24 @@ export component Sidebar inherits Rectangle {
             }
         }
 
-        NavItem {
-            icon: @image-url("../assets/icons/copy.svg");
-            label: @tr("Doublons");
-            folded: root.folded;
-            active: root.page == Page.duplicates;
+        if root.folded: FamilyDivider { }
+
+        if !root.folded: NavItem {
+            icon: @image-url("../assets/icons/package.svg");
+            label: @tr("Logiciels");
+            expandable: true;
+            expanded: root.software-open;
+            holds-current: root.page == Page.apps || root.page == Page.updates;
             clicked => {
-                root.navigate(Page.duplicates);
+                root.software-open = !root.software-open;
+                root.group-chosen(SidebarGroup.software, root.software-open);
             }
         }
 
-        NavItem {
-            icon: @image-url("../assets/icons/arrow-down-wide-narrow.svg");
-            label: @tr("Gros fichiers");
-            folded: root.folded;
-            active: root.page == Page.large-files;
-            clicked => {
-                root.navigate(Page.large-files);
-            }
-        }
-
-        NavItem {
+        if root.folded || root.software-open: NavItem {
             icon: @image-url("../assets/icons/layout-grid.svg");
             label: @tr("Applications");
+            sub: true;
             folded: root.folded;
             active: root.page == Page.apps;
             clicked => {
@@ -206,15 +268,54 @@ export component Sidebar inherits Rectangle {
             }
         }
 
-        NavItem {
+        if root.folded || root.software-open: NavItem {
             icon: @image-url("../assets/icons/package.svg");
             label: @tr("Mises à jour");
+            sub: true;
             folded: root.folded;
             active: root.page == Page.updates;
             clicked => {
                 root.navigate(Page.updates);
             }
         }
+
+        if root.folded: FamilyDivider { }
+
+        if !root.folded: NavItem {
+            icon: @image-url("../assets/icons/hard-drive.svg");
+            label: @tr("Stockage");
+            expandable: true;
+            expanded: root.storage-open;
+            holds-current: root.page == Page.duplicates || root.page == Page.large-files;
+            clicked => {
+                root.storage-open = !root.storage-open;
+                root.group-chosen(SidebarGroup.storage, root.storage-open);
+            }
+        }
+
+        if root.folded || root.storage-open: NavItem {
+            icon: @image-url("../assets/icons/copy.svg");
+            label: @tr("Doublons");
+            sub: true;
+            folded: root.folded;
+            active: root.page == Page.duplicates;
+            clicked => {
+                root.navigate(Page.duplicates);
+            }
+        }
+
+        if root.folded || root.storage-open: NavItem {
+            icon: @image-url("../assets/icons/arrow-down-wide-narrow.svg");
+            label: @tr("Gros fichiers");
+            sub: true;
+            folded: root.folded;
+            active: root.page == Page.large-files;
+            clicked => {
+                root.navigate(Page.large-files);
+            }
+        }
+
+        if root.folded: FamilyDivider { }
 
         NavItem {
             icon: @image-url("../assets/icons/history.svg");

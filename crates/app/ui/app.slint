@@ -1,5 +1,5 @@
 import { Theme, Brand, Screen } from "theme.slint";
-import { Sidebar, Page } from "sidebar.slint";
+import { Sidebar, Page, SidebarGroup } from "sidebar.slint";
 import { AboutPage } from "about.slint";
 import { CleanerPage } from "cleaner.slint";
 import { DashboardPage } from "dashboard.slint";
@@ -33,7 +33,7 @@ import {
 export {
     AddableWidget, CellPlace, Dashboard, DayKind, FocusPart, FocusRequest, Moment, ReadingState, Reclaimable, ReclaimableState, SystemShown, Toast,
     WidgetCell, WidgetKind, WidgetSize,
-    Page, CategoryChoice, CategoryKind, CheckState, CleanerStep, Cleaner, IssueKind, IssueShown,
+    Page, SidebarGroup, CategoryChoice, CategoryKind, CheckState, CleanerStep, Cleaner, IssueKind, IssueShown,
     OutcomeKind, ResultBadge, ResultRow, RowState, ScanRow, SetupProblem, Size, SizeUnit,
     StopReason, StopShown,
     DiskDetail, DiskFiles, DiskLine, DiskLineKind, DiskLineState, DiskPhase, DiskRefusal, DiskStep, DiskUnreadable, DiskUsage,
@@ -59,6 +59,10 @@ export component AppWindow inherits Window {
     in-out property <Page> page: Page.home;
     // The sidebar folded by the user's choice (a narrow window folds it too).
     in-out property <bool> sidebar-chosen-folded;
+    // Each group of the sidebar open, as the user left it.
+    in-out property <bool> sidebar-cleaning-open: true;
+    in-out property <bool> sidebar-software-open: true;
+    in-out property <bool> sidebar-storage-open: true;
     // The width has changed since creation: the state was traced then.
     property <bool> sized;
     pure function narrow-now() -> bool {
@@ -87,6 +91,7 @@ export component AppWindow inherits Window {
     callback sidebar-shown(chosen-folded: bool, narrow: bool);
     // The user's choice, for Rust to keep.
     callback sidebar-fold-chosen(folded: bool);
+    callback sidebar-group-chosen(group: SidebarGroup, open: bool);
     // Before the first width, `Screen.narrow` is not known yet: that width
     // says it.
     changed sidebar-chosen-folded => {
@@ -106,11 +111,17 @@ export component AppWindow inherits Window {
             page: root.page;
             chosen-folded <=> root.sidebar-chosen-folded;
             narrow: Screen.narrow;
+            cleaning-open <=> root.sidebar-cleaning-open;
+            software-open <=> root.sidebar-software-open;
+            storage-open <=> root.sidebar-storage-open;
             navigate(page) => {
                 root.page = page;
             }
             fold-chosen(folded) => {
                 root.sidebar-fold-chosen(folded);
+            }
+            group-chosen(group, open) => {
+                root.sidebar-group-chosen(group, open);
             }
         }
 

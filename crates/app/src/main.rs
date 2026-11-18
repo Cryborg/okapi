@@ -393,7 +393,7 @@ fn main() -> ExitCode {
         }
     };
     tracing::info!("window created");
-    let fold = sidebar::KeptFold::attach(&window, okapi_platform::state_directory());
+    let kept_sidebar = sidebar::KeptSidebar::attach(&window, okapi_platform::state_directory());
     screen.keep_selections(kept_selections::KeptSelections::start(
         okapi_platform::state_directory(),
     ));
@@ -403,7 +403,7 @@ fn main() -> ExitCode {
     large_files.shut_down();
     apps.shut_down();
     home.shut_down();
-    fold.shut_down();
+    kept_sidebar.shut_down();
     settings.shut_down();
     match ran {
         Ok(()) => {
@@ -441,7 +441,8 @@ mod tests {
     use super::*;
 
     use crate::cleaner::tests::{
-        SIDEBAR_ENTRIES, SIDEBAR_STOPS, button, press, resize, shows, start_of, unnamed_images,
+        SIDEBAR_ENTRIES, SIDEBAR_GROUPS, SIDEBAR_STOPS, button, buttons, press, resize, shows,
+        start_of, unnamed_images,
     };
 
     /// The license paragraphs said once on the screen, first to last: what
@@ -493,13 +494,7 @@ mod tests {
         assert!(!shows(&window, "#MadeWithSlint"));
         // Each entry read once, as a button, the current one selected.
         for label in ["Accueil", "Nettoyeur", "Mises à jour", "À propos"] {
-            assert_eq!(
-                ElementHandle::find_by_accessible_label(&window, label)
-                    .filter(|element| element.accessible_role() == Some(AccessibleRole::Button))
-                    .count(),
-                1,
-                "{label}"
-            );
+            assert_eq!(buttons(&window, label), 1, "{label}");
         }
         let current = |label| button(&window, label).accessible_description();
         assert_eq!(current("Accueil").as_deref(), Some("page affichée"));
@@ -572,9 +567,9 @@ mod tests {
         }
         press(&window, slint::platform::Key::Return);
         assert_eq!(window.get_page(), Page::About);
-        // Backtab goes back to home, past disk usage and the cleaner; Escape
-        // does nothing.
-        for _ in 0..SIDEBAR_ENTRIES - 1 {
+        // Backtab goes back to home, past every other entry and every
+        // group's title; Escape does nothing.
+        for _ in 0..SIDEBAR_STOPS - 2 {
             press(&window, slint::platform::Key::Backtab);
         }
         press(&window, slint::platform::Key::Escape);
@@ -588,11 +583,7 @@ mod tests {
     fn the_sidebar_folds_to_its_icons_by_choice_or_in_a_narrow_window() {
         let window = test_window();
         let entry_width = || button(&window, "Accueil").size().width;
-        let buttons = |label| {
-            ElementHandle::find_by_accessible_label(&window, label)
-                .filter(|element| element.accessible_role() == Some(AccessibleRole::Button))
-                .count()
-        };
+        let buttons = |label| buttons(&window, label);
         // On Home only: About shows the name too.
         let named = || shows(&window, "Okapi");
         // The mark has no name: found by its id (debug builds only).
@@ -685,6 +676,260 @@ mod tests {
         }
         press(&window, Key::Return);
         assert_eq!(window.get_page(), Page::About);
+    }
+
+    /// The groups of the sidebar, top to bottom: each one's title, then its
+    /// screens and the pages they lead to.
+    const FAMILIES: [(&str, [(&str, Page); 2]); 3] = [
+        (
+            "Nettoyage",
+            [
+                ("Nettoyeur", Page::Cleaner),
+                ("Espace disque", Page::DiskUsage),
+            ],
+        ),
+        (
+            "Logiciels",
+            [
+                ("Applications", Page::Apps),
+                ("Mises à jour", Page::Updates),
+            ],
+        ),
+        (
+            "Stockage",
+            [
+                ("Doublons", Page::Duplicates),
+                ("Gros fichiers", Page::LargeFiles),
+            ],
+        ),
+    ];
+
+    #[test]
+    fn the_sidebar_groups_its_screens_by_family() {
+        let window = test_window();
+        assert_eq!(SIDEBAR_GROUPS, FAMILIES.len());
+        let mut order = vec!["Accueil"];
+        for (title, screens) in FAMILIES {
+            order.push(title);
+            order.extend(screens.map(|(label, _)| label));
+        }
+        order.extend(["Historique", "Réglages", "À propos"]);
+        assert_eq!(order.len(), SIDEBAR_ENTRIES + SIDEBAR_GROUPS);
+        let tops: Vec<f32> = order
+            .iter()
+            .map(|label| {
+                assert_eq!(buttons(&window, label), 1, "{label}");
+                button(&window, label).absolute_position().y
+            })
+            .collect();
+        assert!(
+            tops.windows(2).all(|pair| pair[0] < pair[1]),
+            "top to bottom: {order:?} {tops:?}"
+        );
+        for (title, screens) in FAMILIES {
+            let title = button(&window, title);
+            assert_eq!(title.accessible_expanded(), Some(true), "open by default");
+            assert_eq!(title.accessible_description().as_deref(), Some(""));
+            // A screen of a group is shorter than its title.
+            let screen = button(&window, screens[0].0);
+            assert!(screen.size().height < title.size().height);
+        }
+    }
+
+    #[test]
+    fn a_closed_group_hides_its_screens_and_shows_the_page_it_holds() {
+        let window = test_window();
+        let said = |label| button(&window, label).accessible_description();
+        for (title, screens) in FAMILIES {
+            for (label, page) in screens {
+                window.set_page(page);
+                // `changed` handlers run on the next turn of the event loop.
+                slint::platform::update_timers_and_animations();
+                assert_eq!(said(label).as_deref(), Some("page affichée"), "{label}");
+                assert_eq!(said(title).as_deref(), Some(""), "open: {title}");
+
+                button(&window, title).invoke_accessible_default_action();
+                assert_eq!(button(&window, title).accessible_expanded(), Some(false));
+                for (hidden, _) in screens {
+                    assert_eq!(buttons(&window, hidden), 0, "{hidden} under {title}");
+                }
+                assert_eq!(window.get_page(), page, "closing leads nowhere");
+                // Only its own title says it holds the page shown.
+                for (other, others) in FAMILIES {
+                    let expected = if other == title {
+                        "contient la page affichée"
+                    } else {
+                        ""
+                    };
+                    assert_eq!(said(other).as_deref(), Some(expected), "{label}: {other}");
+                    if other != title {
+                        assert_eq!(buttons(&window, others[0].0), 1, "{other} stays open");
+                    }
+                }
+
+                button(&window, title).invoke_accessible_default_action();
+                assert_eq!(button(&window, title).accessible_expanded(), Some(true));
+                assert_eq!(said(label).as_deref(), Some("page affichée"));
+            }
+        }
+    }
+
+    #[test]
+    fn only_the_closed_title_of_the_page_shown_says_it_holds_it() {
+        let window = test_window();
+        for (title, _) in FAMILIES {
+            button(&window, title).invoke_accessible_default_action();
+        }
+        let grouped: Vec<(&str, Page)> = FAMILIES
+            .iter()
+            .flat_map(|(title, screens)| screens.iter().map(|(_, page)| (*title, *page)))
+            .collect();
+        let alone = [Page::Home, Page::History, Page::Settings, Page::About];
+        for page in grouped
+            .iter()
+            .map(|(_, page)| *page)
+            .chain(alone)
+            .collect::<Vec<_>>()
+        {
+            window.set_page(page);
+            // `changed` handlers run on the next turn of the event loop.
+            slint::platform::update_timers_and_animations();
+            let holder = grouped
+                .iter()
+                .find(|(_, grouped_page)| *grouped_page == page)
+                .map(|(title, _)| *title);
+            for (title, _) in FAMILIES {
+                let title_button = button(&window, title);
+                let expected = if holder == Some(title) {
+                    "contient la page affichée"
+                } else {
+                    ""
+                };
+                assert_eq!(
+                    title_button.accessible_description().as_deref(),
+                    Some(expected),
+                    "{page:?}: {title}"
+                );
+                // A title is never the page itself.
+                assert_eq!(title_button.accessible_expandable(), Some(true));
+                assert_eq!(title_button.accessible_item_selectable(), Some(false));
+                assert_ne!(title_button.accessible_item_selected(), Some(true));
+            }
+        }
+        // An entry or a screen is selected, never expandable.
+        button(&window, "Nettoyage").invoke_accessible_default_action();
+        window.set_page(Page::Cleaner);
+        slint::platform::update_timers_and_animations();
+        for label in ["Nettoyeur", "À propos"] {
+            let entry = button(&window, label);
+            assert_eq!(entry.accessible_expandable(), Some(false), "{label}");
+            assert_eq!(entry.accessible_item_selectable(), Some(true), "{label}");
+        }
+        assert_eq!(
+            button(&window, "Nettoyeur").accessible_item_selected(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn a_group_opens_and_closes_with_the_keyboard_keeping_the_focus() {
+        use slint::platform::Key;
+
+        let window = test_window();
+        // The fold button, home, the cleaning group and its two screens,
+        // then the software group's title.
+        for _ in 0..6 {
+            press(&window, Key::Tab);
+        }
+        press(&window, Key::Return);
+        assert!(!window.get_sidebar_software_open());
+        assert_eq!(buttons(&window, "Applications"), 0);
+        // A key held changes nothing more.
+        for key in [Key::Return, Key::Space] {
+            window
+                .window()
+                .dispatch_event(slint::platform::WindowEvent::KeyPressRepeated {
+                    text: key.into(),
+                });
+            assert!(!window.get_sidebar_software_open(), "{key:?} held");
+        }
+        press(&window, Key::Space);
+        assert!(
+            window.get_sidebar_software_open(),
+            "Space, on the title still"
+        );
+        press(&window, Key::Return);
+        assert!(!window.get_sidebar_software_open());
+        assert_eq!(window.get_page(), Page::Home, "a title leads nowhere");
+        // The rest of the sidebar, two stops fewer, its last entry About.
+        for _ in 6..SIDEBAR_STOPS - 2 {
+            press(&window, Key::Tab);
+        }
+        press(&window, Key::Return);
+        assert_eq!(window.get_page(), Page::About);
+    }
+
+    #[test]
+    fn the_folded_sidebar_shows_every_screen_whatever_the_groups() {
+        use slint::platform::Key;
+
+        let window = test_window();
+        for (title, _) in FAMILIES {
+            button(&window, title).invoke_accessible_default_action();
+        }
+        window.set_page(Page::Duplicates);
+        for narrow in [false, true] {
+            if narrow {
+                button(&window, "Déplier la barre latérale").invoke_accessible_default_action();
+                resize(&window, 1000);
+            } else {
+                button(&window, "Replier la barre latérale").invoke_accessible_default_action();
+            }
+            for (title, screens) in FAMILIES {
+                assert_eq!(buttons(&window, title), 0, "no title folded: {title}");
+                for (label, _) in screens {
+                    assert_eq!(buttons(&window, label), 1, "{label} folded");
+                    assert!(button(&window, label).size().width < 50.0);
+                }
+            }
+            assert_eq!(
+                button(&window, "Doublons")
+                    .accessible_description()
+                    .as_deref(),
+                Some("page affichée")
+            );
+            assert_eq!(
+                ElementHandle::find_by_element_id(&window, "NavItem::current").count(),
+                1,
+                "the current one marked, alone"
+            );
+        }
+        // Narrow: the screens alone, Gros fichiers the seventh.
+        for _ in 0..7 {
+            press(&window, Key::Tab);
+        }
+        press(&window, Key::Return);
+        assert_eq!(window.get_page(), Page::LargeFiles);
+        // Widened again, the groups as they were left, closed, only the
+        // one of the page shown saying it holds it.
+        resize(&window, 1280);
+        for (title, screens) in FAMILIES {
+            let title_button = button(&window, title);
+            assert_eq!(title_button.accessible_expanded(), Some(false));
+            let holds = if title == "Stockage" {
+                "contient la page affichée"
+            } else {
+                ""
+            };
+            assert_eq!(
+                title_button.accessible_description().as_deref(),
+                Some(holds),
+                "{title}"
+            );
+            for (label, _) in screens {
+                assert_eq!(buttons(&window, label), 0, "{label} widened");
+            }
+        }
     }
 
     #[test]

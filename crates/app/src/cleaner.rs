@@ -2525,6 +2525,13 @@ pub mod tests {
             .unwrap_or_else(|| panic!("no button {label}"))
     }
 
+    /// The buttons labelled `label` shown.
+    pub fn buttons(window: &ui::AppWindow, label: &str) -> usize {
+        ElementHandle::find_by_accessible_label(window, label)
+            .filter(|element| element.accessible_role() == Some(AccessibleRole::Button))
+            .count()
+    }
+
     /// Images a screen reader would read without a name.
     pub fn unnamed_images(window: &ui::AppWindow) -> usize {
         ElementHandle::find_by_element_type_name(window, "Image")
@@ -3692,11 +3699,14 @@ pub mod tests {
         scan.go.send(()).unwrap();
     }
 
-    /// The entries of the sidebar, each a stop of Tab.
+    /// The screens the sidebar leads to, each a stop of Tab; in a narrow
+    /// window, its only stops.
     pub const SIDEBAR_ENTRIES: usize = 10;
-    /// The stops of Tab in the sidebar of a wide window: its fold button,
-    /// then its entries.
-    pub const SIDEBAR_STOPS: usize = SIDEBAR_ENTRIES + 1;
+    /// The groups' titles of the unfolded sidebar, each a stop of Tab.
+    pub const SIDEBAR_GROUPS: usize = okapi_store::SidebarGroup::ALL.len();
+    /// The stops of Tab in the sidebar of a wide window, every group open:
+    /// its fold button, then its entries and its groups' titles.
+    pub const SIDEBAR_STOPS: usize = 1 + SIDEBAR_ENTRIES + SIDEBAR_GROUPS;
 
     pub fn press(window: &ui::AppWindow, key: slint::platform::Key) {
         let text = slint::SharedString::from(key);

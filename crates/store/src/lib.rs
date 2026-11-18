@@ -6,11 +6,11 @@
 //! updates, set aside as `history.1.jsonl` before a cleaning once grown too
 //! large (the one set aside before then lost), the summary of the last analysis
 //! beside it (`last-analysis.json`), how the user last left the interface
-//! (`interface.json`, there too), what they unchecked among the results
-//! (`selections.json`, there too), the applications seen installed
-//! (`seen-apps.json`, there too), and every trace in the journal. A
-//! cleaning's receipt becomes its history line here, the one form both
-//! interfaces write; nothing here depends on an interface.
+//! (`interface.json`, there too: the sidebar's fold and its groups closed),
+//! what they unchecked among the results (`selections.json`, there too), the
+//! applications seen installed (`seen-apps.json`, there too), and every
+//! trace in the journal. A cleaning's receipt becomes its history line here,
+//! the one form both interfaces write; nothing here depends on an interface.
 
 mod dashboard;
 mod file;
@@ -33,7 +33,7 @@ pub use history::{
     HistoryUnavailable, LastCleaning, Opened, OperationEnd, OperationReason, OperationRecord,
     PackageSource, UninstallEntry, UpdateEntry, UpdatedPackage, seconds,
 };
-pub use interface_state::InterfaceState;
+pub use interface_state::{InterfaceState, SidebarGroup};
 pub use last_analysis::LastAnalysis;
 pub use seen_apps::{SeenApp, SeenApps};
 pub use selections::Selections;

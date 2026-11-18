@@ -60,6 +60,22 @@ msgctxt "NavItem"
 msgid "page affichée"
 msgstr "current page"
 
+msgctxt "NavItem"
+msgid "contient la page affichée"
+msgstr "holds the current page"
+
+msgctxt "Sidebar"
+msgid "Nettoyage"
+msgstr "Cleaning"
+
+msgctxt "Sidebar"
+msgid "Logiciels"
+msgstr "Software"
+
+msgctxt "Sidebar"
+msgid "Stockage"
+msgstr "Storage"
+
 msgctxt "Sidebar"
 msgid "Nettoyeur"
 msgstr "Cleaner"

@@ -79,6 +79,10 @@ export global Theme {
     out property <length> sidebar-folded-width: 64px;
     // The mark on the edge of the current entry of the folded sidebar.
     out property <length> sidebar-mark-width: 3px;
+    // A screen of a group, under its title (`.sb .nav.sub`): shorter, with
+    // no icon, its words lined up with the title's.
+    out property <length> sidebar-sub-height: 32px;
+    out property <length> sidebar-sub-indent: spacing-m + icon + spacing-m;
     // Below it, the window is narrow: the sidebar folds, the pages' margins
     // narrow (`Screen`).
     out property <length> narrow-below: 1100px;

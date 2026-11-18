@@ -1277,6 +1277,14 @@ fn updates(window: &ui::AppWindow, state: &str, language: Language) {
     ])));
 }
 
+/// Two groups of the sidebar closed, the page shown (the updates) in one of
+/// them.
+fn groups_closed(app: &ui::AppWindow, language: Language) {
+    updates(app, "pending", language);
+    app.set_sidebar_software_open(false);
+    app.set_sidebar_storage_open(false);
+}
+
 /// The lines of the applications screen, as on the mockup.
 fn app_lines(language: Language) -> Vec<ui::AppLine> {
     let line =
@@ -2099,6 +2107,7 @@ fn main() {
             home(&app, language);
             app.set_sidebar_chosen_folded(true);
         }
+        "groups-closed" | "groups-closed-small" => groups_closed(&app, language),
         "home-disks" => home_tall(&app, true, language),
         "home-updates" => home_updates(&app, "pending", language),
         "home-updates-uptodate" => home_updates(&app, "uptodate", language),
@@ -2138,7 +2147,7 @@ fn main() {
             duplicates(&app, scene, language);
         }
         other => panic!(
-            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings, settings-trash, history, history-small, history-update, history-empty, large-start, large-searching, large-stopped, large-result, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-result, duplicates-empty, duplicates-confirm (each also -small)"
+            "no screen {other} (any one in English with -en, dark with -dark, both with -en-dark): results, results-small, folded, results-docker, results-by-hand, browser, receipt, choosing, scanning, cleaning, ended, about, home, home-small, home-social, home-folded, groups-closed, groups-closed-small, home-disks, home-updates, home-updates-uptodate, home-memory, home-customize, home-move, disk-start, disk-scanning, disk-result, disk-result-small, disk-result-keys, updates, updates-open, updates-open-small, updates-searching, updates-uptodate, updates-locked, apps, apps-small, apps-uninstall, apps-uninstall-flatpak, apps-leftovers, apps-leftovers-empty, settings, settings-trash, history, history-small, history-update, history-empty, large-start, large-searching, large-stopped, large-result, large-blocked, large-outside, large-filtered, large-nomatch, large-empty, large-confirm, large-confirm-filtered, large-receipt, duplicates-result, duplicates-empty, duplicates-confirm (each also -small)"
         ),
     }
     window.set_size(PhysicalSize::new(width, height));

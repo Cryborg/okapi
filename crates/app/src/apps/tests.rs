@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::time::Instant;
 
-use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+use i_slint_backend_testing::ElementHandle;
 use okapi_tools::apps::dpkg::{Status, parse_status};
 use okapi_tools::apps::flatpak::FlatpakRef;
 use okapi_tools::apps::measure::Measured;
@@ -14,7 +14,7 @@ use okapi_tools::apps::{App, AppSize, Origin};
 use slint::Model as _;
 
 use super::*;
-use crate::cleaner::tests::{button, checkbox, press, seams_never_scanning, shows};
+use crate::cleaner::tests::{button, buttons, checkbox, press, seams_never_scanning, shows};
 
 /// How long a test waits for a thread of the screen: a fault fails, it
 /// never hangs.
@@ -296,13 +296,6 @@ fn names(window: &ui::AppWindow) -> Vec<String> {
 
 fn step(window: &ui::AppWindow) -> ui::UninstallStep {
     apps(window).get_step()
-}
-
-/// The buttons labelled `label` shown.
-fn buttons(window: &ui::AppWindow, label: &str) -> usize {
-    ElementHandle::find_by_accessible_label(window, label)
-        .filter(|element| element.accessible_role() == Some(AccessibleRole::Button))
-        .count()
 }
 
 /// Opens the detail of the line named `name`.

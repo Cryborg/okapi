@@ -78,9 +78,9 @@ fn shown_launcher(active: &Revision, root: &Path, reading: &Reading) -> Option<L
     })
 }
 
-/// The revisions of `result` (snapd's list of every revision), in its order
-/// (each snap's oldest first), by their snap's name; a revision of a name
-/// that is no snap's passed over, traced.
+/// The revisions of `result` (snapd's list of every revision), in its order,
+/// by their snap's name; a revision of a name that is no snap's passed
+/// over, traced.
 ///
 /// # Errors
 ///

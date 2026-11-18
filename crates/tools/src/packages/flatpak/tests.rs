@@ -484,3 +484,21 @@ fn the_rights_refused_ask_no_other_runtime_and_a_runtime_kept_asks_the_next() {
     assert_eq!(ends(&removed), ["removed"]);
     assert!(!removed.pruned);
 }
+
+#[test]
+fn one_runtime_gone_among_others_kept_prunes_the_repository() {
+    // Catches a prune asked only when every runtime went: one that went
+    // beside one the helper keeps (an application needs it) still frees
+    // its room.
+    let (helper, heard) = fake_helper(|member, reference| match (member, reference) {
+        (UNINSTALL, SDK) => Answer::Error("org.freedesktop.Flatpak.Error.RuntimeUsed"),
+        _ => Answer::Done,
+    });
+    let removed = helper.remove_runtimes(&strings(&[PLATFORM, SDK]), &|_, _| {});
+    assert_eq!(ends(&removed), ["removed", "failed"]);
+    assert!(removed.pruned);
+    assert_eq!(
+        heard.try_iter().last().map(|heard| heard.member),
+        Some(PRUNE.to_owned())
+    );
+}

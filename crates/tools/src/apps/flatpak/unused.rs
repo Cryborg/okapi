@@ -3,7 +3,8 @@
 //! (`flatpak_dir_list_unused_refs`), but stricter where flatpak broke
 //! applications: every installation read counts, not only the caller's; an
 //! extension any reference reaches is used, `autoprune-unless` or not; a
-//! runtime that says what it extends is kept while that is used; and when a
+//! runtime that says what it extends is kept while that is used, with what
+//! it uses; and when a
 //! part of any installation cannot be read, none is told unused. Each
 //! comes with what its removal would give back, about: its files are hard
 //! links to the repository's objects, shared with the other deployments.
@@ -15,18 +16,17 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::{
-    Active, FlatpakRef, Installation, KeyGroup, METADATA, METADATA_LIMIT, REPOSITORY, RefKind,
-    active, extension_points, key_file_groups, kind_ids, presence, subfolders,
+    Active, EXTENSION_OF_GROUP, Extension, FlatpakRef, Installation, KEY_REF, KeyGroup, METADATA,
+    METADATA_LIMIT, REPOSITORY, RefKind, active, extension_points, key_file_groups, kind_ids,
+    presence, says_true, subfolders,
 };
 
 /// The groups of a metadata that name what a reference uses.
 const APPLICATION_GROUP: &str = "Application";
 const RUNTIME_GROUP: &str = "Runtime";
 const EXTRA_DATA_GROUP: &str = "Extra Data";
-const EXTENSION_OF_GROUP: &str = "ExtensionOf";
 const KEY_RUNTIME: &str = "runtime";
 const KEY_SDK: &str = "sdk";
-const KEY_REF: &str = "ref";
 const KEY_NO_RUNTIME: &str = "NoRuntime";
 /// Where an installation's repository keeps its settings, and the runtimes
 /// pinned there (`flatpak pin`): `xa.pinned` of `[core]`, patterns split by
@@ -43,11 +43,11 @@ const WILDCARD: char = '*';
 /// The most of a repository's settings read.
 const CONFIG_LIMIT: usize = 64 * 1024;
 /// The most entries and depth a deployment is walked to tell its room: a
-/// runtime holds some tens of thousands.
+/// bound, never reached by a runtime as flatpak makes them.
 const MOST_ENTRIES: usize = 1_000_000;
 const MOST_DEPTH: usize = 64;
 /// A block, as `st_blocks` counts them.
-const BLOCK_BYTES: u64 = 512;
+pub(crate) const BLOCK_BYTES: u64 = 512;
 
 /// A runtime of the system's installation no application uses.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,19 +75,10 @@ struct Uses {
     /// needs.
     refs: Vec<FlatpakRef>,
     /// Its extension points, by name and branches.
-    extensions: Vec<(String, Vec<String>, bool)>,
-    /// What its `[ExtensionOf] ref=` names.
-    extends: Extends,
-}
-
-/// What a deployment says it extends.
-#[derive(Debug, Default)]
-enum Extends {
-    #[default]
-    Nothing,
-    Ref(FlatpakRef),
-    /// A reference that cannot be read: it is never told unused.
-    Unreadable,
+    extensions: Vec<Extension>,
+    /// What each `[ExtensionOf] ref=` names; `None` for one that cannot be
+    /// read, which keeps it.
+    extends: Vec<Option<FlatpakRef>>,
 }
 
 /// A deployment in use, where it is.
@@ -131,19 +122,13 @@ pub fn unused_runtimes(installations: &[Installation]) -> Result<Unused, String>
     let system = |deployed: &Deployed| installations[deployed.installation].system;
     // Every runtime of another installation is a root of the system's, as
     // flatpak takes the user's: what it uses there stays.
-    let used_by_all = used(&read, |deployed| {
+    let used_by_all = kept(&read, &|deployed| {
         is_app(deployed) || pinned(deployed) || !system(deployed)
     });
-    let used_by_apps = used(&read, |deployed| is_app(deployed) || pinned(deployed));
+    let used_by_apps = kept(&read, &|deployed| is_app(deployed) || pinned(deployed));
     let unused_in = |used: &BTreeSet<FlatpakRef>, index: usize| {
         let deployed = &read.deployed[index];
-        deployed.reference.kind == RefKind::Runtime
-            && !used.contains(&deployed.reference)
-            && match &read.uses[index].extends {
-                Extends::Nothing => true,
-                Extends::Ref(extended) => !used.contains(extended),
-                Extends::Unreadable => false,
-            }
+        deployed.reference.kind == RefKind::Runtime && !used.contains(&deployed.reference)
     };
     let runtimes: Vec<UnusedRuntime> = (0..read.deployed.len())
         .filter(|index| system(&read.deployed[*index]) && unused_in(&used_by_all, *index))
@@ -173,6 +158,36 @@ pub fn unused_runtimes(installations: &[Installation]) -> Result<Unused, String>
     })
 }
 
+/// Every reference kept from the deployments `root` takes: those [`used`]
+/// reaches, and each runtime that says it extends one of them (or says it
+/// unreadably) with what it reaches in turn, until no more come.
+fn kept(read: &Read, root: &dyn Fn(&Deployed) -> bool) -> BTreeSet<FlatpakRef> {
+    let mut extending: BTreeSet<FlatpakRef> = BTreeSet::new();
+    loop {
+        let reached = used(read, |deployed| {
+            root(deployed) || extending.contains(&deployed.reference)
+        });
+        let more: Vec<FlatpakRef> = read
+            .deployed
+            .iter()
+            .zip(&read.uses)
+            .filter(|(deployed, said)| {
+                !reached.contains(&deployed.reference)
+                    && said.extends.iter().any(|extended| {
+                        extended
+                            .as_ref()
+                            .is_none_or(|extended| reached.contains(extended))
+                    })
+            })
+            .map(|(deployed, _)| deployed.reference.clone())
+            .collect();
+        if more.is_empty() {
+            return reached;
+        }
+        extending.extend(more);
+    }
+}
+
 /// Every reference reached from the deployments `root` takes, through what
 /// their metadata says they use and the extensions their extension points
 /// name (any architecture: an i386 one kept is no harm).
@@ -196,17 +211,17 @@ fn used(read: &Read, root: impl Fn(&Deployed) -> bool) -> BTreeSet<FlatpakRef> {
             }
             let said = &read.uses[index];
             queue.extend(said.refs.iter().cloned());
-            for (name, branches, subdirectories) in &said.extensions {
-                let prefix = format!("{name}.");
+            for extension in &said.extensions {
+                let prefix = format!("{}.", extension.name);
                 queue.extend(
                     read.deployed
                         .iter()
                         .map(|other| &other.reference)
                         .filter(|other| {
                             other.kind == RefKind::Runtime
-                                && branches.contains(&other.branch)
-                                && (other.id == *name
-                                    || (*subdirectories && other.id.starts_with(&prefix)))
+                                && extension.branches.contains(&other.branch)
+                                && (other.id == extension.name
+                                    || (extension.subdirectories && other.id.starts_with(&prefix)))
                         })
                         .cloned(),
                 );
@@ -341,27 +356,23 @@ fn uses_of(reference: &FlatpakRef, deployment: &Path) -> Result<Uses, String> {
     let extra_data = groups
         .iter()
         .filter(|group| group.name == EXTRA_DATA_GROUP)
-        .any(|group| !matches!(group.value(KEY_NO_RUNTIME), Some("true" | "1")));
+        .any(|group| !says_true(group.value(KEY_NO_RUNTIME)));
     if extra_data {
         named.extend(values(&groups, EXTENSION_OF_GROUP, KEY_RUNTIME));
     }
     for value in named {
         uses.refs.push(runtime(value)?);
     }
-    uses.extensions = extension_points(&text, &reference.branch)
-        .into_iter()
-        .map(|extension| (extension.name, extension.branches, extension.subdirectories))
-        .collect();
-    uses.extends = match values(&groups, EXTENSION_OF_GROUP, KEY_REF).last() {
-        None => Extends::Nothing,
-        Some(extended) => FlatpakRef::parse(extended).map_or_else(
-            || {
+    uses.extensions = extension_points(&text, &reference.branch);
+    uses.extends = values(&groups, EXTENSION_OF_GROUP, KEY_REF)
+        .map(|extended| {
+            let parsed = FlatpakRef::parse(extended);
+            if parsed.is_none() {
                 tracing::warn!(path = %path.display(), extended, "what an extension extends unreadable: kept");
-                Extends::Unreadable
-            },
-            Extends::Ref,
-        ),
-    };
+            }
+            parsed
+        })
+        .collect();
     Ok(uses)
 }
 
@@ -456,6 +467,7 @@ fn pins(installation: &Path) -> Result<Vec<Pattern>, String> {
 #[must_use]
 pub fn about_bytes(deployment: &Path, stop: &AtomicBool) -> Option<u64> {
     let root = std::fs::symlink_metadata(deployment)
+        .inspect_err(|error| tracing::info!(path = %deployment.display(), %error, code = error.raw_os_error(), "a deployment not looked at: its room unknown"))
         .ok()
         .filter(std::fs::Metadata::is_dir)?;
     // Each file met: how many of its names were seen, its links, its room.
@@ -476,9 +488,12 @@ pub fn about_bytes(deployment: &Path, stop: &AtomicBool) -> Option<u64> {
                 tracing::info!(path = %deployment.display(), "a deployment too large to measure");
                 return None;
             }
-            // Never followed: a link is told as such.
-            let entry = entry.ok()?;
-            let metadata = entry.metadata().ok()?;
+            let unreadable = |error: &io::Error| {
+                tracing::info!(path = %folder.display(), %error, code = error.raw_os_error(), "an entry of a deployment unreadable: its room unknown");
+            };
+            let entry = entry.inspect_err(unreadable).ok()?;
+            // Never followed: a link is told as such, neither folder nor file.
+            let metadata = entry.metadata().inspect_err(unreadable).ok()?;
             if metadata.dev() != root.dev() {
                 continue;
             }

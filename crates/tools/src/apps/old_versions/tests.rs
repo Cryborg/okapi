@@ -202,7 +202,8 @@ fn retired(
     snapd: &Snapd,
 ) -> Vec<(String, Retired)> {
     let told = RefCell::new(Vec::new());
-    retire(
+    // Revisions alone: no runtime's room is withheld.
+    let withheld = retire(
         report,
         ids,
         snapd,
@@ -216,6 +217,7 @@ fn retired(
             told.borrow_mut().push((name, retired.clone()));
         },
     );
+    assert!(!withheld);
     told.into_inner()
 }
 
@@ -353,33 +355,117 @@ fn an_identifier_of_another_report_asks_nothing_at_all() {
 }
 
 #[test]
-fn a_runtime_still_unused_goes_and_one_used_since_stays() {
-    // Catches a runtime asked though an application came to use it since,
-    // and what the helper did told for another runtime.
+fn a_revision_s_room_is_read_from_its_own_file_and_numbers_compare_as_numbers() {
+    // Catches the room read from another file than `<snap>_<revision>.snap`
+    // (the one in use, the version), and numbers compared as text (`101`
+    // after `100` but before `99`).
     let root = tempfile::tempdir().unwrap();
-    let system = root.path().join("system");
-    let deploy = |kind: &str, id: &str, metadata: &str| {
-        let branch = system.join(kind).join(id).join("x86_64/45");
+    std::fs::write(root.path().join("gimp_99.snap"), [1; 8192]).unwrap();
+    let cached = root.path().join("gimp_101.snap");
+    std::fs::write(&cached, [1; 16384]).unwrap();
+    std::fs::hard_link(&cached, root.path().join("cache-entry")).unwrap();
+    let listed = Value::from(vec![
+        revision("gimp", "99", "app", "installed"),
+        revision("gimp", "100", "app", "active"),
+        revision("gimp", "101", "app", "installed"),
+    ]);
+    let revisions = old_revisions(&listed, root.path()).unwrap();
+    let [only] = revisions.as_slice() else {
+        panic!("one: {revisions:?}");
+    };
+    assert_eq!(only.revision, "99");
+    let blocks = std::fs::metadata(root.path().join("gimp_99.snap"))
+        .unwrap()
+        .blocks()
+        * BLOCK_BYTES;
+    assert_eq!(only.room, Room::Now(blocks));
+}
+
+/// A system's installation in `root` holding the runtimes `ids` (each with
+/// a file of its own, their sizes rising), and the places that read it.
+fn installation_of(root: &Path, ids: &[&str]) -> (PathBuf, InstalledPlaces) {
+    let system = root.join("system");
+    std::fs::create_dir_all(system.join("repo")).unwrap();
+    for (rank, id) in ids.iter().enumerate() {
+        let branch = system.join("runtime").join(id).join("x86_64/45");
         std::fs::create_dir_all(branch.join("abc")).unwrap();
         std::os::unix::fs::symlink("abc", branch.join("active")).unwrap();
-        std::fs::write(branch.join("abc/metadata"), metadata).unwrap();
-    };
-    std::fs::create_dir_all(system.join("repo")).unwrap();
-    deploy("runtime", "org.gnome.Platform", "[Runtime]\n");
-    deploy("runtime", "org.kde.Platform", "[Runtime]\n");
+        std::fs::write(branch.join("abc/metadata"), "[Runtime]\n").unwrap();
+        std::fs::write(branch.join("abc/lib"), vec![1; 64 * 1024 * (rank + 1)]).unwrap();
+    }
     let places = InstalledPlaces {
         installations: vec![Installation::at(system.clone(), true, false)],
-        ..places(root.path())
+        ..places(root)
     };
-    let found = find(
+    (system, places)
+}
+
+fn found_in(places: InstalledPlaces) -> OldVersions {
+    find(
         Err(SnapdError::Malformed("no snapd here")),
         places,
         Path::new(ACCOUNTS),
         &AtomicBool::new(false),
+    )
+}
+
+/// What [`retire`] told of each runtime, and what it returned, asking
+/// `helper`.
+fn retired_runtimes(
+    report: &OldVersionReport,
+    helper: &dyn Fn() -> Result<SystemHelper, FlatpakError>,
+) -> (Vec<(String, Retired)>, bool) {
+    let told = RefCell::new(Vec::new());
+    let withheld = retire(
+        report,
+        &ids(report),
+        &Snapd::at(
+            Path::new("/nonexistent/snapd.socket"),
+            Duration::from_secs(1),
+        ),
+        helper,
+        Duration::from_mins(1),
+        &|version, retired| {
+            if let OldKind::Runtime(runtime) = version.kind() {
+                let id = runtime.reference.id().to_owned();
+                told.borrow_mut().push((id, retired.clone()));
+            }
+        },
     );
+    (told.into_inner(), withheld)
+}
+
+#[test]
+fn a_runtime_still_unused_goes_one_used_or_deployed_again_since_stays() {
+    // Catches a runtime asked though an application came to use it, or
+    // another deployment came in its place, since; each runtime's room
+    // measured from its own deployment; what the helper did told for
+    // another runtime.
+    let root = tempfile::tempdir().unwrap();
+    let (system, places) = installation_of(
+        root.path(),
+        &[
+            "org.freedesktop.Platform",
+            "org.gnome.Platform",
+            "org.kde.Platform",
+        ],
+    );
+    let found = found_in(places);
     assert_eq!(found.flatpaks, OldReading::Read);
-    assert_eq!(found.report.versions().len(), 2);
-    // An application came to use GNOME's since.
+    let rooms: Vec<Option<u64>> = found
+        .report
+        .versions()
+        .iter()
+        .map(|version| match version.kind() {
+            OldKind::Runtime(runtime) => runtime.bytes,
+            OldKind::Revision(_) => None,
+        })
+        .collect();
+    assert!(
+        rooms.windows(2).all(|pair| pair[0] < pair[1]),
+        "each its own deployment's: {rooms:?}"
+    );
+    // An application came to use GNOME's; KDE's was deployed again.
     let app = system.join("app/org.gnome.Maps/x86_64/stable");
     std::fs::create_dir_all(app.join("def")).unwrap();
     std::os::unix::fs::symlink("def", app.join("active")).unwrap();
@@ -388,38 +474,67 @@ fn a_runtime_still_unused_goes_and_one_used_since_stays() {
         "[Application]\nruntime=org.gnome.Platform/x86_64/45\n",
     )
     .unwrap();
+    let kde = system.join("runtime/org.kde.Platform/x86_64/45");
+    std::fs::create_dir_all(kde.join("ghi")).unwrap();
+    std::fs::write(kde.join("ghi/metadata"), "[Runtime]\n").unwrap();
+    std::fs::remove_file(kde.join("active")).unwrap();
+    std::os::unix::fs::symlink("ghi", kde.join("active")).unwrap();
     let (helper, heard) = fake_helper(|_, _| Answer::Done);
-    let told = RefCell::new(Vec::new());
-    retire(
-        &found.report,
-        &ids(&found.report),
-        &Snapd::at(&root.path().join("none"), Duration::from_secs(1)),
-        &|| Ok(helper.clone()),
-        Duration::from_mins(1),
-        &|version, retired| {
-            if let OldKind::Runtime(runtime) = version.kind() {
-                told.borrow_mut()
-                    .push((runtime.reference.to_string(), retired.clone()));
-            }
-        },
-    );
+    let (told, withheld) = retired_runtimes(&found.report, &|| Ok(helper.clone()));
+    let id = |id: &str, retired| (id.to_owned(), retired);
     assert_eq!(
-        told.into_inner(),
+        told,
         [
-            (
-                "runtime/org.gnome.Platform/x86_64/45".to_owned(),
-                Retired::Changed
-            ),
-            (
-                "runtime/org.kde.Platform/x86_64/45".to_owned(),
-                Retired::Removed
-            ),
+            id("org.gnome.Platform", Retired::Changed),
+            id("org.kde.Platform", Retired::Changed),
+            id("org.freedesktop.Platform", Retired::Removed),
         ]
     );
+    assert!(!withheld, "pruned: the room comes back");
     let asked: Vec<(String, Vec<String>)> = heard
         .try_iter()
         .map(|heard| (heard.member, heard.strings))
         .collect();
-    assert_eq!(asked[0].1[0], "runtime/org.kde.Platform/x86_64/45");
+    assert_eq!(asked[0].1[0], "runtime/org.freedesktop.Platform/x86_64/45");
     assert_eq!(asked.len(), 2, "the runtime, then the prune: {asked:?}");
+}
+
+#[test]
+fn what_the_helper_says_of_each_runtime_is_told_and_a_prune_refused_said() {
+    // Catches an end told as another (gone as removed, not asked as gone),
+    // a helper out of reach told removed, and a prune refused after one
+    // went said given back.
+    let root = tempfile::tempdir().unwrap();
+    let (_system, places) =
+        installation_of(root.path(), &["org.a.First", "org.b.Second", "org.c.Third"]);
+    let found = found_in(places);
+    let (helper, _heard) = fake_helper(|member, reference| match (member, reference) {
+        ("Uninstall", "runtime/org.b.Second/x86_64/45") => {
+            Answer::Error("org.freedesktop.Flatpak.Error.NotInstalled")
+        }
+        ("Uninstall", "runtime/org.c.Third/x86_64/45") => {
+            Answer::Error("org.freedesktop.DBus.Error.AccessDenied")
+        }
+        ("PruneLocalRepo", _) => Answer::Error("org.freedesktop.Flatpak.Error.Aborted"),
+        _ => Answer::Done,
+    });
+    let (told, withheld) = retired_runtimes(&found.report, &|| Ok(helper.clone()));
+    let ends: Vec<Retired> = told.into_iter().map(|(_, retired)| retired).collect();
+    assert_eq!(
+        ends,
+        [
+            Retired::Removed,
+            Retired::Gone,
+            Retired::Failed(Why::NotAuthorized)
+        ]
+    );
+    assert!(withheld, "one went, the repository not pruned");
+
+    let (told, withheld) = retired_runtimes(&found.report, &|| Err(FlatpakError::Absent));
+    assert!(
+        told.iter()
+            .all(|(_, retired)| *retired == Retired::Failed(Why::Absent)),
+        "{told:?}"
+    );
+    assert!(!withheld, "nothing went");
 }

@@ -10,11 +10,10 @@
 //! was shown.
 //!
 //! A revision is never one in use, one of a snap with none in use (a snap
-//! disabled: snapd would remove its current one), nor newer than the one in
-//! use (left by a revert); never a kernel's or a gadget's (a boot falls back
+//! disabled: snapd would remove its current one), nor of a higher number
+//! than the one in use (left by a revert); never a kernel's or a gadget's (a boot falls back
 //! on them). Its file is a hard link snapd's download cache shares: the
-//! room comes back once the cache lets it go (within a day for a revision
-//! older than 30 days, at most 30 days otherwise).
+//! room comes back once the cache lets it go, when snapd decides.
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::MetadataExt as _;
@@ -26,7 +25,7 @@ use jiff::Timestamp;
 use okapi_engine::report_nonce;
 use serde_json::Value;
 
-use crate::apps::flatpak::unused::{UnusedRuntime, about_bytes, unused_runtimes};
+use crate::apps::flatpak::unused::{BLOCK_BYTES, UnusedRuntime, about_bytes, unused_runtimes};
 use crate::apps::flatpak::{FlatpakRef, presence};
 use crate::apps::leftovers::InstalledPlaces;
 use crate::apps::snap::{Revision, revisions_by_name};
@@ -43,8 +42,6 @@ const STATUS_ACTIVE: &str = "active";
 /// The types of snap whose old revisions may go: never a kernel's nor a
 /// gadget's, which a boot falls back on.
 const TYPES_OFFERED: [&str; 4] = ["app", "base", "snapd", "os"];
-/// A block, as `st_blocks` counts them.
-const BLOCK_BYTES: u64 = 512;
 /// The links a snap's file has when snapd's download cache shares it: its
 /// own, and the cache's.
 const LINKS_WITH_THE_CACHE: u64 = 2;
@@ -190,7 +187,8 @@ fn old_revisions(listed: &Value, snap_files: &Path) -> Result<Vec<SnapRevision>,
 }
 
 /// The revisions of `snap` that may go: those older than the one in use,
-/// when there is exactly one in use (traced otherwise).
+/// when there is exactly one in use, of a type whose old revisions may go,
+/// and not broken (each passed over traced).
 fn offered(snap: &str, revisions: Vec<Revision>, snap_files: &Path) -> Vec<SnapRevision> {
     let (active, old): (Vec<Revision>, Vec<Revision>) = revisions
         .into_iter()
@@ -224,7 +222,11 @@ fn offered(snap: &str, revisions: Vec<Revision>, snap_files: &Path) -> Vec<SnapR
     let current_since = active
         .install_date
         .as_deref()
-        .and_then(|date| date.parse::<Timestamp>().ok());
+        .and_then(|date| {
+            date.parse::<Timestamp>()
+                .inspect_err(|error| tracing::debug!(snap, date, %error, "since when the revision in use is, unread"))
+                .ok()
+        });
     old.into_iter()
         .filter(|revision| {
             let older = number(&revision.number).is_some_and(|number| number < in_use);
@@ -419,7 +421,11 @@ const fn stops_the_rest(why: &Why) -> bool {
 /// again first: snapd's revisions one at a time, then flatpak's runtimes;
 /// `told` hears each as it ends. An identifier of another report asks
 /// nothing at all (invariant 1). Never called on the interface's thread:
-/// polkit may wait for the user.
+/// polkit may wait for the user. Whether runtimes went while their room is
+/// not given back (flatpak's helper did not prune its repository). A
+/// runtime past its wait is not read again: the list read after says
+/// whether it went.
+#[must_use]
 pub fn retire(
     report: &OldVersionReport,
     ids: &[OldVersionId],
@@ -427,7 +433,7 @@ pub fn retire(
     helper: &dyn Fn() -> Result<SystemHelper, FlatpakError>,
     wait: Duration,
     told: &dyn Fn(&OldVersion, &Retired),
-) {
+) -> bool {
     let _span = tracing::info_span!("old_versions_removal", asked = ids.len()).entered();
     let Some(asked) = ids
         .iter()
@@ -443,7 +449,7 @@ pub fn retire(
                 told(version, &Retired::Failed(Why::Unclear));
             }
         }
-        return;
+        return false;
     };
     let mut stopped = false;
     for version in &asked {
@@ -465,9 +471,7 @@ pub fn retire(
             OldKind::Revision(_) => None,
         })
         .collect();
-    if !runtimes.is_empty() {
-        retire_runtimes(&report.places, &runtimes, helper, told);
-    }
+    !runtimes.is_empty() && retire_runtimes(&report.places, &runtimes, helper, told)
 }
 
 /// Whether `revision` is still offered as read now: `Err` says what it
@@ -475,7 +479,8 @@ pub fn retire(
 fn still_old(snapd: &Snapd, revision: &SnapRevision, snap_files: &Path) -> Result<(), Retired> {
     let listed = snapd.snaps().map_err(|error| {
         tracing::warn!(%error, "snapd's revisions unread again: nothing asked");
-        Retired::Failed(Why::Unclear)
+        // Absent or silent: the next ones are not asked either.
+        Retired::Failed(why_snapd(&error))
     })?;
     let offered_now = old_revisions(&listed, snap_files).map_err(|why| {
         tracing::warn!(why, "snapd's revisions unreadable again: nothing asked");
@@ -487,26 +492,37 @@ fn still_old(snapd: &Snapd, revision: &SnapRevision, snap_files: &Path) -> Resul
     {
         return Ok(());
     }
-    if listed_still(&listed, revision) {
-        tracing::warn!(
-            "the revision no longer offered (in use again, its snap disabled): nothing asked"
-        );
-        Err(Retired::Changed)
-    } else {
-        tracing::info!("the revision gone already");
-        Err(Retired::Gone)
+    match listed_still(&listed, revision) {
+        Ok(true) => {
+            tracing::warn!(
+                "the revision no longer offered (in use again, its snap disabled): nothing asked"
+            );
+            Err(Retired::Changed)
+        }
+        Ok(false) => {
+            tracing::info!("the revision gone already");
+            Err(Retired::Gone)
+        }
+        Err(error) => {
+            tracing::warn!(%error, "snapd's revisions unreadable again: nothing asked");
+            Err(Retired::Failed(Why::Unclear))
+        }
     }
 }
 
 /// Whether `listed` (snapd's revisions) still holds `revision`.
-fn listed_still(listed: &Value, revision: &SnapRevision) -> bool {
-    revisions_by_name(listed).is_ok_and(|by_name: BTreeMap<String, Vec<Revision>>| {
-        by_name.get(&revision.snap).is_some_and(|revisions| {
-            revisions
-                .iter()
-                .any(|listed| listed.number == revision.revision)
-        })
-    })
+///
+/// # Errors
+///
+/// `listed` is no list of revisions: whether it went is unknown, never
+/// taken for gone.
+fn listed_still(listed: &Value, revision: &SnapRevision) -> Result<bool, serde_json::Error> {
+    let by_name: BTreeMap<String, Vec<Revision>> = revisions_by_name(listed)?;
+    Ok(by_name.get(&revision.snap).is_some_and(|revisions| {
+        revisions
+            .iter()
+            .any(|listed| listed.number == revision.revision)
+    }))
 }
 
 /// Asks snapd to remove `revision`, once read again, and follows its change
@@ -526,7 +542,7 @@ fn retire_revision(
     if let Err(retired) = still_old(snapd, revision, snap_files) {
         return retired;
     }
-    let gone = || snapd.snaps().map(|listed| !listed_still(&listed, revision));
+    let gone = || Ok(!listed_still(&snapd.snaps()?, revision)?);
     let change = match snapd.remove_revision(&revision.snap, &revision.revision) {
         Ok(change) => change,
         Err(error) => {
@@ -554,8 +570,9 @@ fn retire_runtimes(
     runtimes: &[(&OldVersion, &OldRuntime)],
     helper: &dyn Fn() -> Result<SystemHelper, FlatpakError>,
     told: &dyn Fn(&OldVersion, &Retired),
-) {
-    let now: Result<Vec<UnusedRuntime>, Retired> = if places.confined.is_some() {
+) -> bool {
+    let now: Result<Vec<UnusedRuntime>, Retired> = if let Some(mark) = &places.confined {
+        tracing::warn!(mark, "Okapi runs confined: no runtime asked");
         Err(Retired::Failed(Why::Unclear))
     } else {
         unused_runtimes(&places.installations)
@@ -571,7 +588,7 @@ fn retire_runtimes(
             for (version, _) in runtimes {
                 told(version, &retired);
             }
-            return;
+            return false;
         }
     };
     let mut going: Vec<&OldVersion> = Vec::new();
@@ -587,7 +604,7 @@ fn retire_runtimes(
         }
     }
     if going.is_empty() {
-        return;
+        return false;
     }
     let helper = match helper() {
         Ok(helper) => helper,
@@ -597,7 +614,7 @@ fn retire_runtimes(
             for version in going {
                 told(version, &Retired::Failed(why.clone()));
             }
-            return;
+            return false;
         }
     };
     let references: Vec<String> = going
@@ -618,7 +635,15 @@ fn retire_runtimes(
             told(version, &retired);
         }
     });
-    tracing::info!(pruned = removed.pruned, "flatpak's runtimes asked");
+    let withheld = !removed.pruned
+        && removed
+            .ends
+            .iter()
+            .any(|end| matches!(end, RuntimeEnd::Removed));
+    if withheld {
+        tracing::warn!("runtimes removed, the repository not pruned: their room not given back");
+    }
+    withheld
 }
 
 #[cfg(test)]

@@ -407,10 +407,14 @@ impl fmt::Display for FlatpakRef {
 struct Listed {
     names: Vec<String>,
     whole: bool,
-    /// A folder's name was refused (not a name, not UTF-8): what it holds
-    /// is not known.
+    /// A folder's name was refused (not a name, not UTF-8), or a link other
+    /// than `current` stands where folders are: what it holds is not known.
     refused: bool,
 }
+
+/// The one link flatpak makes among the folders it lists:
+/// `app/<id>/current`, to a branch.
+const CURRENT_LINK: &str = "current";
 
 /// The names of the folders in `folder` that may be names: never a link
 /// (`app/<id>/current` is one to a branch). An entry that cannot be read
@@ -434,6 +438,11 @@ fn subfolders(folder: &Path) -> io::Result<Listed> {
                 continue;
             }
         };
+        if kind.is_symlink() && name != CURRENT_LINK {
+            tracing::warn!(?name, folder = %folder.display(), "a link where flatpak keeps folders: never followed");
+            refused = true;
+            continue;
+        }
         if !kind.is_dir() {
             tracing::debug!(?name, folder = %folder.display(), "not a folder of flatpak: passed over");
             continue;
@@ -545,7 +554,7 @@ pub(crate) fn app_ids(installation: &Installation) -> Result<Vec<String>, String
 /// # Errors
 ///
 /// Why they could not be listed whole: the folder unreadable, an entry of
-/// it, or the folder missing beside no repository.
+/// it, or the folder missing from an installation that holds nothing.
 fn kind_ids(installation: &Path, kind: RefKind) -> Result<Listed, String> {
     let folder = installation.join(kind.folder());
     match subfolders(&folder) {
@@ -553,21 +562,37 @@ fn kind_ids(installation: &Path, kind: RefKind) -> Result<Listed, String> {
         Ok(_) => Err(format!("{} not listed whole", folder.display())),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             missing_for_sure(&folder)?;
-            // flatpak makes its repository with the installation: a folder
-            // without it is a disk not mounted there, maybe.
-            let repository = installation.join(REPOSITORY);
-            if std::fs::symlink_metadata(&repository).is_ok_and(|metadata| metadata.is_dir()) {
+            if holds_something(installation)? {
                 Ok(Listed {
                     names: Vec::new(),
                     whole: true,
                     refused: false,
                 })
             } else {
-                Err(format!("{} holds no repository", installation.display()))
+                Err(format!("{} holds nothing", installation.display()))
             }
         }
         Err(error) => Err(format!("{}: {error}", folder.display())),
     }
+}
+
+/// Whether the installation at `installation` holds what flatpak makes in
+/// one: its repository, or anything (its permission store, `db`, is there
+/// on a desktop where nothing was ever installed). An empty folder is a
+/// disk not mounted there, maybe.
+///
+/// # Errors
+///
+/// It could not be listed.
+fn holds_something(installation: &Path) -> Result<bool, String> {
+    if std::fs::symlink_metadata(installation.join(REPOSITORY))
+        .is_ok_and(|metadata| metadata.is_dir())
+    {
+        return Ok(true);
+    }
+    std::fs::read_dir(installation)
+        .map(|mut entries| entries.next().is_some())
+        .map_err(|error| format!("{}: {error}", installation.display()))
 }
 
 /// The deployments in use of the application `id` in `installation`, of

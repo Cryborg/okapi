@@ -239,10 +239,32 @@ type Spoiling<'a> = (&'a str, &'a dyn Fn(&Installation));
 fn anything_read_in_part_tells_no_runtime_unused() {
     // Catches each reading that would lose a root, so a runtime in use:
     // each case alone, on an installation where one runtime is unused.
-    let cases: [Spoiling<'_>; 7] = [
+    let cases: [Spoiling<'_>; 12] = [
         ("an application without metadata", &|system| {
             let deployment = deploy(system, "app", "org.a.A", X86, "stable", "");
             std::fs::remove_file(deployment.join(METADATA)).unwrap();
+        }),
+        ("a runtime without metadata", &|system| {
+            let deployment = runtime(system, "org.b.B", "1", "");
+            std::fs::remove_file(deployment.join(METADATA)).unwrap();
+        }),
+        ("an SDK named unreadably", &|system| {
+            app(system, "org.a.A", "[Application]\nsdk=org.gnome.Sdk\n");
+        }),
+        ("what extra data extends named unreadably", &|system| {
+            runtime(
+                system,
+                "org.b.B",
+                "1",
+                "[Extra Data]\nname=x\n\n[ExtensionOf]\nruntime=nothing\n",
+            );
+        }),
+        ("a repository's settings not in UTF-8", &|system| {
+            std::fs::write(
+                system.path.join(REPOSITORY).join(REPOSITORY_CONFIG),
+                b"[core]\nxa.pinned=\xff\n",
+            )
+            .unwrap();
         }),
         ("a runtime named unreadably", &|system| {
             app(
@@ -270,11 +292,11 @@ fn anything_read_in_part_tells_no_runtime_unused() {
             )
             .unwrap();
         }),
-        ("an architecture's folder a file", &|system| {
-            std::fs::create_dir_all(system.path.join("app/org.a.A")).unwrap();
-            std::fs::write(system.path.join("app/org.a.A/x86_64"), b"").unwrap();
-            // A file is no folder: passed over, not a fault. This one is
-            // made a fault by a branch whose name is refused.
+        ("a link where folders are", &|system| {
+            std::fs::create_dir_all(system.path.join("app")).unwrap();
+            std::os::unix::fs::symlink("/elsewhere", system.path.join("app/org.a.A")).unwrap();
+        }),
+        ("a branch's name refused", &|system| {
             std::fs::create_dir_all(system.path.join("app/org.a.A/i386/a b")).unwrap();
         }),
     ];
@@ -293,6 +315,77 @@ fn anything_read_in_part_tells_no_runtime_unused() {
 }
 
 #[test]
+fn each_way_a_runtime_is_kept_keeps_it_alone() {
+    // Catches, each alone: an application's own `sdk=` forgotten; extra
+    // data with `NoRuntime` keeping a runtime it does not need; a runtime
+    // whose `[ExtensionOf]` cannot be read told unused; a declared
+    // installation counted as the user's; a pin read from another
+    // installation than its own.
+    let root = tempfile::tempdir().unwrap();
+    let system = installation(root.path(), "system", true);
+    let user = installation(root.path(), "user", false);
+    let declared = Installation::at(root.path().join("declared"), false, true);
+    std::fs::create_dir_all(declared.path.join(REPOSITORY)).unwrap();
+    app(
+        &system,
+        "org.a.A",
+        &format!("[Application]\nsdk={SDK}/{X86}/45\n\n[Extension org.b.Codecs]\nversion=1\n"),
+    );
+    runtime(&system, SDK, "45", "[Runtime]\n");
+    runtime(
+        &system,
+        "org.b.Codecs",
+        "1",
+        "[Runtime]\n\n[Extra Data]\nname=x\nNoRuntime=true\n\n[ExtensionOf]\nruntime=org.b.Base/x86_64/1\n",
+    );
+    runtime(&system, "org.b.Base", "1", "[Runtime]\n");
+    runtime(
+        &system,
+        "org.c.Odd",
+        "1",
+        "[ExtensionOf]\nref=nothing readable\n",
+    );
+    // Said twice, the second of something unused: kept by the first, with
+    // what it uses itself.
+    runtime(
+        &system,
+        "org.f.Docs",
+        "1",
+        &format!(
+            "[Runtime]\nsdk=org.f.Tool/x86_64/1\n\n[ExtensionOf]\nref=runtime/{SDK}/{X86}/45\n\n[ExtensionOf]\nref=runtime/org.b.Base/x86_64/1\n"
+        ),
+    );
+    runtime(&system, "org.f.Tool", "1", "[Runtime]\n");
+    // Pinned in the user's installation: kept there, never counted, and
+    // the system's copy of another branch not kept by it.
+    std::fs::write(
+        user.path.join(REPOSITORY).join(REPOSITORY_CONFIG),
+        "[core]\nxa.pinned=org.d.Pinned//2\n",
+    )
+    .unwrap();
+    runtime(&user, "org.d.Pinned", "2", "[Runtime]\n");
+    runtime(&system, "org.d.Pinned", "1", "[Runtime]\n");
+    runtime(&declared, "org.e.Elsewhere", "1", "[Runtime]\n");
+    let unused = unused_runtimes(&[system, user, declared]).unwrap();
+    let references: Vec<String> = unused
+        .runtimes
+        .iter()
+        .map(|runtime| runtime.reference.to_string())
+        .collect();
+    assert_eq!(
+        references,
+        [
+            "runtime/org.b.Base/x86_64/1",
+            "runtime/org.d.Pinned/x86_64/1",
+        ]
+    );
+    assert_eq!(
+        unused.for_account_only, 0,
+        "the user's is pinned, the declared one is no account's"
+    );
+}
+
+#[test]
 fn an_installation_absent_reads_as_none_and_one_unplaced_as_unread() {
     // Catches a missing user's installation taken for unread (nothing would
     // ever be proposed), and one that could not be placed taken for none.
@@ -301,6 +394,15 @@ fn an_installation_absent_reads_as_none_and_one_unplaced_as_unread() {
     runtime(&system, PLATFORM, "44", "[Runtime]\n");
     let absent = Installation::at(root.path().join("nobody"), false, false);
     assert_eq!(unused_of(&[system.clone(), absent]).len(), 1);
+    // A desktop where nothing was ever installed for the account: flatpak's
+    // permission store alone.
+    let portals_only = Installation::at(root.path().join("user"), false, false);
+    std::fs::create_dir_all(portals_only.path.join("db")).unwrap();
+    assert_eq!(unused_of(&[system.clone(), portals_only]).len(), 1);
+    // An empty folder may be a disk not mounted there.
+    let empty = Installation::at(root.path().join("empty"), false, false);
+    std::fs::create_dir_all(&empty.path).unwrap();
+    assert!(unused_runtimes(&[system.clone(), empty]).is_err());
     let unplaced = Installation::unplaced(PathBuf::new(), "no data folder".to_owned());
     assert!(unused_runtimes(&[system, unplaced]).is_err());
 }

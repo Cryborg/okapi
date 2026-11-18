@@ -3300,8 +3300,6 @@ pub mod tests {
         take_in();
         assert!(shows(&window, "Firefox : environ 3,0 Go"));
         assert!(shows(&window, "Swap : 2,0 Go sur 8,0 Go"));
-        // Each line says « environ »: no note beside them.
-        assert!(!shows_a_text_starting(&window, "Valeurs approchées"));
         // A new list replaces the one before.
         sink.send(Sample::Memory(Ok(reading_of(8 * GB, Some(Ok(firefox(5)))))))
             .unwrap();

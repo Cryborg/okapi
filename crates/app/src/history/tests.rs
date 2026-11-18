@@ -502,11 +502,13 @@ fn each_update_shows_how_it_ended_and_each_package_asked() {
             assert!(shows(&window, text), "{label}: {text}");
         }
     }
-    // The last line chosen: each update said once, by its icon.
+    // The last line chosen: its update said once, by its icon, and written
+    // without its state.
     assert_eq!(
         ElementHandle::find_by_accessible_label(&window, "deja 1.0 : encore en attente").count(),
         1
     );
+    assert!(shows(&window, "deja 1.0"));
 }
 
 #[test]

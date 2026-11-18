@@ -925,7 +925,8 @@ fn a_partial_size_is_said_at_least_once_the_analysis_stopped() {
     assert!(
         ElementHandle::find_by_element_type_name(&window, "Row")
             .filter_map(|row| row.accessible_label())
-            .any(|label| label.starts_with("partiel, au moins 1,0 Go, "))
+            .any(|label| label.starts_with("partiel, au moins 1,0 Go, ")
+                && label.contains("Taille partielle : l'analyse a été arrêtée"))
     );
 }
 
@@ -936,16 +937,22 @@ fn only_a_hard_link_says_its_state_below_its_name() {
     let closed = home.path().join("closed");
     fs::create_dir(&closed).unwrap();
     fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read_dir(&closed).is_ok() {
+        fs::set_permissions(&closed, fs::Permissions::from_mode(0o700)).unwrap();
+        eprintln!("skipped: root reads every folder");
+        return;
+    }
     let manager = Rc::default();
     let (window, _sampler) = on_disk(seams(&home, &manager));
     analyzed(&window);
     fs::set_permissions(&closed, fs::Permissions::from_mode(0o700)).unwrap();
     let shown_lines = lines(&window);
-    assert!(
-        shown_lines
-            .iter()
-            .any(|line| line.state == ui::DiskLineState::CountedElsewhere)
-    );
+    for state in [
+        ui::DiskLineState::CountedElsewhere,
+        ui::DiskLineState::Unreadable,
+    ] {
+        assert!(shown_lines.iter().any(|line| line.state == state));
+    }
     // Every other state is an icon beside the name: the line stays low.
     for line in &shown_lines {
         assert_eq!(

@@ -395,6 +395,12 @@ fn receipt(window: &ui::AppWindow) {
     window.set_page(ui::Page::Cleaner);
 }
 
+/// The History screen, an installation of updates chosen.
+fn history_update(window: &ui::AppWindow, language: Language) {
+    history(window, false, language);
+    window.global::<ui::History>().set_chosen(1);
+}
+
 /// The History screen: a few days of cleanings, updates and uninstallations, the
 /// newest chosen with its deletion log; none at all when `empty`.
 fn history(window: &ui::AppWindow, empty: bool, language: Language) {
@@ -2250,10 +2256,7 @@ fn main() {
         "settings" => settings(&app),
         "settings-trash" => settings_trash(&app),
         "history" | "history-small" => history(&app, false, language),
-        "history-update" => {
-            history(&app, false, language);
-            app.global::<ui::History>().set_chosen(1);
-        }
+        "history-update" => history_update(&app, language),
         "history-empty" => history(&app, true, language),
         other if let Some(scene) = LargeScene::named(other.trim_end_matches("-small")) => {
             large_files(&app, scene, language);

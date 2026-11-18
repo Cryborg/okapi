@@ -4823,8 +4823,8 @@ msgid "Okapi ne trouve pas de gestionnaire de mises à jour sur ce système."
 msgstr "Okapi finds no update manager on this system."
 
 msgctxt "DashboardWords"
-msgid "Ce qui attend une mise à jour, la sécurité d'abord. Rien ne s'installe depuis l'Accueil."
-msgstr "What waits for an update, security first. Nothing installs from Home."
+msgid "Ce qui attend une mise à jour, la sécurité d'abord."
+msgstr "What waits for an update, security first."
 
 msgctxt "UpdatesWidget"
 msgid "Tout est à jour"

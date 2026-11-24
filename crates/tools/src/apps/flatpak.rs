@@ -791,6 +791,8 @@ fn app_of(
     } = reading.launcher(&launcher, &roots)?;
     Some(App {
         aliases,
+        // Exported as `<id>.desktop`.
+        launchers: vec![id.clone()],
         source: Source::Flatpak,
         package: id.clone(),
         name,

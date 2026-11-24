@@ -44,6 +44,55 @@ pub fn processes() -> io::Result<ProcessList> {
     super::unsupported()
 }
 
+/// The unified (v2) cgroup paths Okapi itself runs in, then each of its
+/// ancestors up to the first process: closing any of them may end Okapi.
+///
+/// # Errors
+///
+/// The system's error reading one; [`io::ErrorKind::InvalidData`] when the
+/// system has no unified hierarchy (cgroup v1) or a `stat` cannot be read;
+/// [`io::ErrorKind::Unsupported`] outside Linux.
+#[cfg(target_os = "linux")]
+pub fn lineage_cgroups() -> io::Result<Vec<String>> {
+    linux::lineage_cgroups()
+}
+
+/// Okapi's cgroups: unknown here.
+///
+/// # Errors
+///
+/// [`io::ErrorKind::Unsupported`].
+#[cfg(not(target_os = "linux"))]
+pub fn lineage_cgroups() -> io::Result<Vec<String>> {
+    super::unsupported()
+}
+
+/// The cgroup of the system's first process.
+const FIRST_PROCESS_CGROUP: &str = "/init.scope";
+
+/// Whether `cgroups` (a lineage, Okapi's first) is seen whole: up to the
+/// system's first process, every path absolute below the root. In a cgroup
+/// or pid namespace of its own, paths are relative (`/`, `/../..`) or the
+/// lineage stops at the namespace's first process: where Okapi runs is not
+/// known.
+pub(crate) fn lineage_whole(cgroups: &[String]) -> bool {
+    cgroups.last().map(String::as_str) == Some(FIRST_PROCESS_CGROUP)
+        && cgroups
+            .iter()
+            .all(|cgroup| cgroup != "/" && cgroup.split('/').all(|part| part != ".."))
+}
+
+/// The parent's pid a `stat` line says (its fourth field, after the name in
+/// parentheses, which may hold anything).
+pub(crate) fn parent_pid(stat: &str) -> Option<u32> {
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
+}
+
 /// The resident pages of a `statm` line (its second field).
 pub(crate) fn resident_pages(statm: &str) -> Option<u64> {
     statm.split_whitespace().nth(1)?.parse().ok()
@@ -60,14 +109,51 @@ mod linux {
     use std::path::Path;
 
     use super::super::capped::{read_capped, read_capped_bytes};
-    use super::{ProcessList, ProcessMemory, io, resident_pages, unified_cgroup};
+    use super::{
+        ProcessList, ProcessMemory, io, lineage_whole, parent_pid, resident_pages, unified_cgroup,
+    };
 
     const PROC: &str = "/proc";
     const STATM_LIMIT: usize = 512;
+    const STAT_LIMIT: usize = 4096;
     const COMM_LIMIT: usize = 64;
     const CGROUP_LIMIT: usize = 16 * 1024;
     /// `ESRCH`: the process ended while being read.
     const NO_SUCH_PROCESS: i32 = rustix::io::Errno::SRCH.raw_os_error();
+
+    pub(super) fn lineage_cgroups() -> io::Result<Vec<String>> {
+        let proc = Path::new(PROC);
+        let mut cgroups = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut directory = proc.join("self");
+        loop {
+            let text = read_capped(&directory.join("cgroup"), CGROUP_LIMIT)?;
+            let cgroup = unified_cgroup(&text).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "no unified cgroup hierarchy")
+            })?;
+            cgroups.push(cgroup.to_owned());
+            let stat = read_capped(&directory.join("stat"), STAT_LIMIT)?;
+            let parent = parent_pid(&stat)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "stat"))?;
+            if parent == 0 {
+                return if lineage_whole(&cgroups) {
+                    Ok(cgroups)
+                } else {
+                    Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "the lineage is not seen whole (a namespace of its own)",
+                    ))
+                };
+            }
+            if !seen.insert(parent) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "a process met twice in the lineage",
+                ));
+            }
+            directory = proc.join(parent.to_string());
+        }
+    }
 
     pub(super) fn processes() -> io::Result<ProcessList> {
         let page = u64::try_from(rustix::param::page_size()).unwrap_or(u64::MAX);
@@ -226,6 +312,50 @@ mod tests {
             Some("/user.slice/app.slice/app-x-1.scope")
         );
         assert_eq!(unified_cgroup("12:pids:/\n"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn this_process_s_cgroups_are_its_own_then_its_ancestors() {
+        let lineage = lineage_cgroups().unwrap();
+        let listed = processes().unwrap().processes;
+        let cgroup_of = |pid: u32| {
+            listed
+                .iter()
+                .find(|process| process.pid == pid)
+                .and_then(|process| process.cgroup.clone())
+        };
+        assert_eq!(cgroup_of(std::process::id()).as_ref(), lineage.first());
+        // Up to the first process, whose cgroup is the system's.
+        assert!(lineage.len() >= 2, "{lineage:?}");
+        assert_eq!(lineage.last().map(String::as_str), Some("/init.scope"));
+    }
+
+    #[test]
+    fn a_lineage_is_whole_only_up_to_the_system_s_first_process_seen_from_the_root() {
+        let lineage =
+            |paths: &[&str]| -> Vec<String> { paths.iter().map(|&path| path.to_owned()).collect() };
+        assert!(lineage_whole(&lineage(&[
+            "/user.slice/app-gnome-x-1.scope",
+            "/init.scope"
+        ])));
+        // In a cgroup namespace of its own.
+        assert!(!lineage_whole(&lineage(&["/", "/../../../init.scope"])));
+        assert!(!lineage_whole(&lineage(&["/", "/init.scope"])));
+        // In a pid namespace: it stops at that namespace's first process.
+        assert!(!lineage_whole(&lineage(&[
+            "/user.slice/app-gnome-x-1.scope",
+            "/user.slice/app-gnome-x-1.scope"
+        ])));
+        assert!(!lineage_whole(&[]));
+    }
+
+    #[test]
+    fn the_parent_is_read_past_a_name_that_holds_anything() {
+        assert_eq!(parent_pid("1234 (cargo) S 987 1234 1234 0"), Some(987));
+        assert_eq!(parent_pid("42 (a) b) c) R 7 42"), Some(7));
+        assert_eq!(parent_pid("1 (systemd) S 0 1 1"), Some(0));
+        assert_eq!(parent_pid("garbage"), None);
     }
 
     #[cfg(target_os = "linux")]

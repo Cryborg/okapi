@@ -117,9 +117,9 @@ fn outcome(forgot: &Forgot) -> ui::ForgetOutcome {
         Forgot::Failed(Why::NotAuthorized) => ui::ForgetOutcome::Refused,
         Forgot::Failed(Why::Busy) => ui::ForgetOutcome::Busy,
         Forgot::Failed(Why::TimedOut | Why::Unanswered) => ui::ForgetOutcome::Unknown,
-        Forgot::Failed(Why::Absent | Why::NotFound | Why::Unclear | Why::Service(_)) => {
-            ui::ForgetOutcome::Failed
-        }
+        Forgot::Failed(
+            Why::Absent | Why::NotFound | Why::Unclear | Why::StillOpen | Why::Service(_),
+        ) => ui::ForgetOutcome::Failed,
     }
 }
 

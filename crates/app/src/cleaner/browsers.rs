@@ -5,7 +5,6 @@
 use std::collections::VecDeque;
 use std::io;
 use std::rc::Rc;
-use std::time::Duration;
 
 use okapi_engine::BrowserLock;
 use slint::ComponentHandle as _;
@@ -14,11 +13,7 @@ use super::CleanerScreen;
 use super::cleaning::Confirming;
 use crate::ui;
 
-/// How often the lock of a browser asked to close is read again.
-pub(super) const CLOSE_LOOK_EVERY: Duration = Duration::from_millis(200);
-/// How many looks a browser has to close: fifteen seconds, time for it to
-/// save its session.
-pub(super) const CLOSE_LOOKS: u32 = 75;
+use crate::closing::{CLOSE_LOOK_EVERY, CLOSE_LOOKS};
 
 /// What the user can be offered about an open browser.
 pub enum Asked {

@@ -13,6 +13,7 @@ use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
 
 mod apps;
 mod cleaner;
+mod closing;
 mod dashboard;
 mod dates;
 mod disk_usage;

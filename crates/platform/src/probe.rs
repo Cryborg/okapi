@@ -31,13 +31,13 @@ pub use confinement::confinement;
 pub use desktop::{DesktopEntry, application_name, desktop_entry, desktop_entry_lossy};
 pub use memory::{MemoryStatus, memory};
 pub use mounts::{Device, Mount, MountClass, MountList, mounts};
-pub use processes::{ProcessList, ProcessMemory, processes};
+pub use processes::{ProcessList, ProcessMemory, lineage_cgroups, processes};
 pub use space::{Space, space};
 pub use system::{
     CpuTimes, DesktopSession, cpu_times, desktop_session, distribution, kernel_release,
     load_average, uptime,
 };
-pub use units::desktop_id;
+pub use units::{SCOPE_SUFFIX, desktop_id, scope_snap};
 
 /// A name with the `\xNN` escapes of systemd and udev decoded (`\x2d` for
 /// `-`, `\x20` for a space).

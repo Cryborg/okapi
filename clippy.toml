@@ -18,6 +18,7 @@ disallowed-methods = [
     { path = "signal_hook::low_level::emulate_default_handler", reason = "invariant 4: no signal sent" },
     { path = "signal_hook::flag::register_conditional_default", reason = "invariant 4: it raises the signal again" },
     { path = "okapi_platform::RunningBrowser::terminate", reason = "invariant 4: closes a browser, for the interface alone" },
+    { path = "okapi_tools::packages::systemd_session::Session::kill", reason = "invariant 4: systemd signals an application's scope, on the user's consent alone (`okapi_tools::apps::open`)" },
     # Invariant 3: one code enters a folder from its parent and checks it is
     # the one read: never through a link, never onto a mount put on it since
     # it was read, where the system tells mount roots.

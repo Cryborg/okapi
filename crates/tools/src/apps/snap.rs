@@ -8,7 +8,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use super::uninstall::Target;
-use super::{App, AppSize, Launcher, Reading, Rest, Source, SourceReading};
+use super::{App, AppSize, Launcher, Reading, Rest, Source, SourceReading, launcher_id};
 use crate::packages::snapd::is_snap_name;
 
 /// What snapd says of one revision.
@@ -162,6 +162,12 @@ pub fn read_snaps(
             package: name.clone(),
             name: shown_name,
             aliases,
+            launchers: active
+                .apps
+                .iter()
+                .filter_map(|app| app.desktop_file.as_deref())
+                .filter_map(|file| launcher_id(Path::new(file)))
+                .collect(),
             version: active.version,
             publisher: active.publisher.map(|publisher| publisher.display_name),
             origin: None,

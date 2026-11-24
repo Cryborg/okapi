@@ -10,18 +10,19 @@ pub mod old_versions;
 mod rows;
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
 use okapi_rules::Language;
 use okapi_store::{HistoryUnavailable, PackageSource, UninstallEntry, UninstallPart};
 use okapi_tools::apps::icons::IconPixels;
+use okapi_tools::apps::open::{Ending, OpenScope, Sessions, open_scopes};
 use okapi_tools::apps::uninstall::{
     Checked, Ended, Going, Gone, Removal, Step, Target, Uninstaller, Why, check, remove_as_shown,
 };
@@ -41,6 +42,29 @@ const READ_EVERY: Duration = Duration::from_millis(500);
 const SORT_EVERY: Duration = Duration::from_secs(2);
 /// A list older than this is read again when the page is shown.
 const READ_AGAIN_AFTER: jiff::SignedDuration = jiff::SignedDuration::from_mins(5);
+/// How long an application forced to close is waited for: it cannot ignore
+/// it, only the system may be slow to end it.
+const FORCED_CLOSE_WAIT: Duration = Duration::from_secs(5);
+
+/// How an application asked to close before its uninstallation is waited
+/// for: looked at every `look_every`, for `asked` once asked to close, for
+/// `forced` once forced.
+#[derive(Debug, Clone, Copy)]
+pub struct CloseWaits {
+    pub look_every: Duration,
+    pub asked: Duration,
+    pub forced: Duration,
+}
+
+impl CloseWaits {
+    /// This system's: a browser's looks, and [`FORCED_CLOSE_WAIT`] once
+    /// forced.
+    const SYSTEM: Self = Self {
+        look_every: crate::closing::CLOSE_LOOK_EVERY,
+        asked: crate::closing::CLOSE_LOOK_EVERY.saturating_mul(crate::closing::CLOSE_LOOKS),
+        forced: FORCED_CLOSE_WAIT,
+    };
+}
 
 /// Reads the sources in `language`: what each finds comes on the sender;
 /// the flag stops measuring.
@@ -53,6 +77,9 @@ pub type Record = crate::history::Record<UninstallEntry>;
 pub struct AppsSeams {
     pub read: Read,
     pub uninstaller: Arc<dyn Uninstaller>,
+    /// The session's scopes: an application open is closed before it goes.
+    pub sessions: Arc<dyn Sessions>,
+    pub close_waits: CloseWaits,
     pub record: Record,
     pub now: fn() -> Timestamp,
     pub leftovers: leftovers::LeftoverSeams,
@@ -113,6 +140,8 @@ impl AppsSeams {
         Self {
             read: Rc::new(read_system),
             uninstaller: system_uninstaller(),
+            sessions: system_sessions(),
+            close_waits: CloseWaits::SYSTEM,
             record: Arc::new(record_system),
             now: Timestamp::now,
             leftovers: leftovers::LeftoverSeams::system(),
@@ -223,6 +252,35 @@ fn system_uninstaller() -> Arc<dyn Uninstaller> {
     Arc::new(Nowhere)
 }
 
+#[cfg(target_os = "linux")]
+fn system_sessions() -> Arc<dyn Sessions> {
+    Arc::new(okapi_tools::apps::open::SystemSessions::default())
+}
+
+/// No session's scopes elsewhere yet: no application is seen open.
+#[cfg(not(target_os = "linux"))]
+fn system_sessions() -> Arc<dyn Sessions> {
+    struct Nowhere;
+    impl Sessions for Nowhere {
+        fn scopes(
+            &self,
+        ) -> Result<okapi_tools::apps::open::Scopes, okapi_tools::apps::open::Unreached> {
+            Ok(okapi_tools::apps::open::Scopes {
+                alive: Vec::new(),
+                okapi_cgroups: Vec::new(),
+            })
+        }
+        fn close(
+            &self,
+            _scope: &OpenScope,
+            _ending: Ending,
+        ) -> Result<(), okapi_tools::apps::open::Unreached> {
+            Err(okapi_tools::apps::open::Unreached)
+        }
+    }
+    Arc::new(Nowhere)
+}
+
 /// What a source is, as shown.
 fn source_shown(reading: &SourceReading) -> ui::SourceShown {
     match reading {
@@ -243,9 +301,23 @@ struct Reading {
 /// What an uninstallation's threads say.
 #[derive(Debug)]
 enum Said {
+    /// The application's scopes open in the session, said before its check.
+    Open(Vec<OpenScope>),
     Checked(Result<Checked, Why>),
+    /// The scopes asked to end: never asked again.
+    Asked(Vec<OpenScope>),
+    /// The application closed: its removal starts.
+    Closed,
+    /// The application asked to close did not in time: `left` is open.
+    NotClosed {
+        going: Vec<Going>,
+        left: Vec<OpenScope>,
+    },
     Step(Step),
-    Ended { ended: Ended, recorded: bool },
+    Ended {
+        ended: Ended,
+        recorded: bool,
+    },
 }
 
 /// The window of an uninstallation running.
@@ -270,9 +342,19 @@ enum Cancelling {
     TooLate,
 }
 
+/// What an uninstallation running does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Stage {
+    /// The application, open, is asked to close first.
+    ClosingApp,
+    #[default]
+    Removing,
+}
+
 /// An uninstallation running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct Run {
+    stage: Stage,
     window: Window,
     cancelling: Cancelling,
     /// Another installation holds the package manager.
@@ -287,6 +369,11 @@ enum Phase {
     Confirm(Vec<Going>),
     Refused(Vec<String>),
     Running(Run),
+    /// The application asked to close did not: the user may force it.
+    NotClosed {
+        going: Vec<Going>,
+        left: Vec<OpenScope>,
+    },
     Failed(Why),
 }
 
@@ -295,6 +382,11 @@ struct Operation {
     key: AppKey,
     name: String,
     target: Target,
+    /// Its launchers, by the names its scopes go by.
+    launchers: Vec<String>,
+    /// Its scopes open in the session when it was checked: the
+    /// confirmation says it closes them, and only those are asked to.
+    open: Vec<OpenScope>,
     /// What it frees whatever is chosen (the application, its old
     /// versions; a deb's packages or a flatpak's extensions once checked),
     /// when every size is known; its data are added when they go.
@@ -366,6 +458,10 @@ struct State {
     read_at: Option<Timestamp>,
     on_page: bool,
     operation: Option<Operation>,
+    /// The scopes already asked to end: never asked twice for the life of
+    /// the screen, a second request could end one saving its work. Forcing
+    /// one is another consent.
+    asked_to_close: HashSet<OpenScope>,
     toast_held: bool,
     line_model: Rc<VecModel<ui::AppLine>>,
     going_model: Rc<VecModel<SharedString>>,
@@ -419,6 +515,7 @@ impl AppsScreen {
             read_at: None,
             on_page: false,
             operation: None,
+            asked_to_close: HashSet::new(),
             toast_held: false,
             line_model: Rc::new(VecModel::default()),
             going_model: Rc::new(VecModel::default()),
@@ -436,14 +533,7 @@ impl AppsScreen {
         screen.attach_leftovers(window);
         screen.attach_old_versions(window);
         let weak = Rc::downgrade(&screen.0);
-        let on = move |action: fn(&Self)| {
-            let weak = weak.clone();
-            move || {
-                if let Some(state) = weak.upgrade() {
-                    action(&Self(state));
-                }
-            }
-        };
+        let on = |action: fn(&Self)| Self::wired(&weak, action);
         apps.on_refresh(on(Self::refresh));
         apps.on_searched(on(Self::show_lines_now));
         apps.on_filtered(on(Self::show_lines_now));
@@ -454,11 +544,7 @@ impl AppsScreen {
             }
         });
         apps.on_close_detail(on(Self::close_detail));
-        apps.on_uninstall(on(Self::uninstall));
-        apps.on_confirm(on(Self::confirm));
-        apps.on_cancel(on(Self::cancel));
-        apps.on_close_modal(on(Self::close_modal));
-        apps.on_retry(on(Self::retry));
+        screen.attach_uninstallation(&apps);
         apps.on_close_toast(on(Self::close_toast));
         let weak = Rc::downgrade(&screen.0);
         let with_index = move |action: fn(&Self, usize)| {
@@ -950,6 +1036,27 @@ impl AppsScreen {
         self.show_lines(false);
     }
 
+    /// `action` on the screen, while it is there.
+    fn wired(weak: &std::rc::Weak<RefCell<State>>, action: fn(&Self)) -> impl Fn() + 'static {
+        let weak = weak.clone();
+        move || {
+            if let Some(state) = weak.upgrade() {
+                action(&Self(state));
+            }
+        }
+    }
+
+    /// Wires the uninstallation's window to the screen.
+    fn attach_uninstallation(&self, apps: &ui::Apps<'_>) {
+        let weak = Rc::downgrade(&self.0);
+        apps.on_uninstall(Self::wired(&weak, Self::uninstall));
+        apps.on_confirm(Self::wired(&weak, Self::confirm));
+        apps.on_cancel(Self::wired(&weak, Self::cancel));
+        apps.on_close_modal(Self::wired(&weak, Self::close_modal));
+        apps.on_retry(Self::wired(&weak, Self::retry));
+        apps.on_force(Self::wired(&weak, Self::force));
+    }
+
     /// Opens the uninstallation of the application chosen, or shows the one
     /// running.
     fn uninstall(&self) {
@@ -1014,26 +1121,37 @@ impl AppsScreen {
             app.key(),
             app.name.clone(),
             target,
+            app.launchers.clone(),
             freed,
             entry.data_bytes(),
         );
     }
 
-    /// Checks what `target` would take with it, on a thread.
+    /// Checks what `target` would take with it, and whether it is open, on
+    /// a thread.
     fn check(
         &self,
         key: AppKey,
         name: String,
         target: Target,
+        launchers: Vec<String>,
         freed: Option<u64>,
         data_bytes: u64,
     ) {
         let (said, receiver) = mpsc::channel();
-        let uninstaller = Arc::clone(&self.0.borrow().seams.uninstaller);
+        let (uninstaller, sessions) = {
+            let state = self.0.borrow();
+            (
+                Arc::clone(&state.seams.uninstaller),
+                Arc::clone(&state.seams.sessions),
+            )
+        };
         let checked = target.clone();
+        let named = launchers.clone();
         let spawned = std::thread::Builder::new()
             .name("okapi-uninstall-check".to_owned())
             .spawn(move || {
+                let _ = said.send(Said::Open(open_now(&*sessions, &named, &checked)));
                 let _ = said.send(Said::Checked(check(&*uninstaller, &checked)));
             });
         let phase = match spawned {
@@ -1047,6 +1165,8 @@ impl AppsScreen {
             key,
             name,
             target,
+            launchers,
+            open: Vec::new(),
             freed,
             estimated: freed,
             data_bytes,
@@ -1058,10 +1178,83 @@ impl AppsScreen {
         self.watch();
     }
 
-    /// Removes what the user confirmed on a thread, which checks a deb once
-    /// more (what goes is what was shown) and writes the history line of
-    /// what went.
+    /// Uninstalls what the user confirmed (`start`), the application closed
+    /// first when the confirmation said it open: only the scopes it showed,
+    /// each asked to end once for the life of the screen. When every one
+    /// was asked already, the user is offered to force it at once.
     fn confirm(&self) {
+        let (going, to_close) = {
+            let mut state = self.0.borrow_mut();
+            let State {
+                operation,
+                asked_to_close,
+                ..
+            } = &mut *state;
+            let Some(operation) = operation.as_mut() else {
+                tracing::warn!("a confirmation without an uninstallation refused");
+                return;
+            };
+            let Phase::Confirm(going) = &operation.phase else {
+                tracing::warn!(phase = ?operation.phase, "a confirmation out of its time refused");
+                return;
+            };
+            let going = going.clone();
+            let to_ask: Vec<OpenScope> = operation
+                .open
+                .iter()
+                .filter(|scope| !asked_to_close.contains(*scope))
+                .cloned()
+                .collect();
+            if !operation.open.is_empty() && to_ask.is_empty() {
+                tracing::info!(scopes = ?operation.open, "every scope asked to close already: offered to force");
+                operation.phase = Phase::NotClosed {
+                    going,
+                    left: operation.open.clone(),
+                };
+                drop(state);
+                self.show_operation();
+                return;
+            }
+            let to_close = (!operation.open.is_empty()).then(|| ToClose {
+                shown: operation.open.clone(),
+                signalled: to_ask,
+                ending: Ending::Asked,
+            });
+            (going, to_close)
+        };
+        self.start(going, to_close);
+    }
+
+    /// Forces the application that did not close, then uninstalls it.
+    fn force(&self) {
+        let (going, left) = match self
+            .0
+            .borrow()
+            .operation
+            .as_ref()
+            .map(|operation| &operation.phase)
+        {
+            Some(Phase::NotClosed { going, left }) => (going.clone(), left.clone()),
+            phase => {
+                tracing::warn!(?phase, "a forced closing out of its time refused");
+                return;
+            }
+        };
+        tracing::info!(scopes = ?left, "the application forced to close");
+        self.start(
+            going,
+            Some(ToClose {
+                shown: left.clone(),
+                signalled: left,
+                ending: Ending::Forced,
+            }),
+        );
+    }
+
+    /// Removes `going` on a thread, which closes the application first as
+    /// `to_close` says, then checks a deb once more (what goes is what was
+    /// shown) and writes the history line of what went.
+    fn start(&self, going: Vec<Going>, to_close: Option<ToClose>) {
         let purge = self
             .0
             .borrow()
@@ -1072,24 +1265,40 @@ impl AppsScreen {
             let mut state = self.0.borrow_mut();
             let uninstaller = Arc::clone(&state.seams.uninstaller);
             let record = Arc::clone(&state.seams.record);
+            let sessions = Arc::clone(&state.seams.sessions);
+            let waits = state.seams.close_waits;
             let now = (state.seams.now)();
             let Some(operation) = state.operation.as_mut() else {
-                tracing::warn!("a confirmation without an uninstallation refused");
+                tracing::warn!("an uninstallation started without one refused");
                 return;
             };
-            let Phase::Confirm(going) = &operation.phase else {
-                tracing::warn!(phase = ?operation.phase, "a confirmation out of its time refused");
-                return;
-            };
-            let going = going.clone();
             if let Target::Snap { purge: asked, .. } = &mut operation.target {
                 *asked = purge;
             }
             let (said, receiver) = mpsc::channel();
             operation.receiver = receiver;
-            operation.phase = Phase::Running(Run::default());
+            operation.phase = Phase::Running(Run {
+                stage: if to_close.is_some() {
+                    Stage::ClosingApp
+                } else {
+                    Stage::Removing
+                },
+                ..Run::default()
+            });
             let target = operation.target.clone();
-            tracing::info!(?target, packages = going.len(), "uninstallation confirmed");
+            let closing = to_close.map(|to_close| AppClosing {
+                sessions,
+                launchers: operation.launchers.clone(),
+                target: target.clone(),
+                to_close,
+                waits,
+            });
+            tracing::info!(
+                ?target,
+                packages = going.len(),
+                closing = closing.is_some(),
+                "uninstallation confirmed"
+            );
             let entry = UninstallEntry {
                 time: now.as_second(),
                 source: match target.source() {
@@ -1109,6 +1318,24 @@ impl AppsScreen {
             std::thread::Builder::new()
                 .name("okapi-uninstall".to_owned())
                 .spawn(move || {
+                    if let Some(closing) = closing
+                        && !closing.close(&going, &said)
+                    {
+                        return;
+                    }
+                    // Okapi was made to quit while the application closed:
+                    // nothing was left to the service yet.
+                    if cancel.load(Ordering::Relaxed) {
+                        tracing::warn!(
+                            ?target,
+                            "the application closed, not uninstalled: Okapi quits"
+                        );
+                        let _ = said.send(Said::Ended {
+                            ended: Ended::Cancelled,
+                            recorded: false,
+                        });
+                        return;
+                    }
                     remove(
                         &*uninstaller,
                         &target,
@@ -1178,6 +1405,7 @@ impl AppsScreen {
                 operation.key,
                 operation.name,
                 target,
+                operation.launchers,
                 operation.estimated,
                 operation.data_bytes,
             );
@@ -1252,14 +1480,35 @@ impl AppsScreen {
         let mut changed = false;
         {
             let mut state = self.0.borrow_mut();
-            let Some(operation) = state.operation.as_mut() else {
+            let State {
+                operation,
+                asked_to_close,
+                ..
+            } = &mut *state;
+            let Some(operation) = operation.as_mut() else {
                 return;
             };
             match said {
+                Said::Asked(asked) => asked_to_close.extend(asked),
+                Said::Open(open) => {
+                    tracing::info!(key = ?operation.key, scopes = ?open, "open application read");
+                    operation.open = open;
+                }
+                Said::Closed => {
+                    if let Phase::Running(run) = &mut operation.phase {
+                        run.stage = Stage::Removing;
+                    }
+                }
+                Said::NotClosed { going, left } => {
+                    operation.phase = Phase::NotClosed { going, left };
+                }
                 Said::Checked(checked) => {
                     changed = operation.running();
                     if changed {
                         tracing::warn!(key = ?operation.key, "what would go changed: asked again");
+                        // Closed already, or never seen again: nothing is
+                        // closed without a new check.
+                        operation.open.clear();
                     }
                     operation.phase = match checked {
                         Ok(Checked::Going(going)) => {
@@ -1400,8 +1649,13 @@ impl AppsScreen {
                 .map(|package| package.name.as_str().into())
                 .collect(),
             Phase::Refused(names) => names.iter().map(|name| name.as_str().into()).collect(),
-            Phase::Checking | Phase::Running(_) | Phase::Failed(_) => Vec::new(),
+            Phase::Checking | Phase::Running(_) | Phase::NotClosed { .. } | Phase::Failed(_) => {
+                Vec::new()
+            }
         };
+        apps.set_app_open(
+            matches!(operation.phase, Phase::Confirm(_)) && !operation.open.is_empty(),
+        );
         crate::shown::show(&state.going_model, going);
         let step = match &operation.phase {
             Phase::Checking => ui::UninstallStep::Checking,
@@ -1412,8 +1666,12 @@ impl AppsScreen {
                 apps.set_too_late(run.cancelling == Cancelling::TooLate);
                 apps.set_waiting(run.waiting);
                 apps.set_closing(run.window == Window::CloseAsked);
-                ui::UninstallStep::Running
+                match run.stage {
+                    Stage::ClosingApp => ui::UninstallStep::ClosingApp,
+                    Stage::Removing => ui::UninstallStep::Running,
+                }
             }
+            Phase::NotClosed { .. } => ui::UninstallStep::NotClosed,
             Phase::Failed(why) => {
                 let (shown_why, detail) = why_shown(why);
                 apps.set_why(shown_why);
@@ -1428,23 +1686,31 @@ impl AppsScreen {
     /// held once, the uninstallation shown; asked again, it closes, the
     /// uninstallation left to the service.
     pub fn close_requested(&self) -> slint::CloseRequestResponse {
-        let insisted = {
+        let (insisted, stage, cancel) = {
             let mut state = self.0.borrow_mut();
-            let Some(Phase::Running(run)) = state
-                .operation
-                .as_mut()
-                .map(|operation| &mut operation.phase)
-            else {
+            let Some(operation) = state.operation.as_mut() else {
+                return slint::CloseRequestResponse::HideWindow;
+            };
+            let cancel = Arc::clone(&operation.cancel);
+            let Phase::Running(run) = &mut operation.phase else {
                 return slint::CloseRequestResponse::HideWindow;
             };
             let insisted = run.window == Window::CloseAsked;
             run.window = Window::CloseAsked;
-            insisted
+            (insisted, run.stage, cancel)
         };
         if insisted {
-            tracing::warn!(
-                "closing insisted during an uninstallation: left to the service, its history line lost"
-            );
+            if stage == Stage::ClosingApp {
+                // Its thread uninstalls nothing once the application closed.
+                cancel.store(true, Ordering::Relaxed);
+                tracing::warn!(
+                    "closing insisted while the application closes: its uninstallation is cancelled"
+                );
+            } else {
+                tracing::warn!(
+                    "closing insisted during an uninstallation: left to the service, its history line lost"
+                );
+            }
             return slint::CloseRequestResponse::HideWindow;
         }
         tracing::info!("closing asked during an uninstallation: held once");
@@ -1454,7 +1720,8 @@ impl AppsScreen {
     }
 
     /// The window closes: measuring stops; an uninstallation running is
-    /// left to its service, never waited for.
+    /// left to its service, never waited for; one whose application still
+    /// closes is not done.
     pub fn shut_down(&self) {
         self.wait_for_leftovers();
         self.leave_old_versions();
@@ -1465,15 +1732,129 @@ impl AppsScreen {
         if let Some(operation) = state
             .operation
             .as_ref()
+            .filter(|operation| matches!(operation.phase, Phase::NotClosed { .. }))
+        {
+            tracing::info!(key = ?operation.key, "closing while the application did not close: not uninstalled");
+        }
+        if let Some(operation) = state
+            .operation
+            .as_ref()
             .filter(|operation| operation.running())
         {
             let source = operation.target.source();
-            if source == Source::Flatpak {
+            if matches!(
+                operation.phase,
+                Phase::Running(Run {
+                    stage: Stage::ClosingApp,
+                    ..
+                })
+            ) {
+                tracing::warn!(key = ?operation.key, "the application closing at closing: not uninstalled");
+            } else if source == Source::Flatpak {
                 tracing::warn!(key = ?operation.key, "flatpak's uninstallation left at closing: its extensions and clean-up may not be done");
             } else {
                 tracing::warn!(key = ?operation.key, ?source, "uninstallation left running at closing");
             }
         }
+    }
+}
+
+/// The scopes of the application `launchers` and `target` name open in the
+/// session now; none when the session cannot say, or when closing them
+/// could end Okapi (traced): it is not closed first, as before Okapi
+/// closed applications.
+fn open_now(sessions: &dyn Sessions, launchers: &[String], target: &Target) -> Vec<OpenScope> {
+    sessions
+        .scopes()
+        .ok()
+        .and_then(|scopes| open_scopes(launchers, target, &scopes).ok())
+        .unwrap_or_else(|| {
+            tracing::warn!(?target, "the application is not closed first");
+            Vec::new()
+        })
+}
+
+/// What a closing asks: the scopes shown open, those to signal, and how.
+struct ToClose {
+    shown: Vec<OpenScope>,
+    signalled: Vec<OpenScope>,
+    ending: Ending,
+}
+
+/// An application to close before its uninstallation.
+struct AppClosing {
+    sessions: Arc<dyn Sessions>,
+    launchers: Vec<String>,
+    target: Target,
+    to_close: ToClose,
+    waits: CloseWaits,
+}
+
+impl AppClosing {
+    /// Has its scopes signalled (those asked to end said, to be never asked
+    /// again), then looks at the session until a look sees none of the
+    /// application's left (new ones too), its wait at most, plus the look
+    /// under way. A look that fails sees nothing: it never says it closed.
+    /// Closed, it says so; not, it says what is left (forced, it fails),
+    /// and its removal of `going` does not start.
+    fn close(&self, going: &[Going], said: &Sender<Said>) -> bool {
+        let ToClose {
+            shown,
+            signalled,
+            ending,
+        } = &self.to_close;
+        let started = Instant::now();
+        let asked: Vec<OpenScope> = signalled
+            .iter()
+            .filter(|scope| self.sessions.close(scope, *ending).is_ok())
+            .cloned()
+            .collect();
+        let refused = signalled.len() - asked.len();
+        tracing::info!(scopes = ?asked, refused, ?ending, "application asked to close");
+        if *ending == Ending::Asked {
+            let _ = said.send(Said::Asked(asked));
+        }
+        let wait = match ending {
+            Ending::Asked => self.waits.asked,
+            Ending::Forced => self.waits.forced,
+        };
+        let mut left = shown.clone();
+        let mut failed_looks = 0_u32;
+        loop {
+            match self
+                .sessions
+                .scopes()
+                .map(|scopes| open_scopes(&self.launchers, &self.target, &scopes))
+            {
+                // Okapi now living by a scope of it: it is never closed.
+                Ok(Err(_)) => break,
+                Ok(Ok(open)) => {
+                    left = open;
+                    if left.is_empty() {
+                        tracing::info!(elapsed = ?started.elapsed(), failed_looks, "application closed");
+                        let _ = said.send(Said::Closed);
+                        return true;
+                    }
+                }
+                Err(_) => failed_looks += 1,
+            }
+            if started.elapsed() >= wait {
+                break;
+            }
+            std::thread::sleep(self.waits.look_every);
+        }
+        tracing::warn!(scopes = ?left, ?ending, refused, failed_looks, elapsed = ?started.elapsed(), "application did not close");
+        let _ = said.send(match ending {
+            Ending::Asked => Said::NotClosed {
+                going: going.to_vec(),
+                left,
+            },
+            Ending::Forced => Said::Ended {
+                ended: Ended::Failed(Why::StillOpen),
+                recorded: false,
+            },
+        });
+        false
     }
 }
 
@@ -1543,6 +1924,7 @@ fn why_shown(why: &Why) -> (ui::UninstallWhy, String) {
         Why::TimedOut => (ui::UninstallWhy::TimedOut, String::new()),
         Why::NotFound => (ui::UninstallWhy::NotFound, String::new()),
         Why::Unclear => (ui::UninstallWhy::Unclear, String::new()),
+        Why::StillOpen => (ui::UninstallWhy::StillOpen, String::new()),
         Why::Service(words) => (ui::UninstallWhy::Service, words.clone()),
     }
 }

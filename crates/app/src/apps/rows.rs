@@ -207,6 +207,7 @@ mod tests {
             package: format!("pkg-{}", name.to_lowercase()),
             name: name.to_owned(),
             aliases: Vec::new(),
+            launchers: Vec::new(),
             version: String::new(),
             publisher: None,
             origin: None,

@@ -2777,8 +2777,8 @@ mod tests {
         let_the_screen_settle();
         button(&window, "Fermer Chrome et continuer").invoke_accessible_default_action();
         assert!(shows(&window, "Fermeture de Chrome…"));
-        for _ in 0..super::super::browsers::CLOSE_LOOKS {
-            i_slint_backend_testing::mock_elapsed_time(super::super::browsers::CLOSE_LOOK_EVERY);
+        for _ in 0..crate::closing::CLOSE_LOOKS {
+            i_slint_backend_testing::mock_elapsed_time(crate::closing::CLOSE_LOOK_EVERY);
             slint::platform::update_timers_and_animations();
         }
         assert!(shows(
@@ -3043,7 +3043,7 @@ mod tests {
 
     #[test]
     fn a_browser_has_its_whole_wait_to_close() {
-        use super::super::browsers::{CLOSE_LOOK_EVERY, CLOSE_LOOKS};
+        use crate::closing::{CLOSE_LOOK_EVERY, CLOSE_LOOKS};
 
         assert_eq!(
             CLOSE_LOOK_EVERY * CLOSE_LOOKS,
@@ -3102,8 +3102,8 @@ mod tests {
         assert!(!there(&lock), "asked to close");
         window.global::<ui::Cleaner>().invoke_cancel_browser();
         assert!(!asking(&window));
-        for _ in 0..super::super::browsers::CLOSE_LOOKS {
-            i_slint_backend_testing::mock_elapsed_time(super::super::browsers::CLOSE_LOOK_EVERY);
+        for _ in 0..crate::closing::CLOSE_LOOKS {
+            i_slint_backend_testing::mock_elapsed_time(crate::closing::CLOSE_LOOK_EVERY);
             slint::platform::update_timers_and_animations();
         }
         assert_eq!(step(&window), ui::CleanerStep::Results, "nothing started");
@@ -3258,8 +3258,8 @@ mod tests {
         button(&window, "Fermer Edge et continuer").invoke_accessible_default_action();
         assert!(shows(&window, "Fermeture de Edge…"));
         assert_eq!(signalled.get(), 2);
-        for _ in 0..super::super::browsers::CLOSE_LOOKS {
-            i_slint_backend_testing::mock_elapsed_time(super::super::browsers::CLOSE_LOOK_EVERY);
+        for _ in 0..crate::closing::CLOSE_LOOKS {
+            i_slint_backend_testing::mock_elapsed_time(crate::closing::CLOSE_LOOK_EVERY);
             slint::platform::update_timers_and_animations();
         }
         assert!(shows(

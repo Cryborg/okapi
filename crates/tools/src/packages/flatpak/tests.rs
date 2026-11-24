@@ -1,10 +1,7 @@
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::str::FromStr as _;
 use std::sync::mpsc;
 
-use futures_lite::StreamExt as _;
-
 use super::*;
+use crate::packages::fake_bus;
 
 const APP: &str = "app/org.gimp.GIMP/x86_64/stable";
 const LOCALE: &str = "runtime/org.gimp.GIMP.Locale/x86_64/stable";
@@ -43,81 +40,56 @@ pub(crate) fn fake_helper(
     fake_helper_waiting(answer, SHORT)
 }
 
+/// What the helper heard of `call`.
+fn heard(call: &zbus::Message) -> Heard {
+    let [destination, path, interface, member, signature] = fake_bus::addressed(call);
+    let body = call.body();
+    // A body's signature reads as a structure's: `(uss)`.
+    let (flags, strings) = match signature.as_str() {
+        "(uss)" => {
+            let (flags, reference, installation): (u32, String, String) =
+                body.deserialize().unwrap();
+            (flags, vec![reference, installation])
+        }
+        "(us)" => {
+            let (flags, installation): (u32, String) = body.deserialize().unwrap();
+            (flags, vec![installation])
+        }
+        _ => (u32::MAX, Vec::new()),
+    };
+    Heard {
+        destination,
+        path,
+        interface,
+        member,
+        signature,
+        flags,
+        strings,
+    }
+}
+
 /// [`fake_helper`], its client waiting `waits`.
 fn fake_helper_waiting(
     answer: impl Fn(&str, &str) -> Answer + Send + 'static,
     waits: Waits,
 ) -> (SystemHelper, mpsc::Receiver<Heard>) {
-    let (server_end, client_end) = UnixStream::pair().unwrap();
-    let (server, client) = futures_lite::future::block_on(futures_lite::future::zip(
-        zbus::connection::Builder::async_io_unix_stream(server_end)
-            .p2p()
-            .server(zbus::Guid::generate())
-            .unwrap()
-            .build(),
-        zbus::connection::Builder::async_io_unix_stream(client_end)
-            .p2p()
-            .build(),
-    ));
-    let server = server.unwrap();
-    // Listened to before the client sends anything.
-    let mut messages = zbus::MessageStream::from(&server);
-    let (told, heard) = mpsc::channel();
-    std::thread::spawn(move || {
-        futures_lite::future::block_on(async move {
-            while let Some(Ok(message)) = messages.next().await {
-                let header = message.header();
-                if header.message_type() != zbus::message::Type::MethodCall {
-                    continue;
-                }
-                let body = message.body();
-                let signature = body.signature().to_string();
-                // A body's signature reads as a structure's: `(uss)`.
-                let (flags, strings) = match signature.as_str() {
-                    "(uss)" => {
-                        let (flags, reference, installation): (u32, String, String) =
-                            body.deserialize().unwrap();
-                        (flags, vec![reference, installation])
-                    }
-                    "(us)" => {
-                        let (flags, installation): (u32, String) = body.deserialize().unwrap();
-                        (flags, vec![installation])
-                    }
-                    _ => (u32::MAX, Vec::new()),
-                };
-                let member = header.member().map(ToString::to_string).unwrap_or_default();
-                let answered = answer(&member, strings.first().map_or("", String::as_str));
-                let _ = told.send(Heard {
-                    destination: header
-                        .destination()
-                        .map(ToString::to_string)
-                        .unwrap_or_default(),
-                    path: header.path().map(ToString::to_string).unwrap_or_default(),
-                    interface: header
-                        .interface()
-                        .map(ToString::to_string)
-                        .unwrap_or_default(),
-                    member,
-                    signature,
-                    flags,
-                    strings,
-                });
-                match answered {
-                    Answer::Done => server.reply(&header, &()).await.unwrap(),
-                    Answer::Error(name) => server
-                        .reply_error(&header, name, &"the helper's words")
-                        .await
-                        .unwrap(),
-                    Answer::Silent => {}
-                }
-            }
-        });
+    let (told, said) = mpsc::channel();
+    // Told before it is answered: what the client got an answer to is heard.
+    let (connection, _calls) = fake_bus::serving(move |call| {
+        let heard = heard(call);
+        let answered = answer(
+            &heard.member,
+            heard.strings.first().map_or("", String::as_str),
+        );
+        let _ = told.send(heard);
+        match answered {
+            Answer::Done => fake_bus::reply(call, &()),
+            Answer::Error(name) => fake_bus::error(call, name),
+            Answer::Silent => None,
+        }
     });
-    let helper = SystemHelper {
-        connection: client.unwrap(),
-        waits,
-    };
-    (helper, heard)
+    let helper = SystemHelper { connection, waits };
+    (helper, said)
 }
 
 fn members(heard: &mpsc::Receiver<Heard>) -> Vec<(String, Vec<String>)> {
@@ -191,7 +163,7 @@ fn the_application_refused_nothing_more_is_asked() {
     // The helper's own words carried, to be shown.
     assert!(matches!(
         helper.remove(APP, &[LOCALE.to_owned()]),
-        Err(FlatpakError::NotAuthorized(words)) if words == "the helper's words"
+        Err(FlatpakError::NotAuthorized(words)) if words == fake_bus::WORDS
     ));
     assert_eq!(
         members(&heard),
@@ -239,22 +211,6 @@ fn a_helper_that_never_answers_is_waited_for_no_longer_than_its_wait() {
         helper.remove(APP, &[]),
         Err(FlatpakError::TimedOut { waited }) if waited == SHORT.uninstall
     ));
-}
-
-#[test]
-fn a_bus_that_never_answers_is_joined_no_longer_than_its_wait() {
-    // Catches a connection without a bound: a socket that accepts and never
-    // speaks.
-    let directory = tempfile::tempdir().unwrap();
-    let socket = directory.path().join("bus");
-    let listener = UnixListener::bind(&socket).unwrap();
-    let held = std::thread::spawn(move || listener.accept().map(|(stream, _)| stream));
-    let address = zbus::Address::from_str(&format!("unix:path={}", socket.display())).unwrap();
-    assert!(matches!(
-        joined(address, Duration::from_millis(200)),
-        Err(FlatpakError::Unanswered(_))
-    ));
-    drop(held);
 }
 
 #[test]

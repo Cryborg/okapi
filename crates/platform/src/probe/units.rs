@@ -1,5 +1,7 @@
 /// Characters of the random suffix of a snap's scope (`-` and a UUID).
 const SNAP_SUFFIX: usize = 37;
+/// What the name of a scope ends with.
+pub const SCOPE_SUFFIX: &str = ".scope";
 
 /// The application (its `.desktop` identifier) a process runs in, from the
 /// path of its cgroup: the nearest unit, from the end, that a desktop
@@ -19,7 +21,7 @@ fn unit_desktop_id(unit: &str) -> Option<String> {
         return snap_desktop_id(snap);
     }
     let named = unit.strip_prefix("app-")?;
-    let body = if let Some(scope) = named.strip_suffix(".scope") {
+    let body = if let Some(scope) = named.strip_suffix(SCOPE_SUFFIX) {
         scope.rsplit_once('-')?.0
     } else if let Some(service) = named.strip_suffix(".service") {
         service.split_once('@').map_or(service, |(body, _)| body)
@@ -32,9 +34,22 @@ fn unit_desktop_id(unit: &str) -> Option<String> {
     usable(identifier)
 }
 
+/// The snap whose application a unit is the scope of
+/// (`snap.<snap>.<app>-<uuid>.scope`), as snapd names it.
+#[must_use]
+pub fn scope_snap(unit: &str) -> Option<&str> {
+    snap_scope(unit.strip_prefix("snap.")?).map(|(name, _)| name)
+}
+
 /// `<snap>.<app>-<uuid>.scope` → `<snap>_<app>`.
 fn snap_desktop_id(snap: &str) -> Option<String> {
-    let body = snap.strip_suffix(".scope")?;
+    let (name, application) = snap_scope(snap)?;
+    usable(format!("{name}_{application}"))
+}
+
+/// `<snap>.<app>-<uuid>.scope` → (`<snap>`, `<app>`).
+fn snap_scope(snap: &str) -> Option<(&str, &str)> {
+    let body = snap.strip_suffix(SCOPE_SUFFIX)?;
     let (name, application) = body.split_once('.')?;
     let cut = application.len().checked_sub(SNAP_SUFFIX)?;
     let (application, suffix) = application.split_at_checked(cut)?;
@@ -42,9 +57,7 @@ fn snap_desktop_id(snap: &str) -> Option<String> {
     let is_uuid = uuid
         .chars()
         .all(|character| character == '-' || character.is_ascii_hexdigit());
-    (is_uuid && !name.is_empty() && !application.is_empty())
-        .then(|| format!("{name}_{application}"))
-        .and_then(usable)
+    (is_uuid && !name.is_empty() && !application.is_empty()).then_some((name, application))
 }
 
 /// An identifier kept only when it names a file in a folder (any user may
@@ -124,6 +137,25 @@ mod tests {
             Some("code_url-handler")
         );
         assert_eq!(id("snap.firefox.firefox-short.scope"), None);
+    }
+
+    #[test]
+    fn a_snap_scope_names_its_snap_alone() {
+        const UUID: &str = "0b6f2c1e-4d2a-4c1e-9a7f-1f2e3d4c5b6a";
+        assert_eq!(
+            scope_snap(&format!("snap.firefox.firefox-{UUID}.scope")),
+            Some("firefox")
+        );
+        assert_eq!(
+            scope_snap(&format!("snap.firefox_beta.firefox-{UUID}.scope")),
+            Some("firefox_beta")
+        );
+        assert_eq!(scope_snap("snap.firefox.firefox.service"), None);
+        assert_eq!(scope_snap("snap.firefox.firefox-short.scope"), None);
+        assert_eq!(
+            scope_snap(&format!("app-firefox.firefox-{UUID}.scope")),
+            None
+        );
     }
 
     #[test]

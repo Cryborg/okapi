@@ -69,6 +69,7 @@ export global AppWords {
             // The title says it.
             : why == UninstallWhy.not-found ? ""
             : why == UninstallWhy.unclear ? @tr("Okapi n'a pas pu savoir ce qui serait retiré avec elle : rien n'a été touché.")
+            : why == UninstallWhy.still-open ? @tr("Elle n'a pas pu être fermée.")
             : @tr("Le système a refusé : {}", detail)
     }
 }
@@ -498,6 +499,8 @@ component Uninstall inherits ModalFrame {
         text: Apps.step == UninstallStep.checking ? @tr("Vérification…")
             : Apps.step == UninstallStep.refused ? @tr("{} ne peut pas être désinstallée", Apps.target)
             : Apps.step == UninstallStep.running ? @tr("Désinstallation de {}…", Apps.target)
+            : Apps.step == UninstallStep.closing-app ? @tr("Fermeture de {}…", Apps.target)
+            : Apps.step == UninstallStep.not-closed ? @tr("{} ne s'est pas fermée", Apps.target)
             : root.already-gone ? @tr("{} est déjà désinstallée", Apps.target)
             : root.failed ? @tr("{} n'a pas été désinstallée", Apps.target)
             : @tr("Désinstaller {} ?", Apps.target);
@@ -507,9 +510,13 @@ component Uninstall inherits ModalFrame {
         font-weight: Theme.weight-semibold;
         wrap: word-wrap;
     }
-    if Apps.step == UninstallStep.checking || Apps.step == UninstallStep.running: ProgressBar {
+    if Apps.step == UninstallStep.checking || Apps.step == UninstallStep.closing-app || Apps.step == UninstallStep.running: ProgressBar {
         indeterminate: true;
         label: title.text;
+    }
+    if Apps.step == UninstallStep.confirm && Apps.app-open: Detail {
+        text: @tr("{} est ouverte : Okapi va la fermer. Enregistrez d'abord votre travail.", Apps.target);
+        wrap: word-wrap;
     }
     if Apps.step == UninstallStep.confirm && Apps.target-source == AppSource.deb && !Apps.freed-known: Detail {
         text: Apps.going.length > 2
@@ -601,6 +608,14 @@ component Uninstall inherits ModalFrame {
             : Apps.too-late ? @tr("Trop tard pour annuler : le système termine.")
             : @tr("Fermer cette fenêtre n'arrête pas la désinstallation.");
     }
+    if Apps.step == UninstallStep.closing-app && Apps.closing: Detail {
+        text: @tr("Fermez encore Okapi pour le quitter quand même : {} ne sera pas désinstallée.", Apps.target);
+        wrap: word-wrap;
+    }
+    if Apps.step == UninstallStep.not-closed: Detail {
+        text: @tr("Si vous la forcez à se fermer, ce qu'elle n'a pas enregistré sera perdu.");
+        wrap: word-wrap;
+    }
     if root.failed: Detail {
         text: AppWords.why(Apps.why, Apps.why-detail);
     }
@@ -608,7 +623,7 @@ component Uninstall inherits ModalFrame {
         alignment: end;
         spacing: Theme.spacing-s;
         close := ActionButton {
-            text: Apps.step == UninstallStep.confirm || Apps.step == UninstallStep.checking ? @tr("Annuler") : @tr("Fermer");
+            text: Apps.step == UninstallStep.confirm || Apps.step == UninstallStep.checking || Apps.step == UninstallStep.not-closed ? @tr("Annuler") : @tr("Fermer");
             kind: ButtonKind.ghost;
             clicked => {
                 Apps.close-modal();
@@ -627,8 +642,15 @@ component Uninstall inherits ModalFrame {
                 Apps.retry();
             }
         }
+        if Apps.step == UninstallStep.not-closed: ActionButton {
+            text: @tr("Forcer la fermeture");
+            kind: ButtonKind.danger;
+            clicked => {
+                Apps.force();
+            }
+        }
         if Apps.step == UninstallStep.confirm: ActionButton {
-            text: @tr("Désinstaller");
+            text: Apps.app-open ? @tr("Fermer et désinstaller") : @tr("Désinstaller");
             kind: ButtonKind.danger;
             clicked => {
                 Apps.confirm();

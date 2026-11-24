@@ -2381,6 +2381,10 @@ msgid "Okapi n'a pas pu savoir ce qui serait retiré avec elle : rien n'a été 
 msgstr "Okapi could not tell what would be removed with it: nothing was touched."
 
 msgctxt "AppWords"
+msgid "Elle n'a pas pu être fermée."
+msgstr "It could not be closed."
+
+msgctxt "AppWords"
 msgid "Le système n'a pas répondu à temps. Si vous avez donné votre mot de passe, la désinstallation peut encore aboutir."
 msgstr "The system did not answer in time. If you gave your password, the uninstallation may still complete."
 
@@ -2607,6 +2611,34 @@ msgstr "Try again"
 msgctxt "Uninstall"
 msgid "Désinstaller"
 msgstr "Uninstall"
+
+msgctxt "Uninstall"
+msgid "Fermer et désinstaller"
+msgstr "Close and uninstall"
+
+msgctxt "Uninstall"
+msgid "Forcer la fermeture"
+msgstr "Force close"
+
+msgctxt "Uninstall"
+msgid "Fermeture de {}…"
+msgstr "Closing {}…"
+
+msgctxt "Uninstall"
+msgid "{} ne s'est pas fermée"
+msgstr "{} did not close"
+
+msgctxt "Uninstall"
+msgid "{} est ouverte : Okapi va la fermer. Enregistrez d'abord votre travail."
+msgstr "{} is open: Okapi will close it. Save your work first."
+
+msgctxt "Uninstall"
+msgid "Fermez encore Okapi pour le quitter quand même : {} ne sera pas désinstallée."
+msgstr "Close Okapi again to quit anyway: {} will not be uninstalled."
+
+msgctxt "Uninstall"
+msgid "Si vous la forcez à se fermer, ce qu'elle n'a pas enregistré sera perdu."
+msgstr "If you force it to close, what it has not saved will be lost."
 
 msgctxt "Toast"
 msgid "{} désinstallée : {} libérés"

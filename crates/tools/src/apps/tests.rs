@@ -70,7 +70,7 @@ fn debs(root: &Path) -> DebPlaces {
     );
     write(
         &applications.join("gimp-extra.desktop"),
-        &launcher("GIMP extra", ""),
+        &launcher("GIMP extra", "NoDisplay=true"),
     );
     write(
         &applications.join("org.gnome.Nautilus.desktop"),
@@ -109,6 +109,11 @@ fn a_package_with_launchers_is_one_app_and_the_others_their_rest() {
     );
     let gimp = &apps[0];
     assert_eq!(gimp.id, "gimp:amd64");
+    assert_eq!(
+        gimp.launchers,
+        ["gimp", "gimp-extra"],
+        "every launcher, the one kept from the menu too"
+    );
     assert_eq!(gimp.size, AppSize::Known(3 * 1024));
     assert_eq!(
         gimp.target,
@@ -199,6 +204,7 @@ fn a_snap_keeps_its_old_versions_and_the_others_are_its_rest() {
     assert_eq!(apps.len(), 1);
     let studio = &apps[0];
     assert_eq!(studio.name, "Android Studio");
+    assert_eq!(studio.launchers, ["android-studio_android-studio"]);
     assert_eq!(studio.size, AppSize::Known(3000));
     assert_eq!(
         studio.target,
@@ -298,6 +304,7 @@ fn a_flatpak_is_read_from_its_active_deployment_never_through_a_link_elsewhere()
     ));
     assert_eq!(apps.len(), 1, "{apps:?}");
     assert_eq!(apps[0].id, "org.gimp.GIMP");
+    assert_eq!(apps[0].launchers, ["org.gimp.GIMP"]);
     assert_eq!(apps[0].size, AppSize::ToMeasure(gimp), "measured");
     assert_eq!(
         apps[0].target,
@@ -325,6 +332,7 @@ fn app(source: Source, id: &str, data: Option<PathBuf>) -> App {
         package: id.to_owned(),
         name: id.to_owned(),
         aliases: Vec::new(),
+        launchers: Vec::new(),
         version: String::new(),
         publisher: None,
         origin: None,

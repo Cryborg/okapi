@@ -98,6 +98,8 @@ pub enum Why {
     NotFound,
     /// What would go cannot be told for sure: nothing removed.
     Unclear,
+    /// The application did not close, even forced: nothing removed.
+    StillOpen,
     /// The service refused, in its own words.
     Service(String),
 }

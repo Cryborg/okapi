@@ -11,6 +11,7 @@ pub mod leftovers;
 pub mod measure;
 #[cfg(target_os = "linux")]
 pub mod old_versions;
+pub mod open;
 pub mod snap;
 #[cfg(target_os = "linux")]
 pub mod snapshots;
@@ -73,6 +74,10 @@ pub struct App {
     /// The other names its launcher goes by: its file's name, its windows'
     /// class, its name in no language.
     pub aliases: Vec<String>,
+    /// The names of all its launchers' files, shown in the menu or not,
+    /// without `.desktop`: what a desktop names the scopes of the processes
+    /// it starts for it by.
+    pub launchers: Vec<String>,
     pub version: String,
     pub publisher: Option<String>,
     /// How a deb came; `None` for another source, or when apt cannot say.
@@ -289,6 +294,12 @@ impl Reading {
     }
 }
 
+/// The identifier of the launcher at `path`: its file's name, without
+/// `.desktop`.
+fn launcher_id(path: &Path) -> Option<String> {
+    path.file_stem()?.to_str().map(str::to_owned)
+}
+
 /// A launcher the menu shows.
 struct Launcher {
     name: String,
@@ -445,6 +456,7 @@ pub fn read_debs(places: &DebPlaces, reading: &Reading) -> SourceReading {
             package: package.name.clone(),
             name,
             aliases,
+            launchers: own.iter().filter_map(|path| launcher_id(path)).collect(),
             version: package.version.clone(),
             publisher: None,
             origin,

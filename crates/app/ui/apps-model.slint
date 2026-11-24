@@ -73,10 +73,12 @@ export struct AppDetail {
     for-account-only: bool,
 }
 
-export enum UninstallStep { closed, checking, confirm, refused, running, failed }
+// `closing-app`: the application asked to close, then uninstalled;
+// `not-closed`: it did not close in time, the user may force it.
+export enum UninstallStep { closed, checking, confirm, refused, closing-app, not-closed, running, failed }
 
 // Why an uninstallation did not happen.
-export enum UninstallWhy { none, absent, not-authorized, busy, unanswered, timed-out, not-found, unclear, service }
+export enum UninstallWhy { none, absent, not-authorized, busy, unanswered, timed-out, not-found, unclear, still-open, service }
 
 // The tab shown: what is installed, what applications uninstalled left, or
 // the old versions the package managers keep.
@@ -318,6 +320,8 @@ export global Apps {
     in property <string> why-detail;
     // The window was asked to close while it runs.
     in property <bool> closing;
+    // The application is open: it is closed before it is uninstalled.
+    in property <bool> app-open;
 
     in property <bool> toast;
     in property <string> toast-name;
@@ -344,6 +348,8 @@ export global Apps {
     callback cancel();
     callback close-modal();
     callback retry();
+    // The application that did not close is forced to.
+    callback force();
     callback close-toast();
     callback toast-held(bool);
 }

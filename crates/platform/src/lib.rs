@@ -34,10 +34,10 @@ pub use identity::{
 };
 pub use probe::{
     CpuTimes, DesktopEntry, DesktopSession, Device, MemoryStatus, Mount, MountClass, MountList,
-    ProcessList, ProcessMemory, Space, application_name, confinement, cpu_times, desktop_entry,
-    desktop_entry_lossy, desktop_id, desktop_session, device_labels, distribution, kernel_release,
-    load_average, memory, mounts, names_a_file, processes, read_regular_capped, removable,
-    rotational, space, uptime,
+    ProcessList, ProcessMemory, SCOPE_SUFFIX, Space, application_name, confinement, cpu_times,
+    desktop_entry, desktop_entry_lossy, desktop_id, desktop_session, device_labels, distribution,
+    kernel_release, lineage_cgroups, load_average, memory, mounts, names_a_file, processes,
+    read_regular_capped, removable, rotational, scope_snap, space, uptime,
 };
 #[cfg(target_os = "linux")]
 pub use session::may_write;

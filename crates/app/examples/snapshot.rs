@@ -1475,6 +1475,18 @@ fn apps(app: &ui::AppWindow, detail: bool, asking: bool, language: Language) {
     }
 }
 
+/// The uninstallation of the screen `screen`: confirmed (`apps-uninstall`),
+/// the application open (`apps-open`), or open still (`apps-not-closed`).
+fn apps_open(app: &ui::AppWindow, screen: &str, language: Language) {
+    apps(app, true, true, language);
+    let apps = app.global::<ui::Apps>();
+    match screen {
+        "apps-open" => apps.set_app_open(true),
+        "apps-not-closed" => apps.set_step(ui::UninstallStep::NotClosed),
+        _ => {}
+    }
+}
+
 /// The tab of leftovers, as on the mockup; empty when `empty`.
 fn apps_leftovers(app: &ui::AppWindow, empty: bool, language: Language) {
     apps(app, false, false, language);
@@ -2406,7 +2418,7 @@ fn main() {
         }
         "apps" => apps(&app, true, false, language),
         "apps-small" => apps(&app, false, false, language),
-        "apps-uninstall" => apps(&app, true, true, language),
+        "apps-uninstall" | "apps-open" | "apps-not-closed" => apps_open(&app, screen, language),
         "apps-uninstall-flatpak" => apps_flatpak(&app, language),
         "apps-leftovers" => apps_leftovers(&app, false, language),
         "apps-leftovers-empty" => apps_leftovers(&app, true, language),

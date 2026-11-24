@@ -183,7 +183,15 @@ impl SystemHelper {
         let address =
             bus::socket_only(zbus::Address::system()?).map_err(FlatpakError::Transport)?;
         Ok(Self {
-            connection: joined(address, bus::CALL_WAIT)?,
+            // Its calls are bounded each by its own wait.
+            connection: bus::joined(address, bus::CALL_WAIT, None).map_err(
+                |error| match error {
+                    bus::JoinError::Bus(error) => FlatpakError::Bus(error),
+                    unanswered @ bus::JoinError::Unanswered(_) => {
+                        FlatpakError::Unanswered(unanswered.to_string())
+                    }
+                },
+            )?,
             waits: WAITS,
         })
     }
@@ -344,20 +352,6 @@ impl SystemHelper {
         }
         ended
     }
-}
-
-/// The bus at `address`, joined within `wait`: a socket that never answers
-/// would hold the thread forever.
-fn joined(address: zbus::Address, wait: Duration) -> Result<zbus::Connection, FlatpakError> {
-    let builder = zbus::connection::Builder::address(address)?;
-    let built = async { builder.build().await.map_err(FlatpakError::from) };
-    let deadline = async {
-        async_io::Timer::after(wait).await;
-        Err(FlatpakError::Unanswered(format!(
-            "the system bus not joined in {wait:?}"
-        )))
-    };
-    futures_lite::future::block_on(futures_lite::future::or(built, deadline))
 }
 
 #[cfg(test)]

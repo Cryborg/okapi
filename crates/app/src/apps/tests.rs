@@ -25,6 +25,8 @@ pub(crate) fn inert() -> AppsSeams {
     AppsSeams {
         read: Rc::new(|_, _, _| {}),
         uninstaller: Fake::new(Vec::new(), Ended::Done(Gone::default())),
+        sessions: FakeSessions::new(&[], |_, _| true),
+        close_waits: SHORT_CLOSE_WAITS,
         record: Arc::new(|_| Ok(())),
         now: Timestamp::now,
         leftovers: super::leftovers::tests::inert(),
@@ -42,6 +44,8 @@ fn app(source: Source, id: &str, name: &str, bytes: u64) -> App {
         package: package.clone(),
         name: name.to_owned(),
         aliases: Vec::new(),
+        // Named apart from the package: a scope is named by its launcher.
+        launchers: vec![format!("org.example.{package}")],
         version: "1.0".to_owned(),
         publisher: None,
         origin: (source == Source::Deb).then_some(Origin::ByUser),
@@ -195,6 +199,107 @@ impl Uninstaller for Fake {
     }
 }
 
+/// Waits a test sees the end of.
+const SHORT_CLOSE_WAITS: CloseWaits = CloseWaits {
+    look_every: Duration::from_millis(1),
+    asked: Duration::from_millis(100),
+    forced: Duration::from_millis(100),
+};
+
+/// A session whose scopes are those given, each gone once signalled when
+/// `closes` says; the signals asked kept, and the scopes unreadable when
+/// told.
+pub(crate) struct FakeSessions {
+    alive: Mutex<Vec<String>>,
+    closes: fn(&str, Ending) -> bool,
+    /// What systemd took: never a scope it refused.
+    asked: Mutex<Vec<(String, Ending)>>,
+    unreadable: AtomicBool,
+    /// Once a scope is asked to close, the session cannot be read.
+    blind_once_asked: AtomicBool,
+    /// A scope systemd refuses to signal.
+    refused: Mutex<Option<String>>,
+    /// Held until the test lets the first request go.
+    held: Mutex<Option<mpsc::Receiver<()>>>,
+    /// The cgroup Okapi runs in.
+    okapi_in: Mutex<String>,
+}
+
+impl FakeSessions {
+    fn new(alive: &[&str], closes: fn(&str, Ending) -> bool) -> Arc<Self> {
+        Arc::new(Self {
+            alive: Mutex::new(alive.iter().map(|&unit| unit.to_owned()).collect()),
+            closes,
+            asked: Mutex::new(Vec::new()),
+            unreadable: AtomicBool::new(false),
+            blind_once_asked: AtomicBool::new(false),
+            refused: Mutex::new(None),
+            held: Mutex::new(None),
+            okapi_in: Mutex::new("/user.slice/app-gnome-okapi-1.scope".to_owned()),
+        })
+    }
+
+    /// Its first request waits until the sender says.
+    fn hold(&self) -> mpsc::Sender<()> {
+        let (release, released) = mpsc::channel();
+        *self.held.lock().unwrap() = Some(released);
+        release
+    }
+
+    fn asked(&self) -> Vec<(String, Ending)> {
+        self.asked.lock().unwrap().clone()
+    }
+
+    fn open(&self, unit: &str) {
+        self.alive.lock().unwrap().push(unit.to_owned());
+    }
+}
+
+impl Sessions for FakeSessions {
+    fn scopes(
+        &self,
+    ) -> Result<okapi_tools::apps::open::Scopes, okapi_tools::apps::open::Unreached> {
+        if self.unreadable.load(Ordering::Relaxed) {
+            return Err(okapi_tools::apps::open::Unreached);
+        }
+        Ok(okapi_tools::apps::open::Scopes {
+            alive: self.alive.lock().unwrap().clone(),
+            okapi_cgroups: vec![
+                self.okapi_in.lock().unwrap().clone(),
+                "/init.scope".to_owned(),
+            ],
+        })
+    }
+
+    fn close(
+        &self,
+        scope: &OpenScope,
+        ending: Ending,
+    ) -> Result<(), okapi_tools::apps::open::Unreached> {
+        let held = self.held.lock().unwrap().take();
+        if let Some(held) = held {
+            held.recv().unwrap();
+        }
+        if self.blind_once_asked.load(Ordering::Relaxed) {
+            self.unreadable.store(true, Ordering::Relaxed);
+        }
+        if self.refused.lock().unwrap().as_deref() == Some(scope.unit()) {
+            return Err(okapi_tools::apps::open::Unreached);
+        }
+        self.asked
+            .lock()
+            .unwrap()
+            .push((scope.unit().to_owned(), ending));
+        if (self.closes)(scope.unit(), ending) {
+            self.alive
+                .lock()
+                .unwrap()
+                .retain(|unit| unit != scope.unit());
+        }
+        Ok(())
+    }
+}
+
 fn going(name: &str, bytes: u64) -> Going {
     Going {
         id: format!("{name};1;amd64;installed"),
@@ -230,6 +335,21 @@ fn on_apps_reading(
     writable: bool,
     arrivals: fn() -> Vec<Arrival>,
 ) -> OnApps {
+    on_apps_in(uninstaller, writable, arrivals, inert().sessions)
+}
+
+/// [`on_apps`], the session's scopes `sessions`.
+fn on_apps_open(uninstaller: Arc<dyn Uninstaller>, sessions: Arc<dyn Sessions>) -> OnApps {
+    on_apps_in(uninstaller, true, arrivals, sessions)
+}
+
+/// [`on_apps_reading`], the session's scopes `sessions`.
+fn on_apps_in(
+    uninstaller: Arc<dyn Uninstaller>,
+    writable: bool,
+    arrivals: fn() -> Vec<Arrival>,
+    sessions: Arc<dyn Sessions>,
+) -> OnApps {
     let recorded = Arc::new(Mutex::new(Vec::new()));
     let kept = Arc::clone(&recorded);
     let reads = Rc::new(std::cell::Cell::new(0));
@@ -243,6 +363,8 @@ fn on_apps_reading(
                 }
             }),
             uninstaller,
+            sessions,
+            close_waits: SHORT_CLOSE_WAITS,
             record: Arc::new(move |entry| {
                 if !writable {
                     return Err(HistoryUnavailable::NoDirectory);
@@ -889,6 +1011,8 @@ fn closing_the_window_during_an_uninstallation_is_held_once() {
             package: "gimp".to_owned(),
             architecture: "amd64".to_owned(),
         },
+        launchers: Vec::new(),
+        open: Vec::new(),
         freed: Some(1),
         estimated: Some(1),
         data_bytes: 0,
@@ -1564,4 +1688,386 @@ fn a_flatpak_tried_again_starts_from_the_row_s_estimate_not_the_last_sum() {
     button(&window, "Réessayer").invoke_accessible_default_action();
     read_until(&window, |window| step(window) == ui::UninstallStep::Confirm);
     assert!(shows(&window, "Place libérée : 2,0 Mo."));
+}
+
+const GIMP_SCOPE: &str = "app-gnome-org.example.gimp-1.scope";
+const GIMP_OTHER_SCOPE: &str = "app-gnome-org.example.gimp-2.scope";
+/// Named by the package, not by its launcher: never GIMP's.
+const PACKAGE_NAMED_SCOPE: &str = "app-gnome-gimp-3.scope";
+
+/// GIMP to uninstall, its removal done.
+fn gimp() -> Arc<Fake> {
+    Fake::new(
+        vec![Ok(vec![going("gimp", 1)])],
+        Ended::Done(Gone::default()),
+    )
+}
+
+/// GIMP's second scope never closes when only asked to.
+fn second_ignores_asking(unit: &str, ending: Ending) -> bool {
+    unit != GIMP_OTHER_SCOPE || ending == Ending::Forced
+}
+
+/// GIMP's second scope never closes.
+fn second_never_closes(unit: &str, _ending: Ending) -> bool {
+    unit != GIMP_OTHER_SCOPE
+}
+
+fn asked(units: &[(&str, Ending)]) -> Vec<(String, Ending)> {
+    units
+        .iter()
+        .map(|&(unit, ending)| (unit.to_owned(), ending))
+        .collect()
+}
+
+#[test]
+fn an_application_open_is_said_closed_then_uninstalled() {
+    let fake = gimp();
+    let sessions = FakeSessions::new(
+        &[GIMP_SCOPE, GIMP_OTHER_SCOPE, PACKAGE_NAMED_SCOPE],
+        |_, _| true,
+    );
+    let (window, _, recorded, _) = on_apps_open(fake.clone(), sessions.clone());
+    ask(&window, "GIMP");
+    assert!(shows(
+        &window,
+        "GIMP est ouverte : Okapi va la fermer. Enregistrez d'abord votre travail."
+    ));
+    assert_eq!(buttons(&window, "Fermer et désinstaller"), 1);
+    assert!(
+        sessions.asked().is_empty(),
+        "nothing asked before the consent"
+    );
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| step(window) == ui::UninstallStep::Closed);
+    assert_eq!(
+        sessions.asked(),
+        asked(&[
+            (GIMP_SCOPE, Ending::Asked),
+            (GIMP_OTHER_SCOPE, Ending::Asked)
+        ]),
+        "its scopes alone, asked"
+    );
+    assert_eq!(fake.removed().len(), 1);
+    assert_eq!(recorded.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn an_application_not_open_is_never_asked_to_close() {
+    let fake = gimp();
+    let sessions = FakeSessions::new(&[PACKAGE_NAMED_SCOPE], |_, _| true);
+    let (window, ..) = on_apps_open(fake.clone(), sessions.clone());
+    ask(&window, "GIMP");
+    assert!(!shows(
+        &window,
+        "GIMP est ouverte : Okapi va la fermer. Enregistrez d'abord votre travail."
+    ));
+    assert_eq!(buttons(&window, "Fermer et désinstaller"), 0);
+    // Opened since its check: no consent was given to close it.
+    sessions.open(GIMP_SCOPE);
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| step(window) == ui::UninstallStep::Closed);
+    assert_eq!(sessions.asked(), asked(&[]));
+    assert_eq!(fake.removed().len(), 1);
+}
+
+#[test]
+fn scopes_that_cannot_be_read_say_the_application_not_open() {
+    let fake = gimp();
+    let sessions = FakeSessions::new(&[GIMP_SCOPE], |_, _| true);
+    sessions.unreadable.store(true, Ordering::Relaxed);
+    let (window, ..) = on_apps_open(fake.clone(), sessions.clone());
+    ask(&window, "GIMP");
+    assert_eq!(buttons(&window, "Fermer et désinstaller"), 0);
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| step(window) == ui::UninstallStep::Closed);
+    assert_eq!(sessions.asked(), asked(&[]));
+    assert_eq!(fake.removed().len(), 1);
+}
+
+#[test]
+fn an_application_that_does_not_close_may_be_left_or_forced() {
+    let fake = gimp();
+    let sessions = FakeSessions::new(&[GIMP_SCOPE, GIMP_OTHER_SCOPE], second_ignores_asking);
+    let (window, _, recorded, _) = on_apps_open(fake.clone(), sessions.clone());
+    ask(&window, "GIMP");
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| {
+        step(window) == ui::UninstallStep::NotClosed
+    });
+    settle();
+    assert_eq!(step(&window), ui::UninstallStep::NotClosed, "it stays");
+    assert!(shows(&window, "GIMP ne s'est pas fermée"));
+    assert!(shows(
+        &window,
+        "Si vous la forcez à se fermer, ce qu'elle n'a pas enregistré sera perdu."
+    ));
+    assert_eq!(fake.removed(), [], "nothing removed while it is open");
+    button(&window, "Forcer la fermeture").invoke_accessible_default_action();
+    read_until(&window, |window| step(window) == ui::UninstallStep::Closed);
+    assert_eq!(
+        sessions.asked(),
+        asked(&[
+            (GIMP_SCOPE, Ending::Asked),
+            (GIMP_OTHER_SCOPE, Ending::Asked),
+            (GIMP_OTHER_SCOPE, Ending::Forced),
+        ]),
+        "only the one left forced"
+    );
+    assert_eq!(fake.removed().len(), 1);
+    assert_eq!(recorded.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn an_application_left_open_is_never_asked_again_nor_uninstalled() {
+    let fake = gimp();
+    let sessions = FakeSessions::new(&[GIMP_SCOPE, GIMP_OTHER_SCOPE], second_ignores_asking);
+    let (window, ..) = on_apps_open(fake.clone(), sessions.clone());
+    ask(&window, "GIMP");
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| {
+        step(window) == ui::UninstallStep::NotClosed
+    });
+    button(&window, "Annuler").invoke_accessible_default_action();
+    assert_eq!(step(&window), ui::UninstallStep::Closed);
+    // Asked again: the scope already asked is waited for, never asked twice.
+    ask(&window, "GIMP");
+    assert_eq!(buttons(&window, "Fermer et désinstaller"), 1);
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| {
+        step(window) == ui::UninstallStep::NotClosed
+    });
+    assert_eq!(
+        sessions.asked(),
+        asked(&[
+            (GIMP_SCOPE, Ending::Asked),
+            (GIMP_OTHER_SCOPE, Ending::Asked)
+        ])
+    );
+    assert_eq!(fake.removed(), []);
+}
+
+#[test]
+fn an_application_that_survives_being_forced_is_not_uninstalled() {
+    let fake = gimp();
+    let sessions = FakeSessions::new(&[GIMP_SCOPE, GIMP_OTHER_SCOPE], second_never_closes);
+    let (window, _, recorded, _) = on_apps_open(fake.clone(), sessions.clone());
+    ask(&window, "GIMP");
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| {
+        step(window) == ui::UninstallStep::NotClosed
+    });
+    button(&window, "Forcer la fermeture").invoke_accessible_default_action();
+    read_until(&window, |window| step(window) == ui::UninstallStep::Failed);
+    assert!(shows(&window, "GIMP n'a pas été désinstallée"));
+    assert!(shows(&window, "Elle n'a pas pu être fermée."));
+    settle();
+    assert_eq!(fake.removed(), []);
+    assert!(recorded.lock().unwrap().is_empty());
+    // Tried again: still open, said so, and never asked to end twice.
+    button(&window, "Réessayer").invoke_accessible_default_action();
+    read_until(&window, |window| step(window) == ui::UninstallStep::Confirm);
+    assert_eq!(buttons(&window, "Fermer et désinstaller"), 1);
+    apps(&window).invoke_confirm();
+    assert_eq!(
+        step(&window),
+        ui::UninstallStep::NotClosed,
+        "offered to force at once"
+    );
+    assert_eq!(
+        sessions.asked(),
+        asked(&[
+            (GIMP_SCOPE, Ending::Asked),
+            (GIMP_OTHER_SCOPE, Ending::Asked),
+            (GIMP_OTHER_SCOPE, Ending::Forced),
+        ])
+    );
+}
+
+/// The screen read a while: what a thread still had to do is done.
+fn settle() {
+    for _ in 0..20 {
+        read_once();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn a_look_that_fails_never_says_the_application_closed() {
+    let fake = gimp();
+    let sessions = FakeSessions::new(&[GIMP_SCOPE], |_, _| true);
+    sessions.blind_once_asked.store(true, Ordering::Relaxed);
+    let (window, ..) = on_apps_open(fake.clone(), sessions.clone());
+    ask(&window, "GIMP");
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| {
+        step(window) == ui::UninstallStep::NotClosed
+    });
+    // What was shown open is offered to force, never taken for closed.
+    button(&window, "Forcer la fermeture").invoke_accessible_default_action();
+    read_until(&window, |window| step(window) == ui::UninstallStep::Failed);
+    assert_eq!(
+        sessions.asked(),
+        asked(&[(GIMP_SCOPE, Ending::Asked), (GIMP_SCOPE, Ending::Forced)])
+    );
+    assert_eq!(fake.removed(), []);
+}
+
+#[test]
+fn a_scope_systemd_refused_to_signal_is_asked_again_later() {
+    let fake = gimp();
+    let sessions = FakeSessions::new(&[GIMP_SCOPE, GIMP_OTHER_SCOPE], |_, _| true);
+    *sessions.refused.lock().unwrap() = Some(GIMP_SCOPE.to_owned());
+    let (window, ..) = on_apps_open(fake.clone(), sessions.clone());
+    ask(&window, "GIMP");
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| {
+        step(window) == ui::UninstallStep::NotClosed
+    });
+    assert_eq!(
+        sessions.asked(),
+        asked(&[(GIMP_OTHER_SCOPE, Ending::Asked)]),
+        "the other one asked all the same"
+    );
+    button(&window, "Annuler").invoke_accessible_default_action();
+    *sessions.refused.lock().unwrap() = None;
+    ask(&window, "GIMP");
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| step(window) == ui::UninstallStep::Closed);
+    assert_eq!(
+        sessions.asked(),
+        asked(&[
+            (GIMP_OTHER_SCOPE, Ending::Asked),
+            (GIMP_SCOPE, Ending::Asked)
+        ]),
+        "never asked, it is asked now"
+    );
+    assert_eq!(fake.removed().len(), 1);
+}
+
+#[test]
+fn a_scope_opened_since_the_check_is_waited_for_never_asked_to_end() {
+    let fake = gimp();
+    let sessions = FakeSessions::new(&[GIMP_SCOPE], second_ignores_asking);
+    let (window, ..) = on_apps_open(fake.clone(), sessions.clone());
+    ask(&window, "GIMP");
+    sessions.open(GIMP_OTHER_SCOPE);
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| {
+        step(window) == ui::UninstallStep::NotClosed
+    });
+    assert_eq!(sessions.asked(), asked(&[(GIMP_SCOPE, Ending::Asked)]));
+    button(&window, "Forcer la fermeture").invoke_accessible_default_action();
+    read_until(&window, |window| step(window) == ui::UninstallStep::Closed);
+    assert_eq!(
+        sessions.asked(),
+        asked(&[
+            (GIMP_SCOPE, Ending::Asked),
+            (GIMP_OTHER_SCOPE, Ending::Forced)
+        ])
+    );
+    assert_eq!(fake.removed().len(), 1);
+}
+
+#[test]
+fn what_would_go_changed_after_the_closing_is_confirmed_again_without_closing() {
+    let fake = Fake::new(
+        vec![
+            Ok(vec![going("gimp", 1)]),
+            Ok(vec![going("gimp", 1), going("gimp-plugin", 1)]),
+        ],
+        Ended::Done(Gone::default()),
+    );
+    let sessions = FakeSessions::new(&[GIMP_SCOPE], |_, _| true);
+    let (window, ..) = on_apps_open(fake.clone(), sessions.clone());
+    ask(&window, "GIMP");
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| {
+        apps(window).get_going().row_data(1).as_deref() == Some("gimp-plugin")
+    });
+    assert_eq!(step(&window), ui::UninstallStep::Confirm);
+    assert!(!apps(&window).get_app_open(), "closed already");
+    assert_eq!(buttons(&window, "Fermer et désinstaller"), 0);
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| step(window) == ui::UninstallStep::Closed);
+    assert_eq!(sessions.asked(), asked(&[(GIMP_SCOPE, Ending::Asked)]));
+    assert_eq!(fake.removed().len(), 1);
+}
+
+#[test]
+fn the_window_closed_while_the_application_closes_lets_it_be_uninstalled() {
+    let fake = gimp();
+    let sessions = FakeSessions::new(&[GIMP_SCOPE], |_, _| true);
+    let release = sessions.hold();
+    let (window, ..) = on_apps_open(fake.clone(), sessions);
+    ask(&window, "GIMP");
+    apps(&window).invoke_confirm();
+    assert_eq!(step(&window), ui::UninstallStep::ClosingApp);
+    apps(&window).invoke_close_modal();
+    assert_eq!(step(&window), ui::UninstallStep::Closed);
+    release.send(()).unwrap();
+    read_until(&window, |_| fake.removed().len() == 1);
+}
+
+#[test]
+fn okapi_closed_twice_while_the_application_closes_uninstalls_nothing() {
+    let fake = gimp();
+    let sessions = FakeSessions::new(&[GIMP_SCOPE], |_, _| true);
+    let release = sessions.hold();
+    let (window, screen, recorded, _) = on_apps_open(fake.clone(), sessions);
+    ask(&window, "GIMP");
+    apps(&window).invoke_confirm();
+    assert_eq!(
+        screen.close_requested(),
+        slint::CloseRequestResponse::KeepWindowShown,
+        "held once"
+    );
+    assert!(shows(
+        &window,
+        "Fermez encore Okapi pour le quitter quand même : GIMP ne sera pas désinstallée."
+    ));
+    assert_eq!(
+        screen.close_requested(),
+        slint::CloseRequestResponse::HideWindow
+    );
+    release.send(()).unwrap();
+    // Cancelled once the application closed.
+    read_until(&window, |window| step(window) == ui::UninstallStep::Closed);
+    assert_eq!(fake.removed(), []);
+    assert!(recorded.lock().unwrap().is_empty());
+}
+
+#[test]
+fn the_window_closed_while_the_application_closes_comes_back_when_it_does_not() {
+    let fake = gimp();
+    let sessions = FakeSessions::new(&[GIMP_SCOPE], |_, _| false);
+    let (window, ..) = on_apps_open(fake.clone(), sessions);
+    ask(&window, "GIMP");
+    apps(&window).invoke_confirm();
+    assert_eq!(step(&window), ui::UninstallStep::ClosingApp);
+    assert!(shows(&window, "Fermeture de GIMP…"));
+    apps(&window).invoke_close_modal();
+    assert_eq!(
+        step(&window),
+        ui::UninstallStep::Closed,
+        "hidden, it goes on"
+    );
+    read_until(&window, |window| {
+        step(window) == ui::UninstallStep::NotClosed
+    });
+    assert_eq!(fake.removed(), []);
+}
+
+#[test]
+fn an_application_okapi_runs_in_is_never_closed_nor_said_open() {
+    let fake = gimp();
+    let sessions = FakeSessions::new(&[GIMP_SCOPE, GIMP_OTHER_SCOPE], |_, _| true);
+    *sessions.okapi_in.lock().unwrap() = format!("/user.slice/{GIMP_SCOPE}");
+    let (window, ..) = on_apps_open(fake.clone(), sessions.clone());
+    ask(&window, "GIMP");
+    assert_eq!(buttons(&window, "Fermer et désinstaller"), 0);
+    apps(&window).invoke_confirm();
+    read_until(&window, |window| step(window) == ui::UninstallStep::Closed);
+    assert_eq!(sessions.asked(), asked(&[]), "not even its other window");
+    assert_eq!(fake.removed().len(), 1);
 }

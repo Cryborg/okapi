@@ -14,6 +14,38 @@ pub const UNKNOWN_SERVICE: [&str; 2] = [
     "org.freedesktop.DBus.Error.NameHasNoOwner",
 ];
 
+/// Why a bus was not joined.
+#[derive(Debug, thiserror::Error)]
+pub enum JoinError {
+    #[error(transparent)]
+    Bus(#[from] zbus::Error),
+    #[error("the bus not joined in {0:?}")]
+    Unanswered(Duration),
+}
+
+/// The bus at `address`, joined within `wait`: a socket that never answers
+/// would hold the thread forever. Each call then waits `calls_wait` at
+/// most; `None` leaves the bound to the caller.
+///
+/// # Errors
+/// The bus's refusal, or no answer within `wait`.
+pub fn joined(
+    address: zbus::Address,
+    wait: Duration,
+    calls_wait: Option<Duration>,
+) -> Result<zbus::Connection, JoinError> {
+    let mut builder = zbus::connection::Builder::address(address)?;
+    if let Some(calls_wait) = calls_wait {
+        builder = builder.method_timeout(calls_wait);
+    }
+    let built = async { builder.build().await.map_err(JoinError::from) };
+    let deadline = async {
+        async_io::Timer::after(wait).await;
+        Err(JoinError::Unanswered(wait))
+    };
+    futures_lite::future::block_on(futures_lite::future::or(built, deadline))
+}
+
 /// The bus at `address`, if it is reached by a socket only; otherwise the
 /// address refused.
 ///
@@ -32,6 +64,22 @@ mod tests {
     use std::str::FromStr as _;
 
     use super::*;
+
+    #[test]
+    fn a_bus_that_never_answers_is_joined_no_longer_than_its_wait() {
+        // Catches a connection without a bound: a socket that accepts and
+        // never speaks.
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("bus");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let held = std::thread::spawn(move || listener.accept().map(|(stream, _)| stream));
+        let address = zbus::Address::from_str(&format!("unix:path={}", socket.display())).unwrap();
+        assert!(matches!(
+            joined(address, Duration::from_millis(200), None),
+            Err(JoinError::Unanswered(_))
+        ));
+        drop(held);
+    }
 
     #[test]
     fn the_bus_is_joined_by_a_socket_only() {

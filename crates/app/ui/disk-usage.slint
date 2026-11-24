@@ -723,7 +723,6 @@ component Panel inherits Card {
     }
 }
 
-// The analysis running, then its result: what is seen, folder by folder.
 // A folder of the trail, a click away, or the one shown. One left out takes
 // no room yet keeps telling what it would take: Rust keeps the root, then
 // the last steps that fit, an ellipsis before them for those left out.
@@ -792,6 +791,7 @@ component TrailStep inherits Rectangle {
     }
 }
 
+// The analysis running, then its result: what is seen, folder by folder.
 component Browse inherits FocusScope {
     property <bool> running: DiskUsage.step == DiskStep.opening || DiskUsage.step == DiskStep.scanning;
     // « Arrêter » gone with the analysis: the focus to the list.

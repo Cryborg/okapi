@@ -79,11 +79,25 @@ mod tests {
 
     #[test]
     fn the_last_steps_that_fit_beside_the_root_and_the_ellipsis_are_kept() {
-        // Root 50, ellipsis 10: 70 left, the last two take 60.
+        // The root leaves 80; with the ellipsis, the last two take 70, the
+        // last three 110.
         assert_eq!(
             trail(&[50.0, 40.0, 40.0, 30.0, 30.0], 130.0).first_kept(),
             3
         );
+    }
+
+    #[test]
+    fn steps_that_fill_the_room_exactly_fit() {
+        assert_eq!(
+            trail(&[50.0, 40.0, 40.0, 30.0, 30.0], 120.0).first_kept(),
+            3
+        );
+    }
+
+    #[test]
+    fn a_root_wider_than_the_room_keeps_the_last_step_alone() {
+        assert_eq!(trail(&[150.0, 40.0, 40.0, 30.0], 100.0).first_kept(), 3);
     }
 
     #[test]

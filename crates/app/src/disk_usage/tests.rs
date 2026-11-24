@@ -381,22 +381,50 @@ fn a_trail_too_long_keeps_its_root_and_its_last_folders() {
         disk(&window).invoke_enter(index_of(&window, &name));
         read_until(&window, |window| !names(window).contains(&name));
     }
-    read_until(&window, |window| disk(window).get_trail_from() > 1);
-    let from = disk(&window).get_trail_from();
-    assert!(
-        usize::try_from(from).unwrap() <= DEPTH,
-        "the last one at least kept: {from}"
-    );
+    // The `changed width` handlers run on the next turn of the event loop.
+    let resized = |width| {
+        window
+            .window()
+            .set_size(slint::PhysicalSize::new(width, 800));
+        read_once();
+    };
+    // Wide enough for the root and a few folders: those between left out.
+    resized(2_400);
+    read_until(&window, |window| from_of(window) > 1);
+    let from = from_of(&window);
+    assert!(from < DEPTH, "some folders kept beside the last: {from}");
     assert!(shows(&window, "Dossiers masqués"));
     assert!(shows(&window, "Dossier personnel"), "the root kept");
+    for level in 0..DEPTH {
+        // Step `level + 1` of the trail.
+        assert_eq!(
+            shows(&window, &long_folder(level)),
+            level + 1 >= from,
+            "{level}"
+        );
+    }
+    // Narrower: the last alone.
+    resized(800);
+    read_until(&window, |window| from_of(window) == DEPTH);
     assert!(shows(&window, &long_folder(DEPTH - 1)));
-    assert!(!shows(&window, &long_folder(0)));
-    window
-        .window()
-        .set_size(slint::PhysicalSize::new(20_000, 800));
-    read_until(&window, |window| disk(window).get_trail_from() == 1);
+    assert!(!shows(&window, &long_folder(DEPTH - 2)));
+    // Wide: whole.
+    resized(20_000);
+    read_until(&window, |window| from_of(window) == 1);
     assert!(!shows(&window, "Dossiers masqués"));
     assert!(shows(&window, &long_folder(0)));
+    // Cut again, then back up near the root: the steps gone never count.
+    resized(800);
+    read_until(&window, |window| from_of(window) == DEPTH);
+    disk(&window).invoke_go_to(1);
+    read_until(&window, |window| disk(window).get_trail().row_count() == 2);
+    read_until(&window, |window| from_of(window) == 1);
+    assert!(!shows(&window, "Dossiers masqués"));
+    assert!(shows(&window, &long_folder(0)));
+}
+
+fn from_of(window: &ui::AppWindow) -> usize {
+    usize::try_from(disk(window).get_trail_from()).unwrap()
 }
 
 #[test]

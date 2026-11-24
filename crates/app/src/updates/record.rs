@@ -146,19 +146,26 @@ pub(super) fn entry(
     snaps_read: Option<&[SnapUpdate]>,
     time: i64,
 ) -> UpdateEntry {
-    let (source, asked): (PackageSource, Vec<(&str, &str)>) = match target {
-        Target::System(asked) => (
+    let asked = |name: &str, version: &str, previous: Option<&str>| UpdatedPackage {
+        name: name.to_owned(),
+        version: version.to_owned(),
+        previous_version: previous.map(str::to_owned),
+        done: false,
+        reason: None,
+    };
+    let (source, asked): (PackageSource, Vec<UpdatedPackage>) = match target {
+        Target::System(updates) => (
             PackageSource::Deb,
-            asked
+            updates
                 .iter()
-                .map(|update| (update.name.as_str(), update.version.as_str()))
+                .map(|update| asked(&update.name, &update.version, update.installed.as_deref()))
                 .collect(),
         ),
-        Target::Snaps(asked) => (
+        Target::Snaps(snaps) => (
             PackageSource::Snap,
-            asked
+            snaps
                 .iter()
-                .map(|snap| (snap.name.as_str(), snap.version.as_str()))
+                .map(|snap| asked(&snap.name, &snap.version, snap.installed.as_deref()))
                 .collect(),
         ),
     };
@@ -170,9 +177,7 @@ pub(super) fn entry(
     let packages = asked
         .into_iter()
         .zip(went)
-        .map(|((name, version), went)| UpdatedPackage {
-            name: name.to_owned(),
-            version: version.to_owned(),
+        .map(|(package, went)| UpdatedPackage {
             done: went == Some(true),
             reason: match went {
                 Some(true) => None,
@@ -180,6 +185,7 @@ pub(super) fn entry(
                 Some(false) => line_reason.is_none().then_some(cause),
             }
             .map(|reason| reason.key().to_owned()),
+            ..package
         })
         .collect();
     UpdateEntry {
@@ -206,6 +212,7 @@ mod tests {
             id: format!("{name};2.0;amd64;resolute-updates"),
             name: name.to_owned(),
             version: "2.0".to_owned(),
+            installed: Some("1.0".to_owned()),
             summary: String::new(),
             kind: Kind::Other,
         }
@@ -218,6 +225,7 @@ mod tests {
             publisher: None,
             verified: false,
             version: "1.5".to_owned(),
+            installed: None,
             download_size: None,
         }
     }
@@ -320,6 +328,7 @@ mod tests {
             ]
         );
         assert_eq!(written.packages[0].version, "2.0");
+        assert_eq!(written.packages[0].previous_version.as_deref(), Some("1.0"));
     }
 
     #[test]

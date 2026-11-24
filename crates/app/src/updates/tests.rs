@@ -13,7 +13,7 @@ use okapi_tools::packages::packagekit::{
     Details, Package, PackageKitError, Updated, Updating, error_code, info,
 };
 use okapi_tools::packages::snapd::{
-    CHANGE_DONE, Change, Followed, Publisher, Refresh, Schedule, SnapdError,
+    CHANGE_DONE, Change, Followed, InUse, Publisher, Refresh, Schedule, SnapdError,
 };
 use okapi_tools::updates::install::{End, Ended, Why};
 use slint::Model as _;
@@ -177,6 +177,9 @@ impl Sources for Fake {
         }
         (self.system)()
     }
+    fn installed(&self, _names: &[&str]) -> Result<Vec<Package>, PackageKitError> {
+        Ok(Vec::new())
+    }
     fn details(
         &self,
         ids: &[String],
@@ -202,6 +205,9 @@ impl Sources for Fake {
             return (self.snaps_after)();
         }
         (self.snaps)()
+    }
+    fn snaps_in_use(&self) -> Result<Vec<InUse>, SnapdError> {
+        Ok(Vec::new())
     }
     fn schedule(&self) -> Result<Schedule, SnapdError> {
         (self.schedule)()
@@ -1827,6 +1833,7 @@ fn asked_system(names: &[&str]) -> Vec<SystemUpdate> {
             id: format!("{name};2;amd64;x"),
             name: (*name).to_owned(),
             version: "2".into(),
+            installed: None,
             summary: String::new(),
             kind: Kind::Other,
         })
@@ -1872,6 +1879,7 @@ fn each_case_of_the_outcome_is_told_by_its_end_and_the_list_read_again() {
                 publisher: None,
                 verified: false,
                 version: "1".into(),
+                installed: None,
                 download_size: None,
             })
             .collect()

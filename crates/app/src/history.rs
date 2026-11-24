@@ -497,6 +497,11 @@ fn update_row(line: &UpdateEntry) -> ui::HistoryRow {
             ui::UpdatedShown {
                 name: package.name.as_str().into(),
                 version: package.version.as_str().into(),
+                previous: package
+                    .previous_version
+                    .as_deref()
+                    .unwrap_or_default()
+                    .into(),
                 state,
                 // The line's cause is said once, on the line.
                 why: why_said(own),

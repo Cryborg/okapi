@@ -547,9 +547,10 @@ fn history_rows() -> Vec<ui::HistoryRow> {
 /// Two installations of updates of today, at the moments `today` gives:
 /// snaps, one not installed, then the system, all of it.
 fn history_updates(today: impl Fn(i32, i32) -> ui::Moment) -> [ui::HistoryRow; 2] {
-    let installed = |name: &str, version: &str| {
+    let installed = |name: &str, previous: &str, version: &str| {
         updated(
             name,
+            previous,
             version,
             ui::UpdateState::Installed,
             ui::InstallWhy::None,
@@ -558,16 +559,17 @@ fn history_updates(today: impl Fn(i32, i32) -> ui::Moment) -> [ui::HistoryRow; 2
     let snaps = vec![
         updated(
             "spotify",
+            "1.2.70",
             "1.2.74",
             ui::UpdateState::NotInstalled,
             ui::InstallWhy::AppsOpen,
         ),
-        installed("firefox", "145.0-1"),
-        installed("obs-studio", "32.0.2"),
+        installed("firefox", "144.0.2-1", "145.0-1"),
+        installed("obs-studio", "", "32.0.2"),
     ];
     let system = vec![
-        installed("openssl", "3.5.1-1ubuntu2"),
-        installed("libssl3t64", "3.5.1-1ubuntu2"),
+        installed("openssl", "3.5.1-1ubuntu1", "3.5.1-1ubuntu2"),
+        installed("libssl3t64", "3.5.1-1ubuntu1", "3.5.1-1ubuntu2"),
     ];
     [
         ui::HistoryRow {
@@ -598,6 +600,7 @@ fn history_updates(today: impl Fn(i32, i32) -> ui::Moment) -> [ui::HistoryRow; 2
 /// An update asked, as the History screen shows it.
 fn updated(
     name: &str,
+    previous: &str,
     version: &str,
     state: ui::UpdateState,
     why: ui::InstallWhy,
@@ -605,6 +608,7 @@ fn updated(
     ui::UpdatedShown {
         name: name.into(),
         version: version.into(),
+        previous: previous.into(),
         state,
         why,
     }

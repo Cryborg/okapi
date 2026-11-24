@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::packages::packagekit::error_code;
-use crate::packages::snapd::Publisher;
+use crate::packages::snapd::{InUse, Publisher};
 
 /// `PkInfoEnum` values that are neither security nor held back.
 const INFO_LOW: u32 = 3;
@@ -22,8 +22,10 @@ const NO_CACHE: u32 = 18;
 struct Fake {
     refresh: fn() -> Result<(), PackageKitError>,
     system: fn() -> Result<Vec<Package>, PackageKitError>,
+    installed: fn(&[&str]) -> Result<Vec<Package>, PackageKitError>,
     stamp: fn() -> io::Result<Option<SystemTime>>,
     snaps: fn() -> Result<Vec<Refresh>, SnapdError>,
+    in_use: fn() -> Result<Vec<InUse>, SnapdError>,
     schedule: fn() -> Result<Schedule, SnapdError>,
     reboot: fn() -> io::Result<Option<RebootRequired>>,
     /// The download size of each identifier asked.
@@ -41,8 +43,10 @@ impl Default for Fake {
         Self {
             refresh: || Ok(()),
             system: || Ok(Vec::new()),
+            installed: |_| Ok(Vec::new()),
             stamp: || Ok(None),
             snaps: || Ok(Vec::new()),
+            in_use: || Ok(Vec::new()),
             schedule: || Ok(Schedule::default()),
             reboot: || Ok(None),
             size: |id| u64::try_from(id.len()).ok(),
@@ -71,6 +75,9 @@ impl Sources for Fake {
         }
         (self.system)()
     }
+    fn installed(&self, names: &[&str]) -> Result<Vec<Package>, PackageKitError> {
+        (self.installed)(names)
+    }
     fn details(
         &self,
         ids: &[String],
@@ -95,6 +102,9 @@ impl Sources for Fake {
     }
     fn snaps(&self) -> Result<Vec<Refresh>, SnapdError> {
         (self.snaps)()
+    }
+    fn snaps_in_use(&self) -> Result<Vec<InUse>, SnapdError> {
+        (self.in_use)()
     }
     fn schedule(&self) -> Result<Schedule, SnapdError> {
         (self.schedule)()
@@ -348,6 +358,117 @@ fn a_name_of_two_architectures_says_each() {
     assert_eq!(names, ["bash", "libc6:amd64", "libc6:i386"]);
 }
 
+/// Installed: `libc6` for i386 alone, and `bash`, asked once each.
+#[expect(clippy::unnecessary_wraps, reason = "the shape of a source")]
+fn installed(names: &[&str]) -> Result<Vec<Package>, PackageKitError> {
+    assert_eq!(names, ["bash", "libc6"], "each name once");
+    Ok(vec![
+        Package {
+            info: info::INSTALLED,
+            id: "libc6;2.41-1;i386;installed:resolute".into(),
+            summary: String::new(),
+        },
+        Package {
+            info: info::INSTALLED,
+            id: "bash;5.2-1;amd64;installed:resolute".into(),
+            summary: String::new(),
+        },
+    ])
+}
+
+#[test]
+fn each_update_knows_the_version_it_replaces_by_name_and_architecture() {
+    // Catches a version taken by name alone, or from another architecture.
+    let fake = Fake {
+        system: || {
+            Ok(vec![
+                Package {
+                    info: INFO_NORMAL,
+                    id: "libc6;2.42-1;i386;resolute-updates".into(),
+                    summary: String::new(),
+                },
+                package(INFO_NORMAL, "bash"),
+                package(INFO_NORMAL, "libc6"),
+            ])
+        },
+        installed,
+        ..Fake::default()
+    };
+    let Outcome::Read(updates) = read_system(&fake, false, &quiet).updates else {
+        panic!("read");
+    };
+    let installed: Vec<(&str, Option<&str>)> = updates
+        .iter()
+        .map(|update| (update.name.as_str(), update.installed.as_deref()))
+        .collect();
+    assert_eq!(
+        installed,
+        [
+            ("bash", Some("5.2-1")),
+            ("libc6:amd64", None),
+            ("libc6:i386", Some("2.41-1")),
+        ]
+    );
+}
+
+#[test]
+fn versions_installed_not_said_leave_the_updates_listed() {
+    let fake = Fake {
+        system: mixed,
+        installed: |_| Err(PackageKitError::Vanished),
+        in_use: || Err(SnapdError::Malformed("test")),
+        snaps: || Ok(vec![snap("zoom-client", None, None)]),
+        ..Fake::default()
+    };
+    let Outcome::Read(updates) = read_system(&fake, false, &quiet).updates else {
+        panic!("read");
+    };
+    assert_eq!(updates.len(), 6);
+    assert!(updates.iter().all(|update| update.installed.is_none()));
+    let Outcome::Read(snaps) = read_snaps(&fake) else {
+        panic!("read");
+    };
+    assert_eq!(snaps.updates[0].installed, None);
+}
+
+#[test]
+fn each_snap_knows_the_version_it_replaces() {
+    let fake = Fake {
+        snaps: || {
+            Ok(vec![
+                snap("zoom-client", None, None),
+                snap("snap-store", None, None),
+            ])
+        },
+        in_use: || {
+            Ok(vec![
+                InUse {
+                    name: "snap-store".into(),
+                    version: "41.3".into(),
+                },
+                InUse {
+                    name: "zoom-client".into(),
+                    version: String::new(),
+                },
+            ])
+        },
+        ..Fake::default()
+    };
+    let Outcome::Read(snaps) = read_snaps(&fake) else {
+        panic!("read");
+    };
+    let installed: Vec<(&str, Option<&str>)> = snaps
+        .updates
+        .iter()
+        .map(|update| (update.name.as_str(), update.installed.as_deref()))
+        .collect();
+    assert_eq!(
+        installed,
+        [("snap-store", Some("41.3")), ("zoom-client", None)],
+        "a version not said is none"
+    );
+}
+
 #[test]
 fn the_lists_are_dated_by_apt_s_stamp_if_it_can_be_read() {
     let fake = Fake {
@@ -405,6 +526,7 @@ fn snaps_are_titled_by_title_or_name_and_vouched_for_by_the_store() {
             publisher: Some("snap-store publisher".into()),
             verified: true,
             version: "snap-store 1.0".into(),
+            installed: None,
             download_size: Some(10),
         }
     );

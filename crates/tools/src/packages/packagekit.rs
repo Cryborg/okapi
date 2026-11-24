@@ -575,14 +575,14 @@ impl PackageKit {
         ]
     }
 
-    /// The installed packages named `name`, of every architecture.
+    /// The installed packages named as `names`, of every architecture.
     ///
     /// # Errors
     /// Whatever kept PackageKit from answering, or its own error.
-    pub fn resolve(&self, name: &str) -> Result<Vec<Package>, PackageKitError> {
+    pub fn resolve(&self, names: &[&str]) -> Result<Vec<Package>, PackageKitError> {
         self.run(
             "Resolve",
-            &(FILTER_INSTALLED, [name]),
+            &(FILTER_INSTALLED, names),
             Asked::reading(RESOLVE_WAIT),
             &|_| {},
         )

@@ -22,6 +22,8 @@ export enum UpdateState { installed, not-installed, waiting, unknown }
 export struct UpdatedShown {
     name: string,
     version: string,
+    // The version it was to replace; empty when not known.
+    previous: string,
     state: UpdateState,
     // Why it was not installed, when it says so itself.
     why: InstallWhy,

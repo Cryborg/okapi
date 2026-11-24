@@ -114,25 +114,30 @@ global HistoryWords {
         ""
     }
 
-    // What became of an update asked: its name, its version, its state.
+    // The version an update brings, after the one it replaces when known.
+    pure public function versions(update: UpdatedShown) -> string {
+        update.previous == "" ? update.version : @tr("{} → {}", update.previous, update.version)
+    }
+
+    // What became of an update asked: its name, its versions, its state.
     pure public function updated(update: UpdatedShown) -> string {
         if update.state == UpdateState.installed {
-            return @tr("{} {} : installée", update.name, update.version);
+            return @tr("{} {} : installée", update.name, versions(update));
         }
         if update.state == UpdateState.waiting {
-            return @tr("{} {} : encore en attente", update.name, update.version);
+            return @tr("{} {} : encore en attente", update.name, versions(update));
         }
         if update.state == UpdateState.unknown {
-            return @tr("{} {} : état inconnu", update.name, update.version);
+            return @tr("{} {} : état inconnu", update.name, versions(update));
         }
-        update.why != InstallWhy.none ? @tr("{} {} : non installée. {}", update.name, update.version, update-why(update.why))
-            : @tr("{} {} : non installée", update.name, update.version)
+        update.why != InstallWhy.none ? @tr("{} {} : non installée. {}", update.name, versions(update), update-why(update.why))
+            : @tr("{} {} : non installée", update.name, versions(update))
     }
 
     // What is written of an update asked: its state is its icon's, a
     // failure and its reason said in words.
     pure public function updated-shown(update: UpdatedShown) -> string {
-        update.state == UpdateState.not-installed ? updated(update) : @tr("{} {}", update.name, update.version)
+        update.state == UpdateState.not-installed ? updated(update) : @tr("{} {}", update.name, versions(update))
     }
 
     pure public function updated-icon(update: UpdatedShown) -> image {

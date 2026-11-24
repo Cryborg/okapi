@@ -673,6 +673,7 @@ fn update(name: &str, arch: &str, version: &str, kind: Kind) -> SystemUpdate {
         id: format!("{name};{version};{arch};x"),
         name: name.into(),
         version: version.into(),
+        installed: None,
         summary: String::new(),
         kind,
     }

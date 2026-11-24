@@ -226,6 +226,14 @@ pub struct Refresh {
     pub download_size: Option<u64>,
 }
 
+/// A snap installed, by its revision in use (`/v2/snaps`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct InUse {
+    pub name: String,
+    #[serde(default)]
+    pub version: String,
+}
+
 /// Who publishes a snap.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Publisher {
@@ -340,6 +348,14 @@ impl Snapd {
         Ok(serde_json::from_value(
             self.get("/v2/find?select=refresh")?,
         )?)
+    }
+
+    /// The snaps installed, each by its revision in use.
+    ///
+    /// # Errors
+    /// Whatever kept snapd from answering, or its refusal.
+    pub fn in_use(&self) -> Result<Vec<InUse>, SnapdError> {
+        Ok(serde_json::from_value(self.get("/v2/snaps")?)?)
     }
 
     /// When snapd refreshes by itself.

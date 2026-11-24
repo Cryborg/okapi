@@ -14,7 +14,7 @@ use okapi_rules::Language;
 use crate::packages::apt;
 use crate::packages::packagekit::{self, Details, Package, PackageId, PackageKitError, info};
 use crate::packages::reboot::{self, RebootRequired};
-use crate::packages::snapd::{self, Refresh, Schedule, SnapdError};
+use crate::packages::snapd::{self, InUse, Refresh, Schedule, SnapdError};
 
 pub mod install;
 
@@ -36,6 +36,8 @@ pub struct SystemUpdate {
     pub name: String,
     /// As the package names it (`1:3.5.1-1ubuntu2`).
     pub version: String,
+    /// The version it replaces, when PackageKit says it.
+    pub installed: Option<String>,
     pub summary: String,
     pub kind: Kind,
 }
@@ -50,6 +52,8 @@ pub struct SnapUpdate {
     /// The store vouches for its publisher.
     pub verified: bool,
     pub version: String,
+    /// The version it replaces, when snapd says it.
+    pub installed: Option<String>,
     pub download_size: Option<u64>,
 }
 
@@ -120,6 +124,11 @@ pub trait Sources: Send + Sync {
     /// # Errors
     /// Why PackageKit did not say.
     fn system(&self, waiting: &dyn Fn(bool)) -> Result<Vec<Package>, PackageKitError>;
+    /// The packages installed named as `names`.
+    ///
+    /// # Errors
+    /// Why PackageKit did not say.
+    fn installed(&self, names: &[&str]) -> Result<Vec<Package>, PackageKitError>;
     /// The details of the packages `ids`, their download size among them.
     ///
     /// # Errors
@@ -139,6 +148,11 @@ pub trait Sources: Send + Sync {
     /// # Errors
     /// Why snapd did not say.
     fn snaps(&self) -> Result<Vec<Refresh>, SnapdError>;
+    /// The snaps installed, by their revision in use.
+    ///
+    /// # Errors
+    /// Why snapd did not say.
+    fn snaps_in_use(&self) -> Result<Vec<InUse>, SnapdError>;
     /// When snapd refreshes by itself.
     ///
     /// # Errors
@@ -176,6 +190,10 @@ impl Sources for SystemSources {
         packagekit::PackageKit::connect(self.locale)?.get_updates(waiting)
     }
 
+    fn installed(&self, names: &[&str]) -> Result<Vec<Package>, PackageKitError> {
+        packagekit::PackageKit::connect(self.locale)?.resolve(names)
+    }
+
     fn details(
         &self,
         ids: &[String],
@@ -190,6 +208,10 @@ impl Sources for SystemSources {
 
     fn snaps(&self) -> Result<Vec<Refresh>, SnapdError> {
         snapd::Snapd::system().refreshes()
+    }
+
+    fn snaps_in_use(&self) -> Result<Vec<InUse>, SnapdError> {
+        snapd::Snapd::system().in_use()
     }
 
     fn schedule(&self) -> Result<Schedule, SnapdError> {
@@ -221,7 +243,10 @@ pub fn read_system(sources: &dyn Sources, refresh: bool, waiting: &dyn Fn(bool))
     };
     let updates = match sources.system(waiting) {
         Ok(packages) => {
-            system_updates(&packages).map_or(Outcome::Failed(Failure::Broken), Outcome::Read)
+            system_updates(&packages).map_or(Outcome::Failed(Failure::Broken), |mut updates| {
+                add_installed(sources, &mut updates);
+                Outcome::Read(updates)
+            })
         }
         Err(PackageKitError::Absent) => {
             tracing::info!("no PackageKit on this system");
@@ -320,10 +345,14 @@ pub fn read_snaps(sources: &dyn Sources) -> Outcome<Snaps> {
     let _snaps = tracing::info_span!("snaps").entered();
     let started = Instant::now();
     let outcome = match sources.snaps() {
-        Ok(refreshes) => Outcome::Read(Snaps {
-            updates: snap_updates(refreshes),
-            next_refresh: next_refresh(sources.schedule()),
-        }),
+        Ok(refreshes) => {
+            let mut updates = snap_updates(refreshes);
+            add_snaps_in_use(sources, &mut updates);
+            Outcome::Read(Snaps {
+                updates,
+                next_refresh: next_refresh(sources.schedule()),
+            })
+        }
         Err(SnapdError::Absent { socket, .. }) => {
             tracing::info!(socket = %socket.display(), "no snapd on this system");
             Outcome::Absent
@@ -397,6 +426,7 @@ fn system_updates(packages: &[Package]) -> Option<Vec<SystemUpdate>> {
                     id.name.to_owned()
                 },
                 version: id.version.to_owned(),
+                installed: None,
                 summary: package.summary.clone(),
                 kind: match package.info {
                     info::SECURITY => Kind::Security,
@@ -408,6 +438,72 @@ fn system_updates(packages: &[Package]) -> Option<Vec<SystemUpdate>> {
         .collect();
     updates.sort_by(|first, second| (first.kind, &first.name).cmp(&(second.kind, &second.name)));
     Some(updates)
+}
+
+/// The version each of `updates` replaces, as PackageKit says it, by name
+/// and architecture; none when it does not say (traced): the update is
+/// then told without it.
+fn add_installed(sources: &dyn Sources, updates: &mut [SystemUpdate]) {
+    let installed = {
+        let mut names: Vec<&str> = updates
+            .iter()
+            .filter_map(|update| PackageId::parse(&update.id))
+            .map(|id| id.name)
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        if names.is_empty() {
+            return;
+        }
+        match sources.installed(&names) {
+            Ok(installed) => installed,
+            Err(error) => {
+                tracing::warn!(%error, "the versions the updates replace not read");
+                return;
+            }
+        }
+    };
+    for update in updates.iter_mut() {
+        update.installed = PackageId::parse(&update.id).and_then(|wanted| {
+            installed
+                .iter()
+                .filter_map(|package| PackageId::parse(&package.id))
+                .find(|id| id.name == wanted.name && id.arch == wanted.arch)
+                .map(|id| id.version.to_owned())
+        });
+    }
+    let unknown: Vec<&str> = updates
+        .iter()
+        .filter(|update| update.installed.is_none())
+        .map(|update| update.name.as_str())
+        .collect();
+    if !unknown.is_empty() {
+        tracing::info!(?unknown, "updates whose version installed is not said");
+    }
+}
+
+/// The version each snap of `updates` replaces, as snapd says it; none
+/// when it does not say (traced).
+fn add_snaps_in_use(sources: &dyn Sources, updates: &mut [SnapUpdate]) {
+    if updates.is_empty() {
+        return;
+    }
+    let in_use = match sources.snaps_in_use() {
+        Ok(in_use) => in_use,
+        Err(error) => {
+            tracing::warn!(%error, "the versions the snaps' updates replace not read");
+            return;
+        }
+    };
+    for update in updates.iter_mut() {
+        update.installed = in_use
+            .iter()
+            .find(|snap| snap.name == update.name && !snap.version.is_empty())
+            .map(|snap| snap.version.clone());
+        if update.installed.is_none() {
+            tracing::info!(snap = %update.name, "a snap's version in use is not said");
+        }
+    }
 }
 
 /// Whether `info` is an update's kind, from low to security.
@@ -432,6 +528,7 @@ fn snap_updates(refreshes: Vec<Refresh>) -> Vec<SnapUpdate> {
             }),
             publisher: refresh.publisher.map(|publisher| publisher.display_name),
             version: refresh.version,
+            installed: None,
             download_size: refresh.download_size,
         })
         .collect();

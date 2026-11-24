@@ -485,6 +485,9 @@ pub struct UpdatedPackage {
     pub name: String,
     /// The version it was to be updated to.
     pub version: String,
+    /// The version it was to replace, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_version: Option<String>,
     /// It is known to have gone. Not done is not always not installed: its
     /// reason may say its fate is not known (the caller's name for it).
     pub done: bool,
@@ -1766,12 +1769,14 @@ mod tests {
                 UpdatedPackage {
                     name: "spotify".to_owned(),
                     version: "1.2.74".to_owned(),
+                    previous_version: None,
                     done: false,
                     reason: Some("appsOpen".to_owned()),
                 },
                 UpdatedPackage {
                     name: "firefox".to_owned(),
                     version: "145.0-1".to_owned(),
+                    previous_version: None,
                     done: true,
                     reason: None,
                 },
@@ -1800,6 +1805,7 @@ mod tests {
                 packages: vec![UpdatedPackage {
                     name: "firefox".to_owned(),
                     version: "145.0+build1-0ubuntu1".to_owned(),
+                    previous_version: Some("144.0.2+build1-0ubuntu1".to_owned()),
                     done: true,
                     reason: None,
                 }],
@@ -1826,7 +1832,12 @@ mod tests {
                     "kind": "update",
                     "time": 1_763_300_000,
                     "source": "deb",
-                    "packages": [{"name": "firefox", "version": "145.0+build1-0ubuntu1", "done": true}],
+                    "packages": [{
+                        "name": "firefox",
+                        "version": "145.0+build1-0ubuntu1",
+                        "previousVersion": "144.0.2+build1-0ubuntu1",
+                        "done": true,
+                    }],
                     "done": true,
                     "restartRequired": true,
                 }),

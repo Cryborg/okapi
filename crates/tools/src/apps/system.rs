@@ -75,7 +75,7 @@ impl Services {
         architecture: &str,
     ) -> Result<String, Why> {
         let resolved = packagekit
-            .resolve(package)
+            .resolve(&[package])
             .map_err(|error| why_packagekit(&error))?;
         let mut matching: Vec<String> = resolved
             .into_iter()

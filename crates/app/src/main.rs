@@ -1161,7 +1161,7 @@ mod tests {
     }
 
     /// Texts the same in both languages.
-    const SAME_IN_ENGLISH: [&str; 30] = [
+    const SAME_IN_ENGLISH: [&str; 31] = [
         "Image",
         "Images",
         "Document",
@@ -1173,6 +1173,7 @@ mod tests {
         "{}, {}, {}",
         "Version {}",
         "{} {}",
+        "{} → {}",
         "{} {} {}",
         "Applications",
         "Distribution",

@@ -341,6 +341,7 @@ fn package(name: &str, version: &str, done: bool, reason: Option<&str>) -> Updat
     UpdatedPackage {
         name: name.to_owned(),
         version: version.to_owned(),
+        previous_version: None,
         done,
         reason: reason.map(str::to_owned),
     }
@@ -375,7 +376,10 @@ fn kept_updates(directory: &Path) {
                 7,
                 PackageSource::Deb,
                 vec![
-                    package("openssl", "3.5.1", true, None),
+                    UpdatedPackage {
+                        previous_version: Some("3.5.0".to_owned()),
+                        ..package("openssl", "3.5.1", true, None)
+                    },
                     package("bash", "5.2.37", true, None),
                 ],
                 None,
@@ -458,7 +462,7 @@ fn each_update_shows_how_it_ended_and_each_package_asked() {
             &[
                 "Toutes les mises à jour demandées ont été installées.",
                 "Le système a demandé un redémarrage pour la terminer.",
-                "openssl 3.5.1 : installée",
+                "openssl 3.5.0 → 3.5.1 : installée",
                 "bash 5.2.37 : installée",
             ][..],
         ),

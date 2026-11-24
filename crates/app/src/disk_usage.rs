@@ -6,6 +6,7 @@
 //! Nothing here removes anything.
 
 mod rows;
+mod trail;
 
 use std::cell::RefCell;
 use std::num::NonZeroUsize;
@@ -29,6 +30,7 @@ use crate::file_manager::{Calls, Open, OpenRequest, open_in_file_manager};
 use crate::shown::{grouped, shown, size};
 use crate::ui;
 use rows::{Arranged, Held, Key, Line, LineKind, LineState, Navigation, Order};
+use trail::Trail;
 
 /// How often the screen reads the analysis.
 pub(crate) const READ_EVERY: Duration = Duration::from_millis(500);
@@ -175,6 +177,7 @@ struct State {
     ended_at: Option<Timestamp>,
     settle_readings: u32,
     navigation: Navigation,
+    trail: Trail,
     order: Order,
     /// The view last shown, to redo nothing when it did not change.
     last_view: Option<View>,
@@ -255,6 +258,7 @@ impl DiskUsageScreen {
             ended_at: None,
             settle_readings: 0,
             navigation: Navigation::default(),
+            trail: Trail::default(),
             order: Order::default(),
             last_view: None,
             tick: 0,
@@ -315,6 +319,20 @@ impl DiskUsageScreen {
         disk.on_list_focus(move |focused| {
             if let Some(state) = weak.upgrade() {
                 Self(state).list_focus(focused);
+            }
+        });
+        let weak = Rc::downgrade(&screen.0);
+        disk.on_trail_room(move |room, ellipsis| {
+            if let Some(state) = weak.upgrade() {
+                state.borrow_mut().trail.room(room, ellipsis);
+                Self(state).cut_trail();
+            }
+        });
+        let weak = Rc::downgrade(&screen.0);
+        disk.on_trail_measured(move |index, width| {
+            if let (Some(state), Ok(index)) = (weak.upgrade(), usize::try_from(index)) {
+                state.borrow_mut().trail.measured(index, width);
+                Self(state).cut_trail();
             }
         });
         screen.set_step(ui::DiskStep::Start);
@@ -609,6 +627,7 @@ impl DiskUsageScreen {
             return;
         }
         // Nothing of the analysis before stays to be chosen.
+        self.0.borrow_mut().trail.resize(0);
         {
             let state = self.0.borrow();
             crate::shown::show(&state.line_model, Vec::new());
@@ -1149,8 +1168,22 @@ impl DiskUsageScreen {
                 }
             })
             .collect();
-        let model = Rc::clone(&self.0.borrow().trail_model);
+        let model = {
+            let mut state = self.0.borrow_mut();
+            state.trail.resize(names.len());
+            Rc::clone(&state.trail_model)
+        };
         crate::shown::show(&model, names);
+        self.cut_trail();
+    }
+
+    fn cut_trail(&self) {
+        let first = self.0.borrow().trail.first_kept();
+        self.with_window(|window| {
+            window
+                .global::<ui::DiskUsage>()
+                .set_trail_from(shown(first));
+        });
     }
 
     fn show_progress(&self, scan: &UsageScan) {

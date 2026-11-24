@@ -1852,9 +1852,13 @@ msgctxt "DiskWords"
 msgid "{}, {}, {}"
 msgstr "{}, {}, {}"
 
-msgctxt "Browse"
+msgctxt "TrailStep"
 msgid "dossier affiché"
 msgstr "folder shown"
+
+msgctxt "TrailStep"
+msgid "Dossiers masqués"
+msgstr "Hidden folders"
 
 msgctxt "Sidebar"
 msgid "Réglages"

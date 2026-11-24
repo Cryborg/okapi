@@ -359,6 +359,46 @@ fn folders_are_entered_and_left_with_their_files_and_the_trail() {
     assert_eq!(disk(&window).get_trail().row_count(), 1);
 }
 
+fn long_folder(level: usize) -> String {
+    format!("un dossier au nom vraiment très long, niveau {level}")
+}
+
+#[test]
+fn a_trail_too_long_keeps_its_root_and_its_last_folders() {
+    const DEPTH: usize = 8;
+    let home = tempfile::tempdir().unwrap();
+    let deepest = (0..DEPTH).fold(home.path().to_path_buf(), |path, level| {
+        path.join(long_folder(level))
+    });
+    fs::create_dir_all(&deepest).unwrap();
+    fs::write(deepest.join("data"), noise(1_000)).unwrap();
+    fs::write(home.path().join("note"), noise(1_000)).unwrap();
+    let manager = Rc::default();
+    let (window, _sampler) = on_disk(seams(&home, &manager));
+    analyzed(&window);
+    for level in 0..DEPTH {
+        let name = long_folder(level);
+        disk(&window).invoke_enter(index_of(&window, &name));
+        read_until(&window, |window| !names(window).contains(&name));
+    }
+    read_until(&window, |window| disk(window).get_trail_from() > 1);
+    let from = disk(&window).get_trail_from();
+    assert!(
+        usize::try_from(from).unwrap() <= DEPTH,
+        "the last one at least kept: {from}"
+    );
+    assert!(shows(&window, "Dossiers masqués"));
+    assert!(shows(&window, "Dossier personnel"), "the root kept");
+    assert!(shows(&window, &long_folder(DEPTH - 1)));
+    assert!(!shows(&window, &long_folder(0)));
+    window
+        .window()
+        .set_size(slint::PhysicalSize::new(20_000, 800));
+    read_until(&window, |window| disk(window).get_trail_from() == 1);
+    assert!(!shows(&window, "Dossiers masqués"));
+    assert!(shows(&window, &long_folder(0)));
+}
+
 #[test]
 fn a_folder_changed_since_the_analysis_says_so() {
     let home = home();

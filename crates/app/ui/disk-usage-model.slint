@@ -103,8 +103,11 @@ export global DiskUsage {
     in property <VolumeShown> target-volume;
     in property <string> target-path;
     in property <bool> target-is-home;
-    // The trail, from the root down to the folder shown.
+    // The trail, from the root down to the folder shown, and the first
+    // step kept after the root: those between are left out, for the
+    // trail to fit (Rust picks it from what the page measures).
     in property <[string]> trail;
+    in property <int> trail-from: 1;
     in property <[DiskLine]> lines;
     // The line with the keyboard's focus, and the one chosen for the panel.
     in-out property <int> current: 0;
@@ -146,6 +149,10 @@ export global DiskUsage {
     callback enter(int);
     callback up();
     callback go-to(int);
+    // The trail's room and what its ellipsis takes; what a step takes, its
+    // gap before it included.
+    callback trail-room(length, length);
+    callback trail-measured(int, length);
     callback choose(int);
     callback close-detail();
     // The line under the pointer (its index), or none (-1); whether the

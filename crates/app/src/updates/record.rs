@@ -225,7 +225,7 @@ mod tests {
             publisher: None,
             verified: false,
             version: "1.5".to_owned(),
-            installed: None,
+            installed: Some(format!("{name} 1.4")),
             download_size: None,
         }
     }
@@ -385,6 +385,11 @@ mod tests {
                 ("firefox", true, None),
                 ("obs-studio", true, None),
             ]
+        );
+        assert_eq!(
+            written.packages[1].previous_version.as_deref(),
+            Some("firefox 1.4"),
+            "each snap its own"
         );
     }
 

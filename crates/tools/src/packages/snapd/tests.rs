@@ -297,6 +297,35 @@ fn a_removal_asks_polkit_and_names_the_change_it_started() {
 }
 
 #[test]
+fn the_snaps_in_use_are_read_by_their_revision_in_use_alone() {
+    let (_directory, snapd, requests) = serving(with_length(
+        "200 OK",
+        r#"{"type":"sync","status-code":200,"status":"OK","result":[
+            {"name":"firefox","version":"145.0-1","revision":"7000","channel":"latest/stable"},
+            {"name":"bare","revision":"3"}
+        ]}"#,
+    ));
+    assert_eq!(
+        snapd.in_use().unwrap(),
+        [
+            InUse {
+                name: "firefox".to_owned(),
+                version: "145.0-1".to_owned(),
+            },
+            InUse {
+                name: "bare".to_owned(),
+                version: String::new(),
+            },
+        ]
+    );
+    let request = requests.recv().unwrap();
+    assert!(
+        request.starts_with("GET /v2/snaps HTTP/1.1\r\n"),
+        "every revision kept would name an old one: {request}"
+    );
+}
+
+#[test]
 fn the_rights_refused_are_told_by_their_kind_and_a_change_by_its_status() {
     let (_directory, snapd, _) = serving(with_length(
         "403 Forbidden",

@@ -177,7 +177,11 @@ impl Sources for Fake {
         }
         (self.system)()
     }
-    fn installed(&self, _names: &[&str]) -> Result<Vec<Package>, PackageKitError> {
+    fn installed(
+        &self,
+        _names: &[&str],
+        _waiting: &dyn Fn(bool),
+    ) -> Result<Vec<Package>, PackageKitError> {
         Ok(Vec::new())
     }
     fn details(

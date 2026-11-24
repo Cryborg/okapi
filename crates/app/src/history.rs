@@ -497,9 +497,11 @@ fn update_row(line: &UpdateEntry) -> ui::HistoryRow {
             ui::UpdatedShown {
                 name: package.name.as_str().into(),
                 version: package.version.as_str().into(),
+                // A snap's new revision often keeps its version: said once.
                 previous: package
                     .previous_version
                     .as_deref()
+                    .filter(|previous| *previous != package.version)
                     .unwrap_or_default()
                     .into(),
                 state,

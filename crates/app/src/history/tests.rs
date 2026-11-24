@@ -380,7 +380,10 @@ fn kept_updates(directory: &Path) {
                         previous_version: Some("3.5.0".to_owned()),
                         ..package("openssl", "3.5.1", true, None)
                     },
-                    package("bash", "5.2.37", true, None),
+                    UpdatedPackage {
+                        previous_version: Some("5.2.37".to_owned()),
+                        ..package("bash", "5.2.37", true, None)
+                    },
                 ],
                 None,
             )

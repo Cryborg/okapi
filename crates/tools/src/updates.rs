@@ -128,7 +128,11 @@ pub trait Sources: Send + Sync {
     ///
     /// # Errors
     /// Why PackageKit did not say.
-    fn installed(&self, names: &[&str]) -> Result<Vec<Package>, PackageKitError>;
+    fn installed(
+        &self,
+        names: &[&str],
+        waiting: &dyn Fn(bool),
+    ) -> Result<Vec<Package>, PackageKitError>;
     /// The details of the packages `ids`, their download size among them.
     ///
     /// # Errors
@@ -190,8 +194,12 @@ impl Sources for SystemSources {
         packagekit::PackageKit::connect(self.locale)?.get_updates(waiting)
     }
 
-    fn installed(&self, names: &[&str]) -> Result<Vec<Package>, PackageKitError> {
-        packagekit::PackageKit::connect(self.locale)?.resolve(names)
+    fn installed(
+        &self,
+        names: &[&str],
+        waiting: &dyn Fn(bool),
+    ) -> Result<Vec<Package>, PackageKitError> {
+        packagekit::PackageKit::connect(self.locale)?.resolve(names, waiting)
     }
 
     fn details(
@@ -244,7 +252,7 @@ pub fn read_system(sources: &dyn Sources, refresh: bool, waiting: &dyn Fn(bool))
     let updates = match sources.system(waiting) {
         Ok(packages) => {
             system_updates(&packages).map_or(Outcome::Failed(Failure::Broken), |mut updates| {
-                add_installed(sources, &mut updates);
+                add_installed(sources, &mut updates, waiting);
                 Outcome::Read(updates)
             })
         }
@@ -340,7 +348,8 @@ fn download_size(
     Some(ids.iter().filter_map(size).sum())
 }
 
-/// Reads the snaps waiting, and when snapd refreshes them.
+/// Reads the snaps waiting, the versions they replace, and when snapd
+/// refreshes them.
 pub fn read_snaps(sources: &dyn Sources) -> Outcome<Snaps> {
     let _snaps = tracing::info_span!("snaps").entered();
     let started = Instant::now();
@@ -443,7 +452,8 @@ fn system_updates(packages: &[Package]) -> Option<Vec<SystemUpdate>> {
 /// The version each of `updates` replaces, as PackageKit says it, by name
 /// and architecture; none when it does not say (traced): the update is
 /// then told without it.
-fn add_installed(sources: &dyn Sources, updates: &mut [SystemUpdate]) {
+fn add_installed(sources: &dyn Sources, updates: &mut [SystemUpdate], waiting: &dyn Fn(bool)) {
+    let started = Instant::now();
     let installed = {
         let mut names: Vec<&str> = updates
             .iter()
@@ -455,7 +465,7 @@ fn add_installed(sources: &dyn Sources, updates: &mut [SystemUpdate]) {
         if names.is_empty() {
             return;
         }
-        match sources.installed(&names) {
+        match sources.installed(&names, waiting) {
             Ok(installed) => installed,
             Err(error) => {
                 tracing::warn!(%error, "the versions the updates replace not read");
@@ -477,9 +487,12 @@ fn add_installed(sources: &dyn Sources, updates: &mut [SystemUpdate]) {
         .filter(|update| update.installed.is_none())
         .map(|update| update.name.as_str())
         .collect();
-    if !unknown.is_empty() {
-        tracing::info!(?unknown, "updates whose version installed is not said");
-    }
+    tracing::info!(
+        elapsed = ?started.elapsed(),
+        known = updates.len() - unknown.len(),
+        ?unknown,
+        "versions the updates replace read"
+    );
 }
 
 /// The version each snap of `updates` replaces, as snapd says it; none

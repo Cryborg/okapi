@@ -1100,11 +1100,23 @@ fn an_application_gone_since_is_said_and_the_list_read_again() {
 }
 
 #[test]
+fn a_check_that_cannot_tell_what_would_go_is_said_and_offered_again() {
+    check_fails(
+        Why::Unclear,
+        "Okapi n'a pas pu savoir ce qui serait retiré avec elle : rien n'a été touché.",
+        false,
+    );
+}
+
+#[test]
 fn an_application_gone_since_is_not_offered_again() {
     let fake = Fake::new(vec![Err(Why::NotFound)], Ended::Done(Gone::default()));
     let (window, _, _, _) = on_apps(fake);
     ask(&window, "GIMP");
+    assert_eq!(step(&window), ui::UninstallStep::Failed);
+    assert!(shows(&window, "GIMP est déjà désinstallée"));
     assert_eq!(buttons(&window, "Réessayer"), 0);
+    assert_eq!(buttons(&window, "Fermer"), 1);
     assert!(!shows(&window, "GIMP n'a pas été désinstallée"));
 }
 

@@ -75,7 +75,15 @@ impl Sources for Fake {
         }
         (self.system)()
     }
-    fn installed(&self, names: &[&str]) -> Result<Vec<Package>, PackageKitError> {
+    fn installed(
+        &self,
+        names: &[&str],
+        waiting: &dyn Fn(bool),
+    ) -> Result<Vec<Package>, PackageKitError> {
+        if self.waits {
+            waiting(true);
+            waiting(false);
+        }
         (self.installed)(names)
     }
     fn details(
@@ -303,6 +311,15 @@ fn a_wait_for_another_program_is_passed_on() {
     };
     read_system(&fake, false, &|waiting| heard.borrow_mut().push(waiting));
     assert_eq!(*heard.borrow(), [true, false]);
+    // While reading the versions installed too.
+    let heard = RefCell::new(Vec::new());
+    let fake = Fake {
+        system: mixed,
+        waits: true,
+        ..Fake::default()
+    };
+    read_system(&fake, false, &|waiting| heard.borrow_mut().push(waiting));
+    assert_eq!(*heard.borrow(), [true, false, true, false]);
     // While downloading the lists too: the longest wait.
     let heard = RefCell::new(Vec::new());
     let fake = Fake {

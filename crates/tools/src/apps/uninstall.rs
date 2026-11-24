@@ -96,10 +96,7 @@ pub enum Why {
     TimedOut,
     /// It is no longer installed.
     NotFound,
-    /// What would go cannot be told for sure (dpkg's state unreadable, an
-    /// answer of the service not read whole, a removal that would also
-    /// install or change packages, a flatpak's deployment or metadata
-    /// unreadable): nothing removed.
+    /// What would go cannot be told for sure: nothing removed.
     Unclear,
     /// The service refused, in its own words.
     Service(String),

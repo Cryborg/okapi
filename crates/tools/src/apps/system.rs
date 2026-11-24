@@ -68,35 +68,65 @@ impl Services {
     }
 
     /// The identifier PackageKit gives `package` installed for
-    /// `architecture`: exactly one, or none.
+    /// `architecture`.
     fn installed_id(
         packagekit: &PackageKit,
         package: &str,
         architecture: &str,
     ) -> Result<String, Why> {
         let resolved = packagekit
-            .resolve(&[package])
+            .resolve(&[package], &|_| {})
             .map_err(|error| why_packagekit(&error))?;
-        let mut matching: Vec<String> = resolved
-            .into_iter()
-            .filter(|found| found.info == packagekit::info::INSTALLED)
-            .filter(|found| {
-                PackageId::parse(&found.id).is_some_and(|id| {
-                    id.name == package && same_architecture(id.arch, architecture)
-                })
-            })
-            .map(|found| found.id)
-            .collect();
-        if matching.len() != 1 {
+        installed_once(resolved, package, architecture)
+    }
+}
+
+/// The one identifier of `resolved` (PackageKit's answer) that is `package`
+/// installed for `architecture`: none is [`Why::NotFound`]; several, or one
+/// unreadable, [`Why::Unclear`]: which would go is not known.
+fn installed_once(
+    resolved: Vec<packagekit::Package>,
+    package: &str,
+    architecture: &str,
+) -> Result<String, Why> {
+    let installed: Vec<String> = resolved
+        .into_iter()
+        .filter(|found| found.info == packagekit::info::INSTALLED)
+        .map(|found| found.id)
+        .collect();
+    if let Some(unreadable) = installed.iter().find(|id| PackageId::parse(id).is_none()) {
+        tracing::warn!(package, id = %unreadable, "an identifier of PackageKit unreadable");
+        return Err(Why::Unclear);
+    }
+    let (mut matching, others): (Vec<String>, Vec<String>) =
+        installed.into_iter().partition(|id| {
+            PackageId::parse(id)
+                .is_some_and(|id| id.name == package && same_architecture(id.arch, architecture))
+        });
+    match matching.len() {
+        1 => Ok(matching.remove(0)),
+        0 if others.is_empty() => {
+            tracing::info!(package, architecture, "the package is no longer installed");
+            Err(Why::NotFound)
+        }
+        0 => {
+            tracing::warn!(
+                package,
+                architecture,
+                ?others,
+                "the package installed for other architectures only"
+            );
+            Err(Why::NotFound)
+        }
+        _ => {
             tracing::warn!(
                 package,
                 architecture,
                 ?matching,
-                "the package installed not found once by PackageKit"
+                "the package installed found more than once by PackageKit"
             );
-            return Err(Why::NotFound);
+            Err(Why::Unclear)
         }
-        Ok(matching.remove(0))
     }
 }
 
@@ -408,6 +438,50 @@ pub(crate) fn why_snapd(error: &SnapdError) -> Why {
 mod tests {
     use super::*;
     use crate::packages::snapd::{self, CHANGE_LOOK_EVERY};
+
+    fn resolved(info: u32, id: &str) -> packagekit::Package {
+        packagekit::Package {
+            info,
+            id: id.to_owned(),
+            summary: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_package_installed_is_found_once_by_name_and_architecture() {
+        let installed = packagekit::info::INSTALLED;
+        let gimp = resolved(installed, "gimp;3.0;amd64;installed:ubuntu");
+        let gimp_i386 = resolved(installed, "gimp;3.0;i386;installed:ubuntu");
+        let available = resolved(4, "gimp;3.1;amd64;ubuntu-updates");
+        assert_eq!(
+            installed_once(
+                vec![gimp.clone(), gimp_i386.clone(), available],
+                "gimp",
+                "amd64"
+            ),
+            Ok(gimp.id.clone())
+        );
+        assert_eq!(
+            installed_once(Vec::new(), "gimp", "amd64"),
+            Err(Why::NotFound)
+        );
+        assert_eq!(
+            installed_once(vec![gimp_i386], "gimp", "amd64"),
+            Err(Why::NotFound),
+            "another architecture's alone"
+        );
+        let all = resolved(installed, "gimp;3.0;all;installed:ubuntu");
+        assert_eq!(
+            installed_once(vec![gimp.clone(), all], "gimp", "amd64"),
+            Err(Why::Unclear),
+            "which would go is not known"
+        );
+        assert_eq!(
+            installed_once(vec![gimp, resolved(installed, "gimp;3.0")], "gimp", "amd64"),
+            Err(Why::Unclear),
+            "an answer not read whole"
+        );
+    }
 
     /// A snapd that answers each request, one per connection, with the
     /// next of `answers` (`None`: closed unanswered); the services that

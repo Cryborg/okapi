@@ -609,7 +609,7 @@ fn what_would_take_the_system_s_is_refused_named_and_never_removed() {
     let (window, _, recorded, _) = on_apps(fake.clone());
     ask(&window, "GIMP");
     assert_eq!(step(&window), ui::UninstallStep::Refused);
-    assert!(shows(&window, "GIMP reste installée"));
+    assert!(shows(&window, "GIMP ne peut pas être désinstallée"));
     assert!(shows(&window, "Ce qui partirait : ubuntu-desktop-minimal"));
     assert_eq!(buttons(&window, "Désinstaller"), 1, "the detail's alone");
     // A confirmation out of its time does nothing, at once (no thread).
@@ -649,7 +649,7 @@ fn ending_says(ended: Ended, words: &str) {
     ask(&window, "GIMP");
     apps(&window).invoke_confirm();
     read_until(&window, |window| step(window) == ui::UninstallStep::Failed);
-    assert!(shows(&window, "GIMP est toujours là"), "{words}");
+    assert!(shows(&window, "GIMP n'a pas été désinstallée"), "{words}");
     assert!(shows(&window, words), "{words}");
     assert!(recorded.lock().unwrap().is_empty(), "no line for a failure");
     assert_eq!(reads.get(), 2, "{words}: read again");
@@ -661,7 +661,7 @@ fn ending_says(ended: Ended, words: &str) {
 fn rights_not_granted_are_said() {
     ending_says(
         Ended::Failed(Why::NotAuthorized),
-        "Les droits n'ont pas été accordés.",
+        "L'autorisation n'a pas été donnée.",
     );
 }
 
@@ -677,7 +677,7 @@ fn another_installation_running_is_said() {
 fn no_answer_in_time_says_it_may_still_happen() {
     ending_says(
         Ended::Failed(Why::TimedOut),
-        "Pas de réponse à temps. Si vous avez accordé les droits, la désinstallation peut se faire quand même.",
+        "Le système n'a pas répondu à temps. Si vous avez donné votre mot de passe, la désinstallation peut encore aboutir.",
     );
 }
 
@@ -1096,11 +1096,16 @@ fn check_fails(why: Why, words: &str, read_again: bool) {
 
 #[test]
 fn an_application_gone_since_is_said_and_the_list_read_again() {
-    check_fails(
-        Why::NotFound,
-        "Elle n'est plus installée. La liste est relue.",
-        true,
-    );
+    check_fails(Why::NotFound, "GIMP est déjà désinstallée", true);
+}
+
+#[test]
+fn an_application_gone_since_is_not_offered_again() {
+    let fake = Fake::new(vec![Err(Why::NotFound)], Ended::Done(Gone::default()));
+    let (window, _, _, _) = on_apps(fake);
+    ask(&window, "GIMP");
+    assert_eq!(buttons(&window, "Réessayer"), 0);
+    assert!(!shows(&window, "GIMP n'a pas été désinstallée"));
 }
 
 #[test]
@@ -1143,7 +1148,7 @@ fn a_removal_that_dies_says_its_outcome_unknown_and_reads_again() {
     read_until(&window, |window| step(window) == ui::UninstallStep::Failed);
     assert!(shows(
         &window,
-        "Le service ne répond pas. La liste est relue."
+        "Le service de désinstallation ne répond pas."
     ));
     assert!(recorded.lock().unwrap().is_empty());
     assert_eq!(reads.get(), 2);

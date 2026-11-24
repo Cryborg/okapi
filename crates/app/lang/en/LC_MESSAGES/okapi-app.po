@@ -2357,32 +2357,28 @@ msgid "Installée avec le système"
 msgstr "Installed with the system"
 
 msgctxt "AppWords"
-msgid "Le service qui désinstalle n'est pas là sur ce système."
-msgstr "The service that uninstalls is not on this system."
+msgid "Le service de désinstallation est absent de ce système."
+msgstr "The uninstallation service is missing from this system."
 
 msgctxt "AppWords"
-msgid "Les droits n'ont pas été accordés."
-msgstr "The rights were not granted."
+msgid "L'autorisation n'a pas été donnée."
+msgstr "The authorization was not given."
 
 msgctxt "AppWords"
 msgid "Une autre installation est en cours : réessayez dans un moment."
 msgstr "Another installation is running: try again in a moment."
 
 msgctxt "AppWords"
-msgid "Le service ne répond pas. La liste est relue."
-msgstr "The service does not answer. The list is read again."
+msgid "Le service de désinstallation ne répond pas."
+msgstr "The uninstallation service does not answer."
 
 msgctxt "AppWords"
-msgid "Okapi ne peut pas dire avec certitude ce qui partirait : rien n'a été retiré."
-msgstr "Okapi cannot tell for sure what would go: nothing was removed."
+msgid "Okapi n'a pas pu savoir ce qui serait retiré avec elle : rien n'a été touché."
+msgstr "Okapi could not tell what would be removed with it: nothing was touched."
 
 msgctxt "AppWords"
-msgid "Pas de réponse à temps. Si vous avez accordé les droits, la désinstallation peut se faire quand même."
-msgstr "No answer in time. If you granted the rights, the uninstallation may still happen."
-
-msgctxt "AppWords"
-msgid "Elle n'est plus installée. La liste est relue."
-msgstr "It is no longer installed. The list is read again."
+msgid "Le système n'a pas répondu à temps. Si vous avez donné votre mot de passe, la désinstallation peut encore aboutir."
+msgstr "The system did not answer in time. If you gave your password, the uninstallation may still complete."
 
 msgctxt "AppWords"
 msgid "Le système a refusé : {}"
@@ -2497,16 +2493,20 @@ msgid "Vérification…"
 msgstr "Checking…"
 
 msgctxt "Uninstall"
-msgid "{} reste installée"
-msgstr "{} stays installed"
+msgid "{} ne peut pas être désinstallée"
+msgstr "{} cannot be uninstalled"
 
 msgctxt "Uninstall"
 msgid "Désinstallation de {}…"
 msgstr "Uninstalling {}…"
 
 msgctxt "Uninstall"
-msgid "{} est toujours là"
-msgstr "{} is still there"
+msgid "{} n'a pas été désinstallée"
+msgstr "{} was not uninstalled"
+
+msgctxt "Uninstall"
+msgid "{} est déjà désinstallée"
+msgstr "{} is already uninstalled"
 
 msgctxt "Uninstall"
 msgid "Désinstaller {} ?"

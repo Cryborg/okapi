@@ -61,13 +61,14 @@ export global AppWords {
     }
 
     pure public function why(why: UninstallWhy, detail: string) -> string {
-        why == UninstallWhy.absent ? @tr("Le service qui désinstalle n'est pas là sur ce système.")
-            : why == UninstallWhy.not-authorized ? @tr("Les droits n'ont pas été accordés.")
+        why == UninstallWhy.absent ? @tr("Le service de désinstallation est absent de ce système.")
+            : why == UninstallWhy.not-authorized ? @tr("L'autorisation n'a pas été donnée.")
             : why == UninstallWhy.busy ? @tr("Une autre installation est en cours : réessayez dans un moment.")
-            : why == UninstallWhy.unanswered ? @tr("Le service ne répond pas. La liste est relue.")
-            : why == UninstallWhy.timed-out ? @tr("Pas de réponse à temps. Si vous avez accordé les droits, la désinstallation peut se faire quand même.")
-            : why == UninstallWhy.not-found ? @tr("Elle n'est plus installée. La liste est relue.")
-            : why == UninstallWhy.unclear ? @tr("Okapi ne peut pas dire avec certitude ce qui partirait : rien n'a été retiré.")
+            : why == UninstallWhy.unanswered ? @tr("Le service de désinstallation ne répond pas.")
+            : why == UninstallWhy.timed-out ? @tr("Le système n'a pas répondu à temps. Si vous avez donné votre mot de passe, la désinstallation peut encore aboutir.")
+            // The title says it.
+            : why == UninstallWhy.not-found ? ""
+            : why == UninstallWhy.unclear ? @tr("Okapi n'a pas pu savoir ce qui serait retiré avec elle : rien n'a été touché.")
             : @tr("Le système a refusé : {}", detail)
     }
 }
@@ -492,9 +493,10 @@ component Uninstall inherits ModalFrame {
     }
     title := Text {
         text: Apps.step == UninstallStep.checking ? @tr("Vérification…")
-            : Apps.step == UninstallStep.refused ? @tr("{} reste installée", Apps.target)
+            : Apps.step == UninstallStep.refused ? @tr("{} ne peut pas être désinstallée", Apps.target)
             : Apps.step == UninstallStep.running ? @tr("Désinstallation de {}…", Apps.target)
-            : Apps.step == UninstallStep.failed ? @tr("{} est toujours là", Apps.target)
+            : Apps.step == UninstallStep.failed && Apps.why == UninstallWhy.not-found ? @tr("{} est déjà désinstallée", Apps.target)
+            : Apps.step == UninstallStep.failed ? @tr("{} n'a pas été désinstallée", Apps.target)
             : @tr("Désinstaller {} ?", Apps.target);
         accessible-role: none;
         color: Theme.text;
@@ -596,7 +598,7 @@ component Uninstall inherits ModalFrame {
             : Apps.too-late ? @tr("Trop tard pour annuler : le système termine.")
             : @tr("Fermer cette fenêtre n'arrête pas la désinstallation.");
     }
-    if Apps.step == UninstallStep.failed: Detail {
+    if Apps.step == UninstallStep.failed && Apps.why != UninstallWhy.not-found: Detail {
         text: AppWords.why(Apps.why, Apps.why-detail);
     }
     HorizontalLayout {
@@ -616,7 +618,7 @@ component Uninstall inherits ModalFrame {
                 Apps.cancel();
             }
         }
-        if Apps.step == UninstallStep.failed: ActionButton {
+        if Apps.step == UninstallStep.failed && Apps.why != UninstallWhy.not-found: ActionButton {
             text: @tr("Réessayer");
             clicked => {
                 Apps.retry();

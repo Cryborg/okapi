@@ -1,72 +1,52 @@
-"""`okapi-vm`: Okapi's test machine, from the download to the scenarios' runs."""
+"""`okapi-vm`: Okapi's test machines, from the download to the scenarios' runs and their coverage."""
 
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import shutil
 import subprocess
 import sys
+import textwrap
 import time
 import traceback
 from pathlib import Path
-from types import ModuleType
 
-from . import config, prepare
-from .bench import SSH_READY_TIMEOUT_SECONDS, Bench, ScenarioFailure, build_okapi, driver_line, install_okapi
+from . import catalog, config, coverage, prepare, slots
+from .bench import Bench, ScenarioFailure, build_okapi, driver_line, stage
+from .catalog import Scenario
 from .machine import Machine, MachineError
 
-
-def scenario_names() -> list[str]:
-    return sorted(path.stem for path in config.SCENARIOS.glob("*.py") if not path.stem.startswith("_"))
+DESCRIPTION_INDENT = "    "
 
 
-def load_scenario(name: str) -> ModuleType:
-    path = config.SCENARIOS / f"{name}.py"
-    if not path.exists():
-        raise MachineError(f"no scenario {name!r}; there are: {', '.join(scenario_names())}")
-    spec = importlib.util.spec_from_file_location(f"scenarios.{name}", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def new_run(home: config.Home, label: str) -> Path:
-    directory = home.runs / f"{time.strftime('%Y%m%d-%H%M%S')}-{label}"
+def new_run(home: config.Home, machine: Machine, label: str) -> Path:
+    directory = home.runs / f"{time.strftime('%Y%m%d-%H%M%S')}-{machine.slot}-{label}"
     directory.mkdir(parents=True)
     return directory
 
 
-def booted(home: config.Home, directory: Path) -> Bench:
+def booted(machine: Machine, directory: Path, measured: coverage.Build | None) -> Bench:
     """A machine just started from the base; what can fail before is done first, so that it starts nothing."""
     accounts = config.read_accounts()
-    bench = Bench(Machine.start(home), accounts, directory)
-    bench.log(f"machine started, SSH on 127.0.0.1:{bench.machine.ssh_port}")
+    machine.start()
+    bench = Bench(machine, accounts, directory, measured)
+    bench.log(f"machine started in slot {machine.slot}, SSH on 127.0.0.1:{machine.ssh_port}")
     return bench
 
 
-def ready(bench: Bench, binaries: Path) -> None:
-    """This checkout's Okapi installed in the machine, GNOME up."""
-    bench.machine.wait_for_ssh(SSH_READY_TIMEOUT_SECONDS)
-    install_okapi(bench.machine, binaries)
-    bench.log("Okapi installed")
-    bench.wait_for_desktop()
-
-
-def run_scenario(home: config.Home, name: str, binaries: Path, *, keep: bool) -> bool:
-    scenario = load_scenario(name)
-    directory = new_run(home, name)
+def run_scenario(home: config.Home, machine: Machine, scenario: Scenario, binaries: Path,
+                 measured: coverage.Build | None, *, keep: bool) -> bool:
+    directory = new_run(home, machine, scenario.name)
     passed = False
     try:
-        bench = booted(home, directory)
+        bench = booted(machine, directory, measured)
     except (MachineError, OSError, subprocess.SubprocessError) as error:
         print(f"okapi-vm: {error}", file=sys.stderr)
     else:
         try:
-            ready(bench, binaries)
-            bench.log(f"scenario {name}")
+            bench.ready(binaries)
+            bench.log(f"scenario {scenario.name}")
             scenario.run(bench)
             passed = True
         except (ScenarioFailure, MachineError) as failure:
@@ -76,8 +56,9 @@ def run_scenario(home: config.Home, name: str, binaries: Path, *, keep: bool) ->
             print(traceback.format_exc(), file=sys.stderr)
         finally:
             wind_up(bench, passed=passed, keep=keep)
-    (directory / "result.json").write_text(json.dumps({"scenario": name, "passed": passed}) + "\n", encoding="utf-8")
-    print(f"{'PASSED' if passed else 'FAILED'} {name}: {directory}")
+    result = {"scenario": scenario.name, "slot": machine.slot, "coverage": measured is not None, "passed": passed}
+    (directory / "result.json").write_text(json.dumps(result) + "\n", encoding="utf-8")
+    print(f"{'PASSED' if passed else 'FAILED'} {scenario.name}: {directory}")
     return passed
 
 
@@ -99,11 +80,54 @@ def wind_up(bench: Bench, *, passed: bool, keep: bool) -> None:
             bench.machine.destroy()
 
 
-def running_machine(home: config.Home) -> Machine:
-    machine = Machine(home)
-    if machine.pid() is None:
-        raise MachineError("no machine is running: `okapi-vm start` first")
-    return machine
+def run(home: config.Home, arguments: argparse.Namespace) -> int:
+    scenarios = catalog.select(arguments.scenarios, arguments.tag)
+    with slots.claimed(home, slots.chosen_slot(arguments.slot)) as machine:
+        # Once for all: an edit during the series must not test two builds.
+        built = build_okapi(instrumented=arguments.coverage)
+        if arguments.coverage:
+            measured = coverage.keep(home, built)
+            binaries = measured.directory
+        else:
+            measured = None
+            binaries = stage(built, home.slot(machine.slot) / "binaries")
+        series = [scenario for _ in range(arguments.repeat) for scenario in scenarios]
+        results = [
+            (scenario.name, run_scenario(home, machine, scenario, binaries, measured,
+                                         keep=arguments.keep and position == len(series) - 1))
+            for position, scenario in enumerate(series)
+        ]
+    if len(results) > 1:
+        failed = [name for name, passed in results if not passed]
+        print(f"{len(results) - len(failed)}/{len(results)} passed" + (f"; failed: {', '.join(failed)}" if failed else ""))
+    return 0 if all(passed for _, passed in results) else 1
+
+
+def start(home: config.Home, arguments: argparse.Namespace) -> None:
+    with slots.claimed(home, slots.chosen_slot(arguments.slot)) as machine:
+        binaries = stage(build_okapi(instrumented=False), home.slot(machine.slot) / "binaries")
+        bench = booted(machine, new_run(home, machine, "start"), None)
+        try:
+            bench.ready(binaries)
+        except BaseException:
+            wind_up(bench, passed=False, keep=False)
+            raise
+    print(f"running in slot {machine.slot}; `okapi-vm stop --slot {machine.slot}` drops it. Notes in {bench.directory}")
+
+
+def listing() -> None:
+    for scenario in catalog.every():
+        tags = f" [{', '.join(scenario.tags)}]" if scenario.tags else ""
+        print(f"{scenario.name}{tags}")
+        print(textwrap.indent(scenario.description or "(no docstring)", DESCRIPTION_INDENT))
+        print()
+
+
+def report(home: config.Home) -> None:
+    done = coverage.report(home)
+    print(done.files.read_text(encoding="utf-8").rstrip().splitlines()[-1])
+    print(f"{done.profiles} profiles from {done.runs} runs, against build {done.build.directory.name}")
+    print(f"by file: {done.files}\nby function: {done.functions}\nHTML: {done.html}")
 
 
 def passed_on(words: list[str]) -> list[str]:
@@ -118,24 +142,33 @@ def forward(result: subprocess.CompletedProcess[str]) -> int:
 
 
 def parser() -> argparse.ArgumentParser:
+    slot = argparse.ArgumentParser(add_help=False)
+    slot.add_argument("--slot", help=f"{config.SLOTS.start} to {config.SLOTS.stop - 1}; default "
+                                     f"${config.SLOT_VARIABLE}, else a free one (or the only one running)")
     root = argparse.ArgumentParser(prog="okapi-vm", description=__doc__)
     commands = root.add_subparsers(dest="command", required=True)
     commands.add_parser("fetch", help=f"download the Ubuntu cloud image ({config.IMAGE_SIZE}) and check it")
     prepare_command = commands.add_parser("prepare", help="provision the base image, once")
     prepare_command.add_argument("--force", action="store_true", help="build it again")
-    run = commands.add_parser("run", help="run scenarios, each on a fresh machine")
-    run.add_argument("scenarios", nargs="*", help=f"default: all ({', '.join(scenario_names())})")
-    run.add_argument("--keep", action="store_true", help="leave the last machine running")
-    commands.add_parser("list", help="the scenarios")
-    commands.add_parser("start", help="start a fresh machine with Okapi, to explore it")
-    commands.add_parser("stop", help="stop the machine and drop everything it wrote")
-    ssh = commands.add_parser("ssh", help="run a command in the running machine")
+    run_command = commands.add_parser("run", parents=[slot], help="run scenarios, each on a fresh machine")
+    run_command.add_argument("scenarios", nargs="*", help="names or shell patterns (quoted: 'cleaner_*'); default: all")
+    run_command.add_argument("--tag", action="append", default=[], help="only those with this tag (repeatable)")
+    run_command.add_argument("--keep", action="store_true", help="leave the last machine running")
+    run_command.add_argument("--coverage", action="store_true", help="instrumented build, profiles gathered")
+    run_command.add_argument("--repeat", type=int, default=1, metavar="N", help="run the series N times")
+    commands.add_parser("list", help="the scenarios, their tags and what they try")
+    commands.add_parser("start", parents=[slot], help="start a fresh machine with Okapi, to explore it")
+    commands.add_parser("stop", parents=[slot], help="stop a machine and drop everything it wrote")
+    ssh = commands.add_parser("ssh", parents=[slot], help="run a command in a running machine")
     ssh.add_argument("--root", action="store_true")
     ssh.add_argument("words", nargs=argparse.REMAINDER)
-    ui = commands.add_parser("ui", help="the AT-SPI driver in the running machine (`ui -- --help`)")
+    ui = commands.add_parser("ui", parents=[slot], help="the AT-SPI driver in a running machine (`ui -- --help`)")
     ui.add_argument("words", nargs=argparse.REMAINDER)
-    shot = commands.add_parser("shot", help="capture the running machine's screen")
+    shot = commands.add_parser("shot", parents=[slot], help="capture a running machine's screen")
     shot.add_argument("path", type=Path)
+    coverage_command = commands.add_parser("coverage", help="what the runs with --coverage gathered")
+    coverage_command.add_argument("action", choices=["report", "reset"],
+                                  help="report: merge everything and write the reports; reset: forget it all")
     return root
 
 
@@ -154,38 +187,30 @@ def dispatch(arguments: argparse.Namespace, home: config.Home) -> int:
         case "fetch":
             prepare.fetch(home)
         case "prepare":
+            if arguments.force and slots.any_running(home):
+                raise MachineError("a slot is in use, its machine runs over the base: stop it first")
             prepare.prepare(home, force=arguments.force)
         case "list":
-            for name in scenario_names():
-                summary, _, _ = (load_scenario(name).__doc__ or "").strip().partition("\n")
-                print(f"{name}: {summary}")
+            listing()
         case "run":
-            names = arguments.scenarios or scenario_names()
-            # Once for all: an edit during the series must not test two builds.
-            binaries = build_okapi()
-            results = [run_scenario(home, name, binaries, keep=arguments.keep and name == names[-1])
-                       for name in names]
-            return 0 if all(results) else 1
+            return run(home, arguments)
         case "start":
-            binaries = build_okapi()
-            bench = booted(home, new_run(home, "start"))
-            try:
-                ready(bench, binaries)
-            except BaseException:
-                wind_up(bench, passed=False, keep=False)
-                raise
-            print(f"running; `okapi-vm stop` drops it. Notes in {bench.directory}")
+            start(home, arguments)
         case "stop":
-            Machine(home).destroy()
+            slots.stop(home, slots.chosen_slot(arguments.slot))
         case "ssh":
-            machine = running_machine(home)
+            machine = slots.running(home, slots.chosen_slot(arguments.slot))
             user = "root" if arguments.root else config.read_accounts().admin.name
             # Joined as ssh itself joins its words: the remote shell splits them.
             return forward(machine.ssh(user, " ".join(passed_on(arguments.words)), check=False))
         case "ui":
-            machine = running_machine(home)
+            machine = slots.running(home, slots.chosen_slot(arguments.slot))
             line = driver_line(passed_on(arguments.words))
             return forward(machine.ssh(config.read_accounts().admin.name, line, check=False))
         case "shot":
-            running_machine(home).screendump(arguments.path.resolve())
+            slots.running(home, slots.chosen_slot(arguments.slot)).screendump(arguments.path.resolve())
+        case "coverage" if arguments.action == "report":
+            report(home)
+        case "coverage":
+            coverage.reset(home)
     return 0

@@ -1,4 +1,4 @@
-"""The QEMU machine: its command line, its QMP socket and SSH into it."""
+"""The QEMU machine of a slot: its command line, its QMP socket and SSH into it."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ SSH_CONTROL_PERSIST_SECONDS = 120
 QUIT_TIMEOUT_SECONDS = 30
 QUIT_POLL_SECONDS = 0.2
 QMP_TIMEOUT_SECONDS = 30
+ABSOLUTE_MAXIMUM = 0x7FFF
 
 
 class MachineError(RuntimeError):
@@ -38,11 +39,12 @@ def fresh_firmware_variables(path: Path) -> None:
     shutil.copyfile(config.FIRMWARE_VARIABLES, path)
 
 
-def qemu_command(disk: Path, firmware_variables: Path, ssh_port: int, serial_log: Path, qmp_socket: Path) -> list[str]:
+def qemu_command(name: str, disk: Path, firmware_variables: Path, ssh_port: int, serial_log: Path,
+                 qmp_socket: Path) -> list[str]:
     """UEFI, the main disk first: under SeaBIOS, the 26.04 cloud image stopped at « Booting from Hard Disk »."""
     return [
         "qemu-system-x86_64",
-        "-name", MACHINE_NAME,
+        "-name", name,
         "-machine", "q35,accel=kvm",
         "-cpu", "host",
         "-smp", str(config.PROCESSORS),
@@ -54,6 +56,8 @@ def qemu_command(disk: Path, firmware_variables: Path, ssh_port: int, serial_log
         "-nic", f"user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:{ssh_port}-:22",
         "-device", f"virtio-vga,xres={config.SCREEN_WIDTH},yres={config.SCREEN_HEIGHT}",
         "-device", "virtio-rng-pci",
+        # An absolute pointer: QMP then clicks at a place of the screen.
+        "-device", "virtio-tablet-pci",
         "-display", "none",
         "-serial", f"file:{serial_log}",
         "-qmp", f"unix:{qmp_socket},server=on,wait=off",
@@ -115,13 +119,19 @@ class Qmp:
 
 @dataclass(frozen=True)
 class Machine:
-    """A running machine, known by the files of `home.machine`."""
+    """A slot's machine, known by the files of its directory. The SSH port is
+    the slot's own, fixed: two machines starting together never race for one."""
 
     home: config.Home
+    slot: int
+
+    @property
+    def name(self) -> str:
+        return f"{MACHINE_NAME}-{self.slot}"
 
     @property
     def directory(self) -> Path:
-        return self.home.machine
+        return self.home.slot(self.slot) / "machine"
 
     @property
     def overlay(self) -> Path:
@@ -141,7 +151,7 @@ class Machine:
 
     @property
     def ssh_port(self) -> int:
-        return int((self.directory / "ssh-port").read_text(encoding="utf-8"))
+        return config.SSH_PORT_BASE + self.slot
 
     def pid(self) -> int | None:
         """QEMU's process, only if it is still this machine's: after a crash or
@@ -155,38 +165,54 @@ class Machine:
             return None
         return pid
 
-    @classmethod
-    def start(cls, home: config.Home) -> Machine:
+    def start(self) -> None:
         """Boots a throwaway overlay over the base image; nothing it writes reaches the base."""
         check_kvm()
-        if not home.base.exists():
-            raise MachineError(f"{home.base} is missing: run `okapi-vm prepare` first")
-        machine = cls(home)
-        if machine.pid() is not None:
-            raise MachineError("a machine is already running: `okapi-vm stop` first")
-        machine.remove_files()
-        machine.directory.mkdir(parents=True)
+        if not self.home.base.exists():
+            raise MachineError(f"{self.home.base} is missing: run `okapi-vm prepare` first")
+        if self.pid() is not None:
+            raise MachineError(f"slot {self.slot} already runs a machine: `okapi-vm stop --slot {self.slot}` first")
+        self.remove_files()
+        self.directory.mkdir(parents=True)
         subprocess.run(
-            ["qemu-img", "create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", str(home.base), str(machine.overlay)],
+            ["qemu-img", "create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", str(self.home.base), str(self.overlay)],
             check=True,
         )
-        port = free_port()
-        (machine.directory / "ssh-port").write_text(str(port), encoding="utf-8")
-        firmware_variables = machine.directory / "firmware-variables.fd"
+        firmware_variables = self.directory / "firmware-variables.fd"
         fresh_firmware_variables(firmware_variables)
-        command = qemu_command(machine.overlay, firmware_variables, port, machine.serial_log, machine.qmp_socket)
-        subprocess.run([*command, "-daemonize", "-pidfile", str(machine.pid_file)], check=True)
-        return machine
+        command = qemu_command(self.name, self.overlay, firmware_variables, self.ssh_port, self.serial_log,
+                               self.qmp_socket)
+        subprocess.run([*command, "-daemonize", "-pidfile", str(self.pid_file)], check=True)
 
     def qmp(self) -> Qmp:
         return Qmp(self.qmp_socket)
 
-    def screendump(self, path: Path) -> None:
+    def _execute(self, command: str, **arguments: object) -> object:
         qmp = self.qmp()
         try:
-            qmp.execute("screendump", filename=str(path), format="png")
+            return qmp.execute(command, **arguments)
         finally:
             qmp.close()
+
+    def screendump(self, path: Path) -> None:
+        self._execute("screendump", filename=str(path), format="png")
+
+    def send_key(self, qcodes: list[str]) -> None:
+        """Presses the keys together, then releases them: a keyboard's keys, whatever the guest's layout."""
+        self._execute("send-key", keys=[{"type": "qcode", "data": qcode} for qcode in qcodes])
+
+    def click_at(self, x: int, y: int) -> None:
+        """A left click at a pixel of the screen, through the absolute pointer."""
+        def axis(name: str, pixel: int, size: int) -> dict[str, object]:
+            return {"type": "abs", "data": {"axis": name, "value": pixel * ABSOLUTE_MAXIMUM // (size - 1)}}
+
+        def button(down: bool) -> dict[str, object]:
+            return {"type": "btn", "data": {"down": down, "button": "left"}}
+
+        self._execute("input-send-event", events=[axis("x", x, config.SCREEN_WIDTH),
+                                                  axis("y", y, config.SCREEN_HEIGHT)])
+        self._execute("input-send-event", events=[button(True)])
+        self._execute("input-send-event", events=[button(False)])
 
     def _ssh_options(self) -> list[str]:
         return [

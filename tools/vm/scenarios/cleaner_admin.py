@@ -3,7 +3,7 @@
 Poses old files where a rule of the account and two administrator rules look
 (thumbnails, crash reports, APT's cache), lets polkit run the helper without a
 password, then drives the whole cleaning by the accessibility bus and checks
-that the files are gone and the receipt recorded.
+that the files are gone and the receipt recorded (ADM-001).
 """
 
 from __future__ import annotations
@@ -11,16 +11,12 @@ from __future__ import annotations
 from okapivm import common
 from okapivm.bench import Bench
 
+from scenarios import _admin
+
 TAGS = ["cleaner", "admin", "helper"]
 
-# Beyond the default minimum age and the floor the helper imposes on any
-# settings (`HELPER_MIN_AGE_FLOOR`), both an hour.
-AGING_SECONDS = 2 * 60 * 60
-SCAN_TIMEOUT_SECONDS = 300
-CLEAN_TIMEOUT_SECONDS = 300
-
-ADMIN_GROUPS = ["Rapports de plantage", "Cache des paquets APT"]
-UNDERSTOOD = "J'ai compris que c'est définitif"
+ADMIN_GROUPS = [_admin.CRASH_REPORTS, "Cache des paquets APT"]
+RECORDED = "Le reçu est enregistré dans l'historique."
 
 
 def run(bench: Bench) -> None:
@@ -33,38 +29,24 @@ def run(bench: Bench) -> None:
         common.ROOT, ["/var/crash/okapi-vm.crash", "/var/cache/apt/archives/okapi-vm_1.0_all.deb"], size=1024 * 1024,
     )
     bench.allow_elevation_without_password()
-    common.plant(bench, account_files, admin_files, age_seconds=AGING_SECONDS)
+    common.plant(bench, account_files, admin_files, age_seconds=_admin.AGING_SECONDS)
 
-    bench.launch_app()
-    bench.screenshot("accueil")
-    common.open_screen(bench, "Nettoyeur")
-    bench.ui.wait("Analyser", role="button")
-    bench.screenshot("nettoyeur")
-
-    bench.ui.click("Analyser", role="button")
-    bench.ui.wait("Résultats", timeout=SCAN_TIMEOUT_SECONDS)
+    _admin.scan(bench)
     bench.screenshot("resultats")
-
-    bench.ui.click("Obtenir les droits", role="button")
-    bench.ui.wait("Droits obtenus", timeout=SCAN_TIMEOUT_SECONDS)
-    # Groups found with the rights are offered unchecked.
+    _admin.obtain_rights(bench)
     for group in ADMIN_GROUPS:
-        bench.ui.click(group, role="check-box")
-        bench.ui.wait(group, role="check-box", state="checked")
+        offered = _admin.row(bench, group)
+        bench.check(_admin.CHECKED not in offered["states"] and _admin.OBTAINED in offered.get("description", ""),
+                    f"ADM-001: « {group} », unlocked by the rights, is offered unchecked ({offered.get('description')!r})")
+    _admin.check_groups(bench, *ADMIN_GROUPS)
     bench.screenshot("droits-obtenus")
 
-    bench.ui.click("Nettoyer", role="button")
-    bench.ui.wait("Supprimer définitivement ?")
-    bench.screenshot("confirmation")
-    bench.ui.click(UNDERSTOOD, role="check-box")
-    bench.ui.wait(UNDERSTOOD, role="check-box", state="checked")
-    bench.ui.click("Supprimer définitivement", role="button")
-    bench.ui.wait("Nettoyage terminé", timeout=CLEAN_TIMEOUT_SECONDS)
-    bench.ui.wait("Le reçu est enregistré dans l'historique.")
+    _admin.clean(bench)
+    bench.ui.wait(RECORDED)
     bench.screenshot("recu")
 
     common.check_gone(bench, account_files, admin_files)
     receipt = common.last_receipt(bench)
     planted = len(account_files.paths) + len(admin_files.paths)
     bench.check(receipt["removed"] >= planted and receipt["admin"]["done"],
-                f"the receipt counts the {planted} files and the administrator's part as done")
+                f"ADM-001: the receipt counts the {planted} files and the administrator's part as done")

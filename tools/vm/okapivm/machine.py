@@ -30,6 +30,11 @@ QMP_TIMEOUT_SECONDS = 30
 ABSOLUTE_MAXIMUM = 0x7FFF
 
 
+def _absolute(axis: str, pixel: int, size: int) -> dict[str, object]:
+    """The absolute pointer's place on `axis`, for a pixel of a screen `size` wide or high."""
+    return {"type": "abs", "data": {"axis": axis, "value": pixel * ABSOLUTE_MAXIMUM // (size - 1)}}
+
+
 class MachineError(RuntimeError):
     pass
 
@@ -203,16 +208,22 @@ class Machine:
 
     def click_at(self, x: int, y: int) -> None:
         """A left click at a pixel of the screen, through the absolute pointer."""
-        def axis(name: str, pixel: int, size: int) -> dict[str, object]:
-            return {"type": "abs", "data": {"axis": name, "value": pixel * ABSOLUTE_MAXIMUM // (size - 1)}}
-
         def button(down: bool) -> dict[str, object]:
             return {"type": "btn", "data": {"down": down, "button": "left"}}
 
-        self._execute("input-send-event", events=[axis("x", x, config.SCREEN_WIDTH),
-                                                  axis("y", y, config.SCREEN_HEIGHT)])
+        self._execute("input-send-event", events=[_absolute("x", x, config.SCREEN_WIDTH),
+                                                  _absolute("y", y, config.SCREEN_HEIGHT)])
         self._execute("input-send-event", events=[button(True)])
         self._execute("input-send-event", events=[button(False)])
+
+    def scroll_at(self, x: int, y: int, steps: int) -> None:
+        """Turns the wheel at a pixel of the screen: `steps` notches down, or up when negative."""
+        self._execute("input-send-event", events=[_absolute("x", x, config.SCREEN_WIDTH),
+                                                  _absolute("y", y, config.SCREEN_HEIGHT)])
+        wheel = "wheel-down" if steps > 0 else "wheel-up"
+        for _ in range(abs(steps)):
+            for down in (True, False):
+                self._execute("input-send-event", events=[{"type": "btn", "data": {"down": down, "button": wheel}}])
 
     def _ssh_options(self) -> list[str]:
         return [

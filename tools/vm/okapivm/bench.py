@@ -31,6 +31,9 @@ APP_EXIT_TIMEOUT_SECONDS = 60
 APP_POLL_SECONDS = 0.5
 SESSION_READY_TIMEOUT_SECONDS = 120
 DISPLAY_MANAGER = "gdm"
+REVEAL_STEPS = 2
+REVEAL_TOP_STEPS = 50
+REVEAL_ATTEMPTS = 30
 KEY_QCODES = {
     "Escape": "esc", "Tab": "tab", "Enter": "ret", "Space": "spc", "Backspace": "backspace", "Delete": "delete",
     "Up": "up", "Down": "down", "Left": "left", "Right": "right", "Home": "home", "End": "end",
@@ -249,6 +252,19 @@ class Ui:
                 raise ScenarioFailure(f"the field reads {read!r}, not the {text!r} typed")
             time.sleep(APP_POLL_SECONDS)
 
+    def reveal(self, name: str | None = None, *, role: str | None = None, pattern: str | None = None,
+               within: str, within_role: str = "list-box", steps: int = REVEAL_STEPS) -> dict:
+        """One node of a scrolled list, `within`, that draws only its rows in
+        view: the list is scrolled down from its top until the node shows."""
+        place = self.center(self.node(within, role=within_role))
+        self.bench.scroll_at(*place, -REVEAL_TOP_STEPS)
+        for _ in range(REVEAL_ATTEMPTS):
+            if self.find(name, role=role, pattern=pattern):
+                return self.node(name, role=role, pattern=pattern)
+            self.bench.scroll_at(*place, steps)
+            time.sleep(APP_POLL_SECONDS)
+        raise ScenarioFailure(f"{name or pattern!r} not found in {within!r}, scrolled to its end")
+
     def tree(self) -> str:
         return self._output("tree", [], DEFAULT_UI_TIMEOUT_SECONDS)
 
@@ -335,6 +351,11 @@ class Bench:
         self.machine.click_at(x, y)
         self.log(f"clicked at {x}, {y}")
 
+    def scroll_at(self, x: int, y: int, steps: int) -> None:
+        """Turns the mouse wheel at a pixel of the screen: `steps` notches down, up when negative."""
+        self.machine.scroll_at(x, y, steps)
+        self.log(f"scrolled {steps} at {x}, {y}")
+
     def set_elevation(self, answer: Elevation) -> None:
         """A polkit rule of this machine alone, for the helper's action and the test account."""
         rule = (
@@ -347,6 +368,12 @@ class Bench:
         )
         self.root(f"cat > {shlex.quote(config.GUEST_POLKIT_RULE)} <<'EOF'\n{rule}EOF")
         self.log(f"polkit answers the helper's action: {answer.name}")
+
+    def elevation_by_policy(self) -> None:
+        """No rule of this machine: the policy Okapi installs answers alone
+        (`auth_admin_keep`, the password asked once, then kept a few minutes)."""
+        self.root(shlex.join(["rm", "-f", config.GUEST_POLKIT_RULE]))
+        self.log("polkit answers the helper's action by Okapi's policy alone")
 
     def allow_elevation_without_password(self) -> None:
         """Without it, pkexec waits for GNOME's password dialog."""

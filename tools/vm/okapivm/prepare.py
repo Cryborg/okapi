@@ -10,7 +10,15 @@ import time
 from pathlib import Path
 
 from . import config
-from .machine import MachineError, check_kvm, free_port, fresh_firmware_variables, qemu_command, seed_drive
+from .machine import (
+    MACHINE_NAME,
+    MachineError,
+    check_kvm,
+    free_port,
+    fresh_firmware_variables,
+    qemu_command,
+    seed_drive,
+)
 
 PROVISION_TIMEOUT_SECONDS = 90 * 60
 PROGRESS_SECONDS = 30
@@ -164,7 +172,7 @@ def provision(home: config.Home, disk: Path, work: Path, serial_log: Path) -> No
     )
     firmware_variables = work / "firmware-variables.fd"
     fresh_firmware_variables(firmware_variables)
-    command = [*qemu_command(disk, firmware_variables, free_port(), serial_log, work / "qmp.sock"), *seed_drive(seed)]
+    command = [*qemu_command(MACHINE_NAME, disk, firmware_variables, free_port(), serial_log, work / "qmp.sock"), *seed_drive(seed)]
     print(f"Provisioning {disk} (a few minutes); console in {serial_log}", flush=True)
     started = time.monotonic()
     with subprocess.Popen(command) as qemu:

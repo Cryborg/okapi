@@ -29,6 +29,8 @@ POLL_SECONDS = 0.5
 DEFAULT_TIMEOUT_SECONDS = 30.0
 SHELL_APPLICATION = "gnome-shell"
 ACTIVATING_ACTIONS = ("click", "press", "activate", "toggle", "default")
+CHECKABLE = "checkable"
+CHECKED = "checked"
 
 
 @dataclass(frozen=True)
@@ -76,10 +78,12 @@ def described(node: Atspi.Accessible) -> dict[str, object]:
     }
     if description := node.get_description():
         entry["description"] = description
+    # Through the interface's class: on the node, a method of the same name
+    # of Atspi.Accessible answers instead.
     if value := node.get_value_iface():
-        entry["value"] = value.get_current_value()
+        entry["value"] = Atspi.Value.get_current_value(value)
     if text := node.get_text_iface():
-        entry["text"] = text.get_text(0, text.get_character_count())
+        entry["text"] = Atspi.Text.get_text(text, 0, Atspi.Text.get_character_count(text))
     return entry
 
 
@@ -196,6 +200,35 @@ def chosen(found: Found, index: int | None, query: Query) -> tuple[Atspi.Accessi
     return found[0]
 
 
+def click(app_name: str, query: Query, index: int | None, timeout: float, settle: float) -> dict[str, object]:
+    """Clicks the node once it has stood for `settle` seconds, as a human would
+    after a change of screen; a check box must then change state."""
+    wait_for(app_name, query, timeout)
+    time.sleep(settle)
+    node, entry = chosen(wait_for(app_name, query, timeout), index, query)
+    if "enabled" not in entry["states"]:
+        raise DriverError(f"{entry} is not enabled")
+    action = activate(node)
+    if CHECKABLE in entry["states"]:
+        was_checked = CHECKED in entry["states"]
+        deadline = time.monotonic() + timeout
+        while (CHECKED in chosen(wait_for(app_name, query, timeout), index, query)[1]["states"]) == was_checked:
+            if time.monotonic() > deadline:
+                raise DriverError(f"{entry} did not change state after its action {action!r}")
+            time.sleep(POLL_SECONDS)
+    return {"node": entry, "action": action}
+
+
+def extents(node: Atspi.Accessible) -> list[int]:
+    """`[x, y, width, height]` in the window's content. Wayland tells no one
+    where a window is: asked for screen coordinates, AT-SPI gives these."""
+    component = node.get_component_iface()
+    if component is None:
+        raise DriverError(f"{described(node)} has no place on screen")
+    rectangle = Atspi.Component.get_extents(component, Atspi.CoordType.WINDOW)
+    return [rectangle.x, rectangle.y, rectangle.width, rectangle.height]
+
+
 def run(arguments: argparse.Namespace) -> object:
     if arguments.command == "applications":
         return [candidate.get_name() for candidate in applications()]
@@ -212,10 +245,10 @@ def run(arguments: argparse.Namespace) -> object:
     if arguments.command == "wait":
         return [entry for _, entry in wait_for(arguments.app, query, arguments.timeout, gone=arguments.gone)]
     if arguments.command == "click":
-        node, entry = chosen(wait_for(arguments.app, query, arguments.timeout), arguments.index, query)
-        if "enabled" not in entry["states"]:
-            raise DriverError(f"{entry} is not enabled")
-        return {"node": entry, "action": activate(node)}
+        return click(arguments.app, query, arguments.index, arguments.timeout, arguments.settle)
+    node, entry = chosen(wait_for(arguments.app, query, arguments.timeout), arguments.index, query)
+    if arguments.command == "node":
+        return {**entry, "extents": extents(node)}
     raise DriverError(f"unknown command {arguments.command}")
 
 
@@ -227,7 +260,8 @@ def parser() -> argparse.ArgumentParser:
     tree = commands.add_parser("tree", help="the application's tree, one node per line")
     tree.add_argument("--all", action="store_true", help="nodes not showing too")
     for name, help_text in (("find", "nodes showing that match"), ("wait", "wait until a node shows (or goes)"),
-                            ("click", "wait for one node, then run its action")):
+                            ("click", "wait for one node, then run its action"),
+                            ("node", "wait for one node, then describe it with its place in its window")):
         command = commands.add_parser(name, help=help_text)
         command.add_argument("--name", help="exact accessible name")
         command.add_argument("--pattern", help="regular expression searched in the name")
@@ -236,8 +270,11 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
         if name == "wait":
             command.add_argument("--gone", action="store_true")
-        if name == "click":
+        if name in ("click", "node"):
             command.add_argument("--index", type=int)
+        if name == "click":
+            command.add_argument("--settle", type=float, default=0.0,
+                                 help="seconds the node must stand before the click")
     return root
 
 

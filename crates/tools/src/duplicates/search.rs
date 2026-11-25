@@ -95,11 +95,12 @@ pub struct SearchOptions {
     pub exclusions: Exclusions,
 }
 
-/// What a search has done so far, step by step.
+/// What a search has done so far, step by step; the files listed, at every
+/// step, are [`DuplicateSearch::files_listed`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Progress {
     /// Its folders are being listed.
-    Listing { files: u64 },
+    Listing,
     /// The first and last bytes of the files of one size are being read.
     Ends { read: u64, to_read: u64 },
     /// The whole contents of the files alike so far are being read; a file
@@ -214,14 +215,18 @@ impl DuplicateSearch {
         self.searching.wait(timeout)
     }
 
+    /// The files listed so far: all of them once the listing is over.
+    #[must_use]
+    pub fn files_listed(&self) -> u64 {
+        self.searching.counts().listed.files.load(Ordering::Relaxed)
+    }
+
     #[must_use]
     pub fn progress(&self) -> Progress {
         let counts = self.searching.counts();
         let step = *counts.step.lock().unwrap_or_else(PoisonError::into_inner);
         match step {
-            Step::Listing => Progress::Listing {
-                files: counts.listed.files.load(Ordering::Relaxed),
-            },
+            Step::Listing => Progress::Listing,
             Step::Ends { to_read } => Progress::Ends {
                 read: counts.ends_read.load(Ordering::Relaxed),
                 to_read,

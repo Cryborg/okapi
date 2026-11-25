@@ -358,18 +358,20 @@ class Bench:
         self.machine.scroll_at(x, y, steps)
         self.log(f"scrolled {steps} at {x}, {y}")
 
-    def set_elevation(self, answer: Elevation) -> None:
-        """A polkit rule of this machine alone, for the helper's action and the test account."""
+    def set_elevation(self, answer: Elevation, actions: tuple[str, ...] = (config.POLKIT_ACTION,)) -> None:
+        """A polkit rule of this machine alone, for the test account and
+        `actions` (the helper's by default, `config.UNINSTALL_ACTIONS` for
+        PackageKit, snapd and flatpak); it replaces the previous one."""
         rule = (
             "polkit.addRule(function (action, subject) {\n"
-            f"    if (action.id == {json.dumps(config.POLKIT_ACTION)} && subject.user == "
+            f"    if ({json.dumps(list(actions))}.indexOf(action.id) >= 0 && subject.user == "
             f"{json.dumps(self.accounts.admin.name)}) {{\n"
             f"        return {answer.value};\n"
             "    }\n"
             "});\n"
         )
         self.root(f"cat > {shlex.quote(config.GUEST_POLKIT_RULE)} <<'EOF'\n{rule}EOF")
-        self.log(f"polkit answers the helper's action: {answer.name}")
+        self.log(f"polkit answers {', '.join(actions)}: {answer.name}")
 
     def elevation_by_policy(self) -> None:
         """No rule of this machine: the policy Okapi installs answers alone

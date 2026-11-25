@@ -1,7 +1,7 @@
 """Bench: what the scenarios share outside the interface, each tried once.
 
 Exit codes and outputs kept apart, the second account, Okapi's store, the
-CLI, polkit's refusal, FAT and bind mounts, a package and an APT repository,
+CLI, polkit's refusal, FAT and bind mounts, packages and an APT repository, a local snap,
 a browser holding its profiles, then pam_tmpdir after a new session.
 """
 
@@ -83,6 +83,27 @@ def packages(bench: Bench) -> None:
     upgradable = bench.root("apt list --upgradable 2>/dev/null")
     bench.check(f"{second.name}/" in upgradable and second.version in upgradable,
                 f"APT offers {second.name} {second.version} from the local repository")
+    dependent = common.Package("okapi-vm-dependent", application=False, hidden_launchers=("okapi-vm-hidden",),
+                               fields=(("Depends", first.name), ("Section", "metapackages")))
+    common.build_deb(bench, dependent)
+    common.install_deb(bench, dependent)
+    bench.check(common.deb_installed(bench, dependent.name)
+                and first.name in bench.root(f"dpkg-query --show --showformat='${{Depends}}' {dependent.name}"),
+                f"{dependent.name} is installed and depends on {first.name}")
+    bench.check("NoDisplay=true" in bench.root("cat /usr/share/applications/okapi-vm-hidden.desktop"),
+                "a package can carry a hidden launcher")
+
+
+def snaps(bench: Bench) -> None:
+    snap = common.Snap("okapi-vm-snap")
+    common.build_snap(bench, snap)
+    common.install_snap(bench, snap)
+    common.install_snap(bench, snap)
+    revisions = bench.root("snap list --all okapi-vm-snap")
+    bench.check(common.snap_installed(bench, snap.name) and "x1" in revisions and "x2" in revisions,
+                "a local snap installs, twice as two revisions, without the store")
+    bench.check(bench.root("ls /var/lib/snapd/desktop/applications").count(f"{snap.name}_{snap.name}.desktop") == 1,
+                "the snap's launcher is exported")
 
 
 def browser(bench: Bench) -> None:
@@ -113,5 +134,6 @@ def run(bench: Bench) -> None:
     refused_elevation(bench)
     mounts(bench)
     packages(bench)
+    snaps(bench)
     browser(bench)
     private_temporary(bench)

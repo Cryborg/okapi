@@ -11,11 +11,13 @@ from dataclasses import dataclass
 from . import config
 from .bench import ROOT, Bench, Elevation, Outcome, ScenarioFailure
 
-__all__ = ["ROOT", "Elevation", "Files", "Outcome", "Package", "bind_mount", "build_deb", "check_gone", "check_kept",
-           "cli", "cli_json", "close_fake_browser", "enable_pam_tmpdir", "expand_home", "helper", "helper_answer",
-           "install_deb", "journal", "journal_text", "last_deletions", "last_receipt", "mount_fat",
-           "open_fake_browser", "open_screen", "plant", "present", "publish_apt_repository", "read_store",
-           "shell_path", "store_path", "trashed", "unmount", "write_settings", "write_store", "write_user_dirs"]
+__all__ = ["ROOT", "WAITING_PROGRAM", "Elevation", "Files", "Outcome", "Package", "Snap", "bind_mount", "build_deb",
+           "build_snap", "check_gone", "check_kept", "cli", "cli_json", "close_fake_browser", "deb_installed",
+           "enable_pam_tmpdir", "expand_home", "helper", "helper_answer", "install_deb", "install_snap",
+           "install_snap_base", "journal", "journal_text", "last_deletions", "last_receipt", "launcher", "mount_fat",
+           "open_fake_browser", "open_screen", "pack_snap", "plant", "present", "publish_apt_repository",
+           "read_store", "shell_path", "snap_installed", "store_path", "trashed", "unmount", "write_files",
+           "write_settings", "write_store", "write_user_dirs"]
 
 HOME_PREFIX = "~/"
 SELECTED = "selected"
@@ -55,6 +57,12 @@ APT_GNUPG = "/root/.okapi-vm-gnupg"
 APT_KEY_NAME = "okapi-vm <okapi-vm@localhost>"
 APT_KEYRING = "/etc/apt/keyrings/okapi-vm.gpg"
 APT_SOURCE = "/etc/apt/sources.list.d/okapi-vm.list"
+# What a package or a snap of the bench runs: it waits until stopped.
+WAITING_PROGRAM = "#!/bin/sh\nexec sleep infinity\n"
+SNAP_BASE = "okapi-vm-base"
+# What snap-confine mounts the host's over, or creates, in an application's base.
+SNAP_BASE_FOLDERS = ("bin", "dev", "etc", "home", "lib", "lib64", "media", "mnt", "opt", "proc", "root", "run",
+                     "snap", "srv", "sys", "tmp", "usr", "var")
 FAKE_BROWSER_UNIT = "okapi-vm-browser"
 FAKE_BROWSER_STUBBORN = "--stubborn"
 FAKE_BROWSER_STUBBORN_KILL = "SIGKILL"
@@ -302,46 +310,144 @@ def unmount(bench: Bench, mountpoint: str) -> None:
     bench.log(f"{mountpoint} unmounted")
 
 
+def launcher(name: str, program: str, *, hidden: bool = False) -> str:
+    """A `.desktop` launcher of `program`, listed in the menu unless `hidden`."""
+    return (f"[Desktop Entry]\nType=Application\nName={name}\nExec={program}\n"
+            + ("NoDisplay=true\n" if hidden else ""))
+
+
+def write_files(files: dict[str, str], executables: Sequence[str] = ()) -> str:
+    """The root shell lines that write each of `files` (its folders made), `executables` made so."""
+    writes = [f"install -D --mode=0644 /dev/stdin {shlex.quote(path)} <<'EOF'\n{text}EOF"
+              for path, text in files.items()]
+    return "\n".join([*writes, *(shlex.join(["chmod", "0755", path]) for path in executables)])
+
+
 @dataclass(frozen=True)
 class Package:
-    """A Debian package made in the machine: an executable that waits, and a launcher if `application`."""
+    """A Debian package made in the machine: `program` as `/usr/bin/<name>`, a
+    launcher of it if `application`, a hidden launcher for each of
+    `hidden_launchers` (as Chromium has a second one), and `fields` added to its
+    control file (`Depends`, `Section`, `Priority`, `Protected`...)."""
 
     name: str
     version: str = "1.0"
     application: bool = True
+    program: str = WAITING_PROGRAM
+    hidden_launchers: tuple[str, ...] = ()
+    fields: tuple[tuple[str, str], ...] = ()
 
     @property
     def deb(self) -> str:
         return f"{PACKAGES}/{self.name}_{self.version}_all.deb"
+
+    @property
+    def executable(self) -> str:
+        return f"/usr/bin/{self.name}"
 
 
 def build_deb(bench: Bench, package: Package) -> str:
     """Builds `package` in the machine and gives the `.deb`'s path there."""
     root = f"{PACKAGES}/{package.name}_{package.version}"
     control = (f"Package: {package.name}\nVersion: {package.version}\nArchitecture: all\n"
-               f"Maintainer: okapi-vm <okapi-vm@localhost>\nDescription: {package.name}, made by the test bench\n")
+               f"Maintainer: okapi-vm <okapi-vm@localhost>\n"
+               + "".join(f"{name}: {value}\n" for name, value in package.fields)
+               + f"Description: {package.name}, made by the test bench\n")
     files = {
         f"{root}/DEBIAN/control": control,
-        f"{root}/usr/bin/{package.name}": "#!/bin/sh\nexec sleep infinity\n",
+        f"{root}{package.executable}": package.program,
     }
     if package.application:
-        files[f"{root}/usr/share/applications/{package.name}.desktop"] = (
-            f"[Desktop Entry]\nType=Application\nName={package.name}\nExec=/usr/bin/{package.name}\n"
-        )
-    writes = [f"install -D --mode=0644 /dev/stdin {shlex.quote(path)} <<'EOF'\n{text}EOF"
-              for path, text in files.items()]
+        files[f"{root}/usr/share/applications/{package.name}.desktop"] = launcher(package.name, package.executable)
+    for name in package.hidden_launchers:
+        files[f"{root}/usr/share/applications/{name}.desktop"] = launcher(name, package.executable, hidden=True)
     bench.root("\n".join([
-        *writes,
-        shlex.join(["chmod", "0755", f"{root}/usr/bin/{package.name}"]),
+        f"rm -rf -- {shlex.quote(root)}",
+        write_files(files, [f"{root}{package.executable}"]),
         shlex.join(["dpkg-deb", "--root-owner-group", "--build", root, package.deb]),
     ]))
     bench.log(f"built {package.deb}")
     return package.deb
 
 
-def install_deb(bench: Bench, package: Package) -> None:
-    bench.root(shlex.join(["apt-get", "install", "--yes", "--no-install-recommends", package.deb]))
-    bench.log(f"installed {package.name} {package.version}")
+def install_deb(bench: Bench, *packages: Package) -> None:
+    """Installs `packages`, built already, in one APT transaction: one may depend on another."""
+    bench.root(shlex.join(["apt-get", "install", "--yes", "--no-install-recommends",
+                           *(package.deb for package in packages)]))
+    bench.log(f"installed {', '.join(f'{package.name} {package.version}' for package in packages)}")
+
+
+def deb_installed(bench: Bench, name: str) -> bool:
+    """Whether dpkg holds `name` as installed (a package removed but for its configuration is not)."""
+    status = bench.root(f"dpkg-query --show --showformat='${{Status}}' {shlex.quote(name)} 2>/dev/null",
+                        check=False)
+    return status.endswith(" installed")
+
+
+@dataclass(frozen=True)
+class Snap:
+    """A strictly confined snap made in the machine, without the store: `program`
+    as its command, with a launcher if `application`. Its base is the bench's
+    own, empty, installed with it: the machine has no network for a real one."""
+
+    name: str
+    version: str = "1.0"
+    application: bool = True
+    program: str = WAITING_PROGRAM
+
+    @property
+    def file(self) -> str:
+        return f"{PACKAGES}/{self.name}_{self.version}_all.snap"
+
+
+def pack_snap(bench: Bench, name: str, version: str, snap_yaml: str, files: dict[str, str], *,
+              executables: Sequence[str] = (), folders: Sequence[str] = ()) -> str:
+    """`snap pack` of a tree of `files` and empty `folders` (paths inside the snap) under its `meta/snap.yaml`."""
+    root = f"{PACKAGES}/snap-{name}_{version}"
+    inside = {f"{root}/meta/snap.yaml": snap_yaml, **{f"{root}/{path}": text for path, text in files.items()}}
+    bench.root("\n".join([
+        f"rm -rf -- {shlex.quote(root)}",
+        write_files(inside, [f"{root}/{path}" for path in executables]),
+        *(shlex.join(["install", "-d", f"{root}/{folder}"]) for folder in folders),
+        shlex.join(["snap", "pack", root, PACKAGES]),
+    ]))
+    return f"{PACKAGES}/{name}_{version}_all.snap"
+
+
+def install_snap_base(bench: Bench) -> None:
+    """The bench's base snap, an empty tree with the folders snap-confine mounts over."""
+    if bench.root(shlex.join(["snap", "list", SNAP_BASE]), check=False).strip():
+        return
+    base = pack_snap(bench, SNAP_BASE, "1",
+                     f"name: {SNAP_BASE}\nversion: '1'\ntype: base\nsummary: base\ndescription: test bench base\n",
+                     {}, folders=SNAP_BASE_FOLDERS)
+    bench.root(shlex.join(["snap", "install", "--dangerous", base]))
+    bench.log(f"installed the base snap {SNAP_BASE}")
+
+
+def build_snap(bench: Bench, snap: Snap) -> str:
+    """Packs `snap` in the machine and gives the `.snap`'s path there."""
+    apps = (f"apps:\n  {snap.name}:\n    command: bin/{snap.name}\n    plugs: [desktop]\n"
+            if snap.application else "")
+    snap_yaml = (f"name: {snap.name}\nversion: '{snap.version}'\nbase: {SNAP_BASE}\nsummary: {snap.name}\n"
+                 f"description: {snap.name}, made by the test bench\nconfinement: strict\n{apps}")
+    files = {f"bin/{snap.name}": snap.program}
+    if snap.application:
+        files[f"meta/gui/{snap.name}.desktop"] = launcher(snap.name, snap.name)
+    built = pack_snap(bench, snap.name, snap.version, snap_yaml, files, executables=[f"bin/{snap.name}"])
+    bench.log(f"built {built}")
+    return built
+
+
+def install_snap(bench: Bench, snap: Snap) -> None:
+    """Installs `snap`, built already, unsigned: each install is a new local revision (`x1`, `x2`...)."""
+    install_snap_base(bench)
+    bench.root(shlex.join(["snap", "install", "--dangerous", snap.file]))
+    bench.log(f"installed the snap {snap.name} {snap.version}")
+
+
+def snap_installed(bench: Bench, name: str) -> bool:
+    return bench.execute(ROOT, shlex.join(["snap", "list", name])).code == 0
 
 
 def publish_apt_repository(bench: Bench, *packages: Package) -> None:

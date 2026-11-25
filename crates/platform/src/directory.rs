@@ -12,10 +12,10 @@ mod system;
 #[path = "directory/unsupported.rs"]
 mod system;
 
-pub(crate) use system::link_refused;
 #[cfg(target_os = "linux")]
 pub use system::open_path;
 pub use system::{Directory, mount_root, out_of_descriptors, tells_mount_roots};
+pub(crate) use system::{Passage, link_refused};
 
 /// Whether [`Directory`] works on this system. Elsewhere it cannot be opened
 /// ([`std::io::ErrorKind::Unsupported`]): on macOS the scan works but cleaning
@@ -153,7 +153,7 @@ pub fn reach_with(
     for (index, name) in below.iter().enumerate() {
         path.push(name);
         let allowed = |status: &EntryStatus| !status.other_mount(device) && accepts(index, status);
-        let Some(status) = judged(&directory, name, &path, allowed)? else {
+        let Some(status) = judged(directory.status_of(name), name, &path, allowed)? else {
             return Ok(None);
         };
         let Some((entered, _)) = entered(&directory, name, status.identity, Some(&path))? else {
@@ -169,24 +169,27 @@ pub fn reach_with(
 
 /// Opens the folder at `path` (absolute, canonical) from the filesystem root,
 /// one name at a time, never through a link, each folder checked to be the
-/// one read before opening; `Ok(None)` when one is gone. No identity vouches
-/// for the folder reached: the caller checks what it opens in it.
+/// one read before opening; `Ok(None)` when one is gone. The folders on the
+/// way are only crossed ([`Passage`]), as the system resolves a path: they
+/// need the right to search, not to read (`/tmp/user`, mode 711 under
+/// `pam_tmpdir`); the folder reached is opened for listing. No identity vouches
+/// for it: the caller checks what it opens in it.
 ///
 /// # Errors
 ///
 /// [`Unreached::Changed`] when `path` is not absolute or holds `..`, or
 /// anything on the way is no longer a folder, never for a folder gone;
-/// [`Unreached::Io`] for the system's refusal.
+/// [`Unreached::Io`] for the system's refusal (a folder on the way that
+/// cannot be searched is told by the entry read in it).
 pub fn reach_path(path: &Path) -> Result<Option<Directory>, Unreached> {
     let mut components = path.components();
     if components.next() != Some(Component::RootDir) {
         tracing::debug!(path = ?path, "not an absolute path: not reached");
         return Err(Unreached::Changed);
     }
-    let filesystem_root = Path::new(FILESYSTEM_ROOT);
-    let mut directory = Directory::open(filesystem_root)
-        .map_err(|error| failed(filesystem_root.as_os_str(), Some(filesystem_root), error))?;
     let mut walked = PathBuf::from(FILESYSTEM_ROOT);
+    let mut passage =
+        Passage::root().map_err(|error| failed(walked.as_os_str(), Some(&walked), error))?;
     for component in components {
         // A canonical path holds no `..` (`components` drops a `.`).
         let Component::Normal(name) = component else {
@@ -194,16 +197,32 @@ pub fn reach_path(path: &Path) -> Result<Option<Directory>, Unreached> {
             return Err(Unreached::Changed);
         };
         walked.push(name);
-        let Some(status) = judged(&directory, name, &walked, |_| true)? else {
+        let Some(status) = judged(passage.status_of(name), name, &walked, |_| true)? else {
             return Ok(None);
         };
         // From `/`, a folder on the way may well be a mount (`/home`, `/tmp`).
-        let Some((entered, _)) = opened(&directory, name, status.identity, Some(&walked))? else {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "invariant 3: the way down from `/`, checked by identity"
+        )]
+        let crossing = passage.pass(name);
+        let Some((crossed, _)) = opened(
+            crossing,
+            Passage::status,
+            name,
+            status.identity,
+            Some(&walked),
+        )?
+        else {
             return Ok(None);
         };
-        directory = entered;
+        passage = crossed;
     }
-    Ok(Some(directory))
+    let name = walked.file_name().unwrap_or(walked.as_os_str());
+    match passage.read() {
+        Ok(directory) => Ok(Some(directory)),
+        Err(error) => unreached(name, Some(&walked), error),
+    }
 }
 
 /// Opens the folder `name` of `parent`, which must still be the folder
@@ -212,7 +231,8 @@ pub fn reach_path(path: &Path) -> Result<Option<Directory>, Unreached> {
 /// identity once opened, and refused when it has become the root of a mount
 /// since it was read; `Ok(None)` when it is gone. The one way a walk below its
 /// root enters a folder from its parent ([`reach_path`], which crosses mounts
-/// on its way down from `/`, opens through the same code, mounts allowed).
+/// on its way down from `/`, checks each folder crossed with the same code,
+/// mounts allowed).
 ///
 /// The caller has read the entry and judged it a folder of its walk's mount
 /// ([`EntryStatus::other_mount`]). This closes the race between that reading
@@ -241,7 +261,14 @@ fn entered(
     expected: FileIdentity,
     path: Option<&Path>,
 ) -> Result<Option<(Directory, EntryStatus)>, Unreached> {
-    let Some((directory, status)) = opened(parent, name, expected, path)? else {
+    // Swapped for a link meanwhile, it fails to open.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "invariant 3: the opening `enter` stands on"
+    )]
+    let opening = parent.open_child(name);
+    let Some((directory, status)) = opened(opening, Directory::status, name, expected, path)?
+    else {
         return Ok(None);
     };
     if status.mount_root == Some(true) {
@@ -256,15 +283,15 @@ fn entered(
     Ok(Some((directory, status)))
 }
 
-/// The status of the folder `name` of `parent`, at `path`, read without
-/// following it and accepted by `allowed`; `None` when it is gone.
+/// The status of the folder `name`, at `path`, as `read` without following
+/// it, accepted by `allowed`; `None` when it is gone.
 fn judged(
-    parent: &Directory,
+    read: io::Result<EntryStatus>,
     name: &OsStr,
     path: &Path,
     allowed: impl Fn(&EntryStatus) -> bool,
 ) -> Result<Option<EntryStatus>, Unreached> {
-    let status = match parent.status_of(name) {
+    let status = match read {
         Ok(status) => status,
         Err(error) => return unreached(name, Some(path), error),
     };
@@ -282,28 +309,22 @@ fn judged(
     Ok(Some(status))
 }
 
-/// Opens the folder `name` of `parent`, still `expected` once opened, a
-/// mount or not; `None` when it is gone.
-fn opened(
-    parent: &Directory,
+/// The folder `name` as `opening` opened it, whose status, as `read_status` reads it, must still be
+/// `expected`, a mount or not; `None` when it is gone.
+fn opened<T>(
+    opening: io::Result<T>,
+    read_status: fn(&T) -> io::Result<EntryStatus>,
     name: &OsStr,
     expected: FileIdentity,
     path: Option<&Path>,
-) -> Result<Option<(Directory, EntryStatus)>, Unreached> {
-    // Swapped for a link meanwhile, it fails to open.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "invariant 3: the opening `enter` stands on"
-    )]
-    let directory = match parent.open_child(name) {
-        Ok(directory) => directory,
+) -> Result<Option<(T, EntryStatus)>, Unreached> {
+    let folder = match opening {
+        Ok(folder) => folder,
         Err(error) => return unreached(name, path, error),
     };
-    let status = directory
-        .status()
-        .map_err(|error| failed(name, path, error))?;
+    let status = read_status(&folder).map_err(|error| failed(name, path, error))?;
     if status.identity == expected {
-        Ok(Some((directory, status)))
+        Ok(Some((folder, status)))
     } else {
         tracing::debug!(
             name = ?name,
@@ -729,6 +750,132 @@ mod tests {
                 reach_path(&base.join("real/../real")),
                 Err(Unreached::Changed)
             ));
+        }
+
+        /// `sealed` in a fresh folder, searchable and not readable, even by
+        /// its owner, as root's `/tmp/user` (711) is to a user under
+        /// `pam_tmpdir`; it holds `inner/deeper`. Opened again on drop, or it
+        /// would outlive the test.
+        struct Sealed {
+            base: std::path::PathBuf,
+            _temporary: tempfile::TempDir,
+        }
+
+        impl Sealed {
+            fn new() -> Self {
+                use std::os::unix::fs::PermissionsExt;
+
+                let temporary = tempfile::tempdir().unwrap();
+                let base = fs::canonicalize(temporary.path()).unwrap();
+                fs::create_dir_all(base.join("sealed/inner/deeper")).unwrap();
+                fs::set_permissions(base.join("sealed"), fs::Permissions::from_mode(0o111))
+                    .unwrap();
+                Self {
+                    base,
+                    _temporary: temporary,
+                }
+            }
+        }
+
+        impl Drop for Sealed {
+            fn drop(&mut self) {
+                use std::os::unix::fs::PermissionsExt;
+
+                let opened = fs::Permissions::from_mode(0o755);
+                fs::set_permissions(self.base.join("sealed"), opened).unwrap();
+            }
+        }
+
+        #[test]
+        fn a_folder_only_searchable_on_the_way_is_crossed() {
+            let sealed = Sealed::new();
+            let inner = sealed.base.join("sealed/inner");
+            let reached = reach_path(&inner).unwrap().unwrap();
+            assert_eq!(reached.status().unwrap().identity, identity(&inner));
+            assert_eq!(reached.names().unwrap(), [OsStr::new("deeper")]);
+            let names = [OsStr::new("deeper")];
+            let below = reach_with(&inner, identity(&inner), &names, |_, _| true)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                below.directory.status().unwrap().identity,
+                identity(&inner.join("deeper"))
+            );
+        }
+
+        #[test]
+        fn a_folder_reached_last_is_read_never_only_crossed() {
+            if crate::running_as_root() {
+                eprintln!("skipped: root reads every folder");
+                return;
+            }
+            let sealed = Sealed::new();
+            let reached = reach_path(&sealed.base.join("sealed"));
+            assert!(
+                matches!(
+                    reached,
+                    Err(Unreached::Io(ref error))
+                        if error.kind() == std::io::ErrorKind::PermissionDenied
+                ),
+                "{reached:?}"
+            );
+        }
+
+        #[test]
+        fn a_folder_on_the_way_that_cannot_be_searched_is_a_refusal() {
+            use std::os::unix::fs::PermissionsExt;
+
+            if crate::running_as_root() {
+                eprintln!("skipped: root searches every folder");
+                return;
+            }
+            let temporary = tempfile::tempdir().unwrap();
+            let base = fs::canonicalize(temporary.path()).unwrap();
+            fs::create_dir_all(base.join("closed/inner")).unwrap();
+            fs::set_permissions(base.join("closed"), fs::Permissions::from_mode(0o644)).unwrap();
+            let reached = reach_path(&base.join("closed/inner"));
+            fs::set_permissions(base.join("closed"), fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(
+                matches!(
+                    reached,
+                    Err(Unreached::Io(ref error))
+                        if error.kind() == std::io::ErrorKind::PermissionDenied
+                ),
+                "{reached:?}"
+            );
+        }
+
+        #[test]
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the crossing `reach_path` checks, tested alone"
+        )]
+        fn a_folder_crossed_is_only_the_one_read() {
+            let temporary = tempfile::tempdir().unwrap();
+            let base = fs::canonicalize(temporary.path()).unwrap();
+            fs::create_dir_all(base.join("a")).unwrap();
+            fs::create_dir_all(base.join("b")).unwrap();
+            let mut passage = Passage::root().unwrap();
+            for name in base.strip_prefix(FILESYSTEM_ROOT).unwrap() {
+                passage = passage.pass(name).unwrap();
+            }
+            let name = OsStr::new("a");
+            let crossed = opened(
+                passage.pass(name),
+                Passage::status,
+                name,
+                identity(&base.join("a")),
+                None,
+            );
+            assert!(matches!(crossed, Ok(Some(_))), "{crossed:?}");
+            let other = opened(
+                passage.pass(name),
+                Passage::status,
+                name,
+                identity(&base.join("b")),
+                None,
+            );
+            assert!(matches!(other, Err(Unreached::Changed)), "{other:?}");
         }
 
         #[test]

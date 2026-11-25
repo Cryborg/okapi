@@ -11,10 +11,10 @@ from dataclasses import dataclass
 from . import config
 from .bench import ROOT, Bench, Elevation, Outcome, ScenarioFailure
 
-__all__ = ["ROOT", "Elevation", "Files", "Outcome", "Package", "bind_mount", "build_deb", "check_gone", "check_kept",
-           "cli", "cli_json", "close_fake_browser", "enable_pam_tmpdir", "install_deb", "last_receipt", "mount_fat",
-           "open_fake_browser", "open_screen", "plant", "present", "publish_apt_repository", "read_store",
-           "shell_path", "store_path", "unmount", "write_store"]
+__all__ = ["ROOT", "Elevation", "Files", "Outcome", "Package", "app_journal", "bind_mount", "build_deb", "check_gone",
+           "check_kept", "cli", "cli_json", "close_fake_browser", "enable_pam_tmpdir", "helper", "helper_answer",
+           "install_deb", "last_receipt", "mount_fat", "open_fake_browser", "open_screen", "plant", "present",
+           "publish_apt_repository", "read_store", "shell_path", "store_path", "unmount", "write_store"]
 
 HOME_PREFIX = "~/"
 SELECTED = "selected"
@@ -23,6 +23,9 @@ JSON_LINES = ".jsonl"
 HISTORY = "history.jsonl"
 CONFIG_DIRECTORY = "~/.config/okapi"
 STATE_DIRECTORY = "~/.local/state/okapi"
+APP_JOURNAL = "okapi-app.log"
+# Longer than any request the helper answers in the machine.
+HELPER_INPUT_SECONDS = 600
 # As `okapi-store` places them (crates/store/src/lib.rs).
 STORE_FILES = {
     "settings.json": CONFIG_DIRECTORY,
@@ -172,6 +175,34 @@ def cli_json(bench: Bench, *arguments: str, account: str | None = None, code: in
     if run.code != code:
         raise ScenarioFailure(f"okapi exited {run.code}, not {code}: {run.stderr.strip()}")
     return json.loads(run.stdout)
+
+
+def helper(bench: Bench, request: str | dict, *, account: str = ROOT) -> Outcome:
+    """Runs the installed helper as `account` (root by default) on one request
+    line, as the interface does: its input held open until it ends, since its
+    end cancels the helper. Measured when the coverage is."""
+    line = request if isinstance(request, str) else json.dumps(request)
+    environment = [f"{name}={value}" for name, value in bench.okapi_environment().items()]
+    program = shlex.join(["env", *environment, config.helper_paths().helper])
+    # The feeder's `sleep` is ended once the helper is: never left behind.
+    feeder = f"printf '%s\\n' {shlex.quote(line)}; exec sleep {HELPER_INPUT_SECONDS} 2>/dev/null"
+    outcome = bench.execute(account, f"{program} < <({feeder}); code=$?; kill $! 2>/dev/null; exit $code")
+    bench.log(f"helper as {account}: exit {outcome.code}")
+    return outcome
+
+
+def helper_answer(outcome: Outcome) -> dict:
+    """The JSON document the helper wrote on its standard output."""
+    try:
+        return json.loads(outcome.stdout)
+    except json.JSONDecodeError as error:
+        raise ScenarioFailure(f"the helper wrote no JSON (exit {outcome.code}): {outcome.stdout[:200]!r}") from error
+
+
+def app_journal(bench: Bench, account: str | None = None) -> str:
+    """The interface's journal (`okapi-app.log`), the helper's traces included; empty when absent."""
+    path = shell_path(f"{STATE_DIRECTORY}/{APP_JOURNAL}")
+    return bench.run_as(account or bench.accounts.admin.name, f"if [ -e {path} ]; then cat -- {path}; fi")
 
 
 def enable_pam_tmpdir(bench: Bench) -> None:

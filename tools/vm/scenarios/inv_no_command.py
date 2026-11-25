@@ -2,12 +2,12 @@
 
 auditd records every `execve` of the machine while the interface scans,
 copies the uv and pnpm commands the user runs by hand, gets the rights,
-cleans the crash reports and vacuums systemd's journal, then while the CLI
-cleans. Okapi's processes, followed from their own start through their
-children, run pkexec with its fixed arguments and the helper, nothing else
+cleans the crash reports, vacuums systemd's journal and has Slint's logo
+clicked, then while the CLI cleans. Okapi's processes, followed from their own
+start through their children, run pkexec with its fixed arguments and the
+helper, nothing else, the window's frame and the logo's link included
 (INV-401); the helper starts nothing, the journal vacuumed without any
-`journalctl` (INV-402); uv and pnpm are never run (INV-403). Known bug, checked
-last: the window decorations winit draws on Wayland run commands of their own.
+`journalctl` (INV-402); uv and pnpm are never run (INV-403).
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from okapivm import common, config
 from okapivm.bench import Bench
 
-TAGS = ["invariants", "admin", "helper", "audit", "known-bug"]
+TAGS = ["invariants", "admin", "helper", "audit"]
 
 # Beyond the 30 days of the journal's vacuum and of the temporary folders' rules.
 AGING_SECONDS = 31 * 24 * 60 * 60
@@ -142,6 +142,9 @@ def run(bench: Bench) -> None:
     common.check_groups(bench, *GROUPS)
     common.clean(bench)
     bench.screenshot("recu")
+    common.open_screen(bench, "À propos")
+    bench.click_at(*bench.ui.center(bench.ui.node("#MadeWithSlint")))
+    bench.screenshot("a-propos")
     bench.stop_app()
     for_the_cli = common.Files(user, ["~/.cache/thumbnails/normal/okapi-vm-cli.png"], SIZE)
     common.plant(bench, for_the_cli, age_seconds=AGING_SECONDS)
@@ -182,6 +185,5 @@ def run(bench: Bench) -> None:
     bench.log(f"last receipt: {receipt}")
 
     others = [record for record in run_below if record not in pkexecs and record not in helpers]
-    bench.check(not others, "INV-401: nothing else is run below Okapi; known bug: the window decorations winit "
-                            "draws on Wayland (sctk-adwaita) run dbus-send, gsettings and fc-match "
-                            f"({[str(record) for record in others]})")
+    bench.check(not others, "INV-401: nothing else is run below Okapi, neither by the window's frame nor by "
+                            f"Slint's logo ({[str(record) for record in others]})")

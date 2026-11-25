@@ -2615,6 +2615,18 @@ pub mod tests {
             .collect()
     }
 
+    /// Whether a box in the window, whichever, is said enabled.
+    pub fn any_box_enabled(window: &ui::AppWindow) -> bool {
+        use i_slint_backend_testing::ElementRoot as _;
+        window
+            .root_element()
+            .query_descendants()
+            .find_all()
+            .into_iter()
+            .filter(|element| element.accessible_role() == Some(AccessibleRole::Checkbox))
+            .any(|element| element.accessible_enabled() == Some(true))
+    }
+
     pub fn shows_a_text_starting(window: &ui::AppWindow, start: &str) -> bool {
         ElementHandle::find_by_element_type_name(window, "Text").any(|text| {
             text.accessible_label()

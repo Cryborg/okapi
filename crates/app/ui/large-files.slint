@@ -682,7 +682,7 @@ component BigLine inherits Rectangle {
     accessible-label: BigWords.spoken(root.line);
     accessible-checkable: true;
     accessible-checked: root.line.checked;
-    accessible-enabled: (root.line.checked || root.line.why == LargeWhy.none) && !LargeFiles.trashing;
+    accessible-enabled: (root.line.checked || root.line.why == LargeWhy.none) && !LargeFiles.frozen;
     accessible-item-selectable: true;
     accessible-item-selected: LargeFiles.current == root.index;
     accessible-action-default => {
@@ -713,7 +713,7 @@ component BigLine inherits Rectangle {
             width: Theme.icon-box;
             CheckMark {
                 checked: root.line.checked;
-                enabled: (root.line.checked || root.line.why == LargeWhy.none) && !LargeFiles.trashing;
+                enabled: (root.line.checked || root.line.why == LargeWhy.none) && !LargeFiles.frozen;
             }
             check-touch := TouchArea {
                 clicked => {
@@ -867,7 +867,7 @@ component BigList inherits FocusScope {
             root.move(LargeFiles.rows.length - 1);
             return accept;
         }
-        if event.text == Key.Space && !event.repeat && !LargeFiles.trashing {
+        if event.text == Key.Space && !event.repeat && !LargeFiles.frozen {
             LargeFiles.toggle(LargeFiles.current);
             return accept;
         }
@@ -898,7 +898,7 @@ component BigList inherits FocusScope {
                 text: @tr("Modifié");
                 applied: LargeFiles.sort == LargeSort.modified;
                 descending: LargeFiles.descending;
-                enabled: !LargeFiles.trashing;
+                enabled: !LargeFiles.frozen;
                 sorted => {
                     LargeFiles.sort-by(LargeSort.modified);
                 }
@@ -913,7 +913,7 @@ component BigList inherits FocusScope {
                 applied: LargeFiles.sort == LargeSort.size;
                 descending: LargeFiles.descending;
                 trailing: true;
-                enabled: !LargeFiles.trashing;
+                enabled: !LargeFiles.frozen;
                 sorted => {
                     LargeFiles.sort-by(LargeSort.size);
                 }
@@ -1207,7 +1207,7 @@ component BigResult inherits VerticalLayout {
                 text: @tr("Changer les dossiers");
                 icon: @image-url("../assets/icons/folder.svg");
                 kind: ButtonKind.ghost;
-                enabled: !LargeFiles.trashing;
+                enabled: !LargeFiles.frozen;
                 cross-axis-self-alignment: center;
                 clicked => {
                     LargeFiles.change();
@@ -1216,7 +1216,7 @@ component BigResult inherits VerticalLayout {
             ActionButton {
                 text: @tr("Rechercher à nouveau");
                 icon: @image-url("../assets/icons/rotate-ccw.svg");
-                enabled: !LargeFiles.trashing;
+                enabled: !LargeFiles.frozen;
                 cross-axis-self-alignment: center;
                 clicked => {
                     LargeFiles.again();
@@ -1236,7 +1236,7 @@ component BigResult inherits VerticalLayout {
                 expanded: size-menu.is-open;
                 label: @tr("Taille minimale");
                 set: LargeFiles.floor >= 0;
-                enabled: !LargeFiles.trashing;
+                enabled: !LargeFiles.frozen;
                 opened => {
                     root.place-menu(self.absolute-position.y, self.absolute-position.x, self.height);
                     size-menu.show();
@@ -1247,7 +1247,7 @@ component BigResult inherits VerticalLayout {
                 expanded: kind-menu.is-open;
                 label: @tr("Type");
                 set: LargeFiles.kind >= 0;
-                enabled: !LargeFiles.trashing;
+                enabled: !LargeFiles.frozen;
                 opened => {
                     root.place-menu(self.absolute-position.y, self.absolute-position.x, self.height);
                     kind-menu.show();
@@ -1258,7 +1258,7 @@ component BigResult inherits VerticalLayout {
                 expanded: age-menu.is-open;
                 label: @tr("Date de modification");
                 set: LargeFiles.age >= 0;
-                enabled: !LargeFiles.trashing;
+                enabled: !LargeFiles.frozen;
                 opened => {
                     root.place-menu(self.absolute-position.y, self.absolute-position.x, self.height);
                     age-menu.show();
@@ -1269,7 +1269,7 @@ component BigResult inherits VerticalLayout {
                 icon: @image-url("../assets/icons/x.svg");
                 kind: ButtonKind.ghost;
                 compact: true;
-                enabled: !LargeFiles.trashing;
+                enabled: !LargeFiles.frozen;
                 cross-axis-self-alignment: center;
                 clicked => {
                     // It goes with the filters: the keyboard's focus, on it,
@@ -1287,7 +1287,7 @@ component BigResult inherits VerticalLayout {
             ActionButton {
                 text: @tr("Tout désélectionner");
                 kind: ButtonKind.ghost;
-                enabled: LargeFiles.chosen-files > 0 && !LargeFiles.trashing;
+                enabled: LargeFiles.chosen-files > 0 && !LargeFiles.frozen;
                 cross-axis-self-alignment: center;
                 clicked => {
                     LargeFiles.deselect-all();
@@ -1313,7 +1313,7 @@ component BigResult inherits VerticalLayout {
             text: @tr("Le gros fichier trouvé est toujours là : changez la taille, le type ou la date pour le revoir." | "Les {n} gros fichiers trouvés sont toujours là : changez la taille, le type ou la date pour les revoir." % LargeFiles.files);
             action: @tr("Effacer les filtres");
             action-icon: @image-url("../assets/icons/x.svg");
-            enabled: !LargeFiles.trashing;
+            enabled: !LargeFiles.frozen;
             acted => {
                 LargeFiles.clear-filters();
             }
@@ -1373,7 +1373,7 @@ component BigResult inherits VerticalLayout {
             icon: @image-url("../assets/icons/trash-2.svg");
             kind: ButtonKind.primary;
             large: true;
-            enabled: LargeFiles.chosen-files > 0 && !LargeFiles.trashing;
+            enabled: LargeFiles.chosen-files > 0 && !LargeFiles.frozen;
             cross-axis-self-alignment: center;
             clicked => {
                 LargeFiles.trash();

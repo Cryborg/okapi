@@ -15,7 +15,9 @@ use slint::Model as _;
 use slint::platform::Key;
 
 use super::*;
-use crate::cleaner::tests::{defaults, labels_read, press, seams_never_scanning, shows};
+use crate::cleaner::tests::{
+    any_box_enabled, button, defaults, labels_read, press, seams_never_scanning, shows,
+};
 use crate::cleaner::{Problem, Seams};
 use crate::dashboard::tests::inert;
 
@@ -638,14 +640,25 @@ fn the_confirmation_waits_on_cancel_and_escape_closes_it() {
     large(&window).invoke_trash();
     assert!(!large(&window).get_confirming());
     large(&window).invoke_toggle(0);
+    let said_enabled = || {
+        (
+            any_box_enabled(&window),
+            button(&window, "Rechercher à nouveau").accessible_enabled() == Some(true),
+        )
+    };
+    assert_eq!(said_enabled(), (true, true));
     large(&window).invoke_trash();
     slint::platform::update_timers_and_animations();
     assert!(large(&window).get_confirming());
     assert!(shows(&window, "Mettre 1 fichier à la corbeille ?"));
+    // Behind it, frozen by Rust: the boxes and « Rechercher à nouveau »
+    // are said disabled.
+    assert_eq!(said_enabled(), (false, false));
     // Two Enter in a row never move a file: the focus is on « Annuler ».
     press(&window, Key::Return);
     slint::platform::update_timers_and_animations();
     assert!(!large(&window).get_confirming());
+    assert_eq!(said_enabled(), (true, true));
     assert!(!large(&window).get_trashing());
     large(&window).invoke_trash();
     slint::platform::update_timers_and_animations();

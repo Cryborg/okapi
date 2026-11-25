@@ -114,6 +114,9 @@ export global LargeFiles {
     // Of the files counted, not named, those the filters hide.
     in property <int> confirmed-more-hidden;
     in property <bool> trashing;
+    // Rust changes nothing behind a confirmation or during a move: the
+    // lines and buttons are told disabled, to a screen reader too.
+    out property <bool> frozen: self.confirming || self.trashing;
     in property <bool> opening;
     // Of the file with the focus, asked for: another line chosen, it is no
     // more.

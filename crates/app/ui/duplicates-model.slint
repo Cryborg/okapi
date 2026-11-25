@@ -93,6 +93,9 @@ export global Duplicates {
     // Opened and closed by Rust, which keeps what it confirms.
     in property <bool> confirming;
     in property <bool> trashing;
+    // Rust changes nothing behind a confirmation or during a move: the
+    // lines and buttons are told disabled, to a screen reader too.
+    out property <bool> frozen: self.confirming || self.trashing;
     in property <bool> opening;
     // Of the copy with the focus, asked for: another line chosen, it is no
     // more.

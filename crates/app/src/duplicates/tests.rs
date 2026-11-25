@@ -18,7 +18,9 @@ use okapi_platform::PersonalKind;
 use slint::Model as _;
 
 use super::*;
-use crate::cleaner::tests::{button, defaults, labels_read, press, seams_never_scanning, shows};
+use crate::cleaner::tests::{
+    any_box_enabled, button, defaults, labels_read, press, seams_never_scanning, shows,
+};
 use crate::cleaner::{Problem, Seams};
 use crate::dashboard::tests::inert;
 use crate::user_files::ReadFolders;
@@ -664,13 +666,24 @@ fn the_confirmation_waits_on_cancel_and_escape_closes_it() {
     sandbox.write("Documents/c.iso", 21, 5);
     let window = on_duplicates(seams(&sandbox, &Rc::default(), &no_exclusion(), None));
     searched(&window);
+    let said_enabled = || {
+        (
+            any_box_enabled(&window),
+            button(&window, "Rechercher à nouveau").accessible_enabled() == Some(true),
+        )
+    };
+    assert_eq!(said_enabled(), (true, true));
     duplicates(&window).invoke_trash();
     slint::platform::update_timers_and_animations();
     assert!(duplicates(&window).get_confirming());
+    // Behind it, frozen by Rust: the boxes and « Rechercher à nouveau »
+    // are said disabled.
+    assert_eq!(said_enabled(), (false, false));
     // Two Enter in a row never move a file: the focus is on « Annuler ».
     press(&window, Key::Return);
     slint::platform::update_timers_and_animations();
     assert!(!duplicates(&window).get_confirming());
+    assert_eq!(said_enabled(), (true, true));
     assert!(downloaded.exists());
     duplicates(&window).invoke_trash();
     slint::platform::update_timers_and_animations();

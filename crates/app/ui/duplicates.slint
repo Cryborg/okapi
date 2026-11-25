@@ -388,7 +388,7 @@ component TreeLine inherits Rectangle {
         accessible-description: DuplicateWords.locked(line);
         accessible-checkable: true;
         accessible-checked: line.checked;
-        accessible-enabled: (line.checked || line.checkable) && !Duplicates.trashing;
+        accessible-enabled: (line.checked || line.checkable) && !Duplicates.frozen;
         accessible-item-selectable: true;
         accessible-item-selected: Duplicates.current == root.index;
         accessible-action-default => {
@@ -441,7 +441,7 @@ component TreeLine inherits Rectangle {
             width: Theme.icon-box;
             CheckMark {
                 checked: line.checked;
-                enabled: (line.checked || line.checkable) && !Duplicates.trashing;
+                enabled: (line.checked || line.checkable) && !Duplicates.frozen;
             }
             check-touch := TouchArea {
                 clicked => {
@@ -561,7 +561,7 @@ component Tree inherits FocusScope {
             root.move(Duplicates.rows.length - 1);
             return accept;
         }
-        if event.text == Key.Space && !event.repeat && !row.is-head && !Duplicates.trashing {
+        if event.text == Key.Space && !event.repeat && !row.is-head && !Duplicates.frozen {
             Duplicates.toggle(Duplicates.current);
             return accept;
         }
@@ -881,7 +881,7 @@ component DuplicateResult inherits VerticalLayout {
                 text: @tr("Changer les dossiers");
                 icon: @image-url("../assets/icons/folder.svg");
                 kind: ButtonKind.ghost;
-                enabled: !Duplicates.trashing;
+                enabled: !Duplicates.frozen;
                 cross-axis-self-alignment: center;
                 clicked => {
                     Duplicates.change();
@@ -890,7 +890,7 @@ component DuplicateResult inherits VerticalLayout {
             ActionButton {
                 text: @tr("Rechercher à nouveau");
                 icon: @image-url("../assets/icons/rotate-ccw.svg");
-                enabled: !Duplicates.trashing;
+                enabled: !Duplicates.frozen;
                 cross-axis-self-alignment: center;
                 clicked => {
                     Duplicates.again();
@@ -906,7 +906,7 @@ component DuplicateResult inherits VerticalLayout {
             ActionButton {
                 text: @tr("Sélection rapide");
                 icon: @image-url("../assets/icons/chevron-down.svg");
-                enabled: !Duplicates.trashing;
+                enabled: !Duplicates.frozen;
                 cross-axis-self-alignment: center;
                 clicked => {
                     root.menu-x = self.absolute-position.x - root.absolute-position.x;
@@ -920,7 +920,7 @@ component DuplicateResult inherits VerticalLayout {
             ActionButton {
                 text: @tr("Tout désélectionner");
                 kind: ButtonKind.ghost;
-                enabled: Duplicates.chosen-files > 0 && !Duplicates.trashing;
+                enabled: Duplicates.chosen-files > 0 && !Duplicates.frozen;
                 cross-axis-self-alignment: center;
                 clicked => {
                     Duplicates.deselect-all();
@@ -991,7 +991,7 @@ component DuplicateResult inherits VerticalLayout {
             icon: @image-url("../assets/icons/trash-2.svg");
             kind: ButtonKind.primary;
             large: true;
-            enabled: Duplicates.chosen-files > 0 && !Duplicates.trashing;
+            enabled: Duplicates.chosen-files > 0 && !Duplicates.frozen;
             cross-axis-self-alignment: center;
             clicked => {
                 Duplicates.trash();

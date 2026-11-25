@@ -202,7 +202,7 @@ Chaque attaque se monte entre l'analyse et le nettoyage (le moment que le code r
 |---|---|---|---|---|
 | INV-201 | Un fichier rajeuni entre analyse et nettoyage reste (`Recent`) | horloge +2 h, analyser, ssh `echo >> fichier` → gardé, raison « modifiées trop récemment » | `inv_age` | oui |
 | INV-202 | `touch -d` vers le passé ne vieillit pas : la date de changement d'inode compte | fichier neuf `touch -d '2 years ago'` → absent des résultats | `inv_age` | oui |
-| INV-203 | Un descendant profond rajeuni garde son dossier entier | `~/.cache/thumbnails/large/a/b/c`, vieilli ; analyser ; écrire dans `c` → dossier `large` entier là | `inv_age` | oui |
+| INV-203 | Un descendant profond rajeuni garde son dossier entier | `~/.cache/thumbnails/large/a/b/c`, vieilli ; analyser ; écrire dans `c` → dossier `large` entier là ; côté root, le helper refait l'analyse au nettoyage : le descendant rajeuni reste (« held back », `Recent`), ses vieux voisins partent un à un | `inv_age` | oui |
 | INV-204 | Un dossier changé à l'instant (extraction, verrou `mkdir`) n'est pas offert, ses vieilles entrées si | dossier vieilli puis `mkdir verrou` dedans avant l'analyse → entrées offertes, dossier non | `inv_age` | oui |
 | INV-205 | Liens physiques : un fichier lié ne rend pas l'autre récent | deux noms d'un même inode vieilli → les deux partent | `inv_age` | oui |
 | INV-206 | Root : âge sous le plancher de 1 h refusé même si les réglages disent 30 min | `minAgeMinutes:30`, fichier admin de 45 min → helper ne l'offre pas, aucune erreur | `inv_age` | oui |
@@ -244,7 +244,7 @@ Chaque attaque se monte entre l'analyse et le nettoyage (le moment que le code r
 |---|---|---|---|---|
 | INV-501 | Aucune ligne `cacheReset` cochée (polices, `Code Cache`, `startupCache`, shaders, GPU) | planter un de chaque → décochés | `inv_preselection` | oui |
 | INV-502 | Maintenances jamais cochées : journal, Docker, uv, pnpm, ni avant ni après les droits, ni par la case de leur catégorie | cocher la catégorie Applis → Docker toujours décoché | `inv_preselection` | oui |
-| INV-503 | Corbeille, dossiers choisis (« Mes dossiers »), anciennes versions des snaps et environnements flatpak : décochés | après analyse et après un retrait (OLD) | `inv_preselection` | oui |
+| INV-503 | Corbeille, dossiers choisis (« Mes dossiers »), anciennes versions des snaps et environnements flatpak : décochés | après analyse et après un retrait (OLD) | `inv_preselection` | partiel : corbeille et « Mes dossiers » oui ; l'image de base n'a ni révision de snap désactivée ni environnement flatpak jugé inutilisé (12 jugés, 0 inutilisé), l'onglet « Anciennes versions » est vide et le scénario le trace sans rien prouver |
 | INV-504 | Un choix retenu (`selections.json`) ne coche jamais ; un `selections.json` forgé qui dirait « coché » ne coche rien | ssh : écrire un `selections.json` valide qui ne liste que des décochages + une clé inconnue → aucun groupe à choisir coché | `inv_preselection` | oui |
 | INV-505 | Analyse limitée à une catégorie garde l'attribut de la racine partagée | Unity, catégorie Applis seule → décoché | `rules_gaming_gpu` | oui |
 | INV-506 | La ligne « À faire vous-même » n'est jamais cochable | case `enabled` faux | `rules_apps` | oui |

@@ -40,6 +40,8 @@ LIST_TOP_STEPS = 50
 LIST_PAGE_STEPS = 3
 LIST_PAGES = 40
 LIST_SETTLE_SECONDS = 0.5
+# A page may show no new line (a tall description): only this many in a row end the list.
+LIST_IDLE_PAGES = 3
 # What crates/engine/src/scan.rs traces when an analysis ends.
 SCAN_FINISHED = "scan finished"
 
@@ -116,18 +118,38 @@ def row(bench: Bench, group: str) -> dict:
     return bench.ui.reveal(group, role=CHECK_BOX, within=RESULTS_LIST)
 
 
+def visible_rows(bench: Bench) -> dict[str, dict]:
+    """The boxes of the results on screen, by their name."""
+    return {node["name"]: node for node in bench.ui.find(role=CHECK_BOX)}
+
+
+def to_top(bench: Bench) -> tuple[int, int]:
+    """Scrolls the results up until their top stays (one long scroll may not
+    reach it), and gives the pixel of the screen where the list is."""
+    place = bench.ui.center(bench.ui.node(RESULTS_LIST, role="list-box"))
+    shown = visible_rows(bench)
+    for _ in range(LIST_PAGES):
+        bench.scroll_at(*place, -LIST_TOP_STEPS)
+        time.sleep(LIST_SETTLE_SECONDS)
+        if (now := visible_rows(bench)).keys() == shown.keys():
+            return place
+        shown = now
+    raise ScenarioFailure(f"the results never reached their top after {LIST_PAGES} pages")
+
+
 def rows(bench: Bench) -> dict[str, dict]:
     """Every box of the results by its name, the list scrolled from its top to its end."""
-    place = bench.ui.center(bench.ui.node(RESULTS_LIST, role="list-box"))
-    bench.scroll_at(*place, -LIST_TOP_STEPS)
-    seen: dict[str, dict] = {}
+    place = to_top(bench)
+    seen = visible_rows(bench)
+    idle = 0
     for _ in range(LIST_PAGES):
-        shown = {node["name"]: node for node in bench.ui.find(role=CHECK_BOX)}
-        if seen and shown.keys() <= seen.keys():
-            return seen
-        seen.update(shown)
         bench.scroll_at(*place, LIST_PAGE_STEPS)
         time.sleep(LIST_SETTLE_SECONDS)
+        shown = visible_rows(bench)
+        idle = idle + 1 if shown.keys() <= seen.keys() else 0
+        seen.update(shown)
+        if idle == LIST_IDLE_PAGES:
+            return seen
     raise ScenarioFailure(f"the results never ended after {LIST_PAGES} pages")
 
 

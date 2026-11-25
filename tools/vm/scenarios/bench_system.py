@@ -88,9 +88,9 @@ def packages(bench: Bench) -> None:
 def browser(bench: Bench) -> None:
     bench.user(f"mkdir -p -- {common.shell_path(FIREFOX_PROFILE)} {common.shell_path(CHROMIUM_PROFILE)}")
     common.open_fake_browser(bench, firefox_profile=FIREFOX_PROFILE, chromium_profile=CHROMIUM_PROFILE)
-    lock = common.shell_path(f"{FIREFOX_PROFILE}/parent.lock")
+    lock = common.shell_path(f"{FIREFOX_PROFILE}/.parentlock")
     inode = bench.user(f"stat --format=%i -- {lock}").strip()
-    bench.check(f":{inode} " in bench.user("cat /proc/locks"), "Firefox's parent.lock is in /proc/locks")
+    bench.check(f":{inode} " in bench.user("cat /proc/locks"), "Firefox's .parentlock is in /proc/locks")
     target = bench.user(f"readlink -- {common.shell_path(f'{CHROMIUM_PROFILE}/SingletonLock')}").strip()
     host = bench.user("hostname").strip()
     bench.check(target.startswith(f"{host}-"), f"Chromium's SingletonLock names a process ({target})")

@@ -47,7 +47,7 @@ pub use session::{
     open_journal, real_user, running_as_root, try_lock_journal_exclusive, try_lock_journal_shared,
 };
 pub use trash::{
-    Deletion, InformationRefusal, InformationRemoval, Trash, TrashError, home_trash,
+    Deletion, InformationRefusal, InformationRemoval, TRASH_FOLDER, Trash, TrashError, home_trash,
     information_folder, read_deletion, remove_information,
 };
 #[cfg(target_os = "linux")]

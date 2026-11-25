@@ -153,14 +153,12 @@ pub enum SearchError {
 /// `$RECYCLE.BIN` on the others).
 pub(crate) fn trash_folder(name: &OsStr) -> bool {
     name.to_str().is_some_and(|name| {
-        name == TRASH_FOLDER
+        name == okapi_platform::TRASH_FOLDER
             || name.starts_with(HIDDEN_TRASH)
             || name.eq_ignore_ascii_case(WINDOWS_TRASH)
     })
 }
 
-/// The trash folder of the freedesktop specification, in the data folder.
-const TRASH_FOLDER: &str = "Trash";
 /// What the trash of another disk is named, at its top (`.Trash`,
 /// `.Trash-1000`).
 const HIDDEN_TRASH: &str = ".Trash";

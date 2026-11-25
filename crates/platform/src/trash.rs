@@ -17,7 +17,8 @@ use crate::directory::link_refused;
 use crate::probe::read_up_to;
 use crate::{Directory, EntryStatus};
 
-const TRASH: &str = "Trash";
+/// The trash folder of the freedesktop specification, in the data folder.
+pub const TRASH_FOLDER: &str = "Trash";
 const FILES: &str = "files";
 const INFO: &str = "info";
 const INFO_EXTENSION: &str = ".trashinfo";
@@ -100,7 +101,7 @@ impl Trash {
     ///
     /// As [`Self::home`].
     pub fn in_folder(data: &Path) -> io::Result<Self> {
-        let trash = opened_or_created(&Directory::open(data)?, TRASH)?;
+        let trash = opened_or_created(&Directory::open(data)?, TRASH_FOLDER)?;
         let files = opened_or_created(&trash, FILES)?;
         let info = opened_or_created(&trash, INFO)?;
         let device = files.status()?.identity.device();
@@ -268,7 +269,7 @@ fn restoring(original: &Path, deleted_at: &str) -> String {
 /// (`$XDG_DATA_HOME`).
 #[must_use]
 pub fn home_trash(data: &Path) -> PathBuf {
-    data.join(TRASH)
+    data.join(TRASH_FOLDER)
 }
 
 /// Where the trash whose entries are in `files` keeps what restores them:

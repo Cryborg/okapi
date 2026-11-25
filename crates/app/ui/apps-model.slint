@@ -4,6 +4,15 @@ import { Moment } from "dashboard-model.slint";
 
 export enum AppSource { deb, snap, flatpak }
 
+// What is known of the space an application itself takes.
+export enum AppSpace {
+    // A flatpak's deployment, not measured yet.
+    measuring,
+    known,
+    // Its package says none, or its deployment could not be measured.
+    unknown,
+}
+
 // What is known of what an application keeps in the home folder.
 export enum AppData {
     // No folder is surely its (a deb).
@@ -35,8 +44,7 @@ export struct AppLine {
     source: AppSource,
     icon: image,
     has-icon: bool,
-    // A flatpak's size is measured.
-    app-known: bool,
+    app-space: AppSpace,
     app-size: Size,
     data: AppData,
     data-size: Size,
@@ -57,7 +65,7 @@ export struct AppDetail {
     publisher: string,
     origin: AppOrigin,
     package: string,
-    app-known: bool,
+    app-space: AppSpace,
     app-size: Size,
     data: AppData,
     data-size: Size,
@@ -65,6 +73,10 @@ export struct AppDetail {
     old-size: Size,
     old-versions: int,
     total: Size,
+    // Anything of what it takes is known.
+    has-total: bool,
+    // Some of it is not known yet, or only in part.
+    total-partial: bool,
     system: bool,
     // Okapi can uninstall it, and its own uninstallation does not run.
     uninstallable: bool,

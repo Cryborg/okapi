@@ -2317,6 +2317,18 @@ msgid "Mesure en cours"
 msgstr "Measuring"
 
 msgctxt "AppWords"
+msgid "Inconnue"
+msgstr "Unknown"
+
+msgctxt "AppWords"
+msgid "taille en cours de mesure"
+msgstr "size being measured"
+
+msgctxt "AppWords"
+msgid "taille inconnue"
+msgstr "size unknown"
+
+msgctxt "AppWords"
 msgid "au moins {}"
 msgstr "at least {}"
 
@@ -2465,10 +2477,6 @@ msgid "Appli : {}"
 msgstr "App: {}"
 
 msgctxt "Panel"
-msgid "Mesure en cours"
-msgstr "Measuring"
-
-msgctxt "Panel"
 msgid "Données : aucune"
 msgstr "Data: none"
 
@@ -2483,6 +2491,10 @@ msgstr "Old versions: {}"
 msgctxt "Panel"
 msgid "Au total : {}"
 msgstr "In all: {}"
+
+msgctxt "Panel"
+msgid "Au total : au moins {}"
+msgstr "In all: at least {}"
 
 msgctxt "Panel"
 msgid "{} versions précédentes gardées par le système."

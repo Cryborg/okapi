@@ -41,6 +41,17 @@ impl Entry {
         }
     }
 
+    /// What is known of what the application itself takes.
+    pub(crate) fn app_space(&self) -> ui::AppSpace {
+        if self.app_bytes().is_some() {
+            ui::AppSpace::Known
+        } else if matches!(self.app.size, AppSize::ToMeasure(_)) && self.deployment.is_none() {
+            ui::AppSpace::Measuring
+        } else {
+            ui::AppSpace::Unknown
+        }
+    }
+
     /// Its folders still waiting once the reading ended: said not measured,
     /// and how many.
     pub(crate) fn never_measured(&mut self) -> usize {
@@ -96,11 +107,22 @@ impl Entry {
             .saturating_add(self.app.old_bytes)
     }
 
-    /// All it takes, once anything of it is known: nothing measured yet, its
-    /// total is neither zero nor anything else.
-    fn total_known(&self) -> Option<u64> {
+    /// All it takes, once anything of it is known (shown only then): nothing
+    /// measured yet, its total is neither zero nor anything else.
+    pub(crate) fn total_known(&self) -> Option<u64> {
         let total = self.total();
         (self.app_bytes().is_some() || total > 0).then_some(total)
+    }
+
+    /// Its total leaves out what is not known yet, or counts what was read
+    /// only in part.
+    pub(crate) fn total_partial(&self) -> bool {
+        self.app_space() != ui::AppSpace::Known
+            || matches!(self.deployment, Some(Measured::Bytes { partial: true, .. }))
+            || matches!(
+                self.data(),
+                ui::AppData::Measuring | ui::AppData::NotMeasured | ui::AppData::Partial
+            )
     }
 
     /// Whether it is shown with `search` (its name or its package's, in any
@@ -184,7 +206,7 @@ pub(crate) fn line(
         source: source(entry.app.source),
         icon: icon.cloned().unwrap_or_default(),
         has_icon: icon.is_some(),
-        app_known: app_bytes.is_some(),
+        app_space: entry.app_space(),
         app_size: size(app_bytes.unwrap_or(0)),
         data: entry.data(),
         data_size: size(entry.data_bytes()),
@@ -391,6 +413,81 @@ mod tests {
             ..app(Source::Deb, "U", 0, false)
         });
         assert_eq!(unknown.app_bytes(), None);
+    }
+
+    #[test]
+    fn a_size_never_to_come_is_said_unknown_not_measuring() {
+        let flatpak = Entry::new(App {
+            size: AppSize::ToMeasure(std::path::PathBuf::from("/deployment")),
+            ..app(Source::Flatpak, "F", 0, false)
+        });
+        assert_eq!(flatpak.app_space(), ui::AppSpace::Measuring);
+        let measured = |deployment| Entry {
+            deployment: Some(deployment),
+            ..flatpak.clone()
+        };
+        let bytes = Measured::Bytes {
+            bytes: 9,
+            partial: false,
+        };
+        assert_eq!(measured(bytes).app_space(), ui::AppSpace::Known);
+        assert_eq!(
+            measured(Measured::NotMeasured).app_space(),
+            ui::AppSpace::Unknown
+        );
+        assert_eq!(
+            measured(Measured::Absent).app_space(),
+            ui::AppSpace::Unknown
+        );
+        let deb = Entry::new(App {
+            size: AppSize::Unknown,
+            ..app(Source::Deb, "U", 0, false)
+        });
+        assert_eq!(deb.app_space(), ui::AppSpace::Unknown);
+        assert_eq!(line(&deb, None, 0, false).app_space, ui::AppSpace::Unknown);
+    }
+
+    #[test]
+    fn a_total_is_shown_once_anything_is_known_and_said_partial_when_some_is_not() {
+        let measured = |bytes, partial| Some(Measured::Bytes { bytes, partial });
+        let deb = Entry::new(App {
+            size: AppSize::Unknown,
+            ..app(Source::Deb, "U", 0, false)
+        });
+        assert_eq!(deb.total_known(), None, "never « 0 o »");
+        let unmeasured = Entry {
+            deployment: Some(Measured::NotMeasured),
+            data: Some(Measured::Absent),
+            ..Entry::new(App {
+                size: AppSize::ToMeasure(std::path::PathBuf::from("/deployment")),
+                ..app(Source::Flatpak, "F", 0, true)
+            })
+        };
+        assert_eq!(unmeasured.total_known(), None);
+        let data_only = Entry {
+            data: measured(4, false),
+            ..Entry::new(App {
+                size: AppSize::Unknown,
+                ..app(Source::Snap, "S", 0, true)
+            })
+        };
+        assert_eq!(data_only.total_known(), Some(4));
+        assert!(data_only.total_partial());
+        let with_data = |data| Entry {
+            data,
+            ..Entry::new(app(Source::Snap, "K", 3, true))
+        };
+        assert!(!with_data(measured(4, false)).total_partial());
+        assert!(!with_data(Some(Measured::Absent)).total_partial());
+        assert!(with_data(None).total_partial(), "its data being measured");
+        assert!(with_data(Some(Measured::NotMeasured)).total_partial());
+        assert!(with_data(measured(4, true)).total_partial());
+        assert!(!Entry::new(app(Source::Deb, "D", 3, false)).total_partial());
+        let partly_deployed = Entry {
+            deployment: measured(5, true),
+            ..unmeasured.clone()
+        };
+        assert!(partly_deployed.total_partial());
     }
 
     #[test]

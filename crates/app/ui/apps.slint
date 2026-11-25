@@ -10,7 +10,7 @@ import {
 } from "widgets.slint";
 import { Size, Words } from "cleaner-model.slint";
 import { DashboardWords } from "dashboard-widgets.slint";
-import { AppData, AppDetail, AppLine, AppOrigin, AppSource, Apps, AppsFilter, AppsSort, AppsTab, CopyLine, ForgetOutcome, LeftoverLine, Leftovers, LeftoversBlock, OldVersions, SourceShown, UninstallStep, UninstallWhy } from "apps-model.slint";
+import { AppData, AppDetail, AppLine, AppOrigin, AppSource, AppSpace, Apps, AppsFilter, AppsSort, AppsTab, CopyLine, ForgetOutcome, LeftoverLine, Leftovers, LeftoversBlock, OldVersions, SourceShown, UninstallStep, UninstallWhy } from "apps-model.slint";
 import { OldVersionsConfirm, OldVersionsView } from "old-versions.slint";
 
 export global AppWords {
@@ -18,8 +18,10 @@ export global AppWords {
         source == AppSource.deb ? @tr("Ubuntu") : source == AppSource.snap ? @tr("Snap") : @tr("Flatpak")
     }
 
-    pure public function app-size(line: AppLine) -> string {
-        line.app-known ? Words.size(line.app-size) : @tr("Mesure en cours")
+    pure public function app-size(space: AppSpace, size: Size) -> string {
+        space == AppSpace.known ? Words.size(size)
+            : space == AppSpace.measuring ? @tr("Mesure en cours")
+            : @tr("Inconnue")
     }
 
     // What the "Données" column says; nothing for a deb, whose data no
@@ -35,7 +37,10 @@ export global AppWords {
 
     // What a screen reader says of a line.
     pure public function spoken(line: AppLine) -> string {
-        @tr("{}, {}, {}", line.name, self.source(line.source), self.app-size(line))
+        @tr("{}, {}, {}", line.name, self.source(line.source),
+            line.app-space == AppSpace.known ? Words.size(line.app-size)
+                : line.app-space == AppSpace.measuring ? @tr("taille en cours de mesure")
+                : @tr("taille inconnue"))
             + (line.data == AppData.unknown || line.data == AppData.none ? ""
                 : line.data == AppData.measuring ? @tr(", données en cours de mesure")
                 : line.data == AppData.not-measured ? @tr(", données illisibles")
@@ -185,12 +190,12 @@ component AppRow inherits Rectangle {
         }
         Text {
             width: Theme.app-col-size;
-            text: AppWords.app-size(line);
+            text: AppWords.app-size(line.app-space, line.app-size);
             accessible-role: none;
             horizontal-alignment: right;
             vertical-alignment: center;
-            color: line.app-known ? Theme.text : Theme.text-2;
-            font-size: line.app-known ? Theme.font-label : Theme.font-caption;
+            color: line.app-space == AppSpace.known ? Theme.text : Theme.text-2;
+            font-size: line.app-space == AppSpace.known ? Theme.font-label : Theme.font-caption;
         }
         Text {
             width: Theme.app-col-data;
@@ -431,7 +436,7 @@ component Panel inherits Card {
                 font-size: Theme.font-caption;
             }
             Text {
-                text: @tr("Appli : {}", Apps.detail.app-known ? Words.size(Apps.detail.app-size) : @tr("Mesure en cours"));
+                text: @tr("Appli : {}", AppWords.app-size(Apps.detail.app-space, Apps.detail.app-size));
                 color: Theme.text;
             }
             if Apps.detail.data != AppData.unknown: Text {
@@ -442,8 +447,10 @@ component Panel inherits Card {
                 text: @tr("Anciennes versions : {}", Words.size(Apps.detail.old-size));
                 color: Theme.text;
             }
-            Text {
-                text: @tr("Au total : {}", Words.size(Apps.detail.total));
+            if Apps.detail.has-total: Text {
+                text: Apps.detail.total-partial
+                    ? @tr("Au total : au moins {}", Words.size(Apps.detail.total))
+                    : @tr("Au total : {}", Words.size(Apps.detail.total));
                 color: Theme.text;
                 font-weight: Theme.weight-semibold;
             }

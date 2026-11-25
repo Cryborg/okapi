@@ -160,12 +160,12 @@ def category_box(bench: Bench) -> None:
 def explanations(bench: Bench) -> None:
     cleaner.fold(bench, BROWSERS)
     cleaner.fold(bench, "Système", folded=False)
-    cleaner.explain(bench, cleaner.SAFE, THUMBNAILS)
+    cleaner.press_for(bench, cleaner.SAFE, THUMBNAILS)
     bench.ui.wait(THUMBNAILS_SAID)
-    cleaner.explain(bench, cleaner.WHAT_GOES, FONTS)
+    cleaner.press_for(bench, cleaner.WHAT_GOES, FONTS)
     bench.ui.wait(FONTS_SAID)
     bench.screenshot("explications")
-    cleaner.explain(bench, cleaner.SAFE, THUMBNAILS)
+    cleaner.press_for(bench, cleaner.SAFE, THUMBNAILS)
     bench.ui.wait(THUMBNAILS_SAID, gone=True)
     bench.log(f"ok: CLN-015: « {cleaner.SAFE} » and « {cleaner.WHAT_GOES} » unfold what their group says, a second click folds it")
 

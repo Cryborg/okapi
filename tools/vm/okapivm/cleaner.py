@@ -31,6 +31,7 @@ CORE_DUMPS = "Vidages mémoire"
 JOURNAL_LOGS = "Journaux de systemd"
 SAFE = "Pourquoi c'est sans risque"
 WHAT_GOES = "Ce qui part"
+COPY = "Copier"
 FOLD = "Replier"
 UNFOLD = "Déplier"
 CATEGORIES = ["Système", "Navigateurs", "Applications", "Jeux", "Caches GPU", "Mes dossiers"]
@@ -133,9 +134,9 @@ def rows(bench: Bench) -> dict[str, dict]:
     raise ScenarioFailure(f"the results never ended after {LIST_PAGES} pages")
 
 
-def explain(bench: Bench, label: str, group: str) -> None:
-    """Clicks the explanation button `label` (`SAFE`, `WHAT_GOES`) of `group`,
-    which its description names: every group has one of each."""
+def press_for(bench: Bench, label: str, group: str) -> None:
+    """Clicks the button `label` of `group`, which its description names:
+    `SAFE` and `WHAT_GOES` (every group has both), `COPY` (a maintenance done by hand)."""
     for index, node in enumerate(bench.ui.find(label, role=BUTTON)):
         if node.get("description") == group:
             bench.ui.click(label, role=BUTTON, index=index)

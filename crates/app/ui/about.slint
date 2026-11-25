@@ -101,10 +101,14 @@ export component AboutPage inherits Rectangle {
                     HorizontalLayout {
                         padding: Theme.spacing-l;
                         spacing: Theme.spacing-l;
-                        AboutSlint {
+                        Rectangle {
                             width: Theme.made-with-slint-width;
                             horizontal-stretch: 0;
                             vertical-stretch: 0;
+                            AboutSlint { }
+                            // Covers AboutSlint's link: its click has Slint run
+                            // gio or xdg-open (invariant 4).
+                            TouchArea { }
                         }
                         Detail {
                             horizontal-stretch: 1;

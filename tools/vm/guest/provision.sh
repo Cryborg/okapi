@@ -25,8 +25,29 @@ apt-get install --yes --no-install-recommends \
     orca \
     packagekit \
     flatpak \
-    docker.io
+    docker.io \
+    wl-clipboard \
+    libpam-tmpdir \
+    auditd \
+    bindfs \
+    dosfstools \
+    dpkg-dev apt-utils \
+    gnupg \
+    nfs-kernel-server
 apt-get clean
+
+# pam_tmpdir moves every session's TMPDIR: off by default, a scenario turns it
+# on (`pam-auth-update --enable tmpdir`) and restarts the session.
+pam-auth-update --package --remove tmpdir
+
+# A Flathub application with its runtime, and a second runtime nothing uses.
+flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --system --noninteractive flathub io.mpv.Mpv
+used=$(flatpak info --system --show-runtime io.mpv.Mpv)
+# Refs listed carry their kind; older branches only with --all.
+orphan=$(flatpak remote-ls --system --all --runtime --columns=ref flathub \
+    | grep "^runtime/org.freedesktop.Platform/x86_64/" | grep -v "^runtime/$used\$" | sort -V | tail -n 1)
+flatpak install --system --noninteractive flathub "$orphan"
 
 # Only once gdm3 is installed: written before, it is a changed conffile and
 # dpkg stops on its question.

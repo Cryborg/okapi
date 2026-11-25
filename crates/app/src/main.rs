@@ -947,6 +947,7 @@ mod tests {
             ),
             ("Mises à jour", "Mises à jour"),
             ("Historique", "Historique"),
+            ("Doublons", "Doublons"),
             ("Gros fichiers", "Gros fichiers"),
             ("Applications", "Applications"),
             ("À propos", "À propos"),

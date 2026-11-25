@@ -20,8 +20,8 @@ import json
 import re
 import shlex
 
-from okapivm import common
-from okapivm.bench import Bench, ScenarioFailure
+from okapivm import cleaner, common
+from okapivm.bench import Bench
 
 from scenarios import _admin
 
@@ -35,7 +35,6 @@ SIZE = 16 * 1024
 RECENT = "recent"
 REMOVED = "removed"
 KEPT = "kept"
-DELETIONS = "deletions"
 RECENT_LINE = "Gardées : modifiées trop récemment"
 BELOW_FLOOR = "ageBelowFloor"
 # What crates/app/src/elevation.rs and the engine's walk trace.
@@ -75,8 +74,7 @@ def run(bench: Bench) -> None:
     touched = common.Files(tester, [TOUCHED], size=SIZE)
 
     bench.allow_elevation_without_password()
-    common.write_store(bench, "settings.json",
-                       {"version": 1, "minAgeMinutes": SETTINGS_MIN_AGE_MINUTES, "deletionLog": True})
+    common.write_settings(bench, {"minAgeMinutes": SETTINGS_MIN_AGE_MINUTES, "deletionLog": True})
     common.plant(bench, old, crash_old)
     # Before the clock moves: a new name changes the inode's date.
     bench.user(f"ln -- {common.shell_path(LINKED)} {common.shell_path(LINK)}")
@@ -85,22 +83,21 @@ def run(bench: Bench) -> None:
     common.plant(bench, touched)
     bench.user(f"touch -d '2 years ago' -- {common.shell_path(TOUCHED)} && mkdir -- {common.shell_path(LOCK)}")
 
-    _admin.scan(bench)
-    _admin.obtain_rights(bench)
-    _admin.check_groups(bench, _admin.CRASH_REPORTS)
+    cleaner.scan(bench)
+    cleaner.obtain_rights(bench)
+    cleaner.check_groups(bench, cleaner.CRASH_REPORTS)
     bench.screenshot("avant-attaque")
 
     bench.user(" && ".join(f"echo >> {common.shell_path(path)}" for path in (REJUVENATED, DEEP)))
     bench.root(" && ".join(f"echo >> {shlex.quote(path)}" for path in (CRASH_REJUVENATED, CRASH_DEEP)))
     bench.log("rejuvenated a file and a deep descendant, of the user's and of root's, after the scan")
 
-    _admin.clean(bench)
+    cleaner.clean(bench)
     bench.screenshot("recu")
-    deletions = deletion_log(bench)
-    home = bench.user('printf %s "$HOME"')
+    deletions = {entry["path"]: entry for entry in common.last_deletions(bench) if entry.get("path")}
 
     def outcome(path: str) -> dict | None:
-        return deletions.get(path.replace("~", home, 1))
+        return deletions.get(common.expand_home(bench, path))
 
     rejuvenated = outcome(REJUVENATED)
     bench.check(kept(bench, tester, REJUVENATED) and rejuvenated is not None
@@ -138,7 +135,7 @@ def run(bench: Bench) -> None:
                 f"INV-205: both names of one old inode go, the first removed not making the second recent ({links})")
 
     receipt = common.last_receipt(bench)
-    journal = common.app_journal(bench)
+    journal = common.journal_text(bench)
     bench.check(not kept(bench, tester, YOUNG), "INV-206: the account's 45-minute-old file goes, 30 minutes set")
     bench.check(kept(bench, common.ROOT, CRASH_YOUNG) and receipt["admin"]["done"] and BELOW_FLOOR not in journal,
                 f"INV-206: root's 45-minute-old crash report stays under the helper's floor of an hour, "
@@ -147,23 +144,10 @@ def run(bench: Bench) -> None:
 
 def helper_traces(bench: Bench) -> list[dict]:
     """The fields of each trace of the helper, as the interface's journal carries them."""
-    traces = []
-    for line in common.app_journal(bench).splitlines():
-        event = json.loads(line)
-        if event.get("fields", {}).get("message") == HELPER_TRACE:
-            traces.append(json.loads(event["fields"]["line"]).get("fields", {}))
-    return traces
+    return [json.loads(event["fields"]["line"]).get("fields", {}) for event in common.journal(bench)
+            if event.get("fields", {}).get("message") == HELPER_TRACE]
 
 
 def kept(bench: Bench, account: str, path: str) -> bool:
     return bool(common.present(bench, common.Files(account, [path])))
 
-
-def deletion_log(bench: Bench) -> dict[str, dict]:
-    """The entries of the last cleaning's deletion log, by their path."""
-    history = common.read_store(bench, common.HISTORY) or []
-    assert isinstance(history, list)
-    logs = [line for line in history if line.get("kind") == DELETIONS]
-    if not logs:
-        raise ScenarioFailure(f"no deletion log in {common.store_path(common.HISTORY)}, deletionLog set")
-    return {entry["path"]: entry for entry in logs[-1]["entries"] if entry.get("path")}

@@ -8,6 +8,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+icu_normalizer = { workspace = true }
 jiff = { workspace = true }
 okapi-engine = { workspace = true }
 okapi-platform = { workspace = true }

@@ -37,6 +37,9 @@ blake3 = "1.8.7"
 # Icons drawn away from the interface, with no file read beside them
 # (the version Slint brings).
 resvg = { version = "0.48.1", default-features = false }
+# Names sorted with their accents set apart, by the decomposition Slint
+# brings already.
+icu_normalizer = { version = "2.4.0", default-features = false, features = ["compiled_data"] }
 # Without the system tray it would bring; the compatibility feature is required.
 slint = { version = "=1.18.1", default-features = false, features = ["std", "backend-default", "renderer-femtovg", "renderer-software", "accessibility", "compat-1-2"] }
 # The testing backend follows no semver: the three move together, exactly.

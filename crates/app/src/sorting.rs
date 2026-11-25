@@ -4,6 +4,9 @@
 //! way. One column at a time, never kept from one launch to the next.
 
 use std::cmp::Ordering;
+use std::ops::RangeInclusive;
+
+use icu_normalizer::DecomposingNormalizerBorrowed;
 
 /// A column a list may be sorted by.
 pub(crate) trait Column: Copy + PartialEq {
@@ -65,9 +68,38 @@ impl<C: Column> Sorting<C> {
     }
 }
 
-/// Two names from A, whatever their case.
+/// The marks a canonical decomposition sets apart from the letters they sit
+/// on: accents, cedilla, diaeresis.
+const COMBINING_MARKS: RangeInclusive<char> = '\u{0300}'..='\u{036F}';
+
+/// Letters no decomposition splits, sorted as the letters they are written
+/// for: « Œuvre » among the O.
+const LIGATURES: [(char, &str); 3] = [('œ', "oe"), ('æ', "ae"), ('ß', "ss")];
+
+/// Two names from A, whatever their case and their accents: « Éditeur » among
+/// the E, before « Zoom ». Two names alike but for their accents keep a
+/// fixed order (in Latin letters, the one without first).
 pub(crate) fn by_name(left: &str, right: &str) -> Ordering {
-    left.to_lowercase().cmp(&right.to_lowercase())
+    let (left, right) = (left.to_lowercase(), right.to_lowercase());
+    unaccented(&left)
+        .cmp(&unaccented(&right))
+        .then_with(|| left.cmp(&right))
+}
+
+/// `name`, in lowercase, as its plain letters.
+fn unaccented(name: &str) -> String {
+    let mut plain = String::with_capacity(name.len());
+    let decomposed = DecomposingNormalizerBorrowed::new_nfd().normalize_iter(name.chars());
+    for character in decomposed.filter(|character| !COMBINING_MARKS.contains(character)) {
+        match LIGATURES
+            .iter()
+            .find(|(ligature, _)| *ligature == character)
+        {
+            Some((_, letters)) => plain.push_str(letters),
+            None => plain.push(character),
+        }
+    }
+    plain
 }
 
 #[cfg(test)]
@@ -122,5 +154,38 @@ mod tests {
     fn names_compare_whatever_their_case() {
         assert_eq!(by_name("beta", "Alpha"), Ordering::Greater);
         assert_eq!(by_name("GIMP", "gimp"), Ordering::Equal);
+    }
+
+    #[test]
+    fn names_compare_whatever_their_accents() {
+        let mut names = [
+            "Zoom",
+            "Éditeur de texte",
+            "Ça va",
+            "editeur",
+            "Écran",
+            "Cb",
+            "Fichiers",
+            "Œuvre",
+            "Ode",
+        ];
+        names.sort_by(|left, right| by_name(left, right));
+        assert_eq!(
+            names,
+            [
+                "Ça va",
+                "Cb",
+                "Écran",
+                "editeur",
+                "Éditeur de texte",
+                "Fichiers",
+                "Ode",
+                "Œuvre",
+                "Zoom"
+            ]
+        );
+        assert_eq!(by_name("straße", "strasse"), Ordering::Greater);
+        assert_eq!(by_name("Élément", "element"), Ordering::Greater);
+        assert_eq!(by_name("Élément", "élément"), Ordering::Equal);
     }
 }

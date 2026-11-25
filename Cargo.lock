@@ -3187,6 +3187,7 @@ version = "0.1.0"
 dependencies = [
  "futures-lite",
  "i-slint-backend-testing",
+ "icu_normalizer",
  "jiff",
  "okapi-engine",
  "okapi-helper",

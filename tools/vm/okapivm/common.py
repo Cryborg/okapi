@@ -157,18 +157,22 @@ def last_receipt(bench: Bench, account: str | None = None) -> dict:
     return history[-1]
 
 
-def cli(bench: Bench, *arguments: str, account: str | None = None) -> Outcome:
-    """Runs `okapi` in the machine as `account` (the administrator by default), whatever its exit code."""
+def cli(bench: Bench, *arguments: str, account: str | None = None,
+        environment: dict[str, str] | None = None) -> Outcome:
+    """Runs `okapi` in the machine as `account` (the administrator by default),
+    with `environment` added (`HOME`, `TMPDIR`...), whatever its exit code."""
     who = account or bench.accounts.admin.name
-    environment = [f"{name}={value}" for name, value in bench.okapi_environment().items()]
-    outcome = bench.execute(who, shlex.join(["env", *environment, f"{config.GUEST_BINARIES}/okapi", *arguments]))
-    bench.log(f"okapi {shlex.join(arguments)} as {who}: exit {outcome.code}")
+    variables = [f"{name}={value}" for name, value in {**bench.okapi_environment(), **(environment or {})}.items()]
+    outcome = bench.execute(who, shlex.join(["env", *variables, f"{config.GUEST_BINARIES}/okapi", *arguments]))
+    added = f" with {shlex.join(f'{name}={value}' for name, value in environment.items())}" if environment else ""
+    bench.log(f"okapi {shlex.join(arguments)} as {who}{added}: exit {outcome.code}")
     return outcome
 
 
-def cli_json(bench: Bench, *arguments: str, account: str | None = None, code: int = 0) -> dict:
+def cli_json(bench: Bench, *arguments: str, account: str | None = None,
+             environment: dict[str, str] | None = None, code: int = 0) -> dict:
     """`okapi --json` with `arguments`, its document read; another exit code than `code` fails."""
-    run = cli(bench, JSON_OPTION, *arguments, account=account)
+    run = cli(bench, JSON_OPTION, *arguments, account=account, environment=environment)
     if run.code != code:
         raise ScenarioFailure(f"okapi exited {run.code}, not {code}: {run.stderr.strip()}")
     return json.loads(run.stdout)

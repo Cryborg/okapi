@@ -200,9 +200,14 @@ def chosen(found: Found, index: int | None, query: Query) -> tuple[Atspi.Accessi
     return found[0]
 
 
+def box_state(entry: dict[str, object]) -> tuple[bool, object]:
+    return CHECKED in entry["states"], entry.get("description")
+
+
 def click(app_name: str, query: Query, index: int | None, timeout: float, settle: float) -> dict[str, object]:
     """Clicks the node once it has stood for `settle` seconds, as a human would
-    after a change of screen; a check box must then change state."""
+    after a change of screen; a check box must then change state, or its
+    description: a box partly checked, then unchecked, is unchecked twice."""
     wait_for(app_name, query, timeout)
     time.sleep(settle)
     node, entry = chosen(wait_for(app_name, query, timeout), index, query)
@@ -210,9 +215,9 @@ def click(app_name: str, query: Query, index: int | None, timeout: float, settle
         raise DriverError(f"{entry} is not enabled")
     action = activate(node)
     if CHECKABLE in entry["states"]:
-        was_checked = CHECKED in entry["states"]
+        was = box_state(entry)
         deadline = time.monotonic() + timeout
-        while (CHECKED in chosen(wait_for(app_name, query, timeout), index, query)[1]["states"]) == was_checked:
+        while box_state(chosen(wait_for(app_name, query, timeout), index, query)[1]) == was:
             if time.monotonic() > deadline:
                 raise DriverError(f"{entry} did not change state after its action {action!r}")
             time.sleep(POLL_SECONDS)

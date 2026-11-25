@@ -103,7 +103,7 @@ def show_in_folder(bench: Bench) -> None:
     # The portal answers once Files shows the copy, a while after the click.
     answered = bench.execute(bench.accounts.admin.name,
                              f"for attempt in $(seq {FILE_MANAGER_TIMEOUT_SECONDS}); do "
-                             f"if grep -q ':\"{SHOWN_IN_FILES}\"' {common.shell_path(common.APP_JOURNAL)}; "
+                             f"if grep -q ':\"{SHOWN_IN_FILES}\"' {common.shell_path(f'{common.STATE_DIRECTORY}/{common.APP_JOURNAL}')}; "
                              f"then exit 0; fi; sleep 1; done; exit 1").code == 0
     bench.screenshot("fichiers")
     said = [event["fields"]["message"] for event in common.journal(bench)[mark:]]

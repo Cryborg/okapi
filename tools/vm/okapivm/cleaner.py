@@ -29,6 +29,8 @@ APT_LOGS = "Journaux d'APT"
 APT_CACHE = "Cache des paquets APT"
 CORE_DUMPS = "Vidages mémoire"
 JOURNAL_LOGS = "Journaux de systemd"
+SAFE = "Pourquoi c'est sans risque"
+WHAT_GOES = "Ce qui part"
 FOLD = "Replier"
 UNFOLD = "Déplier"
 CATEGORIES = ["Système", "Navigateurs", "Applications", "Jeux", "Caches GPU", "Mes dossiers"]
@@ -129,6 +131,16 @@ def rows(bench: Bench) -> dict[str, dict]:
         bench.scroll_at(*place, LIST_PAGE_STEPS)
         time.sleep(LIST_SETTLE_SECONDS)
     raise ScenarioFailure(f"the results never ended after {LIST_PAGES} pages")
+
+
+def explain(bench: Bench, label: str, group: str) -> None:
+    """Clicks the explanation button `label` (`SAFE`, `WHAT_GOES`) of `group`,
+    which its description names: every group has one of each."""
+    for index, node in enumerate(bench.ui.find(label, role=BUTTON)):
+        if node.get("description") == group:
+            bench.ui.click(label, role=BUTTON, index=index)
+            return
+    raise ScenarioFailure(f"no « {label} » for {group}")
 
 
 def check_groups(bench: Bench, *groups: str) -> None:

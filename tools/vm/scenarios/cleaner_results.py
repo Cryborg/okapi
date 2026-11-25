@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 
 from okapivm import cleaner, common
-from okapivm.bench import Bench, ScenarioFailure
+from okapivm.bench import Bench
 
 TAGS = ["cleaner"]
 
@@ -35,8 +35,6 @@ FONTS = "Cache des polices"
 FONTS_SAID = "Cache de rendu des polices de Fontconfig : recréé tout seul quand il manque."
 THUMBNAILS_SAID = ("Miniatures que les gestionnaires de fichiers créent pour l'aperçu (norme freedesktop) : ils les "
                    "recréent quand vous rouvrez un dossier. Vos images ne sont pas touchées.")
-SAFE = "Pourquoi c'est sans risque"
-WHAT_GOES = "Ce qui part"
 BROWSERS = "Navigateurs"
 CHROME = "Chrome"
 CACHE = "Cache"
@@ -159,26 +157,17 @@ def category_box(bench: Bench) -> None:
     bench.screenshot("case-categorie")
 
 
-def explain(bench: Bench, label: str, group: str) -> None:
-    """Clicks the explanation button `label` of `group` (its description)."""
-    for index, node in enumerate(bench.ui.find(label, role=cleaner.BUTTON)):
-        if node.get("description") == group:
-            bench.ui.click(label, role=cleaner.BUTTON, index=index)
-            return
-    raise ScenarioFailure(f"no « {label} » for {group}")
-
-
 def explanations(bench: Bench) -> None:
     cleaner.fold(bench, BROWSERS)
     cleaner.fold(bench, "Système", folded=False)
-    explain(bench, SAFE, THUMBNAILS)
+    cleaner.explain(bench, cleaner.SAFE, THUMBNAILS)
     bench.ui.wait(THUMBNAILS_SAID)
-    explain(bench, WHAT_GOES, FONTS)
+    cleaner.explain(bench, cleaner.WHAT_GOES, FONTS)
     bench.ui.wait(FONTS_SAID)
     bench.screenshot("explications")
-    explain(bench, SAFE, THUMBNAILS)
+    cleaner.explain(bench, cleaner.SAFE, THUMBNAILS)
     bench.ui.wait(THUMBNAILS_SAID, gone=True)
-    bench.log(f"ok: CLN-015: « {SAFE} » and « {WHAT_GOES} » unfold what their group says, a second click folds it")
+    bench.log(f"ok: CLN-015: « {cleaner.SAFE} » and « {cleaner.WHAT_GOES} » unfold what their group says, a second click folds it")
 
 
 def remarks(bench: Bench) -> None:

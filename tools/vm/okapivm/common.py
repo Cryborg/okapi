@@ -13,9 +13,9 @@ from .bench import ROOT, Bench, Elevation, Outcome, ScenarioFailure
 
 __all__ = ["Elevation", "Files", "Outcome", "Package", "ROOT", "analyse", "bind_mount", "build_deb", "check_gone",
            "check_groups", "check_kept", "clean", "cli", "cli_json", "close_fake_browser", "enable_pam_tmpdir",
-           "install_deb", "last_deletions", "last_receipt", "mount_fat", "obtain_rights", "open_fake_browser",
-           "open_screen", "plant", "present", "publish_apt_repository", "read_store", "shell_path", "store_path",
-           "unmount", "write_settings", "write_store"]
+           "install_deb", "journal_events", "last_deletions", "last_receipt", "mount_fat", "obtain_rights",
+           "open_fake_browser", "open_screen", "plant", "present", "publish_apt_repository", "read_store",
+           "shell_path", "store_path", "trashed", "unmount", "write_settings", "write_store", "write_user_dirs"]
 
 HOME_PREFIX = "~/"
 SELECTED = "selected"
@@ -41,6 +41,9 @@ STORE_FILES = {
     "selections.json": STATE_DIRECTORY,
     "seen-apps.json": STATE_DIRECTORY,
 }
+APP_JOURNAL = f"{STATE_DIRECTORY}/okapi-app.log"
+USER_DIRS_FOLDER = "~/.config"
+USER_DIRS = "user-dirs.dirs"
 PAM_TMPDIR_PROFILE = "tmpdir"
 MOUNT_IMAGES = "/var/tmp/okapi-vm-mounts"
 FAT_SIZE_MEGABYTES = 64
@@ -179,6 +182,32 @@ def write_settings(bench: Bench, *, exclusions: Sequence[str] = (), deletion_log
     """Okapi's settings, the defaults but `exclusions` and the deletion log (on, for `last_deletions`)."""
     write_store(bench, SETTINGS, {"version": SETTINGS_VERSION, "exclusions": list(exclusions),
                                   "deletionLog": deletion_log}, account)
+
+
+def write_user_dirs(bench: Bench, folders: dict[str, str], account: str | None = None) -> None:
+    """Replaces `~/.config/user-dirs.dirs`, the personal folders Okapi offers, read
+    when it starts: `{"DOCUMENTS": "$HOME/Documents", "MUSIC": "/media/key"}`."""
+    text = "".join(f'XDG_{kind}_DIR="{path}"\n' for kind, path in folders.items())
+    bench.run_as(account or bench.accounts.admin.name,
+                 f"mkdir -p -- {shell_path(USER_DIRS_FOLDER)} && printf %s {shlex.quote(text)} "
+                 f"> {shell_path(f'{USER_DIRS_FOLDER}/{USER_DIRS}')}")
+    bench.log(f"personal folders: {', '.join(f'{kind}={path}' for kind, path in folders.items()) or 'none'}")
+
+
+def journal_events(bench: Bench, message: str | None = None, account: str | None = None) -> list[dict]:
+    """The interface's journal, one event per line (`timestamp`, `level`, `fields`
+    with its `message` and details, `spans`); those saying `message` only."""
+    path = shell_path(APP_JOURNAL)
+    text = bench.run_as(account or bench.accounts.admin.name, f"if [ -e {path} ]; then cat -- {path}; fi")
+    events = [json.loads(line) for line in text.splitlines() if line.strip()]
+    return [event for event in events if message is None or event["fields"].get("message") == message]
+
+
+def trashed(bench: Bench, account: str | None = None) -> dict[str, str]:
+    """What the account's trash holds, as `gio trash` lists it: each file's
+    original path, and its `trash:///` name to restore it by."""
+    listing = bench.run_as(account or bench.accounts.admin.name, "gio trash --list")
+    return dict(reversed(line.split("\t", 1)) for line in listing.splitlines() if "\t" in line)
 
 
 def analyse(bench: Bench) -> None:

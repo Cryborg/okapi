@@ -120,7 +120,7 @@ def history_a_folder(bench: Bench) -> None:
     common.write_settings(bench, {"deletionLog": False})
     relaunch(bench)
     cleaner.analyze(bench)
-    cleaner.clean(bench)
+    cleaner.clean(bench, recorded=False)
     bench.ui.wait(HISTORY_UNAVAILABLE)
     step = bench.ui.node(RECORDING, role="list-item").get("description", "")
     bench.screenshot("historique-indisponible")
@@ -150,7 +150,8 @@ def folder_no_longer_chosen(bench: Bench) -> None:
     common.check_kept(bench, common.Files(bench.accounts.admin.name, [FOLDER_FILE]))
     history = common.read_store(bench, common.HISTORY)
     assert isinstance(history, list)
-    reasons = [entry.get("reason") for line in history if line.get("kind") == "deletions" for entry in line["entries"]]
+    reasons = [entry.get("reason") for line in history if line.get("kind") == common.DELETIONS
+               for entry in line["entries"]]
     bench.check(bool(bench.ui.find(NO_LONGER_CHOSEN_LINE, role=cleaner.BUTTON)) and NO_LONGER_CHOSEN in reasons,
                 f"CLN-039: the folder removed from the settings since the analysis is kept, as no longer chosen "
                 f"({reasons})")

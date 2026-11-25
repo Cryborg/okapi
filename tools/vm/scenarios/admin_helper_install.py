@@ -15,7 +15,7 @@ import subprocess
 import tarfile
 from pathlib import Path
 
-from okapivm import common, config
+from okapivm import cleaner, common, config
 from okapivm.bench import Bench
 
 from scenarios import _admin
@@ -69,8 +69,8 @@ def replace_helper(bench: Bench, local: Path | None = None, *, text: str | None 
 
 def ask(bench: Bench, label: str) -> str:
     """Asks for the rights from a fresh start and gives the banner once it says what went wrong."""
-    _admin.scan(bench)
-    bench.ui.click(_admin.OBTAIN, role="button")
+    cleaner.scan(bench)
+    bench.ui.click(cleaner.OBTAIN, role="button")
     said = _admin.wait_banner(bench, _admin.STILL_WAITING)
     bench.screenshot(label)
     return said

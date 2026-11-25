@@ -13,15 +13,17 @@ from .bench import ROOT, Bench, Elevation, Outcome, ScenarioFailure
 
 __all__ = ["ROOT", "Elevation", "Files", "Outcome", "Package", "bind_mount", "build_deb", "check_gone", "check_kept",
            "cli", "cli_json", "close_fake_browser", "enable_pam_tmpdir", "expand_home", "helper", "helper_answer",
-           "install_deb", "journal", "journal_text", "last_receipt", "mount_fat", "open_fake_browser", "open_screen",
-           "plant", "present", "publish_apt_repository", "read_store", "shell_path", "store_path", "unmount",
-           "write_settings", "write_store"]
+           "install_deb", "journal", "journal_text", "last_deletions", "last_receipt", "mount_fat",
+           "open_fake_browser", "open_screen", "plant", "present", "publish_apt_repository", "read_store",
+           "shell_path", "store_path", "unmount", "write_settings", "write_store"]
 
 HOME_PREFIX = "~/"
 SELECTED = "selected"
 JSON_OPTION = "--json"
 JSON_LINES = ".jsonl"
 HISTORY = "history.jsonl"
+# The kind of the history line that holds a cleaning's deletion log.
+DELETIONS = "deletions"
 SETTINGS = "settings.json"
 # `SETTINGS_VERSION` of crates/store/src/settings.rs.
 SETTINGS_VERSION = 1
@@ -181,6 +183,17 @@ def last_receipt(bench: Bench, account: str | None = None) -> dict:
     return history[-1]
 
 
+def last_deletions(bench: Bench, account: str | None = None) -> list[dict]:
+    """What the newest cleaning did with each entry (`path`, `result`, `reason`...):
+    its deletion log, which `deletionLog` turns on in the settings."""
+    history = read_store(bench, HISTORY, account) or []
+    assert isinstance(history, list)
+    logs = [line for line in history if line.get("kind") == DELETIONS]
+    if not logs:
+        raise ScenarioFailure(f"{store_path(HISTORY)} holds no deletion log")
+    return logs[-1]["entries"]
+
+
 def journal_text(bench: Bench, binary: str = APP_JOURNAL, account: str | None = None) -> str:
     """A binary's journal (`okapi-app.log`, the helper's traces included, or `okapi.log`); empty when absent."""
     path = shell_path(f"{STATE_DIRECTORY}/{binary}")
@@ -192,18 +205,22 @@ def journal(bench: Bench, binary: str = APP_JOURNAL, account: str | None = None)
     return [json.loads(line) for line in journal_text(bench, binary, account).splitlines() if line.strip()]
 
 
-def cli(bench: Bench, *arguments: str, account: str | None = None) -> Outcome:
-    """Runs `okapi` in the machine as `account` (the administrator by default), whatever its exit code."""
+def cli(bench: Bench, *arguments: str, account: str | None = None,
+        environment: dict[str, str] | None = None) -> Outcome:
+    """Runs `okapi` in the machine as `account` (the administrator by default),
+    with `environment` added (`HOME`, `TMPDIR`...), whatever its exit code."""
     who = account or bench.accounts.admin.name
-    environment = [f"{name}={value}" for name, value in bench.okapi_environment().items()]
-    outcome = bench.execute(who, shlex.join(["env", *environment, f"{config.GUEST_BINARIES}/okapi", *arguments]))
-    bench.log(f"okapi {shlex.join(arguments)} as {who}: exit {outcome.code}")
+    variables = [f"{name}={value}" for name, value in {**bench.okapi_environment(), **(environment or {})}.items()]
+    outcome = bench.execute(who, shlex.join(["env", *variables, f"{config.GUEST_BINARIES}/okapi", *arguments]))
+    added = f" with {shlex.join(f'{name}={value}' for name, value in environment.items())}" if environment else ""
+    bench.log(f"okapi {shlex.join(arguments)} as {who}{added}: exit {outcome.code}")
     return outcome
 
 
-def cli_json(bench: Bench, *arguments: str, account: str | None = None, code: int = 0) -> dict:
+def cli_json(bench: Bench, *arguments: str, account: str | None = None,
+             environment: dict[str, str] | None = None, code: int = 0) -> dict:
     """`okapi --json` with `arguments`, its document read; another exit code than `code` fails."""
-    run = cli(bench, JSON_OPTION, *arguments, account=account)
+    run = cli(bench, JSON_OPTION, *arguments, account=account, environment=environment)
     if run.code != code:
         raise ScenarioFailure(f"okapi exited {run.code}, not {code}: {run.stderr.strip()}")
     return json.loads(run.stdout)

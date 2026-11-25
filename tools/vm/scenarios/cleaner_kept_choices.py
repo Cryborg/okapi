@@ -20,11 +20,8 @@ ACCOUNT_FILES = ["~/.cache/thumbnails/normal/okapi-vm.png", "~/.cache/fontconfig
 ADMIN_FILES = ["/var/crash/okapi-vm.crash"]
 THUMBNAILS = "Cache des miniatures"
 FONTS = "Cache des polices"
-CRASHES = "Rapports de plantage"
 DESELECT = "Tout désélectionner"
 NEW_ANALYSIS = "Nouvelle analyse"
-RIGHTS = "Obtenir les droits"
-RIGHTS_GIVEN = "Droits obtenus"
 SELECTED_PATTERN = r"^Éléments : (\d+) sur \d+$"
 SELECTIONS = "selections.json"
 UNREADABLE = "{"
@@ -81,12 +78,11 @@ def kept_unchecked(bench: Bench) -> None:
 
 def admin_never_kept(bench: Bench) -> None:
     bench.allow_elevation_without_password()
-    bench.ui.click(RIGHTS, role=cleaner.BUTTON)
-    bench.ui.wait(RIGHTS_GIVEN, timeout=cleaner.SCAN_TIMEOUT_SECONDS)
+    cleaner.obtain_rights(bench)
     show_system(bench)
-    cleaner.set_checked(bench, CRASHES, True)
-    cleaner.set_checked(bench, CRASHES, False)
-    bench.ui.wait(CRASHES, role=cleaner.CHECK_BOX)
+    cleaner.set_checked(bench, cleaner.CRASH_REPORTS, True)
+    cleaner.set_checked(bench, cleaner.CRASH_REPORTS, False)
+    bench.ui.wait(cleaner.CRASH_REPORTS, role=cleaner.CHECK_BOX)
     keys = unchecked_keys(bench)
     bench.check(not any(part.startswith(ADMIN_PATH_PREFIX) for key in keys for part in key),
                 f"CLN-018: an administrator group checked then unchecked is never kept ({keys})")

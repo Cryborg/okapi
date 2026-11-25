@@ -42,7 +42,11 @@ fn main() {
         if let Some(outcome) = search.wait(Duration::from_secs(1)) {
             break outcome;
         }
-        println!("… {:?}", search.progress());
+        println!(
+            "… {:?}, {} files listed",
+            search.progress(),
+            search.files_listed()
+        );
     };
     let report = search.report().unwrap();
     println!(

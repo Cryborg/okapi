@@ -102,9 +102,11 @@ Et `okapivm.common`, pour ce qui revient partout :
 - `helper(bench, requête, account=ROOT)` (un `Outcome`) : une ligne de requête (texte ou dict) écrite au helper installé, son entrée tenue ouverte jusqu'à sa fin (la fin de l'entrée l'annule) ; `helper_answer(outcome)` : sa réponse JSON ;
 - `enable_pam_tmpdir(bench)` : allume pam_tmpdir et refait la session, `TMPDIR` devient `/tmp/user/<uid>` ;
 - `mount_fat(bench, point)`, `bind_mount(bench, source, point, fuse=...)` (noyau, ou bindfs par FUSE), `unmount(bench, point)` ;
-- `Package(nom, version, application=..., program=..., hidden_launchers=(...), fields=(("Depends", "x"), ...))`, `build_deb(bench, paquet)`, `install_deb(bench, *paquets)` (une seule transaction : l'un peut dépendre de l'autre), `deb_installed(bench, nom)`, `publish_apt_repository(bench, *paquets)` : des paquets Debian faits dans la VM (un programme qui attend, un lanceur, des lanceurs cachés comme le second de Chromium, des champs de contrôle en plus : dépendance, `Section: metapackages`, `Priority: required`) et un dépôt APT local signé, qu'APT et PackageKit voient ;
+- `Package(nom, version, application=..., program=..., hidden_launchers=(...), fields=(("Depends", "x"), ...), scripts=(("prerm", "#!/bin/sh..."), ...))`, `build_deb(bench, paquet)`, `install_deb(bench, *paquets)` (une seule transaction : l'un peut dépendre de l'autre), `deb_installed(bench, nom)`, `publish_apt_repository(bench, *paquets)` : des paquets Debian faits dans la VM (un programme qui attend, un lanceur, des lanceurs cachés comme le second de Chromium, des champs de contrôle en plus : dépendance, `Section: metapackages`, `Priority: required`) et un dépôt APT local signé, qu'APT et PackageKit voient ;
 - `Snap(nom, version, application=..., program=...)`, `build_snap(bench, snap)`, `install_snap(bench, snap)` (chaque installation est une révision locale de plus, `x1`, `x2`...), `snap_installed(bench, nom)` : un snap strict fait par `snap pack` et installé `--dangerous`, sans la boutique, sur une base vide du banc (`okapi-vm-base`, posée au premier snap) ; `pack_snap` pour un `snap.yaml` à soi ;
 - `bench.set_elevation(réponse, config.UNINSTALL_ACTIONS)` : la même règle polkit pour les désinstallations (PackageKit, snapd, flatpak) au lieu de l'action du helper ;
+- `scope_unit(id_du_lanceur, kind=GNOME_SCOPE | FLATPAK_SCOPE | OWN_SCOPE, number=N)` (le nom d'un scope comme GNOME, flatpak ou Chromium nomment les leurs), `open_in_scope(bench, scope, commande, environment)`, `scope_running(bench, scope)` : une appli lancée dans un scope systemd de la session ;
+- `watch_bus(bench, règle, system=...)` puis `bus_calls(bench, system=...)` (des `BusCall` : expéditeur, interface, méthode, arguments) : dbus-monitor écoute le bus de la session ou du système dès l'appel ; `bus_names(bench, pid)` : les noms uniques d'un processus sur le bus, pour reconnaître les appels d'Okapi ;
 - `open_fake_browser(bench, firefox_profile=..., chromium_profile=...)`, `close_fake_browser(bench)` : un processus qui tient un profil comme un navigateur ouvert (`.parentlock` verrouillé, le nom sous Linux, visible dans `/proc/locks` ; `SingletonLock` qui le nomme) ; `stubborn=True`, il ignore SIGTERM (et `close_fake_browser` le tue par SIGKILL).
 
 Et `okapivm.cleaner`, pour la page Nettoyeur (ses textes et les noms des groupes, `CRASH_REPORTS`, `JOURNAL_LOGS`... y sont des constantes) :
@@ -114,6 +116,12 @@ Et `okapivm.cleaner`, pour la page Nettoyeur (ses textes et les noms des groupes
 - `obtain_rights(bench)` (jusqu'à « Droits obtenus »), `row(bench, groupe)` (la case d'un groupe, la liste défilée jusqu'à elle), `rows(bench)` (toutes les cases, la liste parcourue de haut en bas), `check_groups(bench, cleaner.CRASH_REPORTS, ...)` (ces groupes cochés, ceux de root sont proposés décochés) ;
 - `confirm` (la confirmation acceptée, sans attendre la fin) et `clean(bench, recorded=...)` (jusqu'à « Nettoyage terminé », puis le reçu enregistré dans l'historique, sauf `recorded=False`) ;
 - `last_scan(bench)` : les champs de la trace « scan finished » (`entries`, `bytes`, `issues`), écrite aussi pour une analyse partielle, quand `last-analysis.json` ne l'est que pour une analyse d'au moins les catégories par défaut.
+
+Et `okapivm.apps`, pour la page Applications (ses textes, boutons et titres d'étapes y sont des constantes) :
+
+- `open_page`, `wait_read`, `refresh`, `rows`, `choose_source`, `search`, `open_detail(bench, nom, source, query=...)` (`query` : ce qui se tape dans la recherche, en ASCII, quand le nom a un accent), `labels` ;
+- `ask_uninstall(bench, nom, source, query=..., step=...)`, `wait_step`, `confirm(bench, bouton)` (le bouton de la modale, pas celui du détail), `uninstall(...)` et `wait_done` (jusqu'au bandeau « {} désinstallée ») ;
+- `last_uninstall(bench)` : la dernière ligne `uninstall` de l'historique ; `traced(bench, message)` : les événements du journal qui portent ce message.
 
 `scenarios/_admin.py` garde ce qui n'est qu'aux scénarios des droits : le bandeau des droits (`banner`, `wait_banner`, `waiting`) et l'âge qui dépasse le plancher du helper (`AGING_SECONDS`).
 

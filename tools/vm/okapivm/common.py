@@ -11,13 +11,14 @@ from dataclasses import dataclass
 from . import config
 from .bench import ROOT, Bench, Elevation, Outcome, ScenarioFailure
 
-__all__ = ["ROOT", "WAITING_PROGRAM", "Elevation", "Files", "Outcome", "Package", "Snap", "bind_mount", "build_deb",
-           "build_snap", "check_gone", "check_kept", "cli", "cli_json", "close_fake_browser", "deb_installed",
-           "enable_pam_tmpdir", "expand_home", "helper", "helper_answer", "install_deb", "install_snap",
-           "install_snap_base", "journal", "journal_text", "last_deletions", "last_receipt", "launcher", "mount_fat",
-           "open_fake_browser", "open_screen", "pack_snap", "plant", "present", "publish_apt_repository",
-           "read_store", "shell_path", "snap_installed", "store_path", "unmount", "write_files", "write_settings",
-           "write_store"]
+__all__ = ["FLATPAK_SCOPE", "GNOME_SCOPE", "OWN_SCOPE", "ROOT", "WAITING_PROGRAM", "BusCall", "Elevation", "Files",
+           "Outcome", "Package", "Snap", "bind_mount", "build_deb", "build_snap", "bus_calls", "bus_names",
+           "check_gone", "check_kept", "cli", "cli_json", "close_fake_browser", "deb_installed", "enable_pam_tmpdir",
+           "expand_home", "helper", "helper_answer", "install_deb", "install_snap", "install_snap_base", "journal",
+           "journal_text", "last_deletions", "last_receipt", "launcher", "mount_fat", "open_fake_browser",
+           "open_in_scope", "open_screen", "pack_snap", "plant", "present", "publish_apt_repository", "read_store",
+           "scope_running", "scope_unit", "shell_path", "snap_installed", "store_path", "unmount", "watch_bus",
+           "write_files", "write_settings", "write_store"]
 
 HOME_PREFIX = "~/"
 SELECTED = "selected"
@@ -61,6 +62,16 @@ SNAP_BASE = "okapi-vm-base"
 # What snap-confine mounts the host's over, or creates, in an application's base.
 SNAP_BASE_FOLDERS = ("bin", "dev", "etc", "home", "lib", "lib64", "media", "mnt", "opt", "proc", "root", "run",
                      "snap", "srv", "sys", "tmp", "usr", "var")
+GNOME_SCOPE = "gnome-"
+FLATPAK_SCOPE = "flatpak-"
+OWN_SCOPE = ""
+SCOPE_POLLS = 50
+SCOPE_POLL_SECONDS = 0.1
+BUS_MONITOR_UNIT = "okapi-vm-bus-monitor"
+BUS_RECORD = "/var/tmp/okapi-vm-bus"
+# The basic types dbus-monitor prints a value of, one per line.
+BUS_SCALARS = {"string", "object", "int16", "uint16", "int32", "uint32", "int64", "uint64", "boolean", "byte",
+               "double"}
 FAKE_BROWSER_UNIT = "okapi-vm-browser"
 FAKE_BROWSER_STUBBORN = "--stubborn"
 FAKE_BROWSER_STUBBORN_KILL = "SIGKILL"
@@ -308,8 +319,10 @@ def write_files(files: dict[str, str], executables: Sequence[str] = ()) -> str:
 class Package:
     """A Debian package made in the machine: `program` as `/usr/bin/<name>`, a
     launcher of it if `application`, a hidden launcher for each of
-    `hidden_launchers` (as Chromium has a second one), and `fields` added to its
-    control file (`Depends`, `Section`, `Priority`, `Protected`...)."""
+    `hidden_launchers` (as Chromium has a second one), `fields` added to its
+    control file (`Depends`, `Section`, `Priority`, `Protected`...) and its
+    maintainer `scripts` by name (`prerm`, `postinst`...). Its `Installed-Size`
+    is measured, as `dpkg-gencontrol` does."""
 
     name: str
     version: str = "1.0"
@@ -317,6 +330,7 @@ class Package:
     program: str = WAITING_PROGRAM
     hidden_launchers: tuple[str, ...] = ()
     fields: tuple[tuple[str, str], ...] = ()
+    scripts: tuple[tuple[str, str], ...] = ()
 
     @property
     def deb(self) -> str:
@@ -342,9 +356,12 @@ def build_deb(bench: Bench, package: Package) -> str:
         files[f"{root}/usr/share/applications/{package.name}.desktop"] = launcher(package.name, package.executable)
     for name in package.hidden_launchers:
         files[f"{root}/usr/share/applications/{name}.desktop"] = launcher(name, package.executable, hidden=True)
+    scripts = {f"{root}/DEBIAN/{name}": text for name, text in package.scripts}
+    measure = f"du --summarize --block-size=1K --exclude=DEBIAN {shlex.quote(root)} | cut -f1"
     bench.root("\n".join([
         f"rm -rf -- {shlex.quote(root)}",
-        write_files(files, [f"{root}{package.executable}"]),
+        write_files({**files, **scripts}, [f"{root}{package.executable}", *scripts]),
+        f"printf 'Installed-Size: %s\\n' \"$({measure})\" >> {shlex.quote(f'{root}/DEBIAN/control')}",
         shlex.join(["dpkg-deb", "--root-owner-group", "--build", root, package.deb]),
     ]))
     bench.log(f"built {package.deb}")
@@ -477,3 +494,88 @@ def open_fake_browser(bench: Bench, *, firefox_profile: str | None = None,
 def close_fake_browser(bench: Bench) -> None:
     bench.user(shlex.join(["systemctl", "--user", "stop", FAKE_BROWSER_UNIT]))
     bench.log("fake browser closed")
+
+
+def scope_unit(launcher_id: str, *, kind: str = GNOME_SCOPE, number: int = 1) -> str:
+    """The name of a scope as an application's launch gives it: `app-gnome-<id>-<n>.scope`
+    by GNOME (`GNOME_SCOPE`), `app-flatpak-<id>-<n>.scope` by flatpak (`FLATPAK_SCOPE`),
+    `app-<id>-<n>.scope` by an application itself (`OWN_SCOPE`, Chromium's second one)."""
+    escaped = launcher_id.replace("-", "\\x2d")
+    return f"app-{kind}{escaped}-{number}.scope"
+
+
+def open_in_scope(bench: Bench, unit: str, command: Sequence[str],
+                  environment: dict[str, str] | None = None) -> None:
+    """Runs `command` in a scope of the administrator's systemd named `unit`, as
+    GNOME starts an application, left running after this returns."""
+    line = shlex.join(["systemd-run", "--user", "--scope", "--quiet", f"--unit={unit}",
+                       *(f"--setenv={name}={value}" for name, value in (environment or {}).items()), *command])
+    bench.user(f"setsid --fork {line} </dev/null >/dev/null 2>&1")
+    bench.user(f"for attempt in $(seq {SCOPE_POLLS}); do if {scope_test(unit)}; then exit 0; fi; "
+               f"sleep {SCOPE_POLL_SECONDS}; done; exit 1")
+    bench.log(f"{shlex.join(command)} runs in {unit}")
+
+
+def scope_test(unit: str) -> str:
+    return f"systemctl --user --quiet is-active {shlex.quote(unit)}"
+
+
+def scope_running(bench: Bench, unit: str) -> bool:
+    return bench.execute(bench.accounts.admin.name, scope_test(unit)).code == 0
+
+
+@dataclass(frozen=True)
+class BusCall:
+    """A method call seen on a bus: who sent it, to what, and its arguments'
+    plain values in order, containers flattened."""
+
+    sender: str
+    interface: str
+    member: str
+    arguments: tuple[str, ...]
+
+
+def watch_bus(bench: Bench, match: str, *, system: bool = False) -> None:
+    """Starts recording the method calls of a bus (the administrator's session
+    one, or the system's) that `match` keeps (`"destination='org.freedesktop.systemd1'"`)."""
+    account, scope = (ROOT, []) if system else (bench.accounts.admin.name, ["--user"])
+    bench.run_as(account, shlex.join([
+        "systemd-run", *scope, "--quiet", f"--unit={BUS_MONITOR_UNIT}",
+        f"--property=StandardOutput=truncate:{bus_record(system)}",
+        "dbus-monitor", "--system" if system else "--session", f"type='method_call',{match}",
+    ]))
+    bench.log(f"watching the {'system' if system else 'session'} bus: {match}")
+
+
+def bus_record(system: bool) -> str:
+    return f"{BUS_RECORD}-{'system' if system else 'session'}.txt"
+
+
+def bus_calls(bench: Bench, *, system: bool = False) -> list[BusCall]:
+    """The method calls `watch_bus` recorded so far, oldest first."""
+    text = bench.run_as(ROOT if system else bench.accounts.admin.name, shlex.join(["cat", bus_record(system)]))
+    calls: list[BusCall] = []
+    header: dict[str, str] | None = None
+    arguments: list[str] = []
+    for line in [*text.splitlines(), ""]:
+        if line.startswith(" ") and header is not None:
+            kind, _, value = line.strip().partition(" ")
+            if kind in BUS_SCALARS:
+                arguments.append(value.strip('"') if kind == "string" else value)
+            continue
+        if header is not None:
+            calls.append(BusCall(header.get("sender", ""), header.get("interface", ""), header.get("member", ""),
+                                 tuple(arguments)))
+            header = None
+        if line.startswith("method call "):
+            header = dict(word.rstrip(";").split("=", 1) for word in line.split() if "=" in word)
+            arguments = []
+    return calls
+
+
+def bus_names(bench: Bench, pid: int, *, system: bool = False) -> set[str]:
+    """The unique names a process holds on a bus now."""
+    account, scope = (ROOT, "--system") if system else (bench.accounts.admin.name, "--user")
+    listing = bench.run_as(account, shlex.join(["busctl", scope, "list", "--unique", "--no-legend"]))
+    return {words[0] for words in (line.split() for line in listing.splitlines())
+            if len(words) > 1 and words[1] == str(pid)}

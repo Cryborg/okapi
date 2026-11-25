@@ -15,7 +15,7 @@ import secrets
 import shlex
 from typing import NamedTuple
 
-from okapivm import common
+from okapivm import cleaner, common
 from okapivm.bench import Bench
 
 from scenarios import _admin
@@ -92,21 +92,21 @@ def by_age_through_the_interface(bench: Bench, where: str) -> None:
     plant(bench, where, [young], SMALL_ARCHIVE_BYTES)
     active = {name for name in names(bench, where) if "@" not in name}
 
-    _admin.scan(bench)
-    line = _admin.row(bench, _admin.JOURNAL_LOGS)
+    cleaner.scan(bench)
+    line = cleaner.row(bench, cleaner.JOURNAL_LOGS)
     bench.check(line.get("description") == _admin.ADMINISTRATOR,
                 f"ADM-015: before the rights, the journal's line is not measured ({line.get('description')!r})")
-    _admin.obtain_rights(bench)
-    line = _admin.row(bench, _admin.JOURNAL_LOGS)
+    cleaner.obtain_rights(bench)
+    line = cleaner.row(bench, cleaner.JOURNAL_LOGS)
     bench.screenshot("journal-mesure")
-    bench.check(_admin.CHECKED not in line["states"],
+    bench.check(cleaner.CHECKED not in line["states"],
                 f"ADM-015: the journal's line is offered unchecked ({line['states']})")
     bench.check("Éléments : 2," in line.get("description", ""),
                 f"ADM-015: root measured the two old archives, the young one counted out ({line.get('description')!r})")
 
     bench.root(shlex.join(["touch", f"{where}/{touched.name}"]))
-    _admin.check_groups(bench, _admin.JOURNAL_LOGS)
-    _admin.clean(bench)
+    cleaner.check_groups(bench, cleaner.JOURNAL_LOGS)
+    cleaner.clean(bench)
     bench.screenshot("journal-nettoye")
     left = names(bench, where)
     bench.check(removed.name not in left, "ADM-015: the archive older than 30 days is gone")

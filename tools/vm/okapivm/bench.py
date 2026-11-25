@@ -27,6 +27,8 @@ ROOT = "root"
 PROFILE_VARIABLE = "LLVM_PROFILE_FILE"
 OKAPI_APPLICATION = "okapi"
 SHELL_APPLICATION = "gnome-shell"
+# The title of the interface's main window; a modal of its own is an untitled frame inside it.
+MAIN_WINDOW = "Okapi"
 APP_EXIT_TIMEOUT_SECONDS = 60
 APP_POLL_SECONDS = 0.5
 SESSION_READY_TIMEOUT_SECONDS = 120
@@ -233,7 +235,7 @@ class Ui:
         if self.application == SHELL_APPLICATION:
             left, top = 0, 0
         else:
-            _, _, window_width, window_height = self.node(role="frame")["extents"]
+            _, _, window_width, window_height = self.node(MAIN_WINDOW, role="frame")["extents"]
             left, top = config.SCREEN_WIDTH - window_width, config.SCREEN_HEIGHT - window_height
         return left + x + width // 2, top + y + height // 2
 

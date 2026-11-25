@@ -15,7 +15,7 @@ import subprocess
 import tarfile
 from pathlib import Path
 
-from okapivm import common, config
+from okapivm import cleaner, common, config
 from okapivm.bench import Bench
 
 from scenarios import _admin
@@ -69,8 +69,8 @@ def replace_helper(bench: Bench, local: Path | None = None, *, text: str | None 
 
 def ask(bench: Bench, label: str) -> str:
     """Asks for the rights from a fresh start and gives the banner once it says what went wrong."""
-    _admin.scan(bench)
-    bench.ui.click(_admin.OBTAIN, role="button")
+    cleaner.scan(bench)
+    bench.ui.click(cleaner.OBTAIN, role="button")
     said = _admin.wait_banner(bench, _admin.STILL_WAITING)
     bench.screenshot(label)
     return said
@@ -78,7 +78,7 @@ def ask(bench: Bench, label: str) -> str:
 
 def launches(bench: Bench) -> int:
     """How many times the interface ran pkexec, by its journal."""
-    return common.app_journal(bench).count(LAUNCHED)
+    return common.journal_text(bench).count(LAUNCHED)
 
 
 def run(bench: Bench) -> None:
@@ -92,7 +92,7 @@ def run(bench: Bench) -> None:
     bench.check(said.startswith(NOT_INSTALLED) and _admin.waiting(said) > 0,
                 f"ADM-007: the helper missing, the interface says so and the group still waits ({said!r})")
     bench.check(launches(bench) == 0, "ADM-007: pkexec is never launched for a helper missing")
-    bench.check("the helper is not installed" in common.app_journal(bench),
+    bench.check("the helper is not installed" in common.journal_text(bench),
                 "ADM-007: the interface's journal says the helper is not installed")
 
     replace_helper(bench, old)
@@ -103,14 +103,14 @@ def run(bench: Bench) -> None:
                 f"ADM-008: the helper installed speaks version {OLD_PROTOCOL_VERSION} (exit {version.code}, {answered})")
     said = ask(bench, "ancien")
     bench.check(said.startswith(OUTDATED), f"ADM-008: a helper of version {OLD_PROTOCOL_VERSION} is said outdated ({said!r})")
-    bench.check("unsupportedVersion" in common.app_journal(bench),
+    bench.check("unsupportedVersion" in common.journal_text(bench),
                 "ADM-008: the interface's journal holds the old helper's refusal, unsupportedVersion")
     bench.check(launches(bench) == 1, "ADM-007: the journal does trace a run of pkexec, so its absence above is one")
 
     replace_helper(bench, text=NONSENSE_HELPER)
     said = ask(bench, "illisible")
     bench.check(said.startswith(FAILED), f"ADM-009: an answer that cannot be read is said a failure ({said!r})")
-    bench.check("helper gave no answer to act on" in common.app_journal(bench),
+    bench.check("helper gave no answer to act on" in common.journal_text(bench),
                 "ADM-009: the interface's journal keeps the answer it could not read")
 
     kept = common.present(bench, crash)

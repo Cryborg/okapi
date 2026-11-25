@@ -48,6 +48,15 @@ GUEST_APPLICATIONS = "/usr/share/applications"
 GUEST_ICONS = "/usr/share/icons/hicolor/scalable/apps"
 GUEST_POLKIT_RULE = "/etc/polkit-1/rules.d/49-okapi-vm.rules"
 POLKIT_ACTION = "io.github.cryborg.okapi.clean"
+# What uninstalling an application asks polkit for: PackageKit's removal,
+# snapd's, and flatpak's system helper (its repository pruned after).
+UNINSTALL_ACTIONS = (
+    "org.freedesktop.packagekit.package-remove",
+    "io.snapcraft.snapd.manage",
+    "org.freedesktop.Flatpak.app-uninstall",
+    "org.freedesktop.Flatpak.runtime-uninstall",
+    "org.freedesktop.Flatpak.modify-repo",
+)
 APP_UNIT = "okapi-app"
 PROVISIONED_MARKER = "OKAPI-VM-PROVISIONED"
 

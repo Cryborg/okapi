@@ -17,7 +17,7 @@ import shlex
 from okapivm import common
 from okapivm.bench import Bench
 
-TAGS = ["invariants", "variables", "mounts", "known-bug"]
+TAGS = ["invariants", "variables", "mounts"]
 
 # Beyond the 30 days of the temporary folders' rules.
 AGING_SECONDS = 31 * 24 * 60 * 60
@@ -127,7 +127,6 @@ def pam_tmpdir(bench: Bench, base: str, uid: str) -> None:
     bench.root(shlex.join(["su", "--login", other, "--command", "true"]))
     other_uid = bench.other("id -u").strip()
     others = common.Files(other, [f"/tmp/user/{other_uid}/okapi-vm-601.tmp"], SIZE)
-    own_left: dict[str, list[dict]] = {}
     for attempt in ("cli", "interface"):
         loose = common.Files(user, [f"/tmp/okapi-vm-601-{attempt}.tmp"], SIZE)
         own = common.Files(user, [f"{session_temporary}/okapi-vm-601-{attempt}.tmp"], SIZE)
@@ -156,11 +155,9 @@ def pam_tmpdir(bench: Bench, base: str, uid: str) -> None:
         common.check_kept(bench, others)
         bench.root(shlex.join(["test", "-d", session_temporary]))
         bench.log(f"ok: INV-601: /tmp/user and {session_temporary} are left ({attempt})")
-        if common.present(bench, own):
-            own_left[attempt] = [entry for entry in outcomes if entry.get("path") in own.paths]
-    # Last, once every check of safety has passed: what this run cannot do.
-    bench.check(not own_left, "INV-601 (known bug): the session's TMPDIR under pam_tmpdir is never emptied: "
-                f"reach_path opens /tmp/user (mode 711) for reading on its way down and gets EACCES ({own_left})")
+        left = [entry for entry in outcomes if entry.get("path") in own.paths]
+        bench.check(own.paths[0] in gone and not common.present(bench, own),
+                    f"INV-601: the session's TMPDIR, past /tmp/user (mode 711), is emptied by the {attempt} ({left})")
 
 
 def run(bench: Bench) -> None:

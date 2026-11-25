@@ -143,7 +143,6 @@ struct State {
     folders: Folders,
     asked: Option<Asked>,
     search: Search,
-    listed: u64,
     groups: Vec<GroupChoice>,
     /// The personal folders holding a copy, offered to the quick selection.
     quick_folders: Vec<usize>,
@@ -201,7 +200,6 @@ impl DuplicatesScreen {
             language,
             asked: None,
             search: Search::Idle,
-            listed: 0,
             groups: Vec::new(),
             quick_folders: Vec::new(),
             lines: Vec::new(),
@@ -425,7 +423,6 @@ impl DuplicatesScreen {
         {
             let mut state = self.0.borrow_mut();
             state.search = Search::Opening(receiver);
-            state.listed = 0;
             state.asked = Some(asked);
         }
         self.with_window(|duplicates| {
@@ -487,7 +484,7 @@ impl DuplicatesScreen {
             Search::Running(search) => Arc::clone(search),
             _ => return,
         };
-        self.show_progress(search.progress());
+        self.show_progress(search.progress(), search.files_listed());
         let Some(outcome) = search.wait(Duration::ZERO) else {
             return;
         };
@@ -509,16 +506,13 @@ impl DuplicatesScreen {
         self.with_window(|duplicates| duplicates.set_phase(phase));
     }
 
-    fn show_progress(&self, progress: Progress) {
+    fn show_progress(&self, progress: Progress, files_listed: u64) {
         let language = self.0.borrow().language;
-        if let Progress::Listing { files } = progress {
-            self.0.borrow_mut().listed = files;
-        }
-        let listed = grouped(self.0.borrow().listed, language);
+        let listed = grouped(files_listed, language);
         self.with_window(|duplicates| {
             duplicates.set_files_listed(listed.into());
             match progress {
-                Progress::Listing { .. } => duplicates.set_stage(ui::SearchStage::Listing),
+                Progress::Listing => duplicates.set_stage(ui::SearchStage::Listing),
                 Progress::Ends { read, to_read } => {
                     duplicates.set_stage(ui::SearchStage::Ends);
                     duplicates.set_ends_read(grouped(read, language).into());

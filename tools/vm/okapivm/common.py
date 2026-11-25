@@ -15,7 +15,7 @@ __all__ = ["ROOT", "Elevation", "Files", "Outcome", "Package", "bind_mount", "bu
            "cli", "cli_json", "close_fake_browser", "enable_pam_tmpdir", "expand_home", "helper", "helper_answer",
            "install_deb", "journal", "journal_text", "last_deletions", "last_receipt", "mount_fat",
            "open_fake_browser", "open_screen", "plant", "present", "publish_apt_repository", "read_store",
-           "shell_path", "store_path", "unmount", "write_settings", "write_store"]
+           "shell_path", "store_path", "trashed", "unmount", "write_settings", "write_store", "write_user_dirs"]
 
 HOME_PREFIX = "~/"
 SELECTED = "selected"
@@ -43,6 +43,8 @@ STORE_FILES = {
     "selections.json": STATE_DIRECTORY,
     "seen-apps.json": STATE_DIRECTORY,
 }
+USER_DIRS_FOLDER = "~/.config"
+USER_DIRS = "user-dirs.dirs"
 PAM_TMPDIR_PROFILE = "tmpdir"
 MOUNT_IMAGES = "/var/tmp/okapi-vm-mounts"
 FAT_SIZE_MEGABYTES = 64
@@ -203,6 +205,23 @@ def journal_text(bench: Bench, binary: str = APP_JOURNAL, account: str | None = 
 def journal(bench: Bench, binary: str = APP_JOURNAL, account: str | None = None) -> list[dict]:
     """The events of a binary's journal, oldest first."""
     return [json.loads(line) for line in journal_text(bench, binary, account).splitlines() if line.strip()]
+
+
+def write_user_dirs(bench: Bench, folders: dict[str, str], account: str | None = None) -> None:
+    """Replaces `~/.config/user-dirs.dirs`, the personal folders Okapi offers, read
+    when it starts: `{"DOCUMENTS": "$HOME/Documents", "MUSIC": "/media/key"}`."""
+    text = "".join(f'XDG_{kind}_DIR="{path}"\n' for kind, path in folders.items())
+    bench.run_as(account or bench.accounts.admin.name,
+                 f"mkdir -p -- {shell_path(USER_DIRS_FOLDER)} && printf %s {shlex.quote(text)} "
+                 f"> {shell_path(f'{USER_DIRS_FOLDER}/{USER_DIRS}')}")
+    bench.log(f"personal folders: {', '.join(f'{kind}={path}' for kind, path in folders.items()) or 'none'}")
+
+
+def trashed(bench: Bench, account: str | None = None) -> dict[str, str]:
+    """What the account's trash holds, as `gio trash` lists it: each file's
+    original path, and its `trash:///` name to restore it by."""
+    listing = bench.run_as(account or bench.accounts.admin.name, "gio trash --list")
+    return dict(reversed(line.split("\t", 1)) for line in listing.splitlines() if "\t" in line)
 
 
 def cli(bench: Bench, *arguments: str, account: str | None = None,

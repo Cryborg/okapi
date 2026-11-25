@@ -529,6 +529,19 @@ fn files_that_differ_past_the_first_block_are_no_copies() {
     );
 }
 
+#[test]
+fn the_files_listed_are_still_counted_once_the_listing_is_over() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let content = data(35, 3);
+    write(&root.join("a"), &content);
+    write(&root.join("b"), &content);
+    write(&root.join("small"), b"x");
+    let search = searched(root);
+    assert!(matches!(search.progress(), Progress::Contents { .. }));
+    assert_eq!(search.files_listed(), 3);
+}
+
 /// Puts a link to its twin `a` in the place of the file at `path`.
 fn swapped_for_a_link(path: &Path) {
     fs::remove_file(path).unwrap();

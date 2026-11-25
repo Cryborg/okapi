@@ -458,6 +458,23 @@ mod tests {
             .collect()
     }
 
+    /// Invariant 4: the window frame `sctk-adwaita` draws on Wayland runs
+    /// dbus-send, gsettings and fc-match. Slint's winit backend is patched
+    /// not to bring it (`vendor/`); a Slint taken from crates.io again would.
+    #[test]
+    fn the_window_frame_that_runs_commands_is_never_built() {
+        let lock = include_str!("../../../Cargo.lock");
+        let backend = lock
+            .split("[[package]]")
+            .find(|package| package.contains("name = \"i-slint-backend-winit\""))
+            .unwrap_or_default();
+        assert!(
+            !backend.is_empty() && !backend.contains("source = "),
+            "Slint's winit backend no longer comes from vendor/: copy it again at Slint's version"
+        );
+        assert!(!lock.contains("name = \"sctk-adwaita\""));
+    }
+
     #[test]
     fn the_license_paragraphs_lose_no_word_and_stay_short() {
         let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");

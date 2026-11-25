@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.1.0"
@@ -42,7 +43,8 @@ resvg = { version = "0.48.1", default-features = false }
 icu_normalizer = { version = "2.4.0", default-features = false, features = ["compiled_data"] }
 # Without the system tray it would bring; the compatibility feature is required.
 slint = { version = "=1.18.1", default-features = false, features = ["std", "backend-default", "renderer-femtovg", "renderer-software", "accessibility", "compat-1-2"] }
-# The testing backend follows no semver: the three move together, exactly.
+# The testing backend follows no semver: the three move together, exactly,
+# with the copy of the winit backend (`[patch.crates-io]` below).
 slint-build = "=1.18.1"
 i-slint-backend-testing = "=1.18.1"
 okapi-rules = { path = "crates/rules" }
@@ -51,6 +53,12 @@ okapi-engine = { path = "crates/engine" }
 okapi-store = { path = "crates/store" }
 okapi-helper = { path = "crates/helper" }
 okapi-tools = { path = "crates/tools" }
+
+# Slint's winit backend, copied from crates.io as it is but for one line of its
+# Cargo.toml (said there): Slint has no feature to leave out the window frame
+# that runs commands. Copied again, the same way, with each version of Slint.
+[patch.crates-io]
+i-slint-backend-winit = { path = "vendor/i-slint-backend-winit" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

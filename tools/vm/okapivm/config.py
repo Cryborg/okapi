@@ -57,6 +57,7 @@ UNINSTALL_ACTIONS = (
     "org.freedesktop.Flatpak.runtime-uninstall",
     "org.freedesktop.Flatpak.modify-repo",
 )
+UPDATE_ACTIONS = ("org.freedesktop.packagekit.system-update", "io.snapcraft.snapd.manage")
 APP_UNIT = "okapi-app"
 PROVISIONED_MARKER = "OKAPI-VM-PROVISIONED"
 

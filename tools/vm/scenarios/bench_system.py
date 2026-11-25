@@ -1,7 +1,8 @@
 """Bench: what the scenarios share outside the interface, each tried once.
 
 Exit codes and outputs kept apart, the second account, Okapi's store, the
-CLI, polkit's refusal, FAT and bind mounts, packages and an APT repository, a local snap,
+CLI, polkit's refusal, FAT and bind mounts, packages and APT suites (signed or
+not, a security one, one whose downloads hang), a local snap,
 a browser holding its profiles, then pam_tmpdir after a new session.
 """
 
@@ -23,6 +24,9 @@ FUSE_MOUNTPOINT = "/mnt/okapi-vm-bindfs"
 FIREFOX_PROFILE = "~/.mozilla/firefox/okapi-vm.default"
 CHROMIUM_PROFILE = "~/.config/chromium"
 STORE_PROBE = "seen-apps.json"
+KIBIBYTE = 1024
+STALLED_SECONDS = 5
+TIMED_OUT = 124
 
 
 def filesystem(bench: Bench, mountpoint: str) -> str:
@@ -77,12 +81,31 @@ def packages(bench: Bench) -> None:
     common.install_deb(bench, first)
     installed = bench.root("dpkg-query --show --showformat='${Version}' okapi-vm-demo")
     bench.check(installed == first.version, f"{first.name} {first.version} is installed")
+    common.set_ubuntu_sources_aside(bench)
     second = common.Package(first.name, version="2.0")
     common.build_deb(bench, second)
     common.publish_apt_repository(bench, second)
     upgradable = bench.root("apt list --upgradable 2>/dev/null")
     bench.check(f"{second.name}/" in upgradable and second.version in upgradable,
                 f"APT offers {second.name} {second.version} from the local repository")
+    installed_security = common.Package("okapi-vm-secure")
+    security = common.Package(installed_security.name, version="2.0")
+    for package in (installed_security, security):
+        common.build_deb(bench, package)
+    common.install_deb(bench, installed_security)
+    common.publish_apt_repository(bench, security, suite=f"{common.APT_SUITE}-security", signed=False)
+    simulated = [line for line in bench.root("apt-get --simulate dist-upgrade").splitlines()
+                 if line.startswith(f"Inst {security.name} ")]
+    bench.check(len(simulated) == 1 and f"({security.version} " in simulated[0] and "-security" in simulated[0],
+                f"an unsigned suite named -security offers {security.name} {security.version} ({simulated})")
+    weighty = common.Package("okapi-vm-weighty", version="2.0", payload=KIBIBYTE * KIBIBYTE)
+    common.build_deb(bench, weighty)
+    weighs = int(bench.root(f"stat --format=%s {weighty.deb}"))
+    bench.check(weighs > weighty.payload, f"a payload of {weighty.payload} bytes is not compressed ({weighs})")
+    common.stall_apt_downloads(bench)
+    hung = bench.execute(common.ROOT, f"timeout {STALLED_SECONDS} apt-get download {second.name}={second.version}")
+    bench.check(hung.code == TIMED_OUT, f"a download from the stalling server hangs (code {hung.code})")
+    common.publish_apt_repository(bench, second)
     dependent = common.Package("okapi-vm-dependent", application=False, hidden_launchers=("okapi-vm-hidden",),
                                fields=(("Depends", first.name), ("Section", "metapackages")))
     common.build_deb(bench, dependent)

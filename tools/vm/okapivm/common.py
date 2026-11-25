@@ -11,13 +11,13 @@ from dataclasses import dataclass
 from . import config
 from .bench import ROOT, Bench, Elevation, Outcome, ScenarioFailure
 
-__all__ = ["ROOT", "WAITING_PROGRAM", "Elevation", "Files", "Outcome", "Package", "Snap", "bind_mount", "build_deb",
-           "build_snap", "check_gone", "check_kept", "cli", "cli_json", "close_fake_browser", "deb_installed",
+__all__ = ["ROOT", "WAITING_PROGRAM", "Elevation", "Files", "Outcome", "Package", "Snap", "apt_source", "bind_mount",
+           "build_deb", "build_snap", "check_gone", "check_kept", "cli", "cli_json", "close_fake_browser", "deb_installed",
            "enable_pam_tmpdir", "expand_home", "helper", "helper_answer", "install_deb", "install_snap",
            "install_snap_base", "journal", "journal_text", "last_deletions", "last_receipt", "launcher", "mount_fat",
            "open_fake_browser", "open_screen", "pack_snap", "plant", "present", "publish_apt_repository",
-           "read_store", "shell_path", "snap_installed", "store_path", "trashed", "unmount", "write_files",
-           "write_settings", "write_store", "write_user_dirs"]
+           "read_store", "set_ubuntu_sources_aside", "shell_path", "snap_installed", "stall_apt_downloads",
+           "store_path", "trashed", "unmount", "write_files", "write_settings", "write_store", "write_user_dirs"]
 
 HOME_PREFIX = "~/"
 SELECTED = "selected"
@@ -56,7 +56,31 @@ APT_REPOSITORY = "/srv/okapi-vm-apt"
 APT_GNUPG = "/root/.okapi-vm-gnupg"
 APT_KEY_NAME = "okapi-vm <okapi-vm@localhost>"
 APT_KEYRING = "/etc/apt/keyrings/okapi-vm.gpg"
-APT_SOURCE = "/etc/apt/sources.list.d/okapi-vm.list"
+APT_SUITE = "okapi-vm"
+APT_SOURCES = "/etc/apt/sources.list.d"
+UBUNTU_SOURCES = "/etc/apt/sources.list.d/ubuntu.sources"
+UBUNTU_SOURCES_ASIDE = "/var/tmp/okapi-vm-ubuntu.sources"
+STALLING_SERVER = "/var/tmp/okapi-vm-stall.py"
+STALLING_UNIT = "okapi-vm-stall"
+STALLING_PORT = 8099
+STALLING_SECONDS = 3600
+STALLING_SERVER_PROGRAM = f"""import functools, http.server, os, sys, time
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if not self.path.endswith(".deb"):
+            return super().do_GET()
+        path = self.translate_path(self.path)
+        size = os.path.getsize(path)
+        self.send_response(200)
+        self.send_header("Content-Length", str(size))
+        self.end_headers()
+        with open(path, "rb") as deb:
+            self.wfile.write(deb.read(size - 1))
+        self.wfile.flush()
+        time.sleep({STALLING_SECONDS})
+http.server.ThreadingHTTPServer(("127.0.0.1", int(sys.argv[2])),
+                                functools.partial(Handler, directory=sys.argv[1])).serve_forever()
+"""
 # What a package or a snap of the bench runs: it waits until stopped.
 WAITING_PROGRAM = "#!/bin/sh\nexec sleep infinity\n"
 SNAP_BASE = "okapi-vm-base"
@@ -328,7 +352,9 @@ class Package:
     """A Debian package made in the machine: `program` as `/usr/bin/<name>`, a
     launcher of it if `application`, a hidden launcher for each of
     `hidden_launchers` (as Chromium has a second one), and `fields` added to its
-    control file (`Depends`, `Section`, `Priority`, `Protected`...)."""
+    control file (`Depends`, `Section`, `Priority`, `Protected`...). With a
+    `payload` of bytes, it carries that much random data, uncompressed: the
+    `.deb` weighs it to download and to unpack."""
 
     name: str
     version: str = "1.0"
@@ -336,6 +362,7 @@ class Package:
     program: str = WAITING_PROGRAM
     hidden_launchers: tuple[str, ...] = ()
     fields: tuple[tuple[str, str], ...] = ()
+    payload: int = 0
 
     @property
     def deb(self) -> str:
@@ -361,10 +388,14 @@ def build_deb(bench: Bench, package: Package) -> str:
         files[f"{root}/usr/share/applications/{package.name}.desktop"] = launcher(package.name, package.executable)
     for name in package.hidden_launchers:
         files[f"{root}/usr/share/applications/{name}.desktop"] = launcher(name, package.executable, hidden=True)
+    data = f"{root}/usr/share/{package.name}"
     bench.root("\n".join([
         f"rm -rf -- {shlex.quote(root)}",
         write_files(files, [f"{root}{package.executable}"]),
-        shlex.join(["dpkg-deb", "--root-owner-group", "--build", root, package.deb]),
+        *([shlex.join(["install", "-d", data]),
+           f"head --bytes={package.payload} /dev/urandom > {shlex.quote(f'{data}/payload')}"] if package.payload else []),
+        shlex.join(["dpkg-deb", "--root-owner-group", *(["-Znone"] if package.payload else []),
+                    "--build", root, package.deb]),
     ]))
     bench.log(f"built {package.deb}")
     return package.deb
@@ -450,26 +481,63 @@ def snap_installed(bench: Bench, name: str) -> bool:
     return bench.execute(ROOT, shlex.join(["snap", "list", name])).code == 0
 
 
-def publish_apt_repository(bench: Bench, *packages: Package) -> None:
-    """A local APT repository signed by a key of the machine, holding `packages`
-    (built already), which APT and PackageKit then offer as updates or installs."""
-    bench.root("\n".join([
-        "set -e",
-        shlex.join(["install", "-d", APT_REPOSITORY]),
-        shlex.join(["cp", *(package.deb for package in packages), APT_REPOSITORY]),
-        f"cd {shlex.quote(APT_REPOSITORY)}",
-        "dpkg-scanpackages --multiversion . /dev/null > Packages",
-        "apt-ftparchive release . > Release",
+def publish_apt_repository(bench: Bench, *packages: Package, suite: str = APT_SUITE, signed: bool = True) -> None:
+    """A suite of a local APT repository holding `packages` alone (built
+    already), which APT and PackageKit then offer as updates or installs: a
+    suite published again holds its new packages only. Signed by a key of the
+    machine that APT trusts; not `signed`, APT reads it as insecure and its
+    packages are untrusted. A suite named `<x>-security` gives security updates."""
+    folder = f"{APT_REPOSITORY}/{suite}"
+    signing = [
         f"export GNUPGHOME={shlex.quote(APT_GNUPG)}",
         f"if [ ! -d {shlex.quote(APT_GNUPG)} ]; then install -d --mode=0700 {shlex.quote(APT_GNUPG)}; "
         f"gpg --batch --pinentry-mode loopback --passphrase '' --quick-generate-key {shlex.quote(APT_KEY_NAME)} default sign never; fi",
-        "rm -f InRelease",
         "gpg --batch --clearsign --output InRelease Release",
         f"gpg --batch --yes --export --output {shlex.quote(APT_KEYRING)} {shlex.quote(APT_KEY_NAME)}",
-        f"echo {shlex.quote(f'deb [signed-by={APT_KEYRING}] file:{APT_REPOSITORY} ./')} > {shlex.quote(APT_SOURCE)}",
+    ] if signed else []
+    trust = f"signed-by={APT_KEYRING}" if signed else "allow-insecure=yes"
+    bench.root("\n".join([
+        "set -e",
+        f"rm -rf -- {shlex.quote(folder)}",
+        shlex.join(["install", "-d", folder]),
+        shlex.join(["cp", *(package.deb for package in packages), folder]),
+        f"cd {shlex.quote(folder)}",
+        "dpkg-scanpackages --multiversion . /dev/null > Packages",
+        shlex.join(["apt-ftparchive", "-o", f"APT::FTPArchive::Release::Suite={suite}", "release", "."]) + " > Release",
+        *signing,
+        f"echo {shlex.quote(f'deb [{trust}] copy:{folder} ./')} > {shlex.quote(apt_source(suite))}",
         "apt-get update",
     ]))
-    bench.log(f"APT repository {APT_REPOSITORY}: {', '.join(f'{p.name} {p.version}' for p in packages)}")
+    bench.log(f"APT suite {suite} ({'signed' if signed else 'unsigned'}): "
+              f"{', '.join(f'{p.name} {p.version}' for p in packages)}")
+
+
+def apt_source(suite: str) -> str:
+    return f"{APT_SOURCES}/okapi-vm-{suite}.list"
+
+
+def set_ubuntu_sources_aside(bench: Bench) -> None:
+    """Ubuntu's own repositories out of APT's sources (lists dropped at the
+    next `apt-get update`): only the bench's suites offer updates."""
+    bench.root(shlex.join(["mv", UBUNTU_SOURCES, UBUNTU_SOURCES_ASIDE]))
+    bench.log("Ubuntu's repositories set aside")
+
+
+def stall_apt_downloads(bench: Bench, suite: str = APT_SUITE) -> None:
+    """The suite, published already, served over HTTP by a server that sends
+    each `.deb` but its last byte and then waits: a download that hangs, for as
+    long as the test needs. Publishing the suite again serves it as before."""
+    address = f"http://127.0.0.1:{STALLING_PORT}"
+    bench.root("\n".join([
+        "set -e",
+        write_files({STALLING_SERVER: STALLING_SERVER_PROGRAM}),
+        shlex.join(["systemd-run", "--quiet", f"--unit={STALLING_UNIT}", "python3", "-I", STALLING_SERVER,
+                    APT_REPOSITORY, str(STALLING_PORT)]),
+        f"until curl --silent --output /dev/null {address}/; do sleep 0.1; done",
+        f"echo {shlex.quote(f'deb [signed-by={APT_KEYRING}] {address}/{suite} ./')} > {shlex.quote(apt_source(suite))}",
+        "apt-get update",
+    ]))
+    bench.log(f"APT suite {suite} served at {address}, its downloads hang")
 
 
 def open_fake_browser(bench: Bench, *, firefox_profile: str | None = None,

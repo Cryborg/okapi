@@ -8,15 +8,14 @@ that the files are gone and the receipt recorded (ADM-001).
 
 from __future__ import annotations
 
-from okapivm import common
+from okapivm import cleaner, common
 from okapivm.bench import Bench
 
 from scenarios import _admin
 
 TAGS = ["cleaner", "admin", "helper"]
 
-ADMIN_GROUPS = [_admin.CRASH_REPORTS, "Cache des paquets APT"]
-RECORDED = "Le reçu est enregistré dans l'historique."
+ADMIN_GROUPS = [cleaner.CRASH_REPORTS, cleaner.APT_CACHE]
 
 
 def run(bench: Bench) -> None:
@@ -31,18 +30,17 @@ def run(bench: Bench) -> None:
     bench.allow_elevation_without_password()
     common.plant(bench, account_files, admin_files, age_seconds=_admin.AGING_SECONDS)
 
-    _admin.scan(bench)
+    cleaner.scan(bench)
     bench.screenshot("resultats")
-    _admin.obtain_rights(bench)
+    cleaner.obtain_rights(bench)
     for group in ADMIN_GROUPS:
-        offered = _admin.row(bench, group)
-        bench.check(_admin.CHECKED not in offered["states"] and _admin.OBTAINED in offered.get("description", ""),
+        offered = cleaner.row(bench, group)
+        bench.check(cleaner.CHECKED not in offered["states"] and cleaner.OBTAINED in offered.get("description", ""),
                     f"ADM-001: « {group} », unlocked by the rights, is offered unchecked ({offered.get('description')!r})")
-    _admin.check_groups(bench, *ADMIN_GROUPS)
+    cleaner.check_groups(bench, *ADMIN_GROUPS)
     bench.screenshot("droits-obtenus")
 
-    _admin.clean(bench)
-    bench.ui.wait(RECORDED)
+    cleaner.clean(bench)
     bench.screenshot("recu")
 
     common.check_gone(bench, account_files, admin_files)

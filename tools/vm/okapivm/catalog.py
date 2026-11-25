@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import importlib.util
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -29,6 +30,8 @@ def _load(name: str) -> Scenario:
     if spec is None or spec.loader is None:
         raise MachineError(f"{path} cannot be loaded")
     module = importlib.util.module_from_spec(spec)
+    # Where a dataclass of the scenario looks its module up.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     tags = getattr(module, "TAGS", [])
     if not isinstance(tags, list | tuple) or not all(isinstance(tag, str) for tag in tags):

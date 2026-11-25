@@ -23,4 +23,5 @@ disallowed-methods = [
     # the one read: never through a link, never onto a mount put on it since
     # it was read, where the system tells mount roots.
     { path = "okapi_platform::Directory::open_child", reason = "invariant 3: enter a folder through `okapi_platform::enter`" },
+    { path = "okapi_platform::directory::Passage::pass", reason = "invariant 3: cross a folder through `okapi_platform::reach_path`" },
 ]

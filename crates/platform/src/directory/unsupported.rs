@@ -117,6 +117,55 @@ impl Directory {
     }
 }
 
+/// A directory crossed on the way down: this system provides none.
+#[derive(Debug)]
+pub(crate) enum Passage {}
+
+impl Passage {
+    /// # Errors
+    ///
+    /// Always [`io::ErrorKind::Unsupported`].
+    pub(crate) fn root() -> io::Result<Self> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    /// Never called: no passage exists.
+    ///
+    /// # Errors
+    ///
+    /// None.
+    pub(crate) fn status(&self) -> io::Result<EntryStatus> {
+        match *self {}
+    }
+
+    /// Never called: no passage exists.
+    ///
+    /// # Errors
+    ///
+    /// None.
+    pub(crate) fn status_of(&self, _name: &OsStr) -> io::Result<EntryStatus> {
+        match *self {}
+    }
+
+    /// Never called: no passage exists.
+    ///
+    /// # Errors
+    ///
+    /// None.
+    pub(crate) fn pass(&self, _name: &OsStr) -> io::Result<Self> {
+        match *self {}
+    }
+
+    /// Never called: no passage exists.
+    ///
+    /// # Errors
+    ///
+    /// None.
+    pub(crate) fn read(self) -> io::Result<Directory> {
+        match self {}
+    }
+}
+
 /// Whether the entry at `path` is the root of a mount: this system cannot
 /// tell.
 ///

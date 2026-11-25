@@ -36,9 +36,6 @@ GPU_CACHE = "Cache GPU"
 CHROME = "Chrome"
 DOCKER = "Cache de construction Docker"
 DOCKER_SOCKET = "/run/docker.sock"
-CRASHES = "Rapports de plantage"
-RIGHTS = "Obtenir les droits"
-RIGHTS_GIVEN = "Droits obtenus"
 CANCEL = "Annuler"
 SELECTED_PATTERN = r"^Éléments : (\d+) sur \d+$"
 SAID_PATTERN = (r"^Taille : (.+)\. Éléments : (\d+)\. Rien ne passe par la corbeille : cette action est "
@@ -48,11 +45,12 @@ SENTENCES = {
     GPU_CACHE: ("Les caches retirés seront recréés : ce qui s'en sert démarrera un peu plus lentement la "
                 "prochaine fois."),
     DOCKER: "Docker élaguera son cache de construction : ce qui part n'est connu qu'après.",
-    CRASHES: ("Une fenêtre du système peut vous demander votre mot de passe pour les éléments administrateur. Ils "
-              "sont mesurés de nouveau juste avant d'être retirés : leur nombre a pu changer depuis l'obtention "
-              "des droits."),
+    cleaner.CRASH_REPORTS: ("Une fenêtre du système peut vous demander votre mot de passe pour les éléments "
+                            "administrateur. Ils sont mesurés de nouveau juste avant d'être retirés : leur nombre a "
+                            "pu changer depuis l'obtention des droits."),
 }
-PLACES = {TRASH: ["Système"], CRASHES: ["Système"], GPU_CACHE: ["Navigateurs", CHROME], DOCKER: ["Applications"]}
+PLACES = {TRASH: ["Système"], cleaner.CRASH_REPORTS: ["Système"], GPU_CACHE: ["Navigateurs", CHROME],
+          DOCKER: ["Applications"]}
 # What crates/app/src/cleaner.rs traces for a click within the settle delay.
 IGNORED = "second click of a double click ignored"
 DELETION_ASKED = "deletion"
@@ -116,8 +114,7 @@ def cancelled(bench: Bench, kept: common.Files) -> None:
 
 def sentences(bench: Bench) -> None:
     bench.allow_elevation_without_password()
-    bench.ui.click(RIGHTS, role=cleaner.BUTTON)
-    bench.ui.wait(RIGHTS_GIVEN, timeout=cleaner.SCAN_TIMEOUT_SECONDS)
+    cleaner.obtain_rights(bench)
     checked = {}
     for group, (category, *browsers) in PLACES.items():
         cleaner.show(bench, category, *browsers)

@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 import shlex
 
-from okapivm import common
+from okapivm import cleaner, common
 from okapivm.bench import Bench
 
 from scenarios import _admin
@@ -39,7 +39,6 @@ NFS_EXPORT = "/srv/okapi-vm-nfs"
 NFS_MOUNT = "/mnt/okapi-vm-nfs"
 NFS_EXPORTS = "/etc/exports.d/okapi-vm.exports"
 NFS_HELD_EXCLUSION = f"{NFS_MOUNT}/kept"
-SETTINGS = "settings.json"
 
 UNREADABLE = "Illisible sans les droits administrateur"
 PREPARING = "Préparation de la demande des droits…"
@@ -62,7 +61,7 @@ OWN_WRITES = re.compile(r"^/var/log/(journal/.+\.journal|audit/audit\.log)$"
 
 
 def forget_settings(bench: Bench) -> None:
-    bench.run_as(bench.accounts.admin.name, f"rm -f {common.shell_path(common.store_path(SETTINGS))}")
+    bench.run_as(bench.accounts.admin.name, f"rm -f {common.shell_path(common.store_path(common.SETTINGS))}")
 
 
 def planted(bench: Bench) -> tuple[common.Files, common.Files, common.Files]:
@@ -76,21 +75,21 @@ def planted(bench: Bench) -> tuple[common.Files, common.Files, common.Files]:
 
 
 def waiting_rows(bench: Bench) -> dict[str, dict]:
-    return {name: node for name, node in _admin.rows(bench).items()
+    return {name: node for name, node in cleaner.rows(bench).items()
             if _admin.ADMINISTRATOR in node.get("description", "")}
 
 
 def banner_counts_the_groups(bench: Bench) -> None:
-    _admin.scan(bench)
+    cleaner.scan(bench)
     said = _admin.banner(bench)
     bench.screenshot("bandeau")
     waiting = waiting_rows(bench)
     bench.check(_admin.waiting(said) == len(waiting) > 0,
                 f"ADM-002: the banner counts the {len(waiting)} groups waiting for the rights ({said!r}, {sorted(waiting)})")
-    bench.check({_admin.CRASH_REPORTS, _admin.APT_LOGS, _admin.CORE_DUMPS} <= waiting.keys(),
+    bench.check({cleaner.CRASH_REPORTS, cleaner.APT_LOGS, cleaner.CORE_DUMPS} <= waiting.keys(),
                 f"ADM-002: the crash reports, APT's logs and the core dumps wait for the rights ({sorted(waiting)})")
-    core = waiting[_admin.CORE_DUMPS]
-    bench.check(UNREADABLE in core.get("description", "") and _admin.CHECKED not in core["states"],
+    core = waiting[cleaner.CORE_DUMPS]
+    bench.check(UNREADABLE in core.get("description", "") and cleaner.CHECKED not in core["states"],
                 f"ADM-014: the core dumps' line says root alone reads it, unchecked ({core.get('description')!r})")
 
 
@@ -107,9 +106,9 @@ def accepted(bench: Bench) -> int:
 
 def password_cancelled(bench: Bench) -> None:
     bench.set_elevation(common.Elevation.PASSWORD)
-    _admin.scan(bench)
+    cleaner.scan(bench)
     before = accepted(bench)
-    bench.ui.click(_admin.OBTAIN, role="button")
+    bench.ui.click(cleaner.OBTAIN, role="button")
     _admin.wait_banner(bench, re.escape(AUTHENTICATING))
     bench.shell.wait(_admin.CANCEL, role="button", timeout=_admin.RIGHTS_TIMEOUT_SECONDS)
     bench.screenshot("mot-de-passe")
@@ -124,7 +123,7 @@ def password_cancelled(bench: Bench) -> None:
     bench.check(said.startswith(DISMISSED) and _admin.waiting(said) > 0,
                 f"ADM-006: the dialog closed, the request ends and the groups still wait ({said!r})")
 
-    bench.ui.click(_admin.OBTAIN, role="button")
+    bench.ui.click(cleaner.OBTAIN, role="button")
     _admin.wait_banner(bench, re.escape(AUTHENTICATING))
     dialog_cancel(bench)
     said = _admin.wait_banner(bench, _admin.STILL_WAITING)
@@ -136,8 +135,8 @@ def password_cancelled(bench: Bench) -> None:
 
 def refused(bench: Bench) -> None:
     bench.set_elevation(common.Elevation.REFUSED)
-    _admin.scan(bench)
-    bench.ui.click(_admin.OBTAIN, role="button")
+    cleaner.scan(bench)
+    bench.ui.click(cleaner.OBTAIN, role="button")
     said = _admin.wait_banner(bench, _admin.STILL_WAITING)
     bench.screenshot("refuse")
     bench.check(said.startswith(REFUSED) and _admin.waiting(said) > 0,
@@ -161,12 +160,12 @@ def release_the_mount(bench: Bench) -> None:
 
 def withdrawn_before_the_dialog(bench: Bench) -> None:
     bench.set_elevation(common.Elevation.PASSWORD)
-    _admin.scan(bench)
+    cleaner.scan(bench)
     before = accepted(bench)
     held_by_a_gone_server(bench)
     try:
-        common.write_store(bench, SETTINGS, {"version": 1, "exclusions": [NFS_HELD_EXCLUSION]})
-        bench.ui.click(_admin.OBTAIN, role="button")
+        common.write_settings(bench, {"exclusions": [NFS_HELD_EXCLUSION]})
+        bench.ui.click(cleaner.OBTAIN, role="button")
         said = _admin.wait_banner(bench, re.escape(PREPARING))
         bench.screenshot("preparation")
         bench.check(said == PREPARING, "ADM-003, ADM-006: before any dialog, the request is said under preparation")
@@ -187,15 +186,16 @@ def withdrawn_before_the_dialog(bench: Bench) -> None:
 
 def settings_changed(bench: Bench, crash: common.Files) -> None:
     bench.allow_elevation_without_password()
-    _admin.scan(bench)
-    _admin.obtain_rights(bench)
-    _admin.check_groups(bench, _admin.CRASH_REPORTS)
-    common.write_store(bench, SETTINGS, {"version": 1, "exclusions": [crash.paths[1]]})
-    _admin.clean(bench, done=re.escape(RIGHTS_CHANGED))
+    cleaner.scan(bench)
+    cleaner.obtain_rights(bench)
+    cleaner.check_groups(bench, cleaner.CRASH_REPORTS)
+    common.write_settings(bench, {"exclusions": [crash.paths[1]]})
+    cleaner.confirm(bench)
+    bench.ui.wait(pattern=re.escape(RIGHTS_CHANGED), timeout=cleaner.CLEAN_TIMEOUT_SECONDS)
     bench.screenshot("reglages-changes")
     bench.check(common.present(bench, crash) == list(crash.paths),
                 "ADM-010: the settings changed since the rights, no crash report is removed")
-    bench.check(bool(bench.ui.find(_admin.OBTAIN, role="button")),
+    bench.check(bool(bench.ui.find(cleaner.OBTAIN, role="button")),
                 "ADM-010: the rights are to be obtained again")
     bench.stop_app()
     forget_settings(bench)
@@ -216,17 +216,17 @@ def written_by_root_since(bench: Bench) -> list[str]:
 def cleaned_with_one_password(bench: Bench, crash: common.Files, apt_log: common.Files,
                               core_dump: common.Files) -> None:
     bench.elevation_by_policy()
-    _admin.scan(bench)
-    bench.ui.click(_admin.OBTAIN, role="button")
+    cleaner.scan(bench)
+    bench.ui.click(cleaner.OBTAIN, role="button")
     type_password(bench)
-    bench.ui.wait(_admin.OBTAINED, timeout=_admin.SCAN_TIMEOUT_SECONDS)
-    core = _admin.row(bench, _admin.CORE_DUMPS)
-    bench.check(_admin.CHECKED not in core["states"],
+    bench.ui.wait(cleaner.OBTAINED, timeout=cleaner.SCAN_TIMEOUT_SECONDS)
+    core = cleaner.row(bench, cleaner.CORE_DUMPS)
+    bench.check(cleaner.CHECKED not in core["states"],
                 f"ADM-014: after the rights, the core dumps' line is still unchecked ({core['states']})")
-    _admin.check_groups(bench, _admin.CRASH_REPORTS, _admin.APT_LOGS)
+    cleaner.check_groups(bench, cleaner.CRASH_REPORTS, cleaner.APT_LOGS)
     bench.root(shlex.join(["touch", MARKER]))
     accepted_before = accepted(bench)
-    _admin.clean(bench, done=_admin.CLEANED)
+    cleaner.clean(bench)
     bench.screenshot("recu")
     bench.check(not bench.shell.find(role=PASSWORD_FIELD),
                 "ADM-021: the password typed for the rights is not asked again for the cleaning")
@@ -249,14 +249,14 @@ def part_changed(bench: Bench) -> None:
     bench.allow_elevation_without_password()
     first = common.Files(common.ROOT, [f"{CRASH}/okapi-vm.crash"], size=1024)
     common.plant(bench, first, age_seconds=_admin.AGING_SECONDS)
-    _admin.scan(bench)
-    _admin.obtain_rights(bench)
-    _admin.check_groups(bench, _admin.CRASH_REPORTS)
+    cleaner.scan(bench)
+    cleaner.obtain_rights(bench)
+    cleaner.check_groups(bench, cleaner.CRASH_REPORTS)
     # Deeper than the walk goes (`Limits::depth`): root's walk stops short of it.
     deep = common.Files(common.ROOT, [f"{DEEP}/{'/'.join(['d'] * DEEP_LEVELS)}/okapi-vm.crash"], size=1024)
     try:
         common.plant(bench, deep, age_seconds=_admin.AGING_SECONDS)
-        _admin.clean(bench)
+        cleaner.clean(bench)
         bench.screenshot("arborescence-profonde")
         bench.check(bool(bench.ui.find(pattern=re.escape(PART_CHANGED))),
                     "ADM-012: the receipt says part of what root was to clean changed since the rights")

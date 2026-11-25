@@ -36,7 +36,6 @@ IN_PROGRESS = "En cours"
 FREED_SO_FAR = "Libéré jusqu'ici"
 CANCEL_CLEANING = "Annuler le nettoyage"
 CANCELLED = "Nettoyage annulé"
-RECORDED = "Le reçu est enregistré dans l'historique."
 FINISH = "Terminer"
 STAT_PATTERN = r"^{} : (\d+)$"
 STATS = {"removed": "Retirées", "partial": "Retirées en partie", "gone": "Déjà parties", "kept": "Gardées"}
@@ -51,7 +50,6 @@ KEPT = "kept"
 CANCELLED_REASON = "cancelled"
 REASONS = {REMOVED: ("removed", None), GONE: ("gone", None), RECENT: (KEPT, "recent"),
            EXCLUDED: (KEPT, "excluded")}
-DELETIONS = "deletions"
 HOME = "Accueil"
 RECLAIMABLE = "Récupérable"
 FREED_SINCE = "libérés"
@@ -73,10 +71,7 @@ def line_count(bench: Bench, name: str) -> int:
 
 def deletions(bench: Bench) -> dict[str, dict]:
     """The entries of the deletion log written with the last cleaning, by path."""
-    history = common.read_store(bench, common.HISTORY)
-    assert isinstance(history, list)
-    log = [line for line in history if line.get("kind") == DELETIONS][-1]
-    return {entry["path"]: entry for entry in log["entries"]}
+    return {entry["path"]: entry for entry in common.last_deletions(bench)}
 
 
 def finish(bench: Bench) -> None:
@@ -145,9 +140,10 @@ def receipt(bench: Bench) -> None:
     bench.check(shown["gone"] >= 1 and lines[GONE_LINE] >= 1,
                 f"CLN-028: the thumbnail removed by hand since the analysis counted « {GONE_LINE} » ({shown})")
     written = common.last_receipt(bench)
-    bench.check(bool(bench.ui.find(RECORDED)) and all(written[key] == value for key, value in shown.items())
+    bench.check(bool(bench.ui.find(cleaner.RECORDED)) and all(written[key] == value for key, value in shown.items())
                 and written["removedBytes"] >= FILE_SIZE,
-                f"CLN-029: « {RECORDED} », its line of the history says what the receipt shows ({shown}, {written})")
+                f"CLN-029: « {cleaner.RECORDED} », its line of the history says what the receipt shows "
+                f"({shown}, {written})")
     common.check_kept(bench, common.Files(bench.accounts.admin.name, [RECENT, EXCLUDED]))
 
 

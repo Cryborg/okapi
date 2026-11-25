@@ -1,7 +1,10 @@
-"""Driving the Cleaner page: its categories, an analysis, the boxes of its
-results, a cleaning confirmed. The names are the interface's French texts."""
+"""Driving the Cleaner page: its categories, an analysis, the administrator's
+rights, the boxes of its results, a cleaning confirmed. The names are the
+interface's French texts."""
 
 from __future__ import annotations
+
+import time
 
 from . import common
 from .bench import Bench, ScenarioFailure
@@ -12,11 +15,20 @@ BUTTON = "button"
 CHECKED = "checked"
 ANALYZE = "Analyser"
 RESULTS = "Résultats"
+RESULTS_LIST = "Éléments trouvés"
+OBTAIN = "Obtenir les droits"
+OBTAINED = "Droits obtenus"
 CLEAN = "Nettoyer"
 CONFIRMATION = "Supprimer définitivement ?"
 UNDERSTOOD = "J'ai compris que c'est définitif"
 DELETE = "Supprimer définitivement"
 DONE = "Nettoyage terminé"
+RECORDED = "Le reçu est enregistré dans l'historique."
+CRASH_REPORTS = "Rapports de plantage"
+APT_LOGS = "Journaux d'APT"
+APT_CACHE = "Cache des paquets APT"
+CORE_DUMPS = "Vidages mémoire"
+JOURNAL_LOGS = "Journaux de systemd"
 FOLD = "Replier"
 UNFOLD = "Déplier"
 CATEGORIES = ["Système", "Navigateurs", "Applications", "Jeux", "Caches GPU", "Mes dossiers"]
@@ -24,6 +36,10 @@ CATEGORIES = ["Système", "Navigateurs", "Applications", "Jeux", "Caches GPU", "
 ANALYSIS_ENDS = ["Résultats", "Rien à nettoyer", "Rien n'a été regardé", "L'analyse a échoué"]
 SCAN_TIMEOUT_SECONDS = 300
 CLEAN_TIMEOUT_SECONDS = 300
+LIST_TOP_STEPS = 50
+LIST_PAGE_STEPS = 3
+LIST_PAGES = 40
+LIST_SETTLE_SECONDS = 0.5
 # What crates/engine/src/scan.rs traces when an analysis ends.
 SCAN_FINISHED = "scan finished"
 
@@ -80,6 +96,49 @@ def analyze(bench: Bench) -> str:
     return title
 
 
+def scan(bench: Bench) -> None:
+    """A fresh interface's analysis, until its results show."""
+    bench.launch_app()
+    open_page(bench)
+    title = analyze(bench)
+    if title != RESULTS:
+        raise ScenarioFailure(f"the analysis ended on « {title} », not « {RESULTS} »")
+
+
+def obtain_rights(bench: Bench) -> None:
+    """Asks for the administrator's rights from the results, until root's analysis is in."""
+    bench.ui.click(OBTAIN, role=BUTTON)
+    bench.ui.wait(OBTAINED, timeout=SCAN_TIMEOUT_SECONDS)
+
+
+def row(bench: Bench, group: str) -> dict:
+    """The box of a group of the results, the list scrolled until it shows."""
+    return bench.ui.reveal(group, role=CHECK_BOX, within=RESULTS_LIST)
+
+
+def rows(bench: Bench) -> dict[str, dict]:
+    """Every box of the results by its name, the list scrolled from its top to its end."""
+    place = bench.ui.center(bench.ui.node(RESULTS_LIST, role="list-box"))
+    bench.scroll_at(*place, -LIST_TOP_STEPS)
+    seen: dict[str, dict] = {}
+    for _ in range(LIST_PAGES):
+        shown = {node["name"]: node for node in bench.ui.find(role=CHECK_BOX)}
+        if seen and shown.keys() <= seen.keys():
+            return seen
+        seen.update(shown)
+        bench.scroll_at(*place, LIST_PAGE_STEPS)
+        time.sleep(LIST_SETTLE_SECONDS)
+    raise ScenarioFailure(f"the results never ended after {LIST_PAGES} pages")
+
+
+def check_groups(bench: Bench, *groups: str) -> None:
+    """Checks the boxes of `groups` among the results (those of root are offered unchecked)."""
+    for group in groups:
+        row(bench, group)
+        bench.ui.click(group, role=CHECK_BOX)
+        bench.ui.wait(group, role=CHECK_BOX, state=CHECKED)
+
+
 def confirm(bench: Bench) -> None:
     """« Nettoyer », the confirmation understood, then the deletion asked for."""
     bench.ui.click(CLEAN, role=BUTTON)
@@ -88,10 +147,13 @@ def confirm(bench: Bench) -> None:
     bench.ui.click(DELETE, role=BUTTON)
 
 
-def clean(bench: Bench) -> None:
-    """A cleaning of what is checked, confirmed, to its receipt."""
+def clean(bench: Bench, *, recorded: bool = True) -> None:
+    """A cleaning of what is checked, confirmed, to its end; `recorded`, to its
+    receipt written in the history."""
     confirm(bench)
     bench.ui.wait(DONE, timeout=CLEAN_TIMEOUT_SECONDS)
+    if recorded:
+        bench.ui.wait(RECORDED)
 
 
 def last_scan(bench: Bench) -> dict:

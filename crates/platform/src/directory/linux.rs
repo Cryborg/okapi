@@ -1,7 +1,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
@@ -20,6 +20,18 @@ const OPEN_FLAGS: OFlags = OFlags::RDONLY
     .union(OFlags::DIRECTORY)
     .union(OFlags::NOFOLLOW)
     .union(OFlags::CLOEXEC);
+
+/// A directory crossed on the way down is only named (`O_PATH`), never
+/// through a link: the kernel asks only to search the directory above it
+/// (`do_o_path`, no `may_open`), as resolving a path through it would.
+const PASSAGE_FLAGS: OFlags = OFlags::PATH
+    .union(OFlags::DIRECTORY)
+    .union(OFlags::NOFOLLOW)
+    .union(OFlags::CLOEXEC);
+
+/// The directory a descriptor names, in the name its kernel lookup gives it
+/// (`LAST_DOT`: never a mount put on it since).
+const ITSELF: &str = ".";
 
 /// A file is opened for reading only, never through a link, never blocking
 /// (a pipe), never as the controlling terminal (a device).
@@ -88,7 +100,7 @@ impl Directory {
     /// The system's error, or [`io::ErrorKind::Unsupported`] when it cannot
     /// give a type, an identity and dates.
     pub fn status(&self) -> io::Result<EntryStatus> {
-        status(&statx(&self.fd, "", AtFlags::EMPTY_PATH, WANTED)?)
+        status_on(&self.fd)
     }
 
     /// Whether the process may remove `entry`, read through
@@ -128,7 +140,7 @@ impl Directory {
         // which old seccomp filters refuse with `EPERM`.
         Ok(accessat(
             &self.fd,
-            ".",
+            ITSELF,
             Access::WRITE_OK | Access::EXEC_OK,
             AtFlags::empty(),
         )?)
@@ -158,7 +170,7 @@ impl Directory {
     /// [`io::ErrorKind::InvalidInput`] when `name` is not a single name, or
     /// the errors of [`Self::status`].
     pub fn status_of(&self, name: &OsStr) -> io::Result<EntryStatus> {
-        status(&statx(&self.fd, single_name(name)?, ENTRY_FLAGS, WANTED)?)
+        status_in(&self.fd, name)
     }
 
     /// Opens the subdirectory `name`, refusing a link. A walk enters a folder
@@ -187,7 +199,7 @@ impl Directory {
     /// not a plain file, or the system's error: a link, absent...
     pub fn open_file(&self, name: &OsStr) -> io::Result<(File, EntryStatus)> {
         let fd = openat(&self.fd, single_name(name)?, FILE_FLAGS, Mode::empty())?;
-        let status = status(&statx(&fd, "", AtFlags::EMPTY_PATH, WANTED)?)?;
+        let status = status_on(&fd)?;
         if status.kind != EntryType::File {
             return Err(io::ErrorKind::InvalidInput.into());
         }
@@ -268,6 +280,74 @@ impl Directory {
     }
 }
 
+/// A directory crossed on the way down from `/` ([`crate::reach_path`]),
+/// which needs only the right to search the directories above it: it is
+/// never listed nor changed, though the system would take it as the base of
+/// an `unlinkat`, hence a type of its own.
+#[derive(Debug)]
+pub(crate) struct Passage {
+    fd: OwnedFd,
+}
+
+impl Passage {
+    /// The filesystem root.
+    ///
+    /// # Errors
+    ///
+    /// The system's error.
+    pub(crate) fn root() -> io::Result<Self> {
+        Ok(Self {
+            fd: openat(CWD, super::FILESYSTEM_ROOT, PASSAGE_FLAGS, Mode::empty())?,
+        })
+    }
+
+    /// The directory itself, as [`Directory::status`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Directory::status`].
+    pub(crate) fn status(&self) -> io::Result<EntryStatus> {
+        status_on(&self.fd)
+    }
+
+    /// The entry `name`, as [`Directory::status_of`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Directory::status_of`].
+    pub(crate) fn status_of(&self, name: &OsStr) -> io::Result<EntryStatus> {
+        status_in(&self.fd, name)
+    }
+
+    /// Crosses into the subdirectory `name`, refusing a link (`ENOTDIR`,
+    /// `path_lookupat` with `LOOKUP_DIRECTORY` and no `LOOKUP_FOLLOW`).
+    /// [`crate::reach_path`] alone calls it, and checks the identity:
+    /// `clippy.toml` refuses any other call but a local, justified exception.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::InvalidInput`] when `name` is not a single name, or the
+    /// system's error: not a directory, a link, absent, this directory not
+    /// searchable...
+    pub(crate) fn pass(&self, name: &OsStr) -> io::Result<Self> {
+        Ok(Self {
+            fd: openat(&self.fd, single_name(name)?, PASSAGE_FLAGS, Mode::empty())?,
+        })
+    }
+
+    /// Opens this very directory for listing, which needs the right to read
+    /// and search it.
+    ///
+    /// # Errors
+    ///
+    /// The system's error.
+    pub(crate) fn read(self) -> io::Result<Directory> {
+        Ok(Directory {
+            fd: openat(&self.fd, ITSELF, OPEN_FLAGS, Mode::empty())?,
+        })
+    }
+}
+
 /// A descriptor of the object at `path` that only names it (`O_PATH`: its
 /// content is never opened, a pipe never blocks), and what it is: what the
 /// desktop portal takes to show an object in the file manager. A link in
@@ -283,8 +363,19 @@ pub fn open_path(path: &Path, directory: bool) -> io::Result<(OwnedFd, EntryStat
         flags |= OFlags::DIRECTORY;
     }
     let fd = openat(CWD, path, flags, Mode::empty())?;
-    let status = status(&statx(&fd, "", AtFlags::EMPTY_PATH, WANTED)?)?;
+    let status = status_on(&fd)?;
     Ok((fd, status))
+}
+
+/// The status of what `fd` names.
+fn status_on(fd: impl AsFd) -> io::Result<EntryStatus> {
+    status(&statx(fd, "", AtFlags::EMPTY_PATH, WANTED)?)
+}
+
+/// The status of the entry `name` of the directory `fd` names, never
+/// following it.
+fn status_in(fd: impl AsFd, name: &OsStr) -> io::Result<EntryStatus> {
+    status(&statx(fd, single_name(name)?, ENTRY_FLAGS, WANTED)?)
 }
 
 /// Whether `error` is the refusal to open a link where none is followed
@@ -545,6 +636,38 @@ mod tests {
         symlink(&folder, &link).unwrap();
         let (_, followed) = open_path(&link, true).unwrap();
         assert_eq!(followed.identity, status.identity, "followed to its target");
+    }
+
+    #[test]
+    fn a_passage_never_goes_through_a_link_nor_into_a_file() {
+        let (temporary, _) = directory();
+        fs::create_dir(temporary.path().join("folder")).unwrap();
+        fs::write(temporary.path().join("file"), b"x").unwrap();
+        symlink(
+            temporary.path().join("folder"),
+            temporary.path().join("link"),
+        )
+        .unwrap();
+        let mut passage = Passage::root().unwrap();
+        let real = fs::canonicalize(temporary.path()).unwrap();
+        for name in real.strip_prefix("/").unwrap() {
+            passage = passage.pass(name).unwrap();
+        }
+        let folder = passage.pass(OsStr::new("folder")).unwrap();
+        assert_eq!(folder.status().unwrap().kind, EntryType::Directory);
+        for name in ["link", "file"] {
+            let error = passage.pass(OsStr::new(name)).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::NotADirectory, "{name}");
+        }
+        for name in ["", ".", "..", "folder/.."] {
+            let error = passage.pass(OsStr::new(name)).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{name:?}");
+        }
+        assert_eq!(
+            passage.status_of(OsStr::new("link")).unwrap().kind,
+            EntryType::Link
+        );
+        assert_eq!(passage.read().unwrap().names().unwrap().len(), 3);
     }
 
     #[test]

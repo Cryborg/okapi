@@ -102,7 +102,7 @@ def dialog_cancel(bench: Bench) -> None:
 
 
 def accepted(bench: Bench) -> int:
-    return common.app_journal(bench).count(_admin.HELPER_ACCEPTED)
+    return common.journal_text(bench).count(_admin.HELPER_ACCEPTED)
 
 
 def password_cancelled(bench: Bench) -> None:

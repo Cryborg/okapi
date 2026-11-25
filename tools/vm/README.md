@@ -95,6 +95,8 @@ Et `okapivm.common`, pour ce qui revient partout :
 - `plant(bench, *fichiers, age_seconds=...)` : les écrit (dossiers créés, contenu aléatoire, au compte qui les possède), puis avance l'horloge pour les vieillir ;
 - `present(bench, fichiers)`, `check_gone(bench, *fichiers)`, `check_kept(bench, *fichiers)` ;
 - `open_screen(bench, "Doublons")` : va sur une page de la barre latérale, en ouvrant son groupe s'il est fermé, et attend qu'elle soit la page affichée ;
+- `analyse(bench)`, `obtain_rights(bench)`, `check_groups(bench, "Rapports de plantage", ...)`, `clean(bench)` : le parcours du Nettoyeur (analyser, obtenir les droits, cocher des groupes, nettoyer en confirmant jusqu'au reçu) ;
+- `write_settings(bench, exclusions=[...])` : des réglages par défaut, avec ces exclusions et le journal des suppressions ; `last_deletions(bench)` : ce journal pour le dernier nettoyage (`path`, `result`, `reason` de chaque entrée) ;
 - `read_store(bench, "settings.json", compte)`, `write_store(bench, nom, valeur, compte)`, `store_path(nom)` : les fichiers du magasin d'Okapi (`STORE_FILES` dit où vit chacun ; `history.jsonl` en liste de lignes), `None` quand il n'existe pas ; `last_receipt(bench, compte=...)` : la dernière entrée de l'historique ;
 - `cli(bench, "--clean", account=..., environment={...})` (un `Outcome` ; `environment` ajoute des variables, `HOME`, `TMPDIR`...) et `cli_json(bench, ..., code=0)` (le document de `--json`) : le CLI dans la VM, mesuré quand la couverture l'est ;
 - `enable_pam_tmpdir(bench)` : allume pam_tmpdir et refait la session, `TMPDIR` devient `/tmp/user/<uid>` ;

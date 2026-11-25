@@ -11,21 +11,29 @@ from dataclasses import dataclass
 from . import config
 from .bench import ROOT, Bench, Elevation, Outcome, ScenarioFailure
 
-__all__ = ["ROOT", "Elevation", "Files", "Outcome", "Package", "bind_mount", "build_deb", "check_gone", "check_kept",
-           "cli", "cli_json", "close_fake_browser", "enable_pam_tmpdir", "install_deb", "last_receipt", "mount_fat",
-           "open_fake_browser", "open_screen", "plant", "present", "publish_apt_repository", "read_store",
-           "shell_path", "store_path", "unmount", "write_store"]
+__all__ = ["Elevation", "Files", "Outcome", "Package", "ROOT", "analyse", "bind_mount", "build_deb", "check_gone",
+           "check_groups", "check_kept", "clean", "cli", "cli_json", "close_fake_browser", "enable_pam_tmpdir",
+           "install_deb", "last_deletions", "last_receipt", "mount_fat", "obtain_rights", "open_fake_browser",
+           "open_screen", "plant", "present", "publish_apt_repository", "read_store", "shell_path", "store_path",
+           "unmount", "write_settings", "write_store"]
 
 HOME_PREFIX = "~/"
 SELECTED = "selected"
 JSON_OPTION = "--json"
 JSON_LINES = ".jsonl"
 HISTORY = "history.jsonl"
+DELETIONS = "entries"
+MIN_LINES_WITH_DELETIONS = 2
+SETTINGS = "settings.json"
+SETTINGS_VERSION = 1
+SCAN_TIMEOUT_SECONDS = 300
+CLEAN_TIMEOUT_SECONDS = 300
+UNDERSTOOD = "J'ai compris que c'est définitif"
 CONFIG_DIRECTORY = "~/.config/okapi"
 STATE_DIRECTORY = "~/.local/state/okapi"
 # As `okapi-store` places them (crates/store/src/lib.rs).
 STORE_FILES = {
-    "settings.json": CONFIG_DIRECTORY,
+    SETTINGS: CONFIG_DIRECTORY,
     "dashboard.json": CONFIG_DIRECTORY,
     HISTORY: STATE_DIRECTORY,
     "last-analysis.json": STATE_DIRECTORY,
@@ -155,6 +163,53 @@ def last_receipt(bench: Bench, account: str | None = None) -> dict:
         raise ScenarioFailure(f"{store_path(HISTORY)} holds no receipt")
     assert isinstance(history, list)
     return history[-1]
+
+
+def last_deletions(bench: Bench, account: str | None = None) -> list[dict]:
+    """What the newest cleaning did with each entry (`path`, `result`, `reason`...), the
+    line its deletion log writes before it: `deletionLog` must be on in the settings."""
+    history = read_store(bench, HISTORY, account)
+    if not history or len(history) < MIN_LINES_WITH_DELETIONS or DELETIONS not in history[-2]:
+        raise ScenarioFailure(f"{store_path(HISTORY)} holds no deletion log before its last line")
+    return history[-2][DELETIONS]
+
+
+def write_settings(bench: Bench, *, exclusions: Sequence[str] = (), deletion_log: bool = True,
+                   account: str | None = None) -> None:
+    """Okapi's settings, the defaults but `exclusions` and the deletion log (on, for `last_deletions`)."""
+    write_store(bench, SETTINGS, {"version": SETTINGS_VERSION, "exclusions": list(exclusions),
+                                  "deletionLog": deletion_log}, account)
+
+
+def analyse(bench: Bench) -> None:
+    """Opens the Cleaner and scans, until the results show."""
+    open_screen(bench, "Nettoyeur")
+    bench.ui.click("Analyser", role="button")
+    bench.ui.wait("Résultats", timeout=SCAN_TIMEOUT_SECONDS)
+
+
+def obtain_rights(bench: Bench) -> None:
+    """Asks for the administrator's rights from the results, until root's analysis is in."""
+    bench.ui.click("Obtenir les droits", role="button")
+    bench.ui.wait("Droits obtenus", timeout=SCAN_TIMEOUT_SECONDS)
+
+
+def check_groups(bench: Bench, *groups: str) -> None:
+    """Checks the boxes of `groups` among the results (those of root are offered unchecked)."""
+    for group in groups:
+        bench.ui.click(group, role="check-box")
+        bench.ui.wait(group, role="check-box", state="checked")
+
+
+def clean(bench: Bench) -> None:
+    """Cleans what is checked, the deletion confirmed, until the receipt is recorded."""
+    bench.ui.click("Nettoyer", role="button")
+    bench.ui.wait("Supprimer définitivement ?")
+    bench.ui.click(UNDERSTOOD, role="check-box")
+    bench.ui.wait(UNDERSTOOD, role="check-box", state="checked")
+    bench.ui.click("Supprimer définitivement", role="button")
+    bench.ui.wait("Nettoyage terminé", timeout=CLEAN_TIMEOUT_SECONDS)
+    bench.ui.wait("Le reçu est enregistré dans l'historique.")
 
 
 def cli(bench: Bench, *arguments: str, account: str | None = None,

@@ -24,7 +24,7 @@ pub enum Theme {
 /// What the user set. A missing file means none of it; an optional setting
 /// absent leaves its default (the engine's age, the session's language, the
 /// desktop's theme), and is written absent.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     /// Exclusions as written (`/home/ana/keep`, `*.log`): resolved again at
@@ -39,12 +39,34 @@ pub struct Settings {
     /// Whether each cleaning's history lists every entry (on a line before
     /// the cleaning's).
     pub deletion_log: bool,
+    /// Whether an analysis offers what needs the administrator: on unless
+    /// the user turned it off.
+    pub admin_operations: bool,
     /// The language of both interfaces; `None` is the session's (D-7).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<Language>,
     /// The interface's theme; `None` follows the desktop.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<Theme>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            exclusions: Vec::new(),
+            custom_folders: Vec::new(),
+            min_age_minutes: None,
+            deletion_log: false,
+            admin_operations: admin_operations_by_default(),
+            language: None,
+            theme: None,
+        }
+    }
+}
+
+/// Whether what needs the administrator is offered when nothing says.
+const fn admin_operations_by_default() -> bool {
+    true
 }
 
 /// What [`Settings::save`] did with settings it could read.
@@ -68,6 +90,8 @@ struct RawSettings {
     min_age_minutes: Option<u64>,
     #[serde(default)]
     deletion_log: bool,
+    #[serde(default = "admin_operations_by_default")]
+    admin_operations: bool,
     language: Option<Language>,
     theme: Option<Theme>,
 }
@@ -123,6 +147,7 @@ impl Settings {
             custom_folders,
             min_age_minutes,
             deletion_log,
+            admin_operations,
             language,
             theme,
         } = self;
@@ -131,6 +156,10 @@ impl Settings {
             ("customFolders", *custom_folders != other.custom_folders),
             ("minAgeMinutes", *min_age_minutes != other.min_age_minutes),
             ("deletionLog", *deletion_log != other.deletion_log),
+            (
+                "adminOperations",
+                *admin_operations != other.admin_operations,
+            ),
             ("language", *language != other.language),
             ("theme", *theme != other.theme),
         ]
@@ -159,6 +188,7 @@ impl Settings {
             custom_folders: raw.custom_folders,
             min_age_minutes: raw.min_age_minutes,
             deletion_log: raw.deletion_log,
+            admin_operations: raw.admin_operations,
             language: raw.language,
             theme: raw.theme,
         };
@@ -201,11 +231,14 @@ mod tests {
         let settings = load(
             r#"{"version": 1, "exclusions": ["/data/keep", "*.log"],
                 "customFolders": ["/data/build", "/home/ana/tmp", "/srv/drop"],
-                "minAgeMinutes": 90, "deletionLog": true, "language": "en", "theme": "dark"}"#,
+                "minAgeMinutes": 90, "deletionLog": true, "adminOperations": false,
+                "language": "en", "theme": "dark"}"#,
         )
         .unwrap();
         assert_eq!(settings, every_field());
-        assert_eq!(load(r#"{"version": 1}"#).unwrap(), Settings::default());
+        let defaults = load(r#"{"version": 1}"#).unwrap();
+        assert_eq!(defaults, Settings::default());
+        assert!(defaults.admin_operations, "offered unless turned off");
         for unknown in [r#""language": "de""#, r#""theme": "blue""#] {
             assert!(
                 matches!(
@@ -228,6 +261,7 @@ mod tests {
             ],
             min_age_minutes: Some(90),
             deletion_log: true,
+            admin_operations: false,
             language: Some(Language::English),
             theme: Some(Theme::Dark),
         }
@@ -330,6 +364,7 @@ mod tests {
                 "customFolders",
                 "minAgeMinutes",
                 "deletionLog",
+                "adminOperations",
                 "language",
                 "theme"
             ]
@@ -349,7 +384,7 @@ mod tests {
             directory.path().join(SETTINGS_FILE),
             r#"{"theme":"dark","exclusions":["/data/keep","*.log"],"version":1,
                 "customFolders":["/data/build","/home/ana/tmp","/srv/drop"],
-                "language":"en","deletionLog":true,"minAgeMinutes":90}"#,
+                "language":"en","deletionLog":true,"minAgeMinutes":90,"adminOperations":false}"#,
         )
         .unwrap();
         let written = Settings::default()
@@ -371,7 +406,7 @@ mod tests {
         assert_eq!(written, Replaced::Written);
         assert_eq!(
             fs::read_to_string(directory.path().join(SETTINGS_FILE)).unwrap(),
-            "{\n  \"version\": 1,\n  \"exclusions\": [],\n  \"customFolders\": [],\n  \"deletionLog\": false\n}\n"
+            "{\n  \"version\": 1,\n  \"exclusions\": [],\n  \"customFolders\": [],\n  \"deletionLog\": false,\n  \"adminOperations\": true\n}\n"
         );
     }
 

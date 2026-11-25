@@ -70,6 +70,7 @@ export global Preferences {
     in property <string> min-age-written;
     in property <int> default-min-age;
     in property <bool> deletion-log;
+    in property <bool> admin-operations;
     // Where the history lives, and the settings file, as shown; empty
     // when unknown.
     in property <string> state-directory;
@@ -93,6 +94,7 @@ export global Preferences {
     callback browse(PathList);
     callback choose-min-age(int);
     callback toggle-deletion-log();
+    callback toggle-admin-operations();
     callback choose-language(LanguageChoice);
     callback choose-theme(ThemeChoice);
     // Read again: as the page shows, or as the user asks (`read-again`,

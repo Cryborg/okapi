@@ -1148,6 +1148,121 @@ fn maintenance_admin_and_unsupported_rules() {
     assert!(matches!(report.issues(), [ScanIssue::Unsupported { .. }]));
 }
 
+#[cfg(unix)]
+#[test]
+fn what_needs_the_administrator_is_left_out_when_it_is_not_offered() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if okapi_platform::running_as_root() {
+        return;
+    }
+    let fixture = Fixture::new();
+    let admin_target = |relative: &str, more: &str| {
+        target(&format!(
+            r#"{{"path": "{}", "subcategory": "{relative}", "needsAdmin": true{more}}}"#,
+            fixture.directory(relative).display()
+        ))
+    };
+    fixture.file("apt/old.deb", 1, 2 * HOUR);
+    let apt = admin_target("apt", "");
+    fixture.file("journal/old", 1, 2 * HOUR);
+    let vacuum = admin_target("journal", r#", "cleanupAction": "journal-vacuum""#);
+    let closed = admin_target("closed", r#", "childSubdir": "cache""#);
+    let shut = target(&format!(
+        r#"{{"path": "{}", "subcategory": "Shut", "childSubdir": "cache"}}"#,
+        fixture.directory("shut").display()
+    ));
+    fixture.file("pip/old", 1, 2 * HOUR);
+    let pip = target_at(&fixture.path("pip"));
+    let prune = app(&format!(
+        r#"{{"id": "uv", "name": "uv", "paths": ["{}"], "cleanupAction": "uv-prune"}}"#,
+        fixture.directory("uv").display()
+    ));
+    let mut entries: Vec<RuleEntry<'_>> = [&apt, &vacuum, &closed, &shut, &pip]
+        .into_iter()
+        .map(RuleEntry::Target)
+        .collect();
+    entries.push(RuleEntry::App {
+        file: AppFile::Apps,
+        rule: &prune,
+    });
+    let mut run = Run::new(&fixture, entries);
+    let offered = |run: &Run<'_>| {
+        let closed_mode = |mode| {
+            for relative in ["closed", "shut"] {
+                fs::set_permissions(fixture.path(relative), fs::Permissions::from_mode(mode))
+                    .unwrap();
+            }
+        };
+        closed_mode(0o000);
+        let report = run.scan();
+        closed_mode(0o755);
+        (
+            offered_paths(&report),
+            report.maintenances().len(),
+            report.issues().len(),
+        )
+    };
+    assert_eq!(
+        offered(&run),
+        (
+            vec![fixture.path("apt/old.deb"), fixture.path("pip/old")],
+            2,
+            2
+        ),
+        "offered by default"
+    );
+    run.options = run.options.clone().with_admin(false);
+    assert_eq!(offered(&run), (vec![fixture.path("pip/old")], 1, 1));
+}
+
+#[test]
+fn a_root_shared_with_the_administrators_rule_is_left_out_with_it() {
+    let fixture = Fixture::new();
+    let shared = fixture.directory("shared");
+    fixture.file("shared/old", 1, 2 * HOUR);
+    fixture.file("pip/old", 1, 2 * HOUR);
+    let admin = target(&format!(
+        r#"{{"path": "{}", "subcategory": "Shared", "needsAdmin": true}}"#,
+        shared.display()
+    ));
+    let user = target_at(&shared);
+    let pip = target_at(&fixture.path("pip"));
+    for order in [[&user, &admin, &pip], [&admin, &user, &pip]] {
+        let mut run = Run::new(&fixture, order.into_iter().map(RuleEntry::Target).collect());
+        assert_eq!(
+            offered_paths(&run.scan()),
+            [fixture.path("pip/old"), fixture.path("shared/old")],
+            "offered by default"
+        );
+        run.options = run.options.clone().with_admin(false);
+        assert_eq!(offered_paths(&run.scan()), [fixture.path("pip/old")]);
+    }
+}
+
+#[test]
+fn a_root_of_the_administrators_rule_under_a_users_rule_keeps_its_place_when_not_offered() {
+    let fixture = Fixture::new();
+    fixture.file("base/other/old", 1, 2 * HOUR);
+    fixture.file("base/sub/old", 1, 2 * HOUR);
+    let user = target_at(&fixture.path("base"));
+    let admin = target(&format!(
+        r#"{{"path": "{}", "subcategory": "Sub", "needsAdmin": true}}"#,
+        fixture.path("base/sub").display()
+    ));
+    let mut run = Run::new(
+        &fixture,
+        [&user, &admin].into_iter().map(RuleEntry::Target).collect(),
+    );
+    assert_eq!(
+        offered_paths(&run.scan()),
+        [fixture.path("base/other/old"), fixture.path("base/sub/old")],
+        "offered by default"
+    );
+    run.options = run.options.clone().with_admin(false);
+    assert_eq!(offered_paths(&run.scan()), [fixture.path("base/other/old")]);
+}
+
 #[test]
 fn a_maintenance_is_offered_where_its_place_is_when_it_is_chosen() {
     let fixture = Fixture::new();

@@ -265,11 +265,13 @@ fn prepare(run: &Run, language: Language) -> Result<Prepared, u8> {
     } else {
         Vec::new()
     };
-    tracing::info!(?min_age, exclusions = ?written, ?custom_folders, deletion_log = settings.deletion_log, "effective options");
+    tracing::info!(?min_age, exclusions = ?written, ?custom_folders, deletion_log = settings.deletion_log, admin_operations = settings.admin_operations, "effective options");
     Ok(Prepared {
         variables,
         rules,
-        options: ScanOptions::new(now, min_age, exclusions).with_custom_folders(custom_folders),
+        options: ScanOptions::new(now, min_age, exclusions)
+            .with_custom_folders(custom_folders)
+            .with_admin(settings.admin_operations),
         deletion_log: settings.deletion_log,
     })
 }

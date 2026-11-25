@@ -556,6 +556,31 @@ fn the_deletion_log_is_switched_and_the_journal_says_where_it_is() {
 }
 
 #[test]
+fn the_administrators_operations_are_offered_until_switched_off() {
+    let sandbox = Sandbox::new();
+    let (window, screens) = sandbox.window();
+    let switch = || {
+        ElementHandle::find_by_accessible_label(&window, "Opérations administrateur")
+            .find(|element| element.accessible_role() == Some(AccessibleRole::Switch))
+            .unwrap()
+    };
+    assert_eq!(switch().accessible_checked(), Some(true), "on by default");
+    switch().invoke_accessible_default_action();
+    written(&screens);
+    assert_eq!(
+        sandbox.settings(),
+        Settings {
+            admin_operations: false,
+            ..Settings::default()
+        }
+    );
+    assert_eq!(switch().accessible_checked(), Some(false));
+    switch().invoke_accessible_default_action();
+    written(&screens);
+    assert!(sandbox.settings().admin_operations);
+}
+
+#[test]
 fn the_language_is_written_for_the_next_start_only() {
     let sandbox = Sandbox::new();
     let (window, screens) = sandbox.window();

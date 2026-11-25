@@ -3393,6 +3393,37 @@ mod tests {
     }
 
     #[test]
+    fn turned_off_what_needs_the_administrator_is_never_offered() {
+        let sandbox = Sandbox::new();
+        sandbox.file("home/.cache/pip/old");
+        sandbox.file("var/crash/core");
+        settle_files();
+        let rules = admin_rules(&sandbox);
+        let asked = Asked::default();
+        let inputs = Inputs {
+            admin_operations: false,
+            ..sandbox.inputs(Some(&sandbox.root.join("state")))
+        };
+        let seams = Seams {
+            read: Rc::new(move || Ok(inputs.clone())),
+            ..admin_seams(&sandbox, &rules, &asked, |_, _| (1, String::new()))
+        };
+        let (window, _screen) = on_admin_results(seams, &rules);
+        assert_eq!(window.global::<ui::Cleaner>().get_rights_waiting(), 0);
+        assert_eq!(
+            found(&window, "Cache de pip").accessible_checked(),
+            Some(true)
+        );
+        assert!(
+            ElementHandle::find_by_accessible_label(&window, "Rapports de plantage")
+                .next()
+                .is_none()
+        );
+        assert!(no_button(&window, "Obtenir les droits"));
+        assert!(asked.lock().unwrap().is_empty(), "the helper never asked");
+    }
+
+    #[test]
     fn the_rights_unlock_what_roots_scan_offers_and_root_cleans_only_what_is_checked() {
         let sandbox = Sandbox::new();
         let pip = sandbox.file("home/.cache/pip/old");

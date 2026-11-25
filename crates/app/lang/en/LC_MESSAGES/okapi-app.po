@@ -1897,6 +1897,14 @@ msgid "Garde dans l'historique la liste des chemins retirés à chaque nettoyage
 msgstr "Keeps in the history the list of paths removed at each cleaning. The oldest operations go when the history outgrows the size kept."
 
 msgctxt "General"
+msgid "Opérations administrateur"
+msgstr "Administrator operations"
+
+msgctxt "General"
+msgid "Le Nettoyeur propose aussi ce que seuls les droits administrateur permettent de nettoyer. S'applique à la prochaine analyse."
+msgstr "The Cleaner also offers what only administrator rights can clean. Applies from the next analysis."
+
+msgctxt "General"
 msgid "Journal technique"
 msgstr "Technical log"
 

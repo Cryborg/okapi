@@ -375,12 +375,22 @@ fn plan(
         ..
     } = planner;
     // Every rule is planned, chosen or not (its roots reserve their place):
-    // only the chosen ones' issues are the analysis's to tell.
+    // only the chosen and offered ones' issues are the analysis's to tell.
+    let admin: BTreeSet<Origin> = entries.iter().filter_map(RuleEntry::admin_origin).collect();
     for issue in issues {
-        if issue.origins().is_empty() || planning.options.chooses(issue.origins()) {
+        let chosen = issue.origins().is_empty() || planning.options.chooses(issue.origins());
+        let offered = planning
+            .options
+            .offers(issue.origins().iter().any(|origin| admin.contains(origin)));
+        if chosen && offered {
             report.issue(issue);
         } else {
-            tracing::debug!(?issue, "issue of a rule not chosen: not told");
+            tracing::debug!(
+                ?issue,
+                chosen,
+                offered,
+                "issue of a rule not chosen or not offered: not told"
+            );
         }
     }
     report.add_stats(&stats);
@@ -440,7 +450,8 @@ struct Planned {
     places: BTreeSet<FileIdentity>,
 }
 
-/// The roots of a group `options` choose, each with its categories: those of
+/// The roots of a group `options` choose and offer ([`ScanOptions::offers`]),
+/// each with its categories: those of
 /// its group's rules (the sense a group is shown in).
 fn chosen_roots(
     roots: Vec<(usize, PlannedRoot)>,
@@ -451,12 +462,18 @@ fn chosen_roots(
     roots
         .into_iter()
         .filter_map(|(rule, root)| {
-            let origins = attributes
-                .get(&groups.find(rule))
-                .map_or(&[][..], |attributes| &attributes.origins);
-            options
-                .chooses(origins)
-                .then(|| (rule, root, Category::of_group(origins)))
+            let group = attributes.get(&groups.find(rule));
+            let origins = group.map_or(&[][..], |attributes| &attributes.origins);
+            if !options.chooses(origins) {
+                return None;
+            }
+            // The group's, its rules merged: one that joins the administrator's
+            // is root's to clean.
+            if !options.offers(group.is_some_and(|attributes| attributes.needs_admin)) {
+                tracing::debug!(root = ?root.path, ?origins, "a group that needs the administrator, not offered");
+                return None;
+            }
+            Some((rule, root, Category::of_group(origins)))
         })
         .collect()
 }

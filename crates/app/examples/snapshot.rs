@@ -1658,6 +1658,7 @@ fn settings(window: &ui::AppWindow) {
     let preferences = window.global::<ui::Preferences>();
     preferences.set_state(ui::SettingsState::Editable);
     preferences.set_save_refused(ui::SaveRefusal::ChangedElsewhere);
+    preferences.set_admin_operations(true);
     preferences.set_state_directory("~/.local/state/okapi".into());
     preferences.set_settings_file("~/.config/okapi/settings.json".into());
     preferences.set_min_age_options(ModelRc::new(VecModel::from(vec![

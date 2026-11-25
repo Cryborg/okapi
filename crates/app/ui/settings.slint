@@ -598,6 +598,28 @@ component General inherits Card {
             }
         }
         Separator { }
+        SettingRow {
+            name: @tr("Opérations administrateur");
+            description: @tr("Le Nettoyeur propose aussi ce que seuls les droits administrateur permettent de nettoyer. S'applique à la prochaine analyse.");
+            HorizontalLayout {
+                spacing: Theme.spacing-m;
+                SilentDetail {
+                    text: Preferences.admin-operations ? @tr("Activé") : @tr("Désactivé");
+                    // The switch says it.
+                    vertical-alignment: center;
+                    wrap: no-wrap;
+                }
+                Switch {
+                    label: @tr("Opérations administrateur");
+                    on: Preferences.admin-operations;
+                    enabled: root.enabled;
+                    toggled => {
+                        Preferences.toggle-admin-operations();
+                    }
+                }
+            }
+        }
+        Separator { }
         InfoRow {
             name: @tr("Journal technique");
             description: Preferences.state-directory == ""

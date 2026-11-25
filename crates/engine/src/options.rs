@@ -266,6 +266,8 @@ pub struct ScanOptions {
     origins: Option<BTreeSet<Origin>>,
     /// The folders the user chose to have emptied, planned after the rules.
     custom_folders: Vec<CustomFolder>,
+    /// What needs the administrator is offered.
+    admin: bool,
 }
 
 impl ScanOptions {
@@ -280,6 +282,7 @@ impl ScanOptions {
             categories: BTreeSet::new(),
             origins: None,
             custom_folders: Vec::new(),
+            admin: true,
         }
     }
 
@@ -362,6 +365,22 @@ impl ScanOptions {
                     .as_ref()
                     .is_none_or(|chosen| chosen.contains(origin))
         })
+    }
+
+    /// Offers what needs the administrator, or not (it is by default): left
+    /// out, its groups are not walked, its maintenances not offered and what
+    /// kept its roots out not told, but its roots keep their place, as those
+    /// of a category not chosen.
+    #[must_use]
+    pub const fn with_admin(mut self, offered: bool) -> Self {
+        self.admin = offered;
+        self
+    }
+
+    /// Whether something is offered, `needs_admin` saying it needs the
+    /// administrator: always, unless it does and that is not offered.
+    pub(crate) const fn offers(&self, needs_admin: bool) -> bool {
+        self.admin || !needs_admin
     }
 
     /// The exclusions honoured.

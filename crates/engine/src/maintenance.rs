@@ -104,6 +104,14 @@ pub(crate) fn found(entries: &[RuleEntry<'_>], planning: &Planning<'_>) -> Vec<M
             if !options.chooses(std::slice::from_ref(&origin)) {
                 return None;
             }
+            if !options.offers(needs_admin) {
+                tracing::debug!(
+                    ?origin,
+                    ?action,
+                    "a maintenance that needs the administrator, not offered"
+                );
+                return None;
+            }
             let paths = present(&origin, affected, variables, options);
             if paths.is_empty() {
                 tracing::debug!(

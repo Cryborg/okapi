@@ -1031,6 +1031,7 @@ mod tests {
             exclusions: exclusions.iter().map(PathBuf::from).collect(),
             custom_folders: Vec::new(),
             deletion_log: false,
+            admin_operations: true,
             state_directory: None,
         }
     }

@@ -454,6 +454,12 @@ impl SettingsScreen {
             });
         });
         let screen = self.clone();
+        preferences.on_toggle_admin_operations(move || {
+            screen.change("administrator's operations", |settings| {
+                settings.admin_operations = !settings.admin_operations;
+            });
+        });
+        let screen = self.clone();
         preferences.on_choose_language(move |choice| {
             screen.change("language", |settings| {
                 settings.language = language_of(choice);
@@ -1065,6 +1071,7 @@ impl State {
         preferences.set_min_age_chosen(chosen);
         preferences.set_min_age_written(minutes.to_string().into());
         preferences.set_deletion_log(self.settings.deletion_log);
+        preferences.set_admin_operations(self.settings.admin_operations);
         preferences.set_language(match self.settings.language {
             None => ui::LanguageChoice::System,
             Some(Language::French) => ui::LanguageChoice::French,

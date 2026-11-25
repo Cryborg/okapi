@@ -554,6 +554,7 @@ Options :
 
 Réglages : {settings}
   (exclusions, ajoutées à --exclude ; customFolders ; minAgeMinutes ; deletionLog ;
+  adminOperations, false pour ne rien analyser qui exige l'administrateur ;
   language, \"fr\" ou \"en\", sinon celle de la session)
 Historique (nettoyages, désinstallations et mises à jour) : {history}
   (mis de côté dans history.1.jsonl avant un nettoyage quand il dépasse la
@@ -590,6 +591,7 @@ Options:
 
 Settings: {settings}
   (exclusions, added to --exclude; customFolders; minAgeMinutes; deletionLog;
+  adminOperations, false to scan nothing that needs the administrator;
   language, \"fr\" or \"en\", else the session's)
 History (cleanings, uninstallations and updates): {history}
   (set aside as history.1.jsonl before a cleaning once beyond the size

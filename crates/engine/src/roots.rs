@@ -82,6 +82,15 @@ impl RuleEntry<'_> {
             Self::Custom(_) => false,
         }
     }
+
+    /// The rule's origin when it needs the administrator: only a target of
+    /// the system's may.
+    pub(crate) fn admin_origin(&self) -> Option<Origin> {
+        match self {
+            Self::Target(target) => target.needs_admin().then(|| Origin::of_target(target)),
+            Self::File(_) | Self::App { .. } | Self::Browser { .. } | Self::Custom(_) => None,
+        }
+    }
 }
 
 /// The first profile of a Chromium-based browser.

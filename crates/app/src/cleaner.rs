@@ -60,6 +60,8 @@ pub struct Inputs {
     pub custom_folders: Vec<PathBuf>,
     /// Every entry of a cleaning is kept in the history.
     pub deletion_log: bool,
+    /// An analysis offers what needs the administrator.
+    pub admin_operations: bool,
     /// Where the history lives; none when no state directory is known.
     pub state_directory: Option<PathBuf>,
 }
@@ -217,6 +219,7 @@ fn read_system() -> Result<Inputs, Problem> {
             .map(PathBuf::from)
             .collect(),
         deletion_log: settings.deletion_log,
+        admin_operations: settings.admin_operations,
         state_directory: okapi_platform::state_directory(),
     })
 }
@@ -276,7 +279,8 @@ fn options(
     tracing::info!(elapsed = ?started.elapsed(), "exclusions resolved");
     Ok(ScanOptions::new(now, min_age, exclusions)
         .with_categories(chosen)
-        .with_custom_folders(custom_folders))
+        .with_custom_folders(custom_folders)
+        .with_admin(inputs.admin_operations))
 }
 
 /// One category offered before the analysis.
@@ -2265,6 +2269,7 @@ pub mod tests {
             exclusions: Vec::new(),
             custom_folders: Vec::new(),
             deletion_log: false,
+            admin_operations: true,
             state_directory: None,
         }
     }
@@ -2475,6 +2480,7 @@ pub mod tests {
         let inputs = Inputs {
             min_age_minutes: Some(7),
             exclusions: vec![exclusion.clone()],
+            admin_operations: false,
             ..defaults()
         };
         let chosen = BTreeSet::from([Category::Gaming]);
@@ -2485,7 +2491,8 @@ pub mod tests {
                 Duration::from_mins(7),
                 Exclusions::new([exclusion]).unwrap()
             )
-            .with_categories(chosen.clone()))
+            .with_categories(chosen.clone())
+            .with_admin(false))
         );
         let refused = Inputs {
             exclusions: vec![PathBuf::from("relative")],
@@ -2943,6 +2950,7 @@ pub mod tests {
                 exclusions: Self::excluded(),
                 custom_folders: Vec::new(),
                 deletion_log: true,
+                admin_operations: true,
                 state_directory: state_directory.map(Path::to_path_buf),
             }
         }

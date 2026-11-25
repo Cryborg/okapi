@@ -96,7 +96,7 @@ Et `okapivm.common`, pour ce qui revient partout :
 - `present(bench, fichiers)`, `check_gone(bench, *fichiers)`, `check_kept(bench, *fichiers)` ;
 - `open_screen(bench, "Doublons")` : va sur une page de la barre latérale, en ouvrant son groupe s'il est fermé, et attend qu'elle soit la page affichée ;
 - `read_store(bench, "settings.json", compte)`, `write_store(bench, nom, valeur, compte)`, `store_path(nom)` : les fichiers du magasin d'Okapi (`STORE_FILES` dit où vit chacun ; `history.jsonl` en liste de lignes), `None` quand il n'existe pas ; `last_receipt(bench, compte=...)` : la dernière entrée de l'historique ;
-- `cli(bench, "--clean", account=...)` (un `Outcome`) et `cli_json(bench, ..., code=0)` (le document de `--json`) : le CLI dans la VM, mesuré quand la couverture l'est ;
+- `cli(bench, "--clean", account=..., environment={...})` (un `Outcome` ; `environment` ajoute des variables, `HOME`, `TMPDIR`...) et `cli_json(bench, ..., code=0)` (le document de `--json`) : le CLI dans la VM, mesuré quand la couverture l'est ;
 - `enable_pam_tmpdir(bench)` : allume pam_tmpdir et refait la session, `TMPDIR` devient `/tmp/user/<uid>` ;
 - `mount_fat(bench, point)`, `bind_mount(bench, source, point, fuse=...)` (noyau, ou bindfs par FUSE), `unmount(bench, point)` ;
 - `Package(nom, version, application=...)`, `build_deb(bench, paquet)`, `install_deb(bench, paquet)`, `publish_apt_repository(bench, *paquets)` : des paquets Debian faits dans la VM et un dépôt APT local signé, qu'APT et PackageKit voient ;

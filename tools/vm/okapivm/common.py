@@ -12,20 +12,25 @@ from . import config
 from .bench import ROOT, Bench, Elevation, Outcome, ScenarioFailure
 
 __all__ = ["ROOT", "Elevation", "Files", "Outcome", "Package", "bind_mount", "build_deb", "check_gone", "check_kept",
-           "cli", "cli_json", "close_fake_browser", "enable_pam_tmpdir", "install_deb", "last_receipt", "mount_fat",
-           "open_fake_browser", "open_screen", "plant", "present", "publish_apt_repository", "read_store",
-           "shell_path", "store_path", "unmount", "write_store"]
+           "cli", "cli_json", "close_fake_browser", "enable_pam_tmpdir", "expand_home", "install_deb", "journal", "last_receipt",
+           "mount_fat", "open_fake_browser", "open_screen", "plant", "present", "publish_apt_repository",
+           "read_store", "shell_path", "store_path", "unmount", "write_settings", "write_store"]
 
 HOME_PREFIX = "~/"
 SELECTED = "selected"
 JSON_OPTION = "--json"
 JSON_LINES = ".jsonl"
 HISTORY = "history.jsonl"
+SETTINGS = "settings.json"
+# `SETTINGS_VERSION` of crates/store/src/settings.rs.
+SETTINGS_VERSION = 1
 CONFIG_DIRECTORY = "~/.config/okapi"
 STATE_DIRECTORY = "~/.local/state/okapi"
+# As `okapi-store` names them (crates/store/src/journal.rs).
+APP_JOURNAL = "okapi-app.log"
 # As `okapi-store` places them (crates/store/src/lib.rs).
 STORE_FILES = {
-    "settings.json": CONFIG_DIRECTORY,
+    SETTINGS: CONFIG_DIRECTORY,
     "dashboard.json": CONFIG_DIRECTORY,
     HISTORY: STATE_DIRECTORY,
     "last-analysis.json": STATE_DIRECTORY,
@@ -44,6 +49,8 @@ APT_KEY_NAME = "okapi-vm <okapi-vm@localhost>"
 APT_KEYRING = "/etc/apt/keyrings/okapi-vm.gpg"
 APT_SOURCE = "/etc/apt/sources.list.d/okapi-vm.list"
 FAKE_BROWSER_UNIT = "okapi-vm-browser"
+FAKE_BROWSER_STUBBORN = "--stubborn"
+FAKE_BROWSER_STUBBORN_KILL = "SIGKILL"
 FAKE_BROWSER_POLLS = 50
 FAKE_BROWSER_POLL_SECONDS = 0.1
 # The sidebar's pages that sit in a group, which may be closed.
@@ -62,6 +69,15 @@ def shell_path(path: str) -> str:
     if path.startswith(HOME_PREFIX):
         return '"$HOME"/' + shlex.quote(path.removeprefix(HOME_PREFIX))
     return shlex.quote(path)
+
+
+def expand_home(bench: Bench, path: str, account: str | None = None) -> str:
+    """`path` with a leading `~/` made the account's home (the administrator's by
+    default), as the settings want it: absolute."""
+    if not path.startswith(HOME_PREFIX):
+        return path
+    home = bench.run_as(account or bench.accounts.admin.name, 'printf %s "$HOME"')
+    return f"{home}/{path.removeprefix(HOME_PREFIX)}"
 
 
 @dataclass(frozen=True)
@@ -148,6 +164,11 @@ def write_store(bench: Bench, name: str, value: object, account: str | None = No
     bench.log(f"wrote {store_path(name)}")
 
 
+def write_settings(bench: Bench, values: dict, account: str | None = None) -> None:
+    """Okapi's settings replaced by `values` (camelCase keys, `minAgeMinutes`...), in the format this Okapi reads."""
+    write_store(bench, SETTINGS, {"version": SETTINGS_VERSION, **values}, account)
+
+
 def last_receipt(bench: Bench, account: str | None = None) -> dict:
     """The newest entry of the account's history (the administrator's by default)."""
     history = read_store(bench, HISTORY, account)
@@ -155,6 +176,13 @@ def last_receipt(bench: Bench, account: str | None = None) -> dict:
         raise ScenarioFailure(f"{store_path(HISTORY)} holds no receipt")
     assert isinstance(history, list)
     return history[-1]
+
+
+def journal(bench: Bench, binary: str = APP_JOURNAL, account: str | None = None) -> list[dict]:
+    """The events of a binary's journal (`okapi-app.log` or `okapi.log`), oldest first."""
+    path = shell_path(f"{STATE_DIRECTORY}/{binary}")
+    text = bench.run_as(account or bench.accounts.admin.name, f"if [ -e {path} ]; then cat -- {path}; fi")
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
 def cli(bench: Bench, *arguments: str, account: str | None = None) -> Outcome:
@@ -274,17 +302,21 @@ def publish_apt_repository(bench: Bench, *packages: Package) -> None:
 
 
 def open_fake_browser(bench: Bench, *, firefox_profile: str | None = None,
-                      chromium_profile: str | None = None) -> None:
+                      chromium_profile: str | None = None, stubborn: bool = False) -> None:
     """A process of the administrator account that holds a browser's profile as
-    open: Firefox's `parent.lock` locked (`/proc/locks`), Chromium's
-    `SingletonLock` naming it. `close_fake_browser` ends it."""
+    open: Firefox's `.parentlock` (its name on Linux) locked (`/proc/locks`), Chromium's
+    `SingletonLock` naming it; `stubborn`, it ignores SIGTERM.
+    `close_fake_browser` ends it, stubborn or not."""
     profiles = [f"firefox={firefox_profile}"] if firefox_profile else []
     profiles += [f"chromium={chromium_profile}"] if chromium_profile else []
-    bench.user(shlex.join(["systemd-run", "--user", "--quiet", f"--unit={FAKE_BROWSER_UNIT}", "--collect",
-                           "python3", "-I", config.GUEST_FAKE_BROWSER_PATH, *profiles]))
+    unit = ["systemd-run", "--user", "--quiet", f"--unit={FAKE_BROWSER_UNIT}", "--collect"]
+    if stubborn:
+        unit.append(f"--property=KillSignal={FAKE_BROWSER_STUBBORN_KILL}")
+        profiles.insert(0, FAKE_BROWSER_STUBBORN)
+    bench.user(shlex.join([*unit, "python3", "-I", config.GUEST_FAKE_BROWSER_PATH, *profiles]))
     # SingletonLock points at no file: `-e` would follow it and find nothing.
     held = [f"[ {test} {shell_path(path + marker)} ]" for path, marker, test in
-            ((firefox_profile, "/parent.lock", "-e"), (chromium_profile, "/SingletonLock", "-L")) if path]
+            ((firefox_profile, "/.parentlock", "-e"), (chromium_profile, "/SingletonLock", "-L")) if path]
     bench.user(f"for attempt in $(seq {FAKE_BROWSER_POLLS}); do if {' && '.join(held)}; then exit 0; fi; "
                f"sleep {FAKE_BROWSER_POLL_SECONDS}; done; exit 1")
     bench.log(f"fake browser holds {', '.join(profiles)}")
